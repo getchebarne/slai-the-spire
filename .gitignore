@@ -20,3 +20,6 @@ venv/
 
 # mypy
 .mypy_cache/
+
+# VScode config
+.vscode
