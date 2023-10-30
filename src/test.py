@@ -1,5 +1,6 @@
 from agents.random import RandomAgent
 from game.battle.context import BattleContext
+from game.battle.drawer import BattleDrawer
 from game.battle.engine import BattleEngine
 from game.entities.actors.base import Health
 from game.entities.actors.char import Character
@@ -16,7 +17,7 @@ if __name__ == "__main__":
     agent = RandomAgent()
 
     # Instance battle context
-    battle_context = BattleContext(
+    context = BattleContext(
         char=Character(health=Health(10)),
         monsters=MonsterCollection([Dummy()]),
         deck=SILENT_STARTER_DECK,
@@ -24,8 +25,11 @@ if __name__ == "__main__":
         draw_pile=DrawPile(SILENT_STARTER_DECK.cards),
         hand=Hand([]),
     )
+    # Instance drawer
+    drawer = BattleDrawer()
+
     # Instance Battle
-    battle = BattleEngine(battle_context, agent)
+    engine = BattleEngine(agent, context, drawer)
 
     # Start
-    battle.run()
+    engine.run()

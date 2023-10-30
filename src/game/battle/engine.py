@@ -1,17 +1,29 @@
 from agents.base import BaseAgent
 from game.battle.comm import ActionType
 from game.battle.context import BattleContext
+from game.battle.drawer import BattleDrawer
 from game.battle.state import BattleState
 
 
 class BattleEngine:
-    def __init__(self, context: BattleContext, agent: BaseAgent):
-        self.context = context
+    def __init__(
+        self,
+        agent: BaseAgent,
+        context: BattleContext,
+        drawer: BattleDrawer,
+        draw: bool = True,
+    ):
         self.agent = agent
+        self.context = context
+        self.drawer = drawer
+        self.draw = draw
 
     def _char_turn(self) -> None:
         # TODO: improve this
         while not self.context.is_over():
+            if self.draw:
+                self.drawer(self.context.view())
+
             # Get action from agent
             action_type, action_idx = self.agent.select_action(self.context.view())
 
