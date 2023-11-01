@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import List, Optional
 
 from agents.base import BaseAgent
@@ -6,6 +5,7 @@ from game.battle.comm import ActionType
 from game.battle.comm import BattleView
 from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
+from game.battle.pipelines.base import TargetedEffect
 from game.battle.state import BattleState
 from game.effects.base import BaseEffect
 from game.effects.base import TargetType
@@ -13,14 +13,6 @@ from game.entities.actors.base import BaseActor
 from game.entities.cards.base import BaseCard
 
 
-@dataclass
-class TargetedEffect:
-    effect: BaseEffect
-    source: BaseActor
-    target: BaseActor
-
-
-# TODO: maybe move BattleState here?
 class BattleEngine:
     def __init__(
         self,
@@ -37,19 +29,6 @@ class BattleEngine:
         # Setup
         self._state = BattleState.DEFAULT
         self._active_card: BaseCard = None
-
-    def _monsters_turn(self) -> None:
-        for monster in self.context.monsters:
-            for effect in monster.move:
-                targeted_effects = self._resolve_target(
-                    effect, monster, self.context.char
-                )
-                for targeted_effect in targeted_effects:
-                    self.context._monster_pipe(
-                        targeted_effect.effect, targeted_effect.target
-                    )
-                    if self.context.is_over():
-                        return
 
     def _select_card(self, card_idx: int) -> None:
         # Get card from hand
@@ -86,7 +65,7 @@ class BattleEngine:
         ]
         # Apply targeted effects.
         for targeted_effect in targeted_effects:
-            self.context._char_pipe(targeted_effect.effect, targeted_effect.target)
+            self.context.char_pipe(targeted_effect)
 
     def _resolve_target(
         self, effect: BaseEffect, source: BaseActor, target: Optional[BaseActor] = None
@@ -108,8 +87,24 @@ class BattleEngine:
                 )
             return [TargetedEffect(effect, source, target)]
 
+    def _monsters_turn(self) -> None:
+        # TODO: find way to improve this
+        for monster in self.context.monsters:
+            for effect in monster.move:
+                targeted_effects = self._resolve_target(
+                    effect, monster, self.context.char
+                )
+                for targeted_effect in targeted_effects:
+                    self.context.monster_pipe(targeted_effect)
+                    if self.context.is_over():
+                        return
+
     def _char_turn(self) -> None:
         while not self.context.is_over():
+            # TODO: improve drawing logic
+            if self.draw:
+                self.drawer(self.view())
+
             # Get action from agent
             action_type, action_idx = self.agent.select_action(self.view())
 
