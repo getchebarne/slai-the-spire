@@ -48,8 +48,8 @@ class BattleContext:
 
     def _setup(self) -> None:
         # Pipelines
-        self._char_pipe = CharacterPipeline()
-        self._monster_pipe = MonsterPipeline()
+        self.char_pipe = CharacterPipeline()
+        self.monster_pipe = MonsterPipeline()
 
         # Systems
         self._draw_card = DrawCard(self.disc_pile, self.draw_pile, self.hand)
