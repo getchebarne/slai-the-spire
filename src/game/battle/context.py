@@ -1,7 +1,6 @@
 import random
 from typing import Optional
 
-# from game.battle.comm import BattleView
 from game.battle.pipelines.char import CharacterPipeline
 from game.battle.pipelines.monster import MonsterPipeline
 from game.battle.systems.draw_card import DrawCard
@@ -52,10 +51,6 @@ class BattleContext:
         self.monster_pipe = MonsterPipeline()
 
         # Systems
-        self._draw_card = DrawCard(self.disc_pile, self.draw_pile, self.hand)
-
-    def _setup_systems(self) -> None:
-        # Draw card. TODO: remove?
         self._draw_card = DrawCard(self.disc_pile, self.draw_pile, self.hand)
 
     def is_over(self) -> bool:
