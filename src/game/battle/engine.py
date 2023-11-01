@@ -18,13 +18,11 @@ class BattleEngine:
         self,
         agent: BaseAgent,
         context: BattleContext,
-        drawer: BattleDrawer,
-        draw: bool = True,
+        drawer: Optional[BattleDrawer] = None,
     ):
         self.agent = agent
         self.context = context
         self.drawer = drawer
-        self.draw = draw
 
         # Setup
         self._state = BattleState.DEFAULT
@@ -102,7 +100,7 @@ class BattleEngine:
     def _char_turn(self) -> None:
         while not self.context.is_over():
             # TODO: improve drawing logic
-            if self.draw:
+            if self.drawer:
                 self.drawer(self.view())
 
             # Get action from agent
