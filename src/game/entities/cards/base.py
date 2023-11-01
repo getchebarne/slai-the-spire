@@ -2,6 +2,7 @@ from abc import ABC
 from enum import Enum
 from typing import List
 
+from game.effects.base import TargetType
 from game.effects.card import CardEffect
 
 
@@ -14,7 +15,6 @@ class CardType(Enum):
     CURSE = 4
 
 
-# TODO: rename to `Card`
 class BaseCard(ABC):
     name: str
     type_: CardType
@@ -36,3 +36,12 @@ class BaseCard(ABC):
 
     def __str__(self) -> str:
         return f"{type(self).__name__} ({self._cost})"
+
+    @classmethod
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+        # Determine if the card requires targetting based on its effects
+        cls.requires_target = any(
+            effect.target_type == TargetType.SINGLE for effect in cls.effects
+        )

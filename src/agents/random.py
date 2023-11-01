@@ -5,7 +5,7 @@ import numpy as np
 from agents.base import BaseAgent
 from game.battle.comm import ActionType
 from game.battle.comm import BattleView
-from game.battle.context import BattleState
+from game.battle.state import BattleState
 
 
 class RandomAgent(BaseAgent):
@@ -19,8 +19,11 @@ class RandomAgent(BaseAgent):
                 return ActionType.END_TURN, None
 
             card_idx = np.random.choice(range(len(battle_view.hand)))
-            return ActionType.PLAY_CARD, card_idx
+            return ActionType.SELECT_CARD, card_idx
 
         if battle_view.state == BattleState.AWAIT_TARGET:
-            monster_idx = np.random.choice(range(len(battle_view.monsters)))
-            return ActionType.SELECT_TARGET, monster_idx
+            if battle_view.active_card.requires_target:
+                monster_idx = np.random.choice(range(len(battle_view.monsters)))
+                return ActionType.SELECT_TARGET, monster_idx
+
+            return ActionType.SELECT_TARGET, None
