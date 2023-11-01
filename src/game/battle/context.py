@@ -1,13 +1,10 @@
 import random
 from typing import Optional
 
-from game.battle.comm import BattleView
+# from game.battle.comm import BattleView
 from game.battle.pipelines.char import CharacterPipeline
 from game.battle.pipelines.monster import MonsterPipeline
-from game.battle.state import BattleState
 from game.battle.systems.draw_card import DrawCard
-from game.battle.systems.play_card import PlayCard
-from game.battle.systems.resolve_target import ResolveTarget
 from game.entities.actors.char import Character
 from game.entities.actors.monster import MonsterCollection
 from game.entities.cards.deck import Deck
@@ -46,24 +43,16 @@ class BattleContext:
             draw_pile if draw_pile else DrawPile(deck.cards)
         )  # TODO: shuffle
 
-        # Set initial state
-        self.state = BattleState.DEFAULT
-
         # Setup systems
         self._setup()
 
     def _setup(self) -> None:
-        # Set initial state
-        self.state = BattleState.DEFAULT
-
         # Pipelines
         self._char_pipe = CharacterPipeline()
         self._monster_pipe = MonsterPipeline()
 
         # Systems
         self._draw_card = DrawCard(self.disc_pile, self.draw_pile, self.hand)
-        self._play_card = PlayCard(self.char, self.disc_pile, self.hand)
-        self._resolve_target = ResolveTarget()
 
     def _setup_systems(self) -> None:
         # Draw card. TODO: remove?
@@ -95,20 +84,3 @@ class BattleContext:
     def monsters_turn_end(self) -> None:
         for monster in self.monsters:
             monster.update_move()
-
-    def _process_monster_turn(self) -> None:
-        for monster in self.monsters:
-            effects = monster.move
-            for effect in effects:
-                # TODO: set monster's target properly
-                self._process_effect(effect, self.char)
-
-    def view(self) -> BattleView:
-        return BattleView(
-            self.state,
-            self.char,
-            self.monsters,
-            self.disc_pile,
-            self.draw_pile,
-            self.hand,
-        )
