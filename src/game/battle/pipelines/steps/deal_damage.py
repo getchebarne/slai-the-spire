@@ -1,11 +1,11 @@
 from game.battle.pipelines.steps.base import BaseStep
 from game.effects.base import BaseEffect
-from game.entities.actors.base import BaseActor
 
 
 class DealDamage(BaseStep):
-    def _apply_effect(self, effect: BaseEffect, target: BaseActor) -> None:
+    def _apply_effect(self, effect: BaseEffect) -> None:
         damage = effect.damage
+        target = effect.target
 
         # Remove block
         dmg_over_block = max(0, damage - target.block.current)

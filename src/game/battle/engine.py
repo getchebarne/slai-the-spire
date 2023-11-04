@@ -1,15 +1,11 @@
-from typing import List, Optional
+from typing import Optional
 
 from agents.base import BaseAgent
 from game.battle.comm import ActionType
 from game.battle.comm import BattleView
 from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
-from game.battle.pipelines.base import TargetedEffect
 from game.battle.state import BattleState
-from game.effects.base import BaseEffect
-from game.effects.base import TargetType
-from game.entities.actors.base import BaseActor
 from game.entities.cards.base import BaseCard
 
 
@@ -42,60 +38,28 @@ class BattleEngine:
         self._active_card = card
 
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
-        # Remove card from hand and send it to the draw pile
+        # Get targeted effects
+        effects = self._active_card.use(
+            self.context.char, self.context.monsters, monster_idx
+        )
+        # Apply targeted effects
+        for effect in effects:
+            self.context.char_pipe(effect)
+
+        # Remove card from hand and send it to the draw pile.
+        # TODO: cards can also be exhausted
         self.context.hand.cards.remove(self._active_card)
         self.context.disc_pile.cards.append(self._active_card)
 
         # Substract energy
         self.context.char.energy.current -= self._active_card.cost
 
-        # Get target monster if there's any
-        monster = (
-            self.context.monsters[monster_idx] if monster_idx is not None else None
-        )
-        # Get targeted effects
-        targeted_effects = [
-            targeted_effect
-            for effect in self._active_card.effects
-            for targeted_effect in self._resolve_target(
-                effect, self.context.char, monster
-            )
-        ]
-        # Apply targeted effects.
-        for targeted_effect in targeted_effects:
-            self.context.char_pipe(targeted_effect)
-
-    def _resolve_target(
-        self, effect: BaseEffect, source: BaseActor, target: Optional[BaseActor] = None
-    ) -> List[TargetedEffect]:
-        if effect.target_type == TargetType.SELF:
-            return [TargetedEffect(effect, source, source)]
-
-        if effect.target_type == TargetType.ALL_MONSTERS:
-            return [
-                TargetedEffect(effect, source, monster)
-                for monster in self.context.monsters
-            ]
-
-        if effect.target_type == TargetType.SINGLE:
-            if target is None:
-                raise ValueError(
-                    "Argument `target` can't be None for effects with target type "
-                    f"{TargetType.SINGLE}"
-                )
-            return [TargetedEffect(effect, source, target)]
-
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
         for monster in self.context.monsters:
-            for effect in monster.move:
-                targeted_effects = self._resolve_target(
-                    effect, monster, self.context.char
-                )
-                for targeted_effect in targeted_effects:
-                    self.context.monster_pipe(targeted_effect)
-                    if self.context.is_over():
-                        return
+            effects = monster.execute_move(self.context.char, self.context.monsters)
+            for effect in effects:
+                self.context.monster_pipe(effect)
 
     def _char_turn(self) -> None:
         while not self.context.is_over():
