@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from game.battle.state import BattleState
-from game.entities.actors.char import Character
-from game.entities.actors.monster import MonsterCollection
+from game.entities.actors.characters.base import Character
+from game.entities.actors.monsters.base import MonsterCollection
 from game.entities.cards.base import BaseCard
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile

@@ -1,6 +1,7 @@
+from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Iterable, List
+from typing import Iterable, List
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
@@ -8,6 +9,8 @@ from game.entities.actors.base import Block
 from game.entities.actors.base import Buffs
 from game.entities.actors.base import Debuffs
 from game.entities.actors.base import Health
+from game.entities.actors.characters.base import Character
+from game.entities.actors.monsters.moves.base import BaseMonsterMove
 
 
 # TODO: probably set defaults to `None`
@@ -38,8 +41,6 @@ class Intent:
 
 
 class Monster(BaseActor):
-    moves: Dict[str, List[MonsterEffect]] = dict()
-
     def __init__(
         self,
         health: Health,
@@ -56,46 +57,20 @@ class Monster(BaseActor):
             )
 
         # Set initial move
-        self._set_first_move()
+        self.move = self._first_move()
+
+    def execute_move(
+        self, char: Character, monsters: MonsterCollection
+    ) -> List[MonsterEffect]:
+        return self.move(self, char, monsters)
 
     @abstractmethod
     def update_move(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def _set_first_move(self) -> None:
+    def _first_move(self) -> BaseMonsterMove:
         raise NotImplementedError
-
-    @staticmethod
-    def _move_to_intent(move: List[MonsterEffect]) -> Intent:
-        # TODO: improve this
-        damage = None
-        instances = 0
-        block = False
-        debuff = False
-        for effect in move:
-            if effect.damage:
-                if damage is None:
-                    damage = effect.damage
-                else:
-                    if damage != effect.damage:
-                        # TODO: should this check be here?
-                        raise ValueError(
-                            "A monster can't have instances with different damage"
-                        )
-
-                instances += 1
-
-            if effect.block:
-                block = True
-
-            if effect.frail:
-                debuff = True
-
-            if effect.weak:
-                debuff = True
-
-        return Intent(damage=damage, instances=instances, block=block, debuff=debuff)
 
     def __str__(self) -> str:
         # TODO: improve intent
@@ -103,7 +78,7 @@ class Monster(BaseActor):
         base_str = super().__str__()
 
         # Append intent
-        return f"{base_str} {self.intent}"
+        return f"{base_str} {self.move.intent}"
 
 
 class MonsterCollection(list):

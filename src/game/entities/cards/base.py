@@ -1,9 +1,11 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from enum import Enum
-from typing import List
+from functools import wraps
+from typing import Callable, List, Optional
 
-from game.effects.base import TargetType
 from game.effects.card import CardEffect
+from game.entities.actors.characters.base import Character
+from game.entities.actors.monsters.base import MonsterCollection
 
 
 # TODO: add card rarity
@@ -18,7 +20,6 @@ class CardType(Enum):
 class BaseCard(ABC):
     name: str
     type_: CardType
-    effects: List[CardEffect]
 
     def __init__(self, cost: int):
         self._cost = cost
@@ -34,14 +35,30 @@ class BaseCard(ABC):
 
         self._cost = value
 
+    @abstractmethod
+    def use(
+        self,
+        char: Character,
+        monsters: MonsterCollection,
+        target_monster_idx: Optional[int] = None,
+    ) -> List[CardEffect]:
+        raise NotImplementedError
+
     def __str__(self) -> str:
         return f"{type(self).__name__} ({self._cost})"
 
-    @classmethod
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
 
-        # Determine if the card requires targetting based on its effects
-        cls.requires_target = any(
-            effect.target_type == TargetType.SINGLE for effect in cls.effects
-        )
+def ensure_target_monster_idx(func: Callable) -> Callable:
+    @wraps(func)
+    def wrapper(
+        self: BaseCard,
+        char: Character,
+        monsters: MonsterCollection,
+        target_monster_idx: Optional[int] = None,
+    ) -> List[CardEffect]:
+        if target_monster_idx is None:
+            raise ValueError("target_monster_idx cannot be None for this card")
+
+        return func(self, char, monsters, target_monster_idx)
+
+    return wrapper

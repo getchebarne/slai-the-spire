@@ -3,9 +3,9 @@ from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
 from game.battle.engine import BattleEngine
 from game.entities.actors.base import Health
-from game.entities.actors.char import Character
-from game.entities.actors.dummy import Dummy
-from game.entities.actors.monster import MonsterCollection
+from game.entities.actors.characters.base import Character
+from game.entities.actors.monsters.dummy import Dummy
+from game.entities.actors.monsters.base import MonsterCollection
 from game.entities.cards.deck import SILENT_STARTER_DECK
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
