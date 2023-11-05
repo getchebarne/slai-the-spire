@@ -1,8 +1,8 @@
 import random
 from typing import Optional
 
-from game.battle.pipelines.char import CharacterPipeline
-from game.battle.pipelines.monster import MonsterPipeline
+from game.battle.pipeline.char import CharacterPipeline
+from game.battle.pipeline.monster import MonsterPipeline
 from game.battle.systems.draw_card import DrawCard
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.base import MonsterCollection
