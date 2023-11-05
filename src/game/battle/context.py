@@ -45,7 +45,7 @@ class BattleContext:
         self._setup()
 
     def _setup(self) -> None:
-        # Pipeline
+        # Pipeline. TODO: maybe move to `BattleEngine`
         self.pipeline = EffectPipeline()
 
         # Systems
