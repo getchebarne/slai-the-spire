@@ -43,8 +43,7 @@ class BattleEngine:
             self.context.char, self.context.monsters, monster_idx
         )
         # Apply targeted effects
-        for effect in effects:
-            self.context.pipeline(effect)
+        self.context.pipeline(effects)
 
         # Remove card from hand and send it to the draw pile.
         # TODO: cards can also be exhausted
@@ -58,8 +57,7 @@ class BattleEngine:
         # TODO: find way to improve this
         for monster in self.context.monsters:
             effects = monster.execute_move(self.context.char, self.context.monsters)
-            for effect in effects:
-                self.context.pipeline(effect)
+            self.context.pipeline(effects)
 
     def _char_turn(self) -> None:
         while not self.context.is_over():

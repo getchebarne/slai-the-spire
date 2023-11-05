@@ -1,5 +1,6 @@
 from __future__ import annotations
 from bisect import insort
+from collections import deque
 from typing import List
 
 from game.battle.pipeline.steps.base import BaseStep
@@ -25,6 +26,11 @@ class EffectPipeline:
 
         insort(self._steps, step)
 
-    def __call__(self, effect: BaseEffect) -> None:
-        for step in self._steps:
-            step(effect)
+    def __call__(self, effects: List[BaseEffect]) -> None:
+        effect_queue = deque(effects)
+
+        while effect_queue:
+            effect = effect_queue.popleft()
+            for step in self._steps:
+                # TODO: steps can create additional effects to be processed
+                step(effect)
