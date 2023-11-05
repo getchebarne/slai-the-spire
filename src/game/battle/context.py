@@ -1,8 +1,7 @@
 import random
 from typing import Optional
 
-from game.battle.pipeline.char import CharacterPipeline
-from game.battle.pipeline.monster import MonsterPipeline
+from game.battle.pipeline.pipeline import EffectPipeline
 from game.battle.systems.draw_card import DrawCard
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.base import MonsterCollection
@@ -46,9 +45,8 @@ class BattleContext:
         self._setup()
 
     def _setup(self) -> None:
-        # Pipelines
-        self.char_pipe = CharacterPipeline()
-        self.monster_pipe = MonsterPipeline()
+        # Pipeline
+        self.pipeline = EffectPipeline()
 
         # Systems
         self._draw_card = DrawCard(self.disc_pile, self.draw_pile, self.hand)
