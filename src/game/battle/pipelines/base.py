@@ -11,5 +11,4 @@ class BasePipeline(ABC):
     def __call__(self, effect: BaseEffect) -> None:
         for step in self._steps:
             # TODO: systems can create additional effects to be processed
-            # TODO: will probably need to add `source` here
             step(effect)

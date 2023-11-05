@@ -3,6 +3,10 @@ from game.effects.base import BaseEffect
 
 
 class DealDamage(BaseStep):
+    @property
+    def priority(self) -> int:
+        return 0
+
     def _apply_effect(self, effect: BaseEffect) -> None:
         damage = effect.damage
         target = effect.target
