@@ -9,11 +9,13 @@ packages = [{include = "src"}]
 [tool.poetry.dependencies]
 python = "^3.10"
 
-
 [tool.poetry.group.dev.dependencies]
 flake8 = "^6.1.0"
 black = "^23.7.0"
 isort = "^5.12.0"
+
+[tool.isort]
+force_single_line=true
 
 [build-system]
 requires = ["poetry-core"]
