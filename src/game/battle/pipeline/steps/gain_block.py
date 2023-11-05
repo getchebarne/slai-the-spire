@@ -1,4 +1,4 @@
-from game.battle.pipelines.steps.base import BaseStep
+from game.battle.pipeline.steps.base import BaseStep
 from game.effects.base import BaseEffect
 
 
