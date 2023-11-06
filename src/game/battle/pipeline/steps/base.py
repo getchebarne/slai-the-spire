@@ -1,13 +1,28 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
 
 from game.effects.base import BaseEffect
 
 
+class AddTo(Enum):
+    TOP = 0
+    BOT = 1
+
+
+# TODO: review is this is the best solution
+@dataclass
+class NewEffect:
+    effect: BaseEffect
+    where: AddTo
+
+
 class BaseStep(ABC):
-    def __call__(self, effect: BaseEffect) -> None:
+    def __call__(self, effect: BaseEffect) -> Optional[NewEffect]:
         if self._condition(effect):
-            self._apply_effect(effect)
+            return self._apply_effect(effect)
 
     @property
     @abstractmethod
@@ -15,7 +30,7 @@ class BaseStep(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _apply_effect(self, effect: BaseEffect) -> None:
+    def _apply_effect(self, effect: BaseEffect) -> Optional[NewEffect]:
         raise NotImplementedError
 
     @abstractmethod
