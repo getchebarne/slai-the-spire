@@ -3,6 +3,7 @@ from bisect import insort
 from collections import deque
 from typing import List
 
+from game.battle.pipeline.steps.base import AddTo
 from game.battle.pipeline.steps.base import BaseStep
 from game.battle.pipeline.steps.deal_damage import DealDamage
 from game.battle.pipeline.steps.gain_block import GainBlock
@@ -32,5 +33,16 @@ class EffectPipeline:
         while effect_queue:
             effect = effect_queue.popleft()
             for step in self._steps:
-                # TODO: steps can create additional effects to be processed
-                step(effect)
+                new_effect = step(effect)
+
+                if new_effect is not None:
+                    if new_effect.where == AddTo.BOT:
+                        effect_queue.append(new_effect.effect)
+
+                    elif new_effect.where == AddTo.TOP:
+                        effect_queue.appendleft(new_effect.effect)
+
+                    else:
+                        raise ValueError(
+                            f"Undefined `NewEffect` `where` attribute: {new_effect.where}"
+                        )
