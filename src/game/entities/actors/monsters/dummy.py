@@ -7,6 +7,7 @@ from game.entities.actors.monsters.moves.attack import Attack
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
 from game.entities.actors.monsters.moves.defend import Defend
 
+
 # TODO: unshare
 BASE_HEALTH = Health(10)
 BASE_BLOCK = Block(0)

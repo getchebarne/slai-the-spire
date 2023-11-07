@@ -2,6 +2,7 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Optional
 
+
 MAX_BLOCK = 999
 
 

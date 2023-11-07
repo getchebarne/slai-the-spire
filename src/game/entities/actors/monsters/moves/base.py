@@ -8,6 +8,7 @@ from typing import List
 from game.effects.monster import MonsterEffect
 from game.entities.actors.characters.base import Character
 
+
 if TYPE_CHECKING:
     from game.entities.actors.monsters.base import Intent
     from game.entities.actors.monsters.base import Monster

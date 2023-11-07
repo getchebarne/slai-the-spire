@@ -7,6 +7,7 @@ from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.base import BaseCard
 from game.entities.cards.base import CardType
 
+
 BASE_COST = 1
 BASE_BLOCK = 5
 

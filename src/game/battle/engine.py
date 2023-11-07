@@ -15,6 +15,7 @@ from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
 
+
 if TYPE_CHECKING:
     from agents.base import BaseAgent
 

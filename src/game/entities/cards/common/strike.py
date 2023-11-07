@@ -8,6 +8,7 @@ from game.entities.cards.base import BaseCard
 from game.entities.cards.base import CardType
 from game.entities.cards.base import ensure_target_monster_idx
 
+
 BASE_COST = 1
 BASE_DAMAGE = 6
 

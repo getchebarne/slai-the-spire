@@ -9,6 +9,7 @@ from game.entities.cards.deck import SILENT_STARTER_DECK
 from game.entities.relics.group import RelicGroup
 from game.entities.relics.vajra import Vajra
 
+
 if __name__ == "__main__":
     # Instance Agent
     agent = RandomAgent()
