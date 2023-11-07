@@ -5,7 +5,7 @@ from game.battle.pipeline.pipeline import EffectPipeline
 from game.battle.pipeline.steps.base import BaseStep
 from game.effects.relic import RelicEffect
 from game.entities.actors.characters.base import Character
-from game.entities.actors.monsters.base import MonsterCollection
+from game.entities.actors.monsters.group import MonsterGroup
 
 
 # TODO: does this need priority?
@@ -14,23 +14,21 @@ class BaseRelic(ABC):
     def step(self) -> Optional[BaseStep]:
         return None
 
-    def on_turn_end(
-        self, char: Character, monsters: MonsterCollection
-    ) -> List[RelicEffect]:
+    def on_turn_end(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
 
     def on_turn_start(
-        self, char: Character, monsters: MonsterCollection
+        self, char: Character, monsters: MonsterGroup
     ) -> List[RelicEffect]:
         return []
 
     def on_battle_end(
-        self, char: Character, monsters: MonsterCollection
+        self, char: Character, monsters: MonsterGroup
     ) -> List[RelicEffect]:
         return []
 
     def on_battle_start(
-        self, char: Character, monsters: MonsterCollection
+        self, char: Character, monsters: MonsterGroup
     ) -> List[RelicEffect]:
         return []
 

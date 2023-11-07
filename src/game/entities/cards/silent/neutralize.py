@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from game.effects.card import CardEffect
 from game.entities.actors.characters.base import Character
-from game.entities.actors.monsters.base import MonsterCollection
+from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.base import BaseCard
 from game.entities.cards.base import CardType
 from game.entities.cards.base import ensure_target_monster_idx
@@ -24,7 +24,7 @@ class Neutralize(BaseCard):
     def use(
         self,
         char: Character,
-        monsters: MonsterCollection,
+        monsters: MonsterGroup,
         target_monster_idx: Optional[int] = None,
     ) -> List[CardEffect]:
         target_monster = monsters[target_monster_idx]

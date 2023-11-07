@@ -5,7 +5,7 @@ from typing import Callable, List, Optional
 
 from game.effects.card import CardEffect
 from game.entities.actors.characters.base import Character
-from game.entities.actors.monsters.base import MonsterCollection
+from game.entities.actors.monsters.group import MonsterGroup
 
 
 # TODO: add card rarity
@@ -39,7 +39,7 @@ class BaseCard(ABC):
     def use(
         self,
         char: Character,
-        monsters: MonsterCollection,
+        monsters: MonsterGroup,
         target_monster_idx: Optional[int] = None,
     ) -> List[CardEffect]:
         raise NotImplementedError
@@ -53,7 +53,7 @@ def ensure_target_monster_idx(func: Callable) -> Callable:
     def wrapper(
         self: BaseCard,
         char: Character,
-        monsters: MonsterCollection,
+        monsters: MonsterGroup,
         target_monster_idx: Optional[int] = None,
     ) -> List[CardEffect]:
         if target_monster_idx is None:
