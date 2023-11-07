@@ -5,7 +5,6 @@ from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.relics.base import BaseRelic
 
-
 PLUS_STR = 1
 
 

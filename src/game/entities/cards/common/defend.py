@@ -1,4 +1,5 @@
-from typing import List, Optional
+from typing import List
+from typing import Optional
 
 from game.effects.card import CardEffect
 from game.entities.actors.characters.base import Character
