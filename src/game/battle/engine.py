@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from agents.base import BaseAgent
 
 
+# TODO: condense into single `Action` dataclass?
 class ActionType(Enum):
     SELECT_CARD = 0
     SELECT_TARGET = 1
@@ -70,18 +71,14 @@ class BattleEngine:
 
         # Check the player has enough energy to play the card
         if self.context.char.energy.current < card.cost:
-            raise ValueError(
-                f"Can't play {card} with {self.char.energy.current} energy"
-            )
+            raise ValueError(f"Can't play {card} with {self.char.energy.current} energy")
 
         # Set active card
         self._active_card = card
 
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
         # Get targeted effects
-        effects = self._active_card.use(
-            self.context.char, self.context.monsters, monster_idx
-        )
+        effects = self._active_card.use(self.context.char, self.context.monsters, monster_idx)
         # Apply targeted effects
         self.effect_pipeline(effects)
 
@@ -133,13 +130,9 @@ class BattleEngine:
         self._select_card(action_idx)
         self._state = BattleState.AWAIT_TARGET
 
-    def _handle_await_target_state(
-        self, action_type: ActionType, action_idx: int
-    ) -> None:
+    def _handle_await_target_state(self, action_type: ActionType, action_idx: int) -> None:
         if action_type != ActionType.SELECT_TARGET:
-            raise ValueError(
-                "Invalid action type: Expected SELECT_TARGET in AWAIT_TARGET state"
-            )
+            raise ValueError("Invalid action type: Expected SELECT_TARGET in AWAIT_TARGET state")
 
         # TODO: add potion usage support
         self._play_card(action_idx)

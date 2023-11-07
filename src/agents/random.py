@@ -10,9 +10,7 @@ from game.battle.engine import BattleState
 
 class RandomAgent(BaseAgent):
     # TODO: choose more actions other than card index
-    def select_action(
-        self, battle_view: BattleView
-    ) -> Tuple[ActionType, Optional[int]]:
+    def select_action(self, battle_view: BattleView) -> Tuple[ActionType, Optional[int]]:
         if battle_view.state == BattleState.DEFAULT:
             if battle_view.char.energy.current == 0:
                 # TODO: play `Neutralize` if it's in hand

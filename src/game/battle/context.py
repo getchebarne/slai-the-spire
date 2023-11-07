@@ -40,9 +40,7 @@ class BattleContext:
 
         # Initialize as deck (shuffled)
         random.shuffle(deck.cards)
-        self.draw_pile = (
-            draw_pile if draw_pile else DrawPile(deck.cards)
-        )  # TODO: shuffle
+        self.draw_pile = draw_pile if draw_pile else DrawPile(deck.cards)  # TODO: shuffle
 
         # Setup systems
         self._setup()

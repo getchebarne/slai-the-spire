@@ -10,7 +10,5 @@ PLUS_STR = 1
 
 
 class Vajra(BaseRelic):
-    def on_battle_start(
-        self, char: Character, monsters: MonsterGroup
-    ) -> List[RelicEffect]:
+    def on_battle_start(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return [RelicEffect(char, char, plus_str=PLUS_STR)]
