@@ -117,6 +117,9 @@ class BattleEngine:
         )
 
     def run(self) -> None:
+        # Battle start
+        self.context.battle_start()
+
         while not self.context.is_over():
             # Character's turn
             self.context.char_turn_start()

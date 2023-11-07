@@ -9,6 +9,7 @@ from game.entities.cards.deck import Deck
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
+from game.relics.base import Relics
 
 
 MAX_MONSTERS = 5
@@ -23,6 +24,7 @@ class BattleContext:
         disc_pile: Optional[DiscardPile] = None,
         draw_pile: Optional[DrawPile] = None,
         hand: Optional[Hand] = None,
+        relics: Optional[Relics] = None,
     ):
         if len(monsters) > MAX_MONSTERS:
             raise ValueError(f"Can't have more than {MAX_MONSTERS} monsters")
@@ -34,6 +36,7 @@ class BattleContext:
         # Initialize as empty unless initial values are provided
         self.disc_pile = disc_pile if disc_pile else DiscardPile([])
         self.hand = hand if hand else Hand([])
+        self.relics = relics if relics is not None else Relics()
 
         # Initialize as deck (shuffled)
         random.shuffle(deck.cards)
@@ -55,6 +58,12 @@ class BattleContext:
         return self.char.health.current <= 0 or all(
             [monster.health.current <= 0 for monster in self.monsters]
         )
+
+    def battle_start(self) -> None:
+        for relic in self.relics:
+            relic_effects = relic.on_battle_start(self.char, self.monsters)
+            if len(relic_effects) > 0:
+                self.pipeline(relic_effects)
 
     def char_turn_start(self) -> None:
         # Reset block & energy
