@@ -10,7 +10,7 @@ from game.entities.cards.deck import SILENT_STARTER_DECK
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
-from game.entities.relics.base import Relics
+from game.entities.relics.group import RelicGroup
 from game.entities.relics.vajra import Vajra
 
 
@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # Instance Agent
     agent = RandomAgent()
 
-    relics = Relics()
+    relics = RelicGroup()
 
     # Instance battle context
     context = BattleContext(

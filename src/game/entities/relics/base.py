@@ -1,7 +1,6 @@
 from abc import ABC
 from typing import List, Optional
 
-from game.battle.pipeline.pipeline import EffectPipeline
 from game.battle.pipeline.steps.base import BaseStep
 from game.effects.relic import RelicEffect
 from game.entities.actors.characters.base import Character
@@ -31,20 +30,3 @@ class BaseRelic(ABC):
         self, char: Character, monsters: MonsterGroup
     ) -> List[RelicEffect]:
         return []
-
-
-class Relics(list):
-    def __init__(self):
-        super().__init__([])
-
-    def add_relic(self, relic: BaseRelic, pipeline: EffectPipeline) -> None:
-        if not isinstance(relic, BaseRelic):
-            raise TypeError(
-                f"Can only add objects of {BaseRelic} type. Received type: {type(relic)}"
-            )
-
-        # If the relic has a corresponding EffectPipeline step, add it
-        if relic.step is not None:
-            pipeline.add_step(relic.step)
-
-        self.append(relic)

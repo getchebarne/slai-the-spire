@@ -9,7 +9,7 @@ from game.entities.cards.deck import Deck
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
-from game.entities.relics.base import Relics
+from game.entities.relics.group import RelicGroup
 
 
 MAX_MONSTERS = 5
@@ -24,7 +24,7 @@ class BattleContext:
         disc_pile: Optional[DiscardPile] = None,
         draw_pile: Optional[DrawPile] = None,
         hand: Optional[Hand] = None,
-        relics: Optional[Relics] = None,
+        relics: Optional[RelicGroup] = None,
     ):
         if len(monsters) > MAX_MONSTERS:
             raise ValueError(f"Can't have more than {MAX_MONSTERS} monsters")
@@ -36,7 +36,7 @@ class BattleContext:
         # Initialize as empty unless initial values are provided
         self.disc_pile = disc_pile if disc_pile else DiscardPile([])
         self.hand = hand if hand else Hand([])
-        self.relics = relics if relics is not None else Relics()
+        self.relics = relics if relics is not None else RelicGroup()
 
         # Initialize as deck (shuffled)
         random.shuffle(deck.cards)
