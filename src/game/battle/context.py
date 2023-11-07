@@ -1,4 +1,3 @@
-import random
 from typing import Generator
 from typing import List
 from typing import Optional
@@ -22,10 +21,10 @@ class BattleContext:
         char: Character,
         monsters: MonsterGroup,
         deck: Deck,
-        disc_pile: Optional[DiscardPile] = None,
+        disc_pile: DiscardPile = DiscardPile([]),
         draw_pile: Optional[DrawPile] = None,
-        hand: Optional[Hand] = None,
-        relics: Optional[RelicGroup] = None,
+        hand: Hand = Hand([]),
+        relics: RelicGroup = RelicGroup([]),
     ):
         if len(monsters) > MAX_MONSTERS:
             raise ValueError(f"Can't have more than {MAX_MONSTERS} monsters")
@@ -33,15 +32,12 @@ class BattleContext:
         self.char = char
         self.monsters = monsters
         self.deck = deck
-
-        # Initialize as empty unless initial values are provided
-        self.disc_pile = disc_pile if disc_pile else DiscardPile([])
-        self.hand = hand if hand else Hand([])
-        self.relics = relics if relics is not None else RelicGroup()
+        self.disc_pile = disc_pile
+        self.hand = hand
+        self.relics = relics
 
         # Initialize as deck (shuffled)
-        random.shuffle(deck.cards)
-        self.draw_pile = draw_pile if draw_pile else DrawPile(deck.cards)  # TODO: shuffle
+        self.draw_pile = draw_pile if draw_pile is not None else DrawPile(deck.cards).shuffle()
 
         # Setup systems
         self._setup()
