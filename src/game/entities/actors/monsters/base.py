@@ -14,6 +14,7 @@ from game.entities.actors.base import Health
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
 
+
 if TYPE_CHECKING:
     from game.entities.actors.monsters.group import MonsterGroup
 

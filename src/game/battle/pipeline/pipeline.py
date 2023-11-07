@@ -12,6 +12,7 @@ from game.battle.pipeline.steps.gain_block import GainBlock
 from game.battle.pipeline.steps.gain_str import GainStrength
 from game.effects.base import BaseEffect
 
+
 DEFAULT_STEPS = {DealDamage(), GainBlock(), GainStrength(), ApplyStrength()}
 
 

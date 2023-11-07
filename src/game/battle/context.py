@@ -12,6 +12,7 @@ from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
 from game.entities.relics.group import RelicGroup
 
+
 MAX_MONSTERS = 5
 
 
