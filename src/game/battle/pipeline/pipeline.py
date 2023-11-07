@@ -5,12 +5,14 @@ from typing import List
 
 from game.battle.pipeline.steps.base import AddTo
 from game.battle.pipeline.steps.base import BaseStep
+from game.battle.pipeline.steps.apply_str import ApplyStrength
 from game.battle.pipeline.steps.deal_damage import DealDamage
 from game.battle.pipeline.steps.gain_block import GainBlock
+from game.battle.pipeline.steps.gain_str import GainStrength
 from game.effects.base import BaseEffect
 
 
-DEFAULT_STEPS = {DealDamage(), GainBlock()}
+DEFAULT_STEPS = {DealDamage(), GainBlock(), GainStrength(), ApplyStrength()}
 
 
 class EffectPipeline:
