@@ -3,7 +3,7 @@ from typing import List
 from game.effects.relic import RelicEffect
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.base import MonsterCollection
-from game.relics.base import BaseRelic
+from game.entities.relics.base import BaseRelic
 
 
 PLUS_STR = 1

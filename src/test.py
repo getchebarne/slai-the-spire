@@ -10,8 +10,8 @@ from game.entities.cards.deck import SILENT_STARTER_DECK
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
-from game.relics.base import Relics
-from game.relics.vajra import Vajra
+from game.entities.relics.base import Relics
+from game.entities.relics.vajra import Vajra
 
 
 if __name__ == "__main__":
