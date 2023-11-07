@@ -1,7 +1,7 @@
 from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import List, TYPE_CHECKING
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
@@ -11,6 +11,9 @@ from game.entities.actors.base import Debuffs
 from game.entities.actors.base import Health
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
+
+if TYPE_CHECKING:
+    from game.entities.actors.monsters.group import MonsterGroup
 
 
 # TODO: probably set defaults to `None`
@@ -60,7 +63,7 @@ class Monster(BaseActor):
         self.move = self._first_move()
 
     def execute_move(
-        self, char: Character, monsters: MonsterCollection
+        self, char: Character, monsters: MonsterGroup
     ) -> List[MonsterEffect]:
         return self.move(self, char, monsters)
 
@@ -79,26 +82,3 @@ class Monster(BaseActor):
 
         # Append intent
         return f"{base_str} {self.move.intent}"
-
-
-class MonsterCollection(list):
-    def __init__(self, iterable: Iterable[Monster]):
-        if not all(isinstance(item, Monster) for item in iterable):
-            raise ValueError("All elements must be Monsters")
-
-        super().__init__(iterable)
-
-    def append(self) -> None:
-        raise NotImplementedError
-
-    def extend(self) -> None:
-        raise NotImplementedError
-
-    def insert(self) -> None:
-        raise NotImplementedError
-
-    def __add__(self) -> None:
-        raise NotImplementedError
-
-    def __str__(self) -> str:
-        return "\n".join([f"{idx}) {monster}" for idx, monster in enumerate(self)])

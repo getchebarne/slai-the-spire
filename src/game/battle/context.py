@@ -4,7 +4,7 @@ from typing import Optional
 from game.battle.pipeline.pipeline import EffectPipeline
 from game.battle.systems.draw_card import DrawCard
 from game.entities.actors.characters.base import Character
-from game.entities.actors.monsters.base import MonsterCollection
+from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.deck import Deck
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
@@ -19,7 +19,7 @@ class BattleContext:
     def __init__(
         self,
         char: Character,
-        monsters: MonsterCollection,
+        monsters: MonsterGroup,
         deck: Deck,
         disc_pile: Optional[DiscardPile] = None,
         draw_pile: Optional[DrawPile] = None,

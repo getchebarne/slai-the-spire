@@ -8,7 +8,7 @@ from game.entities.actors.characters.base import Character
 if TYPE_CHECKING:
     from game.entities.actors.monsters.base import Intent
     from game.entities.actors.monsters.base import Monster
-    from game.entities.actors.monsters.base import MonsterCollection
+    from game.entities.actors.monsters.group import MonsterGroup
 
 
 class BaseMonsterMove(ABC):
@@ -19,6 +19,6 @@ class BaseMonsterMove(ABC):
 
     @abstractmethod
     def __call__(
-        self, owner: Monster, char: Character, monsters: MonsterCollection
+        self, owner: Monster, char: Character, monsters: MonsterGroup
     ) -> List[MonsterEffect]:
         raise NotImplementedError
