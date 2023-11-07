@@ -62,9 +62,7 @@ class Monster(BaseActor):
         # Set initial move
         self.move = self._first_move()
 
-    def execute_move(
-        self, char: Character, monsters: MonsterGroup
-    ) -> List[MonsterEffect]:
+    def execute_move(self, char: Character, monsters: MonsterGroup) -> List[MonsterEffect]:
         return self.move(self, char, monsters)
 
     @abstractmethod

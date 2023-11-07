@@ -16,17 +16,11 @@ class BaseRelic(ABC):
     def on_turn_end(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
 
-    def on_turn_start(
-        self, char: Character, monsters: MonsterGroup
-    ) -> List[RelicEffect]:
+    def on_turn_start(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
 
-    def on_battle_end(
-        self, char: Character, monsters: MonsterGroup
-    ) -> List[RelicEffect]:
+    def on_battle_end(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
 
-    def on_battle_start(
-        self, char: Character, monsters: MonsterGroup
-    ) -> List[RelicEffect]:
+    def on_battle_start(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
