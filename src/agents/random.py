@@ -3,9 +3,9 @@ from typing import Tuple, Optional
 import numpy as np
 
 from agents.base import BaseAgent
-from game.battle.comm import ActionType
-from game.battle.comm import BattleView
-from game.battle.state import BattleState
+from game.battle.engine import ActionType
+from game.battle.engine import BattleView
+from game.battle.engine import BattleState
 
 
 class RandomAgent(BaseAgent):

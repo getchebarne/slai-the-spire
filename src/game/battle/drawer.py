@@ -1,4 +1,8 @@
-from game.battle.comm import BattleView
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from game.battle.engine import BattleView
 
 
 class BattleDrawer:

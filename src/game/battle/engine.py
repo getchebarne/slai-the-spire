@@ -1,13 +1,42 @@
-from typing import Optional
+from __future__ import annotations
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, TYPE_CHECKING
 
-from agents.base import BaseAgent
-from game.battle.comm import ActionType
-from game.battle.comm import BattleView
 from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
 from game.battle.pipeline.pipeline import EffectPipeline
-from game.battle.state import BattleState
+from game.entities.actors.characters.base import Character
+from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.base import BaseCard
+from game.entities.cards.disc_pile import DiscardPile
+from game.entities.cards.draw_pile import DrawPile
+from game.entities.cards.hand import Hand
+
+if TYPE_CHECKING:
+    from agents.base import BaseAgent
+
+
+class ActionType(Enum):
+    SELECT_CARD = 0
+    SELECT_TARGET = 1
+    END_TURN = 2
+
+
+class BattleState(Enum):
+    DEFAULT = 0
+    AWAIT_TARGET = 1
+
+
+@dataclass
+class BattleView:
+    state: BattleState
+    active_card: BaseCard
+    char: Character
+    monsters: MonsterGroup
+    disc_pile: DiscardPile
+    draw_pile: DrawPile
+    hand: Hand
 
 
 class BattleEngine:
