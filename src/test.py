@@ -1,6 +1,5 @@
 from agents.random import RandomAgent
 from game.battle.context import BattleContext
-from game.battle.drawer import BattleDrawer
 from game.battle.engine import BattleEngine
 from game.entities.actors.base import Health
 from game.entities.actors.characters.base import Character
@@ -18,7 +17,8 @@ if __name__ == "__main__":
     # Instance Agent
     agent = RandomAgent()
 
-    relics = RelicGroup()
+    # Instance Relics
+    relics = RelicGroup([Vajra()])
 
     # Instance battle context
     context = BattleContext(
@@ -30,13 +30,8 @@ if __name__ == "__main__":
         hand=Hand([]),
         relics=relics,
     )
-    relics.add_relic(Vajra(), context.pipeline)
-
-    # Instance drawer
-    drawer = BattleDrawer()
-
     # Instance Battle
-    engine = BattleEngine(agent, context, drawer)
+    engine = BattleEngine(agent, context)
 
     # Start
     engine.run()

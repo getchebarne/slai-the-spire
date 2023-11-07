@@ -5,6 +5,7 @@ from game.battle.comm import ActionType
 from game.battle.comm import BattleView
 from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
+from game.battle.pipeline.pipeline import EffectPipeline
 from game.battle.state import BattleState
 from game.entities.cards.base import BaseCard
 
@@ -14,15 +15,25 @@ class BattleEngine:
         self,
         agent: BaseAgent,
         context: BattleContext,
-        drawer: Optional[BattleDrawer] = None,
+        effect_pipeline: EffectPipeline = EffectPipeline(),
+        drawer: Optional[BattleDrawer] = BattleDrawer(),
     ):
         self.agent = agent
         self.context = context
+        self.effect_pipeline = effect_pipeline
         self.drawer = drawer
 
-        # Setup
-        self._state = BattleState.DEFAULT
+        self._setup()
+
+    def _setup(self) -> None:
+        # Set state & active card
+        self._state: BattleState = BattleState.DEFAULT
         self._active_card: BaseCard = None
+
+        # Register relics
+        for relic in self.context.relics:
+            if relic.step is not None:
+                self.effect_pipeline.add_step(relic.step)
 
     def _select_card(self, card_idx: int) -> None:
         # Get card from hand
@@ -43,7 +54,7 @@ class BattleEngine:
             self.context.char, self.context.monsters, monster_idx
         )
         # Apply targeted effects
-        self.context.pipeline(effects)
+        self.effect_pipeline(effects)
 
         # Remove card from hand and send it to the draw pile.
         # TODO: cards can also be exhausted
@@ -57,7 +68,7 @@ class BattleEngine:
         # TODO: find way to improve this
         for monster in self.context.monsters:
             effects = monster.execute_move(self.context.char, self.context.monsters)
-            self.context.pipeline(effects)
+            self.effect_pipeline(effects)
 
     def _char_turn(self) -> None:
         while not self.context.is_over():
@@ -118,7 +129,8 @@ class BattleEngine:
 
     def run(self) -> None:
         # Battle start
-        self.context.battle_start()
+        for effects in self.context.battle_start():
+            self.effect_pipeline(effects)
 
         while not self.context.is_over():
             # Character's turn

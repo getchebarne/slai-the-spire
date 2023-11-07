@@ -1,20 +1,29 @@
-from game.battle.pipeline.pipeline import EffectPipeline
+from typing import Iterable, Iterator
+
 from game.entities.relics.base import BaseRelic
 
 
 class RelicGroup(list):
-    def __init__(self):
-        super().__init__([])
+    def __init__(self, iterable: Iterable[BaseRelic] = []):
+        if not all(isinstance(item, BaseRelic) for item in iterable):
+            raise ValueError(f"All elements must be instances of {BaseRelic}")
 
-    # TODO: should this be moved to the `battle` module?
-    def add_relic(self, relic: BaseRelic, pipeline: EffectPipeline) -> None:
-        if not isinstance(relic, BaseRelic):
-            raise TypeError(
-                f"Can only add objects of {BaseRelic} type. Received type: {type(relic)}"
-            )
+        super().__init__(iterable)
 
-        # If the relic has a corresponding EffectPipeline step, add it
-        if relic.step is not None:
-            pipeline.add_step(relic.step)
+    def append(self) -> None:
+        raise NotImplementedError
 
-        self.append(relic)
+    def extend(self) -> None:
+        raise NotImplementedError
+
+    def insert(self) -> None:
+        raise NotImplementedError
+
+    def __add__(self) -> None:
+        raise NotImplementedError
+
+    def __getitem__(self, idx: int) -> BaseRelic:
+        return super().__getitem__(idx)
+
+    def __iter__(self) -> Iterator[BaseRelic]:
+        return super().__iter__()

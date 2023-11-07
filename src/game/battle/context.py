@@ -1,8 +1,8 @@
 import random
-from typing import Optional
+from typing import Generator, List, Optional
 
-from game.battle.pipeline.pipeline import EffectPipeline
 from game.battle.systems.draw_card import DrawCard
+from game.effects.base import BaseEffect
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.deck import Deck
@@ -48,10 +48,7 @@ class BattleContext:
         self._setup()
 
     def _setup(self) -> None:
-        # Pipeline. TODO: maybe move to `BattleEngine`
-        self.pipeline = EffectPipeline()
-
-        # Systems
+        # Systems. TODO: re-evaluate this
         self._draw_card = DrawCard(self.disc_pile, self.draw_pile, self.hand)
 
     def is_over(self) -> bool:
@@ -59,11 +56,10 @@ class BattleContext:
             [monster.health.current <= 0 for monster in self.monsters]
         )
 
-    def battle_start(self) -> None:
+    def battle_start(self) -> Generator[List[BaseEffect], None, None]:
+        # Relic effects
         for relic in self.relics:
-            relic_effects = relic.on_battle_start(self.char, self.monsters)
-            if len(relic_effects) > 0:
-                self.pipeline(relic_effects)
+            yield relic.on_battle_start(self.char, self.monsters)
 
     def char_turn_start(self) -> None:
         # Reset block & energy
