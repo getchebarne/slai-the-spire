@@ -12,6 +12,7 @@ class BaseEffect(ABC):
     damage: int = 0
     block: int = 0
     weak: int = 0
+    plus_str: int = 0
 
     # TODO: add more consistency checks
     def __post_init__(self):

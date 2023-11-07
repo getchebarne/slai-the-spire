@@ -5,7 +5,7 @@ from game.effects.base import BaseEffect
 class DealDamage(BaseStep):
     @property
     def priority(self) -> int:
-        return 0
+        return 3
 
     def _apply_effect(self, effect: BaseEffect) -> None:
         damage = effect.damage

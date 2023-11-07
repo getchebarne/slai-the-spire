@@ -1,18 +1,15 @@
 from game.battle.pipeline.steps.base import BaseStep
 from game.effects.base import BaseEffect
+from game.effects.card import CardEffect
 
 
-class GainBlock(BaseStep):
+class ApplyStrength(BaseStep):
     @property
     def priority(self) -> int:
-        return 2
+        return 0
 
     def _apply_effect(self, effect: BaseEffect) -> None:
-        target = effect.target
-
-        target.block.current = min(
-            target.block.max, target.block.current + effect.block
-        )
+        effect.damage += effect.source.buffs.strength
 
     def _condition(self, effect: BaseEffect) -> bool:
-        return bool(effect.block)
+        return effect.damage and isinstance(effect, CardEffect)
