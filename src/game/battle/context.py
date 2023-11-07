@@ -9,7 +9,7 @@ from game.entities.cards.deck import Deck
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
-from game.relics.base import Relics
+from game.entities.relics.base import Relics
 
 
 MAX_MONSTERS = 5
