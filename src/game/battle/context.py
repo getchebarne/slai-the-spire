@@ -1,5 +1,7 @@
 import random
-from typing import Generator, List, Optional
+from typing import Generator
+from typing import List
+from typing import Optional
 
 from game.battle.systems.draw_card import DrawCard
 from game.effects.base import BaseEffect
@@ -10,7 +12,6 @@ from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
 from game.entities.relics.group import RelicGroup
-
 
 MAX_MONSTERS = 5
 

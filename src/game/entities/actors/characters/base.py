@@ -6,7 +6,6 @@ from game.entities.actors.base import Buffs
 from game.entities.actors.base import Debuffs
 from game.entities.actors.base import Health
 
-
 BASE_ENERGY = 3
 
 

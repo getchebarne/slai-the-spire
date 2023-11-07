@@ -1,4 +1,5 @@
-from typing import List, Optional
+from typing import List
+from typing import Optional
 
 from game.effects.card import CardEffect
 from game.entities.actors.characters.base import Character
@@ -6,7 +7,6 @@ from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.base import BaseCard
 from game.entities.cards.base import CardType
 from game.entities.cards.base import ensure_target_monster_idx
-
 
 BASE_COST = 0
 BASE_DAMAGE = 3

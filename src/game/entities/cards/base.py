@@ -1,7 +1,10 @@
-from abc import ABC, abstractmethod
+from abc import ABC
+from abc import abstractmethod
 from enum import Enum
 from functools import wraps
-from typing import Callable, List, Optional
+from typing import Callable
+from typing import List
+from typing import Optional
 
 from game.effects.card import CardEffect
 from game.entities.actors.characters.base import Character

@@ -1,11 +1,12 @@
-from typing import Tuple, Optional
+from typing import Optional
+from typing import Tuple
 
 import numpy as np
 
 from agents.base import BaseAgent
 from game.battle.engine import ActionType
-from game.battle.engine import BattleView
 from game.battle.engine import BattleState
+from game.battle.engine import BattleView
 
 
 class RandomAgent(BaseAgent):

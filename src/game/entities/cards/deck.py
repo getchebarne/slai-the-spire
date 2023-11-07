@@ -1,8 +1,8 @@
 from typing import List
 
 from game.entities.cards.base import BaseCard
-from game.entities.cards.common.strike import Strike
 from game.entities.cards.common.defend import Defend
+from game.entities.cards.common.strike import Strike
 from game.entities.cards.silent.neutralize import Neutralize
 
 

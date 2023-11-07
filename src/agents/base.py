@@ -1,5 +1,7 @@
-from abc import ABC, abstractmethod
-from typing import Tuple, Optional
+from abc import ABC
+from abc import abstractmethod
+from typing import Optional
+from typing import Tuple
 
 from game.battle.engine import ActionType
 from game.battle.engine import BattleView
