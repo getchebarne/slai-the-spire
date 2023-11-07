@@ -19,11 +19,16 @@ if TYPE_CHECKING:
     from agents.base import BaseAgent
 
 
-# TODO: condense into single `Action` dataclass?
 class ActionType(Enum):
     SELECT_CARD = 0
     SELECT_TARGET = 1
     END_TURN = 2
+
+
+@dataclass
+class Action:
+    type: ActionType
+    index: Optional[int]
 
 
 class BattleState(Enum):
@@ -81,6 +86,7 @@ class BattleEngine:
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
         # Get targeted effects
         effects = self._active_card.use(self.context.char, self.context.monsters, monster_idx)
+
         # Apply targeted effects
         self.effect_pipeline(effects)
 
@@ -105,39 +111,39 @@ class BattleEngine:
                 self.drawer(self.view())
 
             # Get action from agent
-            action_type, action_idx = self.agent.select_action(self.view())
+            action = self.agent.select_action(self.view())
 
             # End turn TODO: maybe add enemy turn state?
-            if action_type == ActionType.END_TURN:
+            if action.type == ActionType.END_TURN:
                 self._state = BattleState.DEFAULT
                 break
 
             # Default state
             if self._state == BattleState.DEFAULT:
-                self._handle_default_state(action_type, action_idx)
+                self._handle_default_state(action)
                 continue
 
             # Await target state
             if self._state == BattleState.AWAIT_TARGET:
-                self._handle_await_target_state(action_type, action_idx)
+                self._handle_await_target_state(action)
 
-    def _handle_default_state(self, action_type: ActionType, action_idx: int) -> None:
-        if action_type == ActionType.SELECT_TARGET:
+    def _handle_default_state(self, action: Action) -> None:
+        if action.type == ActionType.SELECT_TARGET:
             raise ValueError("Invalid action type: SELECT_TARGET in DEFAULT state")
 
         # TODO: add potion usage support
-        if action_type != ActionType.SELECT_CARD:
-            raise ValueError(f"Undefined action type {action_type}")
+        if action.type != ActionType.SELECT_CARD:
+            raise ValueError(f"Undefined action type {action.type}")
 
-        self._select_card(action_idx)
+        self._select_card(action.index)
         self._state = BattleState.AWAIT_TARGET
 
-    def _handle_await_target_state(self, action_type: ActionType, action_idx: int) -> None:
-        if action_type != ActionType.SELECT_TARGET:
+    def _handle_await_target_state(self, action: Action) -> None:
+        if action.type != ActionType.SELECT_TARGET:
             raise ValueError("Invalid action type: Expected SELECT_TARGET in AWAIT_TARGET state")
 
         # TODO: add potion usage support
-        self._play_card(action_idx)
+        self._play_card(action.index)
         self._state = BattleState.DEFAULT
 
     def view(self) -> BattleView:
