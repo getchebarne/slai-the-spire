@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 
-from game.battle.comm import ActionType
-from game.battle.comm import BattleView
+from game.battle.engine import ActionType
+from game.battle.engine import BattleView
 
 
 class BaseAgent(ABC):
