@@ -1,6 +1,5 @@
 from abc import ABC
-from typing import List
-from typing import Optional
+from typing import List, Optional
 
 from game.battle.pipeline.steps.base import BaseStep
 from game.effects.relic import RelicEffect

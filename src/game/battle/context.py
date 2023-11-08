@@ -1,6 +1,4 @@
-from typing import Generator
-from typing import List
-from typing import Optional
+from typing import Generator, List, Optional
 
 from game.battle.systems.draw_card import DrawCard
 from game.effects.base import BaseEffect

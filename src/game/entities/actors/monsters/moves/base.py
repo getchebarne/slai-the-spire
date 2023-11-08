@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from abc import ABC
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.characters.base import Character
