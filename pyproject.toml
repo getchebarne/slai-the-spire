@@ -15,8 +15,9 @@ black = "^23.7.0"
 isort = "^5.12.0"
 
 [tool.isort]
-force_single_line=true
-lines_after_imports=2
+force_single_line = true
+single_line_exclusions = ["typing", "abc"]
+lines_after_imports = 2
 
 [tool.black]
 line-length = 99

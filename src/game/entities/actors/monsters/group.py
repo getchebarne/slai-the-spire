@@ -1,5 +1,4 @@
-from typing import Iterable
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from game.entities.actors.monsters.base import Monster
 
