@@ -12,8 +12,7 @@ BASE_BLOCK = 5
 
 
 class Defend(BaseCard):
-    name = "Defend"
-    type_ = CardType.SKILL
+    type = CardType.SKILL
 
     def __init__(self, cost: int = BASE_COST):
         super().__init__(cost)

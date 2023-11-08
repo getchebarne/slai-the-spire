@@ -14,8 +14,7 @@ BASE_WEAK = 1
 
 
 class Neutralize(BaseCard):
-    name = "Neutralize"
-    type_ = CardType.ATTACK
+    type = CardType.ATTACK
 
     def __init__(self, cost: int = BASE_COST):
         super().__init__(cost)

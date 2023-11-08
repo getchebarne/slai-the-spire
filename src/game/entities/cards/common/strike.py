@@ -13,8 +13,7 @@ BASE_DAMAGE = 6
 
 
 class Strike(BaseCard):
-    name = "Strike"
-    type_ = CardType.ATTACK
+    type = CardType.ATTACK
 
     def __init__(self, cost: int = BASE_COST):
         super().__init__(cost)

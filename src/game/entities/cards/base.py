@@ -18,8 +18,7 @@ class CardType(Enum):
 
 
 class BaseCard(ABC):
-    name: str
-    type_: CardType
+    type: CardType
 
     def __init__(self, cost: int):
         self._cost = cost
