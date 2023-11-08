@@ -13,4 +13,4 @@ class GainBlock(BaseStep):
         target.block.current = min(target.block.max, target.block.current + effect.block)
 
     def _condition(self, effect: BaseEffect) -> bool:
-        return bool(effect.block)
+        return effect.block is not None

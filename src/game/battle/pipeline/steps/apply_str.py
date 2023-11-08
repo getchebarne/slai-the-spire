@@ -12,4 +12,4 @@ class ApplyStrength(BaseStep):
         effect.damage += effect.source.buffs.strength
 
     def _condition(self, effect: BaseEffect) -> bool:
-        return effect.damage and isinstance(effect, CardEffect)
+        return effect.damage is not None and isinstance(effect, CardEffect)

@@ -4,6 +4,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import List
+from typing import Optional
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
@@ -19,12 +20,11 @@ if TYPE_CHECKING:
     from game.entities.actors.monsters.group import MonsterGroup
 
 
-# TODO: probably set defaults to `None`
 # TODO: apply intent correction based on buffs / debuffs (e.g., weak)?
 @dataclass
 class Intent:
-    damage: int = 0
-    instances: int = 0
+    damage: Optional[int] = None
+    instances: Optional[int] = None
     block: bool = False
     buff: bool = False
     debuff: bool = False
@@ -37,10 +37,10 @@ class Intent:
     def __str__(self) -> str:
         # TODO: add support for other intents
         str_ = ""
-        if self.damage:
+        if self.damage is not None:
             str_ = f"{str_}\U0001F5E1 {self.damage}"
 
-        if self.instances > 1:
+        if self.instances is not None and self.instances > 1:
             str_ = f"{str_}x{self.instances}"
 
         return str_
