@@ -2,7 +2,7 @@ from typing import List
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.characters.base import Character
-from game.entities.actors.monsters.base import Intent
+from game.entities.actors.monsters.moves.base import Intent
 from game.entities.actors.monsters.base import Monster
 from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.actors.monsters.moves.base import BaseMonsterMove

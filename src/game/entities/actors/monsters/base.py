@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-from typing import List
-from typing import Optional
+from typing import TYPE_CHECKING, List
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
@@ -18,32 +15,6 @@ from game.entities.actors.monsters.moves.base import BaseMonsterMove
 
 if TYPE_CHECKING:
     from game.entities.actors.monsters.group import MonsterGroup
-
-
-# TODO: apply intent correction based on buffs / debuffs (e.g., weak)?
-@dataclass
-class Intent:
-    damage: Optional[int] = None
-    instances: Optional[int] = None
-    block: bool = False
-    buff: bool = False
-    debuff: bool = False
-    strong_debuff: bool = False
-    escape: bool = False
-    asleep: bool = False
-    stunned: bool = False
-    unknown: bool = False
-
-    def __str__(self) -> str:
-        # TODO: add support for other intents
-        str_ = ""
-        if self.damage is not None:
-            str_ = f"{str_}\U0001F5E1 {self.damage}"
-
-        if self.instances is not None and self.instances > 1:
-            str_ = f"{str_}x{self.instances}"
-
-        return str_
 
 
 class Monster(BaseActor):
@@ -77,7 +48,6 @@ class Monster(BaseActor):
         raise NotImplementedError
 
     def __str__(self) -> str:
-        # TODO: improve intent
         # Get BaseActor string
         base_str = super().__str__()
 
