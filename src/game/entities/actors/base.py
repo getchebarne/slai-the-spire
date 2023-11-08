@@ -45,9 +45,9 @@ class BaseActor(ABC):
     def __init__(
         self,
         health: Health,
-        block: Block,
-        buffs: Buffs,
-        debuffs: Debuffs,
+        block: Block = Block(),
+        buffs: Buffs = Buffs(),
+        debuffs: Debuffs = Debuffs(),
     ) -> None:
         self.health = health
         self.block = block

@@ -9,10 +9,7 @@ from game.entities.actors.monsters.moves.defend import Defend
 
 
 # TODO: unshare
-BASE_HEALTH = Health(10)
-BASE_BLOCK = Block(0)
-BASE_BUFFS = Buffs()
-BASE_DEBUFFS = Debuffs()
+BASE_HEALTH = 10
 
 
 move_attack = Attack(6)
@@ -24,18 +21,20 @@ class Dummy(Monster):
 
     def __init__(
         self,
-        health: Health = BASE_HEALTH,
-        block: Block = BASE_BLOCK,
-        buffs: Buffs = BASE_BUFFS,
-        debuffs: Debuffs = BASE_DEBUFFS,
+        health: Health = Health(BASE_HEALTH),
+        block: Block = Block(),
+        buffs: Buffs = Buffs(),
+        debuffs: Debuffs = Debuffs(),
     ) -> None:
         super().__init__(health, block, buffs, debuffs)
 
     def update_move(self) -> None:
         if isinstance(self.move, Attack):
             self.move = move_defend
+
         elif isinstance(self.move, Defend):
             self.move = move_attack
+
         else:
             raise ValueError(f"Unexpected move: {self.move}")
 
