@@ -19,4 +19,4 @@ class DealDamage(BaseStep):
         target.health.current = max(0, target.health.current - dmg_over_block)
 
     def _condition(self, effect: BaseEffect) -> bool:
-        return bool(effect.damage)
+        return effect.damage is not None

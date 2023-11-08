@@ -14,7 +14,7 @@ class Attack(BaseMonsterMove):
 
     @property
     def intent(self) -> Intent:
-        return Intent(damage=self.value)
+        return Intent(damage=self.value, instances=1)
 
     def __call__(
         self, owner: Monster, char: Character, monsters: MonsterGroup

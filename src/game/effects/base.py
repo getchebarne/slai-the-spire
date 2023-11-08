@@ -1,18 +1,18 @@
 from abc import ABC
 from dataclasses import dataclass
+from typing import Optional
 
 from game.entities.actors.base import BaseActor
 
 
-# TODO: maybe initialize values with `None` instead of `0`
 @dataclass
 class BaseEffect(ABC):
     source: BaseActor
     target: BaseActor
-    damage: int = 0
-    block: int = 0
-    weak: int = 0
-    plus_str: int = 0
+    damage: Optional[int] = None
+    block: Optional[int] = None
+    weak: Optional[int] = None
+    plus_str: Optional[int] = None
 
     # TODO: add more consistency checks
     def __post_init__(self):

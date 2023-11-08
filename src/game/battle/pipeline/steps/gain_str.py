@@ -11,4 +11,4 @@ class GainStrength(BaseStep):
         effect.target.buffs.strength += effect.plus_str
 
     def _condition(self, effect: BaseEffect) -> bool:
-        return bool(effect.plus_str)
+        return effect.plus_str is not None
