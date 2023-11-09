@@ -4,13 +4,13 @@ from bisect import insort
 from collections import deque
 from typing import List
 
-from game.battle.pipeline.steps.apply_str import ApplyStrength
-from game.battle.pipeline.steps.base import AddTo
-from game.battle.pipeline.steps.base import BaseStep
-from game.battle.pipeline.steps.deal_damage import DealDamage
-from game.battle.pipeline.steps.gain_block import GainBlock
-from game.battle.pipeline.steps.gain_str import GainStrength
 from game.effects.base import BaseEffect
+from game.pipeline.steps.apply_str import ApplyStrength
+from game.pipeline.steps.base import AddTo
+from game.pipeline.steps.base import BaseStep
+from game.pipeline.steps.deal_damage import DealDamage
+from game.pipeline.steps.gain_block import GainBlock
+from game.pipeline.steps.gain_str import GainStrength
 
 
 DEFAULT_STEPS = {DealDamage(), GainBlock(), GainStrength(), ApplyStrength()}

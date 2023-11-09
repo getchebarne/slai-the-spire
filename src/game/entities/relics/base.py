@@ -1,10 +1,10 @@
 from abc import ABC
 from typing import List, Optional
 
-from game.battle.pipeline.steps.base import BaseStep
 from game.effects.relic import RelicEffect
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.group import MonsterGroup
+from game.pipeline.steps.base import BaseStep
 
 
 # TODO: does this need priority?

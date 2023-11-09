@@ -15,6 +15,9 @@ class Health:
         if self.max is None:
             self.max = self.current
 
+        elif self.current > self.max:
+            raise ValueError("Current health can't be larger than maximum health")
+
     def __str__(self) -> str:
         return f"\u2764\uFE0F {self.current}/{self.max}"
 
