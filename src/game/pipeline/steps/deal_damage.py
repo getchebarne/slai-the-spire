@@ -1,5 +1,5 @@
-from game.battle.pipeline.steps.base import BaseStep
 from game.effects.base import BaseEffect
+from game.pipeline.steps.base import BaseStep
 
 
 class DealDamage(BaseStep):

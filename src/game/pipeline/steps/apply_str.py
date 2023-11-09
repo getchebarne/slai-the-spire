@@ -1,6 +1,6 @@
-from game.battle.pipeline.steps.base import BaseStep
 from game.effects.base import BaseEffect
 from game.effects.card import CardEffect
+from game.pipeline.steps.base import BaseStep
 
 
 class ApplyStrength(BaseStep):

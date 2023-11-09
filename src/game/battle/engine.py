@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING, Optional
 
 from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
-from game.battle.pipeline.pipeline import EffectPipeline
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.cards.base import BaseCard
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
+from game.pipeline.pipeline import EffectPipeline
 
 
 if TYPE_CHECKING:
