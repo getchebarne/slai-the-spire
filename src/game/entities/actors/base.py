@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 from abc import ABC
 from dataclasses import dataclass
 from typing import Optional
+
+from game.entities.actors.powers.strength import Strength
 
 
 MAX_BLOCK = 999
@@ -40,7 +44,7 @@ class Debuffs:
 
 @dataclass
 class Buffs:
-    strength: int = 0
+    strength: Strength = Strength()
     dexterity: int = 0
 
 
