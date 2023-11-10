@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, List
 from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
 from game.entities.actors.base import Block
-from game.entities.actors.base import Buffs
-from game.entities.actors.base import Debuffs
 from game.entities.actors.base import Health
+from game.entities.actors.base import Modifiers
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
 
@@ -19,13 +18,9 @@ if TYPE_CHECKING:
 
 class Monster(BaseActor):
     def __init__(
-        self,
-        health: Health,
-        block: Block,
-        buffs: Buffs,
-        debuffs: Debuffs,
+        self, health: Health, block: Block = Block(), modifiers: Modifiers = Modifiers()
     ) -> None:
-        super().__init__(health, block, buffs, debuffs)
+        super().__init__(health, block, modifiers)
 
         # Check if `moves` is defined
         if not hasattr(self.__class__, "moves") or not self.__class__.moves:

@@ -4,5 +4,5 @@ from game.effects.base import BaseEffect
 
 
 @dataclass
-class PowerEffect(BaseEffect):
+class ModifierEffect(BaseEffect):
     pass

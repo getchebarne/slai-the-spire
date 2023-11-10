@@ -2,9 +2,8 @@ from dataclasses import dataclass
 
 from game.entities.actors.base import BaseActor
 from game.entities.actors.base import Block
-from game.entities.actors.base import Buffs
-from game.entities.actors.base import Debuffs
 from game.entities.actors.base import Health
+from game.entities.actors.base import Modifiers
 
 
 BASE_ENERGY = 3
@@ -24,11 +23,10 @@ class Character(BaseActor):
         self,
         health: Health,
         block: Block = Block(),
-        buffs: Buffs = Buffs(),
-        debuffs: Debuffs = Debuffs(),
+        modifiers: Modifiers = Modifiers(),
         energy: Energy = Energy(),
     ) -> None:
-        super().__init__(health, block, buffs, debuffs)
+        super().__init__(health, block, modifiers)
 
         self.energy = energy
 
