@@ -4,7 +4,7 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Optional
 
-from game.entities.actors.powers.strength import Strength
+from game.entities.actors.modifiers.strength import Strength
 
 
 MAX_BLOCK = 999
@@ -36,30 +36,21 @@ class Block:
 
 
 @dataclass
-class Debuffs:
+class Modifiers:
+    strength: Strength = Strength()
+    dexterity: int = 0
     vulnerable: int = 0
     weak: int = 0
     frail: int = 0
 
 
-@dataclass
-class Buffs:
-    strength: Strength = Strength()
-    dexterity: int = 0
-
-
 class BaseActor(ABC):
     def __init__(
-        self,
-        health: Health,
-        block: Block = Block(),
-        buffs: Buffs = Buffs(),
-        debuffs: Debuffs = Debuffs(),
+        self, health: Health, block: Block = Block(), modifiers: Modifiers = Modifiers()
     ) -> None:
         self.health = health
         self.block = block
-        self.buffs = buffs
-        self.debuffs = debuffs
+        self.modifiers = modifiers
 
     def __str__(self) -> str:
         return f"{type(self).__name__} {self.block} {self.health}"

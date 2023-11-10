@@ -1,7 +1,6 @@
 from game.entities.actors.base import Block
-from game.entities.actors.base import Buffs
-from game.entities.actors.base import Debuffs
 from game.entities.actors.base import Health
+from game.entities.actors.base import Modifiers
 from game.entities.actors.monsters.base import Monster
 from game.entities.actors.monsters.moves.attack import Attack
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
@@ -23,10 +22,9 @@ class Dummy(Monster):
         self,
         health: Health = Health(BASE_HEALTH),
         block: Block = Block(),
-        buffs: Buffs = Buffs(),
-        debuffs: Debuffs = Debuffs(),
+        modifiers: Modifiers = Modifiers(),
     ) -> None:
-        super().__init__(health, block, buffs, debuffs)
+        super().__init__(health, block, modifiers)
 
     def update_move(self) -> None:
         if isinstance(self.move, Attack):
