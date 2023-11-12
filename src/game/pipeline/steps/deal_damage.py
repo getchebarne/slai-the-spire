@@ -3,10 +3,6 @@ from game.pipeline.steps.base import BaseStep
 
 
 class DealDamage(BaseStep):
-    @property
-    def priority(self) -> int:
-        return 3
-
     def _apply_effect(self, effect: BaseEffect) -> None:
         damage = effect.damage
         target = effect.target

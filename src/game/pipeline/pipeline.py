@@ -49,3 +49,6 @@ class EffectPipeline:
                         raise ValueError(
                             f"Undefined `NewEffect` `where` attribute: {new_effect.where}"
                         )
+
+    def __str__(self) -> str:
+        return "\n".join([f"{step.priority} : {step.__class__.__name__}" for step in self._steps])
