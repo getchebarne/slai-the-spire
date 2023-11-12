@@ -4,10 +4,6 @@ from game.pipeline.steps.base import BaseStep
 
 
 class ApplyStrength(BaseStep):
-    @property
-    def priority(self) -> int:
-        return 0
-
     def _apply_effect(self, effect: BaseEffect) -> None:
         effect.damage += effect.source.modifiers.strength.stack.amount
 

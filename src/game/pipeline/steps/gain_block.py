@@ -3,10 +3,6 @@ from game.pipeline.steps.base import BaseStep
 
 
 class GainBlock(BaseStep):
-    @property
-    def priority(self) -> int:
-        return 2
-
     def _apply_effect(self, effect: BaseEffect) -> None:
         target = effect.target
 

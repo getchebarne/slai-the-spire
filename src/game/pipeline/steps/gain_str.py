@@ -3,10 +3,6 @@ from game.pipeline.steps.base import BaseStep
 
 
 class GainStrength(BaseStep):
-    @property
-    def priority(self) -> int:
-        return 1
-
     def _apply_effect(self, effect: BaseEffect) -> None:
         effect.target.modifiers.strength.stack.increase(effect.plus_str)
 

@@ -25,11 +25,6 @@ class BaseStep(ABC):
         if self._condition(effect):
             return self._apply_effect(effect)
 
-    @property
-    @abstractmethod
-    def priority(self) -> int:
-        raise NotImplementedError
-
     @abstractmethod
     def _apply_effect(self, effect: BaseEffect) -> Optional[NewEffect]:
         raise NotImplementedError
@@ -37,6 +32,12 @@ class BaseStep(ABC):
     @abstractmethod
     def _condition(self, effect: BaseEffect) -> bool:
         raise NotImplementedError
+
+    @property
+    def priority(self) -> int:
+        from game.pipeline.steps.order import STEP_ORDER
+
+        return STEP_ORDER.index(self.__class__)
 
     def __lt__(self, other: BaseStep) -> bool:
         if not isinstance(other, BaseStep):
