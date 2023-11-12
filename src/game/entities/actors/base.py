@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from game.entities.actors.modifiers.strength import Strength
+from game.entities.actors.modifiers.weak import Weak
 
 
 MAX_BLOCK = 999
@@ -40,8 +41,11 @@ class Modifiers:
     strength: Strength = Strength()
     dexterity: int = 0
     vulnerable: int = 0
-    weak: int = 0
+    weak: Weak = Weak()
     frail: int = 0
+
+    def __str__(self) -> str:
+        return f"\U0001F5E1 {self.strength.stack.amount} \U0001F940 {self.weak.stack.amount}"
 
 
 class BaseActor(ABC):
@@ -53,4 +57,4 @@ class BaseActor(ABC):
         self.modifiers = modifiers
 
     def __str__(self) -> str:
-        return f"{type(self).__name__} {self.block} {self.health}"
+        return f"{self.__class__.__name__} {self.block} {self.health} \n {self.modifiers}"

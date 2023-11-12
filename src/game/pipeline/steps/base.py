@@ -13,7 +13,7 @@ class AddTo(Enum):
     BOT = 1
 
 
-# TODO: review is this is the best solution
+# TODO: review if this is the best solution
 @dataclass
 class NewEffect:
     effect: BaseEffect
