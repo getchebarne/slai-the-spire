@@ -7,7 +7,6 @@ from typing import List
 from game.effects.base import BaseEffect
 from game.pipeline.steps.apply_str import ApplyStrength
 from game.pipeline.steps.apply_weak import ApplyWeak
-from game.pipeline.steps.base import AddTo
 from game.pipeline.steps.base import BaseStep
 from game.pipeline.steps.deal_damage import DealDamage
 from game.pipeline.steps.gain_block import GainBlock
@@ -45,19 +44,11 @@ class EffectPipeline:
         while effect_queue:
             effect = effect_queue.popleft()
             for step in self._steps:
-                new_effect = step(effect)
+                new_effects = step(effect)
 
-                if new_effect is not None:
-                    if new_effect.where == AddTo.BOT:
-                        effect_queue.append(new_effect.effect)
-
-                    elif new_effect.where == AddTo.TOP:
-                        effect_queue.appendleft(new_effect.effect)
-
-                    else:
-                        raise ValueError(
-                            f"Undefined `NewEffect` `where` attribute: {new_effect.where}"
-                        )
+                # Add new effects to the queue
+                effect_queue.extend(new_effects.add_to_bot)
+                effect_queue.extendleft(new_effects.add_to_top)
 
     def __str__(self) -> str:
         return "\n".join([f"{step.priority} : {step.__class__.__name__}" for step in self._steps])
