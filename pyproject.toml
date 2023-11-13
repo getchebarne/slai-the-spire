@@ -16,7 +16,7 @@ isort = "^5.12.0"
 
 [tool.isort]
 force_single_line = true
-single_line_exclusions = ["typing", "abc"]
+single_line_exclusions = ["typing", "abc", "dataclasses"]
 lines_after_imports = 2
 
 [tool.black]
