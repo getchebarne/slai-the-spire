@@ -41,7 +41,7 @@ class Stack:
 
     def decrease(self, value: int) -> None:
         if self.type.none:
-            raise ValueError("Can't decrease the stack of a non-stackable power")
+            raise ValueError("Can't decrease the stack of a non-stackable modifier")
 
         self.amount -= value
         if self.amount < self.min:
@@ -51,7 +51,7 @@ class Stack:
 
     def increase(self, value: int) -> None:
         if self.type.none:
-            raise ValueError("Can't increase the stack of a non-stackable power")
+            raise ValueError("Can't increase the stack of a non-stackable modifier")
 
         self.amount += value
         if self.amount > self.max:
