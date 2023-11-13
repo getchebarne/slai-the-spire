@@ -7,8 +7,8 @@ from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
 from game.entities.actors.base import Block
 from game.entities.actors.base import Health
-from game.entities.actors.base import Modifiers
 from game.entities.actors.characters.base import Character
+from game.entities.actors.modifiers.group import ModifierGroup
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
 
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 class Monster(BaseActor):
     def __init__(
-        self, health: Health, block: Block = Block(), modifiers: Modifiers = Modifiers()
+        self, health: Health, block: Block = Block(), modifiers: ModifierGroup = ModifierGroup()
     ) -> None:
         super().__init__(health, block, modifiers)
 
