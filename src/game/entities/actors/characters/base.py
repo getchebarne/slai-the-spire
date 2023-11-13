@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from game.entities.actors.base import BaseActor
 from game.entities.actors.base import Block
 from game.entities.actors.base import Health
-from game.entities.actors.base import Modifiers
+from game.entities.actors.modifiers.group import ModifierGroup
 
 
 BASE_ENERGY = 3
@@ -23,7 +23,7 @@ class Character(BaseActor):
         self,
         health: Health,
         block: Block = Block(),
-        modifiers: Modifiers = Modifiers(),
+        modifiers: ModifierGroup = ModifierGroup(),
         energy: Energy = Energy(),
     ) -> None:
         super().__init__(health, block, modifiers)
