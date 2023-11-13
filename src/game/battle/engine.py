@@ -107,7 +107,7 @@ class BattleEngine:
     def _char_turn(self) -> None:
         while not self.context.is_over():
             # TODO: improve drawing logic
-            if self.drawer:
+            if self.drawer is not None:
                 self.drawer(self.view())
 
             # Get action from agent
@@ -158,6 +158,9 @@ class BattleEngine:
         )
 
     def run(self) -> None:
+        if self.drawer is not None:
+            self.drawer(self.view())
+
         # Battle start
         for effects in self.context.battle_start():
             self.effect_pipeline(effects)

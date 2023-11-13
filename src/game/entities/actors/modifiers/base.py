@@ -81,6 +81,9 @@ class BaseModifier(ABC):
     def on_turn_end(
         self, owner: BaseActor, char: Character, monsters: MonsterGroup
     ) -> List[ModifierEffect]:
+        if self.stack.type.duration and self.stack.amount > self.stack.min:
+            self.stack.decrease(1)
+
         return []
 
     def on_turn_start(
@@ -89,21 +92,6 @@ class BaseModifier(ABC):
         return []
 
     def on_battle_end(
-        self, owner: BaseActor, char: Character, monsters: MonsterGroup
-    ) -> List[ModifierEffect]:
-        return []
-
-    def on_battle_start(
-        self, owner: BaseActor, char: Character, monsters: MonsterGroup
-    ) -> List[ModifierEffect]:
-        return []
-
-    def on_round_end(
-        self, owner: BaseActor, char: Character, monsters: MonsterGroup
-    ) -> List[ModifierEffect]:
-        return []
-
-    def on_round_start(
         self, owner: BaseActor, char: Character, monsters: MonsterGroup
     ) -> List[ModifierEffect]:
         return []
