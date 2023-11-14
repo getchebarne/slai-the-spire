@@ -167,11 +167,23 @@ class BattleEngine:
 
         while not self.context.is_over():
             # Character's turn
-            self.context.char_turn_start()
+            effects = self.context.char_turn_start()
+            self.effect_pipeline(effects)
+
             self._char_turn()
-            self.context.char_turn_end()
+
+            effects = self.context.char_turn_end()
+            self.effect_pipeline(effects)
 
             # Monsters' turn
-            self.context.monsters_turn_start()
+            effects = self.context.monsters_turn_start()
+            self.effect_pipeline(effects)
+
             self._monsters_turn()
-            self.context.monsters_turn_end()
+
+            effects = self.context.monsters_turn_end()
+            self.effect_pipeline(effects)
+
+        # Battle end
+        for effects in self.context.battle_end():
+            self.effect_pipeline(effects)
