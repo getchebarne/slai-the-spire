@@ -162,8 +162,8 @@ class BattleEngine:
             self.drawer(self.view())
 
         # Battle start
-        for effects in self.context.battle_start():
-            self.effect_pipeline(effects)
+        effects = self.context.battle_start()
+        self.effect_pipeline(effects)
 
         while not self.context.is_over():
             # Character's turn
