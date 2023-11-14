@@ -1,8 +1,8 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from game.entities.actors.base import BaseActor
 from game.entities.actors.base import Block
-from game.entities.actors.base import Health
 from game.entities.actors.modifiers.group import ModifierGroup
 
 
@@ -21,14 +21,15 @@ class Energy:
 class Character(BaseActor):
     def __init__(
         self,
-        health: Health,
-        block: Block = Block(),
-        modifiers: ModifierGroup = ModifierGroup(),
-        energy: Energy = Energy(),
+        max_health: int,
+        current_health: Optional[int] = None,
+        block: Optional[Block] = None,
+        modifiers: Optional[ModifierGroup] = None,
+        energy: Optional[Energy] = None,
     ) -> None:
-        super().__init__(health, block, modifiers)
+        super().__init__(max_health, current_health, block, modifiers)
 
-        self.energy = energy
+        self.energy = energy if energy is not None else Energy()
 
     def __str__(self) -> str:
         base_str = super().__str__()

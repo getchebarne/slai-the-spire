@@ -35,7 +35,7 @@ class StackType:
 @dataclass
 class Stack:
     type: StackType
-    amount: int
+    amount: int = 0
     max: int = DEFAULT_STACK_AMOUNT_MAX
     min: int = DEFAULT_STACK_AMOUNT_MIN
 
