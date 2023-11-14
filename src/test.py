@@ -1,7 +1,6 @@
 from agents.random import RandomAgent
 from game.battle.context import BattleContext
 from game.battle.engine import BattleEngine
-from game.entities.actors.base import Health
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.dummy import Dummy
 from game.entities.actors.monsters.group import MonsterGroup
@@ -19,8 +18,8 @@ if __name__ == "__main__":
 
     # Instance battle context
     context = BattleContext(
-        char=Character(health=Health(10)),
-        monsters=MonsterGroup([Dummy()]),
+        char=Character(max_health=10),
+        monsters=MonsterGroup([Dummy(max_health=10)]),
         deck=SILENT_STARTER_DECK,
         relics=relics,
     )

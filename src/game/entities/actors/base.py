@@ -17,12 +17,12 @@ MAX_BLOCK = 999
 
 @dataclass
 class Health:
-    current: int
-    max: Optional[int] = None
+    max: int
+    current: Optional[int] = None
 
     def __post_init__(self) -> None:
-        if self.max is None:
-            self.max = self.current
+        if self.current is None:
+            self.current = self.max
 
         elif self.current > self.max:
             raise ValueError("Current health can't be larger than maximum health")
@@ -33,8 +33,8 @@ class Health:
 
 @dataclass
 class Block:
-    current: int = 0
     max: int = MAX_BLOCK
+    current: int = 0
 
     def __str__(self) -> str:
         return f"\U0001F6E1 {self.current}"
@@ -42,11 +42,15 @@ class Block:
 
 class BaseActor(ABC):
     def __init__(
-        self, health: Health, block: Block = Block(), modifiers: ModifierGroup = ModifierGroup()
+        self,
+        max_health: int,
+        current_health: Optional[int] = None,
+        block: Optional[Block] = None,
+        modifiers: Optional[ModifierGroup] = None,
     ) -> None:
-        self.health = health
-        self.block = block
-        self.modifiers = modifiers
+        self.health = Health(max_health, current_health)
+        self.block = block if block is not None else Block()
+        self.modifiers = modifiers if modifiers is not None else ModifierGroup()
 
     def on_turn_end(self, char: Character, monsters: MonsterGroup) -> List[ModifierEffect]:
         effects = []

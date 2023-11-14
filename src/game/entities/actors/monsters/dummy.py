@@ -1,5 +1,6 @@
+from typing import Optional
+
 from game.entities.actors.base import Block
-from game.entities.actors.base import Health
 from game.entities.actors.modifiers.group import ModifierGroup
 from game.entities.actors.monsters.base import Monster
 from game.entities.actors.monsters.moves.attack import Attack
@@ -7,7 +8,6 @@ from game.entities.actors.monsters.moves.base import BaseMonsterMove
 from game.entities.actors.monsters.moves.defend import Defend
 
 
-# TODO: unshare
 BASE_HEALTH = 10
 
 
@@ -20,11 +20,12 @@ class Dummy(Monster):
 
     def __init__(
         self,
-        health: Health = Health(BASE_HEALTH),
-        block: Block = Block(),
-        modifiers: ModifierGroup = ModifierGroup(),
+        max_health: int = BASE_HEALTH,
+        current_health: Optional[int] = None,
+        block: Optional[Block] = None,
+        modifiers: Optional[ModifierGroup] = None,
     ) -> None:
-        super().__init__(health, block, modifiers)
+        super().__init__(max_health, current_health, block, modifiers)
 
     def update_move(self) -> None:
         if isinstance(self.move, Attack):

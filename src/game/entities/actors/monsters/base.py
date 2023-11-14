@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from game.effects.monster import MonsterEffect
 from game.entities.actors.base import BaseActor
 from game.entities.actors.base import Block
-from game.entities.actors.base import Health
 from game.entities.actors.characters.base import Character
 from game.entities.actors.modifiers.group import ModifierGroup
 from game.entities.actors.monsters.moves.base import BaseMonsterMove
@@ -18,9 +17,13 @@ if TYPE_CHECKING:
 
 class Monster(BaseActor):
     def __init__(
-        self, health: Health, block: Block = Block(), modifiers: ModifierGroup = ModifierGroup()
+        self,
+        max_health: int,
+        current_health: Optional[int] = None,
+        block: Optional[Block] = None,
+        modifiers: Optional[ModifierGroup] = None,
     ) -> None:
-        super().__init__(health, block, modifiers)
+        super().__init__(max_health, current_health, block, modifiers)
 
         # Check if `moves` is defined
         if not hasattr(self.__class__, "moves") or not self.__class__.moves:

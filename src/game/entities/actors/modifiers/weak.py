@@ -1,3 +1,5 @@
+from typing import Optional
+
 from game.entities.actors.modifiers.base import BaseModifier
 from game.entities.actors.modifiers.base import ModifierType
 from game.entities.actors.modifiers.base import Stack
@@ -9,8 +11,8 @@ STACK_TYPE = StackType(duration=True)
 
 
 class Weak(BaseModifier):
-    def __init__(self, stack: Stack = Stack(STACK_TYPE, amount=0, min=MIN)):
-        super().__init__(stack)
+    def __init__(self, stack: Optional[Stack] = None):
+        super().__init__(stack if stack is not None else Stack(STACK_TYPE, min=MIN))
 
     @property
     def type(self) -> ModifierType:
