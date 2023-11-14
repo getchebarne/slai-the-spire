@@ -1,5 +1,8 @@
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, List
 
+from game.effects.relic import RelicEffect
+from game.entities.actors.characters.base import Character
+from game.entities.actors.monsters.group import MonsterGroup
 from game.entities.relics.base import BaseRelic
 
 
@@ -9,6 +12,34 @@ class RelicGroup(list):
             raise ValueError(f"All elements must be instances of {BaseRelic}")
 
         super().__init__(iterable)
+
+    def on_turn_end(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
+        effects = []
+        for relic in self:
+            effects.extend(relic.on_turn_end(char, monsters))
+
+        return effects
+
+    def on_turn_start(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
+        effects = []
+        for relic in self:
+            effects.extend(relic.on_turn_start(char, monsters))
+
+        return effects
+
+    def on_battle_end(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
+        effects = []
+        for relic in self:
+            effects.extend(relic.on_battle_end(char, monsters))
+
+        return effects
+
+    def on_battle_start(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
+        effects = []
+        for relic in self:
+            effects.extend(relic.on_battle_start(char, monsters))
+
+        return effects
 
     def append(self) -> None:
         raise NotImplementedError

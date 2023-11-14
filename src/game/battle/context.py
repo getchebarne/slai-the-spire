@@ -1,4 +1,4 @@
-from typing import Generator, List, Optional
+from typing import List, Optional
 
 from game.battle.systems.draw_card import DrawCard
 from game.effects.base import BaseEffect
@@ -50,10 +50,9 @@ class BattleContext:
             [monster.health.current <= 0 for monster in self.monsters]
         )
 
-    def battle_start(self) -> Generator[List[BaseEffect], None, None]:
-        # Relic effects
-        for relic in self.relics:
-            yield relic.on_battle_start(self.char, self.monsters)
+    def battle_start(self) -> List[BaseEffect]:
+        # Return relic effects
+        return self.relics.on_battle_start(self.char, self.monsters)
 
     def char_turn_start(self) -> List[BaseEffect]:
         # Reset block & energy
@@ -78,12 +77,11 @@ class BattleContext:
 
         return effects
 
-    def battle_end(self) -> Generator[List[BaseEffect], None, None]:
+    def battle_end(self) -> List[BaseEffect]:
         # Relic effects
-        for relic in self.relics:
-            yield relic.on_battle_end(self.char, self.monsters)
-
-        yield self.char.on_battle_end(self.char, self.monsters)
+        return self.relics.on_battle_end(self.char, self.monsters) + self.char.on_battle_end(
+            self.char, self.monsters
+        )
 
     def char_turn_end(self) -> List[BaseEffect]:
         # Discard cards in hand

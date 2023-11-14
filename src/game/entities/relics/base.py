@@ -13,9 +13,11 @@ class BaseRelic(ABC):
     def step(self) -> Optional[BaseStep]:
         return None
 
+    # TODO: maybe rename to `on_char_turn_end`
     def on_turn_end(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
 
+    # TODO: maybe rename to `on_char_turn_start`
     def on_turn_start(self, char: Character, monsters: MonsterGroup) -> List[RelicEffect]:
         return []
 
