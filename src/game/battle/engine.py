@@ -8,7 +8,6 @@ from game.battle.context import BattleContext
 from game.battle.drawer import BattleDrawer
 from game.entities.actors.characters.base import Character
 from game.entities.actors.monsters.group import MonsterGroup
-from game.entities.cards.base import BaseCard
 from game.entities.cards.disc_pile import DiscardPile
 from game.entities.cards.draw_pile import DrawPile
 from game.entities.cards.hand import Hand
@@ -39,7 +38,6 @@ class BattleState(Enum):
 @dataclass
 class BattleView:
     state: BattleState
-    active_card: BaseCard
     char: Character
     monsters: MonsterGroup
     disc_pile: DiscardPile
@@ -65,7 +63,6 @@ class BattleEngine:
     def _setup(self) -> None:
         # Set state & active card
         self._state: BattleState = BattleState.DEFAULT
-        self._active_card: BaseCard = None
 
         # Register relics
         for relic in self.context.relics:
@@ -81,22 +78,26 @@ class BattleEngine:
             raise ValueError(f"Can't play {card} with {self.char.energy.current} energy")
 
         # Set active card
-        self._active_card = card
+        self.context.hand.set_active_card(card_idx)
 
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
         # Get targeted effects
-        effects = self._active_card.use(self.context.char, self.context.monsters, monster_idx)
-
+        effects = self.context.hand.active_card.use(
+            self.context.char, self.context.monsters, monster_idx
+        )
         # Apply targeted effects
         self.effect_pipeline(effects)
 
         # Remove card from hand and send it to the draw pile.
         # TODO: cards can also be exhausted
-        self.context.hand.cards.remove(self._active_card)
-        self.context.disc_pile.cards.append(self._active_card)
+        self.context.hand.cards.remove(self.context.hand.active_card)
+        self.context.disc_pile.cards.append(self.context.hand.active_card)
 
-        # Substract energy
-        self.context.char.energy.current -= self._active_card.cost
+        # Substract energy spent
+        self.context.char.energy.current -= self.context.hand.active_card.cost
+
+        # Clear active card
+        self.context.hand.clear_active_card()
 
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
@@ -149,7 +150,6 @@ class BattleEngine:
     def view(self) -> BattleView:
         return BattleView(
             self._state,
-            self._active_card,
             self.context.char,
             self.context.monsters,
             self.context.disc_pile,
@@ -158,9 +158,6 @@ class BattleEngine:
         )
 
     def run(self) -> None:
-        if self.drawer is not None:
-            self.drawer(self.view())
-
         # Battle start
         effects = self.context.battle_start()
         self.effect_pipeline(effects)

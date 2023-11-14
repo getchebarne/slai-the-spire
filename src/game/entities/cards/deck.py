@@ -11,4 +11,23 @@ class Deck:
         self.cards = cards
 
 
-SILENT_STARTER_DECK = Deck([Strike()] * 6 + [Defend()] * 6 + [Neutralize()])
+SILENT_STARTER_DECK = Deck(
+    [
+        # Strikes
+        Strike(),
+        Strike(),
+        Strike(),
+        Strike(),
+        Strike(),
+        Strike(),
+        # Defends
+        Defend(),
+        Defend(),
+        Defend(),
+        Defend(),
+        Defend(),
+        Defend(),
+        # Class-specific
+        Neutralize(),
+    ]
+)
