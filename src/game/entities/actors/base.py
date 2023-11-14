@@ -28,7 +28,11 @@ class Health:
             raise ValueError("Current health can't be larger than maximum health")
 
     def __str__(self) -> str:
-        return f"\u2764\uFE0F {self.current}/{self.max}"
+        # TODO: define representations in drawer module - they're ugly here
+        bar_length = 20
+        filled_length = int(self.current / self.max * bar_length) if self.max else 0
+        bar = f"{'■' * filled_length}{'-' * (bar_length - filled_length)}"
+        return f"\u2764\uFE0F {self.current}/{self.max} [{bar}]"
 
 
 @dataclass
@@ -73,4 +77,4 @@ class BaseActor(ABC):
         return effects
 
     def __str__(self) -> str:
-        return f"{self.__class__.__name__} {self.block} {self.health} \n {self.modifiers}"
+        return f"{self.__class__.__name__} \n {self.block} {self.health} \n {self.modifiers}"
