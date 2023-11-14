@@ -29,4 +29,4 @@ class MonsterGroup(list):
         return super().__iter__()
 
     def __str__(self) -> str:
-        return "\n".join([f"{idx}) {monster}" for idx, monster in enumerate(self)])
+        return "\n".join([str(monster) for monster in self])

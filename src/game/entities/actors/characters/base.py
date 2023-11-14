@@ -32,7 +32,3 @@ class Character(BaseActor):
             health if health is not None else Health(BASE_MAX_HEALTH), block, modifiers
         )
         self.energy = energy if energy is not None else Energy()
-
-    def __str__(self) -> str:
-        base_str = super().__str__()
-        return f"{base_str} {self.energy}"
