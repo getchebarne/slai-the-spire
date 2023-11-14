@@ -66,16 +66,40 @@ class BattleContext:
         # Return modifier effects
         return self.char.on_turn_start(self.char, self.monsters)
 
-    def monsters_turn_start(self) -> None:
-        # Reset block
+    def monsters_turn_start(self) -> List[BaseEffect]:
+        # Create effects buffer. TODO: improve this
+        effects = []
         for monster in self.monsters:
+            # Reset block
             monster.block.current = 0
 
-    def char_turn_end(self) -> None:
+            # Extend effect buffer
+            effects.extend(monster.on_turn_start(self.char, self.monsters))
+
+        return effects
+
+    def battle_end(self) -> Generator[List[BaseEffect], None, None]:
+        # Relic effects
+        for relic in self.relics:
+            yield relic.on_battle_end(self.char, self.monsters)
+
+        yield self.char.on_battle_end(self.char, self.monsters)
+
+    def char_turn_end(self) -> List[BaseEffect]:
         # Discard cards in hand
         self.disc_pile.cards.extend(self.hand.cards)
         self.hand.cards = []
 
-    def monsters_turn_end(self) -> None:
+        return self.char.on_turn_end(self.char, self.monsters)
+
+    def monsters_turn_end(self) -> List[BaseEffect]:
+        # Create effects buffer. TODO: improve this
+        effects = []
         for monster in self.monsters:
+            # Update move
             monster.update_move()
+
+            # Extend effect buffer
+            effects.extend(monster.on_turn_start(self.char, self.monsters))
+
+        return effects
