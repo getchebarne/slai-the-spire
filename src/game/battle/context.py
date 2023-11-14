@@ -55,13 +55,16 @@ class BattleContext:
         for relic in self.relics:
             yield relic.on_battle_start(self.char, self.monsters)
 
-    def char_turn_start(self) -> None:
+    def char_turn_start(self) -> List[BaseEffect]:
         # Reset block & energy
         self.char.block.current = 0
         self.char.energy.current = self.char.energy.max
 
         # Draw 5 cards
         self._draw_card(5)
+
+        # Return modifier effects
+        return self.char.on_turn_start(self.char, self.monsters)
 
     def monsters_turn_start(self) -> None:
         # Reset block
