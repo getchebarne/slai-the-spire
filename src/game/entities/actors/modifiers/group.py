@@ -9,10 +9,10 @@ from game.entities.actors.modifiers.weak import Weak
 @dataclass
 class ModifierGroup:
     strength: Strength = Strength()
-    dexterity: int = 0
-    vulnerable: int = 0
+    # dexterity: int = 0
+    # vulnerable: int = 0
     weak: Weak = Weak()
-    frail: int = 0
+    # frail: int = 0
 
     def __iter__(self) -> Generator[BaseModifier, None, None]:
         for field in fields(self):

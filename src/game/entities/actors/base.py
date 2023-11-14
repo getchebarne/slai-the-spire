@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from abc import ABC
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from game.entities.actors.modifiers.group import ModifierGroup
 
+
+if TYPE_CHECKING:
+    from game.effects.modifier import ModifierEffect
+    from game.entities.actors.characters.base import Character
+    from game.entities.actors.monsters.group import MonsterGroup
 
 MAX_BLOCK = 999
 
@@ -42,6 +47,27 @@ class BaseActor(ABC):
         self.health = health
         self.block = block
         self.modifiers = modifiers
+
+    def on_turn_end(self, char: Character, monsters: MonsterGroup) -> List[ModifierEffect]:
+        effects = []
+        for modifier in self.modifiers:
+            effects.extend(modifier.on_turn_end(self, char, monsters))
+
+        return effects
+
+    def on_turn_start(self, char: Character, monsters: MonsterGroup) -> List[ModifierEffect]:
+        effects = []
+        for modifier in self.modifiers:
+            effects.extend(modifier.on_turn_start(self, char, monsters))
+
+        return effects
+
+    def on_battle_end(self, char: Character, monsters: MonsterGroup) -> List[ModifierEffect]:
+        effects = []
+        for modifier in self.modifiers:
+            effects.extend(modifier.on_battle_end(self, char, monsters))
+
+        return effects
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__} {self.block} {self.health} \n {self.modifiers}"
