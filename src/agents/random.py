@@ -21,5 +21,3 @@ class RandomAgent(BaseAgent):
         if battle_view.state == BattleState.AWAIT_TARGET:
             monster_idx = np.random.choice(range(len(battle_view.monsters)))
             return Action(ActionType.SELECT_TARGET, monster_idx)
-
-            return Action(ActionType.SELECT_TARGET, None)
