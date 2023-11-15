@@ -1,4 +1,4 @@
-from dataclasses import dataclass, fields, field
+from dataclasses import dataclass, field, fields
 from typing import Generator
 
 from game.entities.actors.modifiers.base import BaseModifier
