@@ -18,8 +18,8 @@ if __name__ == "__main__":
 
     # Instance battle context
     context = BattleContext(
-        char=Character(max_health=10),
-        monsters=MonsterGroup([Dummy(max_health=10)]),
+        char=Character(),
+        monsters=MonsterGroup([Dummy()]),
         deck=SILENT_STARTER_DECK,
         relics=relics,
     )

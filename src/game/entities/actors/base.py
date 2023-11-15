@@ -43,12 +43,11 @@ class Block:
 class BaseActor(ABC):
     def __init__(
         self,
-        max_health: int,
-        current_health: Optional[int] = None,
+        health: Health,
         block: Optional[Block] = None,
         modifiers: Optional[ModifierGroup] = None,
     ) -> None:
-        self.health = Health(max_health, current_health)
+        self.health = health
         self.block = block if block is not None else Block()
         self.modifiers = modifiers if modifiers is not None else ModifierGroup()
 
