@@ -14,10 +14,6 @@ if TYPE_CHECKING:
     from game.pipeline.steps.base import BaseStep
 
 
-DEFAULT_STACK_AMOUNT_MIN = 0
-DEFAULT_STACK_AMOUNT_MAX = 999
-
-
 @dataclass
 class StackType:
     none: bool = False
@@ -35,18 +31,18 @@ class StackType:
 @dataclass
 class Stack:
     type: StackType
+    min_amount: int
+    max_amount: int
     amount: int = 0
-    max: int = DEFAULT_STACK_AMOUNT_MAX
-    min: int = DEFAULT_STACK_AMOUNT_MIN
 
     def decrease(self, value: int) -> None:
         if self.type.none:
             raise ValueError("Can't decrease the stack of a non-stackable modifier")
 
         self.amount -= value
-        if self.amount < self.min:
+        if self.amount < self.min_amount:
             raise ValueError(
-                f"Power {self.__class__.__name__}'s stacks can't be decreased below {self.min}"
+                f"Power {type(self).__name__}'s stacks can't be decreased below {self.min_amount}"
             )
 
     def increase(self, value: int) -> None:
@@ -54,9 +50,9 @@ class Stack:
             raise ValueError("Can't increase the stack of a non-stackable modifier")
 
         self.amount += value
-        if self.amount > self.max:
+        if self.amount > self.max_amount:
             raise ValueError(
-                f"Power {self.__class__.__name__}'s stacks can't be increased above {self.max}"
+                f"Power {type(self).__name__}'s stacks can't be increased above {self.max_amount}"
             )
 
 
@@ -81,7 +77,7 @@ class BaseModifier(ABC):
     def on_turn_end(
         self, owner: BaseActor, char: Character, monsters: MonsterGroup
     ) -> List[ModifierEffect]:
-        if self.stack.type.duration and self.stack.amount > self.stack.min:
+        if self.stack.type.duration and self.stack.amount > self.stack.min_amount:
             self.stack.decrease(1)
 
         return []
