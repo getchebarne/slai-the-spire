@@ -41,9 +41,7 @@ class Stack:
 
         self.amount -= value
         if self.amount < self.min_amount:
-            raise ValueError(
-                f"Power {type(self).__name__}'s stacks can't be decreased below {self.min_amount}"
-            )
+            raise ValueError(f"Stacks of {self} can't be decreased below {self.min_amount}")
 
     def increase(self, value: int) -> None:
         if self.type.none:
@@ -51,9 +49,7 @@ class Stack:
 
         self.amount += value
         if self.amount > self.max_amount:
-            raise ValueError(
-                f"Power {type(self).__name__}'s stacks can't be increased above {self.max_amount}"
-            )
+            raise ValueError(f"Stacks of {self} can't be increased above {self.max_amount}")
 
 
 class ModifierType(Enum):
