@@ -1,5 +1,6 @@
 from game.effects.base import BaseEffect
 from game.effects.card import CardEffect
+from game.effects.monster import MonsterEffect
 from game.pipeline.steps.base import BaseStep
 from game.pipeline.steps.base import NewEffects
 
@@ -16,6 +17,6 @@ class ApplyWeak(BaseStep):
     def _condition(self, effect: BaseEffect) -> bool:
         return (
             effect.damage is not None
-            and isinstance(effect, CardEffect)
+            and isinstance(effect, (CardEffect, MonsterEffect))
             and effect.source.modifiers.weak.stack.amount > 0
         )
