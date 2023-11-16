@@ -7,7 +7,7 @@ from game.entities.cards.base import BaseCard
 
 
 class DrawPile:
-    def __init__(self, cards: List[BaseCard]):
+    def __init__(self, cards: List[BaseCard] = []):
         self.cards = cards
 
     def shuffle(self) -> DrawPile:

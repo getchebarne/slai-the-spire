@@ -4,7 +4,7 @@ from game.entities.cards.base import BaseCard
 
 
 class Hand:
-    def __init__(self, cards: List[BaseCard]):
+    def __init__(self, cards: List[BaseCard] = []):
         self.cards = cards
 
     def __getitem__(self, idx: int) -> BaseCard:
