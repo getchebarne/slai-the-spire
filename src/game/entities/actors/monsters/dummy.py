@@ -9,7 +9,7 @@ from game.entities.actors.monsters.moves.base import BaseMonsterMove
 from game.entities.actors.monsters.moves.defend import Defend
 
 
-BASE_MAX_HEALTH = 10
+BASE_MAX_HEALTH = 60
 
 # TODO: improve this
 move_attack = Attack(6)
