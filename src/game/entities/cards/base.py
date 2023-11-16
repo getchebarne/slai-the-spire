@@ -44,7 +44,7 @@ class BaseCard(ABC):
         raise NotImplementedError
 
     def __str__(self) -> str:
-        return f"{type(self).__name__} ({self._cost})"
+        return f"{self.__class__.__name__} ({self._cost})"
 
 
 def ensure_target_monster_idx(func: Callable) -> Callable:
