@@ -36,6 +36,9 @@ class Intent:
         if self.instances is not None and self.instances > 1:
             str_ = f"{str_}x{self.instances}"
 
+        if self.block:
+            str_ = f"{str_} \U0001F6E1"
+
         return str_
 
 
