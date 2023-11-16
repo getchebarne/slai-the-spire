@@ -77,4 +77,4 @@ class BaseActor(ABC):
         return effects
 
     def __str__(self) -> str:
-        return f"{self.__class__.__name__} \n {self.block} {self.health} \n {self.modifiers}"
+        return f"{self.__class__.__name__}\n{self.block} {self.health}\n{self.modifiers}"
