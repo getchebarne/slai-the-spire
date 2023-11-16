@@ -98,6 +98,6 @@ class BattleContext:
             monster.update_move()
 
             # Extend effect buffer
-            effects.extend(monster.on_turn_start(self.char, self.monsters))
+            effects.extend(monster.on_turn_end(self.char, self.monsters))
 
         return effects
