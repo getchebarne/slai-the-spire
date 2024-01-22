@@ -4,29 +4,29 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List
 
-from game.effects.base import BaseEffect
+from game.core.effect import Effect
 
 
 # TODO: review if this is the best solution
 @dataclass
 class NewEffects:
-    add_to_bot: List[BaseEffect] = field(default_factory=list)
-    add_to_top: List[BaseEffect] = field(default_factory=list)
+    add_to_bot: List[Effect] = field(default_factory=list)
+    add_to_top: List[Effect] = field(default_factory=list)
 
 
 class BaseStep(ABC):
-    def __call__(self, effect: BaseEffect) -> NewEffects:
+    def __call__(self, effect: Effect) -> NewEffects:
         if self._condition(effect):
             return self._apply_effect(effect)
 
         return NewEffects()
 
     @abstractmethod
-    def _apply_effect(self, effect: BaseEffect) -> NewEffects:
+    def _apply_effect(self, effect: Effect) -> NewEffects:
         raise NotImplementedError
 
     @abstractmethod
-    def _condition(self, effect: BaseEffect) -> bool:
+    def _condition(self, effect: Effect) -> bool:
         raise NotImplementedError
 
     @property
