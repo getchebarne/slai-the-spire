@@ -1,15 +1,17 @@
-from game.effects.base import BaseEffect
+from game.core.effect import Effect
+from game.core.effect import EffectType
 from game.pipeline.steps.base import BaseStep
 from game.pipeline.steps.base import NewEffects
 
 
 class GainBlock(BaseStep):
-    def _apply_effect(self, effect: BaseEffect) -> NewEffects:
+    def _apply_effect(self, effect: Effect) -> NewEffects:
         target = effect.target
 
-        target.block.current = min(target.block.max, target.block.current + effect.block)
+        # TODO: parametrize max block
+        target.block = min(999, target.block + effect.value)
 
         return NewEffects()
 
-    def _condition(self, effect: BaseEffect) -> bool:
-        return effect.block is not None
+    def _condition(self, effect: Effect) -> bool:
+        return effect.type == EffectType.BLOCK
