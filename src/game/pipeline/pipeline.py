@@ -4,24 +4,13 @@ from bisect import insort
 from collections import deque
 from typing import List
 
-from game.effects.base import BaseEffect
-from game.pipeline.steps.apply_str import ApplyStrength
-from game.pipeline.steps.apply_weak import ApplyWeak
+from game.core.effect import Effect
 from game.pipeline.steps.base import BaseStep
 from game.pipeline.steps.deal_damage import DealDamage
 from game.pipeline.steps.gain_block import GainBlock
-from game.pipeline.steps.gain_str import GainStrength
-from game.pipeline.steps.gain_weak import GainWeak
 
 
-DEFAULT_STEPS = {
-    DealDamage(),
-    GainBlock(),
-    GainStrength(),
-    ApplyStrength(),
-    GainWeak(),
-    ApplyWeak(),
-}
+DEFAULT_STEPS = {DealDamage(), GainBlock()}
 
 
 class EffectPipeline:
@@ -38,7 +27,7 @@ class EffectPipeline:
 
         insort(self._steps, step)
 
-    def __call__(self, effects: List[BaseEffect]) -> None:
+    def __call__(self, effects: List[Effect]) -> None:
         effect_queue = deque(effects)
 
         while effect_queue:

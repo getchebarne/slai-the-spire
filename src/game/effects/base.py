@@ -2,13 +2,9 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Optional
 
-from game.entities.actors.base import BaseActor
-
 
 @dataclass
 class BaseEffect(ABC):
-    source: BaseActor
-    target: BaseActor
     damage: Optional[int] = None
     block: Optional[int] = None
     weak: Optional[int] = None
