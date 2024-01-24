@@ -1,12 +1,11 @@
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Dict
 
 from game.constants import DB_PATH
 
 
 @dataclass
-class CharacterEntry:
+class CharEntry:
     base_health: int
     start_relic_name: str
 
@@ -21,13 +20,9 @@ cursor = connection.cursor()
 # Execute database query
 cursor.execute("SELECT * FROM CharacterLib")
 
-# Initialize card library. The card library is implemented as a dictionary mapping card_name to a
-# dictionary containing card information
-char_lib: Dict[str, Dict[str, Any]] = {}
-
-# Fetch all rows. TODO: wrap in function
-rows = cursor.fetchall()
-for row in rows:
-    char_lib[row["char_name"]] = CharacterEntry(
-        base_health=row["base_health"], start_relic_name=row["start_relic_name"]
-    )
+# Initialize character library. The character library is implemented as a dictionary mapping
+# char_name to an instance of CharEntry
+char_lib = {
+    row["char_name"]: CharEntry(row["base_health"], row["start_relic_name"])
+    for row in cursor.fetchall()
+}

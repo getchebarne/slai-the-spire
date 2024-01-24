@@ -1,7 +1,13 @@
 import sqlite3
-from typing import Any, Dict
+from dataclasses import dataclass
 
 from game.constants import DB_PATH
+
+
+@dataclass
+class RelicEntry:
+    relic_desc: str
+    relic_rarity: str
 
 
 # Connect to the SQLite database
@@ -12,19 +18,11 @@ connection.row_factory = sqlite3.Row
 cursor = connection.cursor()
 
 # Execute database query
-cursor.execute(
-    """
-    SELECT
-        *
-    FROM
-        Relic
-        LEFT JOIN RelicBattleEndEffects USING (relic_name)
-        LEFT JOIN RelicBattleStartEffects USING (relic_name)
-    """
-)
-# Initialize card library. The card library is implemented as a dictionary mapping card_name to a
-# dictionary containing card information
-card_lib: Dict[str, Dict[str, Any]] = {}
+cursor.execute("SELECT * FROM RelicLib")
 
-# Fetch all rows. TODO: wrap in function
-rows = cursor.fetchall()
+# Initialize relic library. The relic library is implemented as a dictionary mapping relic_name to
+# an instance of RelicEntry
+card_lib = {
+    row["relic_name"]: RelicEntry(row["relic_desc"], row["relic_rarity"])
+    for row in cursor.fetchall()
+}
