@@ -1,13 +1,15 @@
+import importlib
 import sqlite3
 from dataclasses import dataclass
 
 from game.constants import DB_PATH
+from game.logic.move.base import BaseMoveLogic
 
 
 @dataclass
 class MonsterEntry:
     base_health: int
-    move_names: list[str]
+    moves: dict[str, BaseMoveLogic]
 
 
 # Connect to the SQLite database
@@ -37,12 +39,16 @@ for row in rows:
     monster_name = row["monster_name"]
     move_name = row["move_name"]
 
+    # Get the move's logic
+    logic_module = importlib.import_module(f"game.logic.move.{move_name.lower()}")
+    move_logic = getattr(logic_module, f"{move_name}Logic")()
+
     # If monster_name is not in monster_lib, create a new MonsterEntry instance
     if monster_name not in monster_lib:
         monster_lib[monster_name] = MonsterEntry(
-            base_health=row["base_health"], move_names=[move_name]
+            base_health=row["base_health"], moves={move_name: move_logic}
         )
 
-    # If monster_name is in monster_lib, add move_name to the list of move_names
+    # If monster_name is in monster_lib, add move_name to the monster's moves
     else:
-        monster_lib[monster_name].move_names.append(move_name)
+        monster_lib[monster_name].moves[move_name] = move_logic

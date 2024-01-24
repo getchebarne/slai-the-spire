@@ -9,8 +9,6 @@ from game import ai
 from game import context
 from game.lib.card import card_lib
 from game.lib.monster import monster_lib
-from game.logic import card as card_logic
-from game.logic import moves as move_logic  # TODO: rename to `move`
 from game.pipeline.pipeline import EffectPipeline
 
 
@@ -71,9 +69,9 @@ class BattleEngine:
         # Reset energy
         context.energy.current = context.energy.max
 
-        # Update monsters' moves. TODO: fix
+        # Update monsters' moves. TODO: fix, use ai
         for monster in context.monsters:
-            monster.current_move_name = random.choice(monster_lib[monster.name].move_names)
+            monster.current_move_name = random.choice(list(monster_lib[monster.name].moves.keys()))
 
     def _char_turn_end(self) -> None:
         # Discard hand
@@ -109,7 +107,7 @@ class BattleEngine:
         # Get active card's effects
         card_name = context.active_card
         card_info = card_lib[card_name]
-        effects = getattr(card_logic, f"{card_name}Logic")().use(monster_idx)  # TODO: improve this
+        effects = card_info.card_logic.use(monster_idx)
 
         # Apply targeted effects
         self.effect_pipeline(effects)
@@ -128,7 +126,7 @@ class BattleEngine:
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
         for monster in context.monsters:
-            move = getattr(move_logic, f"{monster.current_move_name}")()
+            move = monster_lib[monster.name].moves[monster.current_move_name]
             effects = move.use(monster)
             self.effect_pipeline(effects)
 
@@ -182,6 +180,6 @@ class BattleEngine:
 
     @staticmethod
     def is_over() -> bool:
-        return context.char.current_health <= 0 or all(
-            monster.current_health <= 0 for monster in context.monsters
+        return context.char.health.current <= 0 or all(
+            monster.health.current <= 0 for monster in context.monsters
         )

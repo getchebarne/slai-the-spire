@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
 
-from game.core.effect import Effect
+from game.logic.card.base import BaseCardLogic
 
 
 # TODO: add card upgrade
@@ -31,7 +30,7 @@ class Card:
     cost: int
     type: CardType
     rarity: CardRarity
-    effects: List[Effect]
+    logic: BaseCardLogic
 
     def __str__(self) -> str:
         return f"{self.name} ({self.cost})"

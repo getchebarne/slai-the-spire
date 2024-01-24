@@ -10,11 +10,11 @@ class DealDamage(BaseStep):
         target = effect.target
 
         # Remove block
-        dmg_over_block = max(0, damage - target.block)
-        target.block = max(0, target.block - damage)
+        dmg_over_block = max(0, damage - target.block.current)
+        target.block.current = max(0, target.block.current - damage)
 
         # Remove health
-        target.current_health = max(0, target.current_health - dmg_over_block)
+        target.health.current = max(0, target.health.current - dmg_over_block)
 
         return NewEffects()
 

@@ -1,11 +1,11 @@
 from game import context
-from game.context import Entity
+from game.core.monster import Monster
 from game.core.effect import Effect
 from game.core.effect import EffectType
-from game.logic.moves.base import BaseMoveLogic
+from game.logic.move.base import BaseMoveLogic
 
 
-class Attack(BaseMoveLogic):
+class AttackLogic(BaseMoveLogic):
     # TODO: improve owner def
-    def use(self, owner: Entity) -> list[Effect]:
-        return [Effect(EffectType.DAMAGE, 6, owner, context.char)]
+    def use(self, source: Monster) -> list[Effect]:
+        return [Effect(EffectType.DAMAGE, 6, source, context.char)]

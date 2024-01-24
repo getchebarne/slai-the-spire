@@ -4,7 +4,7 @@ from typing import Optional
 
 @dataclass
 class Energy:
-    max: int
+    max: int = 3
     current: Optional[int] = None
 
     def __post_init__(self) -> None:
