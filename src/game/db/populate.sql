@@ -1,23 +1,4 @@
--- EffectType
-INSERT INTO
-    EffectType (effect_type)
-VALUES
-    ("DAMAGE"),
-    ("BLOCK"),
-    ("WEAK"),
-    ("PLUS_STR"),
-    ("HEAL"),
-    ("DRAW");
-
--- EffectTargetType
-INSERT INTO
-    EffectTargetType (effect_target_type)
-VALUES
-    ("CHAR"),
-    ("SINGLE_MONSTER"),
-    ("ALL_MONSTERS"),
-    ("RANDOM_MONSTER");
-
+-- TODO: change population order
 -- CardType
 INSERT INTO
     CardType (card_type)
@@ -58,18 +39,9 @@ VALUES
     ("Defend", "Gain 5 block.", 1, "SKILL", "BASIC"),
     ("Neutralize", "Deal 3 damage. Apply 1 Weak.", 0, "ATTACK", "BASIC");
 
--- CardEffects
+-- RelicLib
 INSERT INTO
-    CardEffects (card_name, effect_type, effect_target_type, effect_value)
-VALUES
-    ("Strike", "DAMAGE", "SINGLE_MONSTER", 6),
-    ("Defend", "BLOCK", "CHAR", 5),
-    ("Neutralize", "DAMAGE", "SINGLE_MONSTER", 3),
-    ("Neutralize", "WEAK", "SINGLE_MONSTER", 1);
-
--- Relic
-INSERT INTO
-    Relic (relic_name, relic_desc, relic_rarity)
+    RelicLib (relic_name, relic_desc, relic_rarity)
 VALUES
     (
         "Ring of the Snake",
@@ -89,31 +61,6 @@ VALUES
         "UNCOMMON"
     );
 
--- RelicBattleEndEffects
-INSERT INTO
-    RelicBattleEndEffects (relic_name, effect_type, effect_value)
-VALUES
-    ("Burning Blood", "HEAL", 6);
-
--- RelicBattleStartEffects
-INSERT INTO
-    RelicBattleStartEffects (relic_name, effect_type, effect_value)
-VALUES
-    ("Ring of the Snake", "DRAW", 2),
-    ("Vajra", "PLUS_STR", 1);
-
--- RelicTurnEndEffects
-INSERT INTO
-    RelicTurnEndEffects (relic_name, effect_type, effect_value)
-VALUES
-    ("Orichalcum", "BLOCK", 6);
-
--- RelicTurnStartEffects
-INSERT INTO
-    RelicTurnStartEffects (relic_name, effect_type, effect_value)
-VALUES
-    ("Mercury Hourglass", "DAMAGE", 3);
-
 -- Modifier
 INSERT INTO
     Modifier (modifier_name, modifier_desc, stacks_duration, stacks_counter)
@@ -127,14 +74,6 @@ VALUES
         0
     );
 
--- ModifierTurnEndEffects
-INSERT INTO
-    ModifierTurnEndEffects (modifier_name, effect_type)
-VALUES
-    ("Poison", "DAMAGE");
-
--- ModifierTurnStartEffects
--- ModifierBattleEndEffects
 -- MonsterLib
 INSERT INTO
     MonsterLib (monster_name, base_health)
@@ -143,10 +82,10 @@ VALUES
 
 -- MonsterMoves
 INSERT INTO
-    MonsterMoves (monster_name, move_name, effect_type, effect_target_type, effect_value)
+    MonsterMoves (monster_name, move_name)
 VALUES
-    ("Dummy", "Attack", "DAMAGE", "CHAR", 6),
-    ("Dummy", "Defend", "BLOCK", "SINGLE_MONSTER", 5);
+    ("Dummy", "Attack"),
+    ("Dummy", "Defend");
 
 -- CharacterLib
 INSERT INTO
@@ -170,35 +109,3 @@ VALUES
     ("Silent", "Defend"),
     ("Silent", "Defend"),
     ("Silent", "Neutralize");
-
----------------------
--- Initialize game --
----------------------
--- CurrentEntity
-INSERT INTO
-    CurrentEntity (entity_name, current_health, max_health, current_block)
-VALUES
-    ("Silent", 60, 60, 0),
-    ("Dummy", 60, 60, 0);
-
--- Energy
-INSERT INTO
-    Energy (current_energy, max_energy)
-VALUES
-    (3, 3);
-
--- Deck
-INSERT INTO
-    Deck (card_name)
-VALUES
-    ("Strike"),
-    ("Strike"),
-    ("Strike"),
-    ("Strike"),
-    ("Strike"),
-    ("Defend"),
-    ("Defend"),
-    ("Defend"),
-    ("Defend"),
-    ("Defend"),
-    ("Neutralize");

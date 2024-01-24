@@ -1,6 +1,5 @@
 import sqlite3
 from dataclasses import dataclass
-from typing import Dict, List
 
 from game.constants import DB_PATH
 
@@ -8,7 +7,7 @@ from game.constants import DB_PATH
 @dataclass
 class MonsterEntry:
     base_health: int
-    move_names: List[str]
+    move_names: list[str]
 
 
 # Connect to the SQLite database
@@ -30,7 +29,7 @@ cursor.execute(
 )
 # Initialize monster library. The monster library is implemented as a dictionary mapping
 # monster_name to a MonsterEntry instance
-monster_lib: Dict[str, MonsterEntry] = {}
+monster_lib = {}
 
 # Fetch all rows. TODO: wrap in function
 rows = cursor.fetchall()
@@ -44,6 +43,6 @@ for row in rows:
             base_health=row["base_health"], move_names=[move_name]
         )
 
-    # If monster_name is in monster_lib, check if the move_name is in the monster's moves
-    elif move_name not in monster_lib[monster_name].move_names:
+    # If monster_name is in monster_lib, add move_name to the list of move_names
+    else:
         monster_lib[monster_name].move_names.append(move_name)

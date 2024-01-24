@@ -1,6 +1,5 @@
 import sqlite3
 from dataclasses import dataclass
-from typing import Dict
 
 from game.constants import DB_PATH
 
@@ -24,19 +23,10 @@ cursor = connection.cursor()
 cursor.execute("""SELECT * FROM CardLib""")
 
 # Initialize card library. The card library is implemented as a dictionary mapping card_name to a
-# dictionary containing card information
-card_lib: Dict[str, CardEntry] = {}
-
-# Fetch all rows. TODO: wrap in function
-rows = cursor.fetchall()
-for row in rows:
-    card_name = row["card_name"]
-
-    # If card_name is not in card_lib, create a new card instance
-    if card_name not in card_lib:
-        card_lib[card_name] = CardEntry(
-            card_desc=row["card_desc"],
-            card_cost=row["card_cost"],
-            card_type=row["card_type"],
-            card_rarity=row["card_rarity"],
-        )
+# an instance of CardEntry
+card_lib = {
+    row["card_name"]: CardEntry(
+        row["card_desc"], row["card_cost"], row["card_type"], row["card_rarity"]
+    )
+    for row in cursor.fetchall()
+}
