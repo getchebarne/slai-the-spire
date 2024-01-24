@@ -1,5 +1,6 @@
+from abc import ABC
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Optional
 
 from game.core.modifier import Modifier
 
@@ -28,16 +29,20 @@ class Block:
     max: int = MAX_BLOCK
     current: int = 0
 
+    def __post_init__(self) -> None:
+        if self.current > self.max:
+            raise ValueError("Current block can't be larger than maximum block")
+
     def __str__(self) -> str:
         return f"\U0001F6E1 {self.current}"
 
 
 @dataclass
-class Actor:
+class Entity(ABC):
     name: str
-    base_health: int
+    health: Health
     block: Block = field(default_factory=Block)
-    modifiers: List[Modifier] = field(default_factory=list)
+    modifiers: list[Modifier] = field(default_factory=list)
 
     def __str__(self) -> str:
-        return f"{self.__class__.__name__}\n{self.block} {self.health}\n{self.modifiers}"
+        return f"{self.name}\n{self.block} {self.health}\n{self.modifiers}"

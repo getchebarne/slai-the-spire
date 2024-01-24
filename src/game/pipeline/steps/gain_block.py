@@ -9,7 +9,7 @@ class GainBlock(BaseStep):
         target = effect.target
 
         # TODO: parametrize max block
-        target.block = min(999, target.block + effect.value)
+        target.block.current = min(999, target.block.current + effect.value)
 
         return NewEffects()
 

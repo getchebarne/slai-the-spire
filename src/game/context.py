@@ -1,15 +1,12 @@
-from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
 
 from game.lib.char import char_lib
 from game.lib.monster import monster_lib
-
-
-@dataclass
-class Energy:
-    max: int
-    current: int
+from game.core.energy import Energy
+from game.core.char import Character
+from game.core.entity import Health
+from game.core.monster import Monster
 
 
 class BattleState(Enum):
@@ -18,26 +15,12 @@ class BattleState(Enum):
     NONE = 2
 
 
-@dataclass
-class Entity:
-    name: str
-    max_health: int
-    current_health: int
-    block: int = 0
-
-
-@dataclass
-class Character(Entity):
-    pass
-
-
-@dataclass
-class Monster(Entity):
-    current_move_name: Optional[str] = None
-
-
+# TODO: parametrize
 CHAR_NAME = "Silent"
 MONSTER_NAME = "Dummy"
+
+# Battle state
+state = BattleState.NONE
 
 # Cards
 deck: List[str] = [
@@ -66,18 +49,11 @@ active_card: Optional[str] = None
 # TODO: intialize elsewhere
 # TODO: add modifiers
 # Character
-char = Character(
-    name=CHAR_NAME,
-    max_health=char_lib[CHAR_NAME].base_health,
-    current_health=char_lib[CHAR_NAME].base_health,
-)
-# Monsters
-monsters = [
-    Monster(
-        name=MONSTER_NAME,
-        max_health=monster_lib[MONSTER_NAME].base_health,
-        current_health=monster_lib[MONSTER_NAME].base_health,
-    )
-]
-# Battle state
-state = BattleState.NONE
+char = Character(name=CHAR_NAME, health=Health(char_lib[CHAR_NAME].base_health))
+
+# Monsters. The monsters are implemented as a list of monsters
+monsters = [Monster(name=MONSTER_NAME, health=Health(monster_lib[MONSTER_NAME].base_health))]
+
+# Current monsters' moves. The current monsters' moves are implemented as a dictionary mapping
+# monster_id to a move_name
+monster_moves = {0: None}
