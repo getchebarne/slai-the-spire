@@ -4,6 +4,7 @@ import sqlite3
 from game.constants import DB_PATH
 from game.logic.move.base import BaseMoveLogic
 
+
 # Connect to the SQLite database
 connection = sqlite3.connect(DB_PATH)
 connection.row_factory = sqlite3.Row

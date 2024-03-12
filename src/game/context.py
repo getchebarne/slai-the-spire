@@ -1,12 +1,12 @@
 from enum import Enum
 from typing import List, Optional
 
-from game.lib.char import char_lib
-from game.lib.monster import monster_lib
-from game.core.energy import Energy
 from game.core.char import Character
+from game.core.energy import Energy
 from game.core.entity import Health
 from game.core.monster import Monster
+from game.lib.char import char_lib
+from game.lib.monster import monster_lib
 
 
 # TODO: define elsewhere

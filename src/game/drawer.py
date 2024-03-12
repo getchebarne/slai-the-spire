@@ -3,10 +3,10 @@ from functools import wraps
 from typing import Any, Callable
 
 from game import context
-from game.lib.card import card_lib
-from game.core.entity import Health
 from game.core.entity import Block
 from game.core.entity import Entity
+from game.core.entity import Health
+from game.lib.card import card_lib
 
 
 N_TERM_COLS, _ = os.get_terminal_size()

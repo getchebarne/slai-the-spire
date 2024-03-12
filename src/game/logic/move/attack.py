@@ -1,7 +1,7 @@
 from game import context
-from game.core.monster import Monster
 from game.core.effect import Effect
 from game.core.effect import EffectType
+from game.core.monster import Monster
 from game.logic.move.base import BaseMoveLogic
 
 
