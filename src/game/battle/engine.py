@@ -10,6 +10,7 @@ from game.lib.card import card_lib
 from game.lib.monster import monster_lib
 from game.lib.move import move_lib
 from game.pipeline.pipeline import EffectPipeline
+from game.drawer import draw_state_dec
 
 
 if TYPE_CHECKING:
@@ -50,6 +51,7 @@ class BattleEngine:
 
         # TODO: register relics?
 
+    @draw_state_dec
     def _select_card(self, card_idx: int) -> None:
         # Get card from hand
         card_name = context.hand[card_idx]
@@ -100,6 +102,7 @@ class BattleEngine:
             monster_ai = monster_lib[monster.name].ai
             monster.current_move_name = monster_ai.next_move_name(monster.current_move_name)
 
+    @draw_state_dec
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
         if context.active_card_idx is None:
             raise ValueError("No active card to play")
@@ -123,6 +126,7 @@ class BattleEngine:
         # Clear active card
         context.active_card_idx = None
 
+    @draw_state_dec
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
         for monster in context.monsters:
