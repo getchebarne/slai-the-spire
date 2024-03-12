@@ -8,3 +8,7 @@ class BaseAI(ABC):
     @abstractmethod
     def next_move_name(self, current_move_name: str) -> str:
         raise NotImplementedError
+
+    @abstractmethod
+    def first_move_name(self) -> str:
+        raise NotImplementedError

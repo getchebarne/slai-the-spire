@@ -32,7 +32,6 @@ class Action:
     index: Optional[int]
 
 
-# TODO: reset block at start of turn
 class BattleEngine:
     def __init__(self, agent: BaseAgent):
         self.agent = agent
@@ -48,6 +47,11 @@ class BattleEngine:
         # Fill draw pile
         context.draw_pile = context.deck.copy()
         random.shuffle(context.draw_pile)
+
+        # Get first move from monsters
+        for monster in context.monsters:
+            monster_ai = monster_lib[monster.name].ai
+            monster.current_move_name = monster_ai.first_move_name()
 
         # TODO: register relics?
 
@@ -72,10 +76,8 @@ class BattleEngine:
         # Reset energy
         context.energy.current = context.energy.max
 
-        # Update monsters' moves. TODO: fix, use ai
-        for monster in context.monsters:
-            monster_ai = monster_lib[monster.name].ai
-            monster.current_move_name = monster_ai.next_move_name(monster.current_move_name)
+        # Reset block
+        context.char.block.current = 0
 
     def _char_turn_end(self) -> None:
         # Discard hand
@@ -94,7 +96,9 @@ class BattleEngine:
         context.draw_pile = context.draw_pile[1:]
 
     def _monsters_turn_start(self) -> None:
-        pass
+        # Reset block
+        for monster in context.monsters:
+            monster.block.current = 0
 
     def _monsters_turn_end(self) -> None:
         # Update monsters' moves
