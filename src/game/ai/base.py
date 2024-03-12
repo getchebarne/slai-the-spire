@@ -6,5 +6,5 @@ class BaseAI(ABC):
         self.previous_move_names: list[str] = []
 
     @abstractmethod
-    def next_move_name(self) -> str:
+    def next_move_name(self, current_move_name: str) -> str:
         raise NotImplementedError
