@@ -9,6 +9,7 @@ from game.core.entity import Health
 from game.core.monster import Monster
 
 
+# TODO: define elsewhere
 class BattleState(Enum):
     DEFAULT = 0
     AWAIT_TARGET = 1

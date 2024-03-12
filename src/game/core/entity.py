@@ -20,9 +20,6 @@ class Health:
         elif self.current > self.max:
             raise ValueError("Current health can't be larger than maximum health")
 
-    def __str__(self) -> str:
-        return f"\u2764\uFE0F {self.current}/{self.max}"
-
 
 @dataclass
 class Block:
@@ -33,9 +30,6 @@ class Block:
         if self.current > self.max:
             raise ValueError("Current block can't be larger than maximum block")
 
-    def __str__(self) -> str:
-        return f"\U0001F6E1 {self.current}"
-
 
 @dataclass
 class Entity(ABC):
@@ -43,6 +37,3 @@ class Entity(ABC):
     health: Health
     block: Block = field(default_factory=Block)
     modifiers: list[Modifier] = field(default_factory=list)
-
-    def __str__(self) -> str:
-        return f"{self.name}\n{self.block} {self.health}\n{self.modifiers}"
