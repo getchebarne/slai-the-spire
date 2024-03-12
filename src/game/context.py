@@ -44,7 +44,7 @@ disc_pile: List[str] = []
 energy = Energy(max=3, current=3)
 
 # Active card
-active_card: Optional[str] = None
+active_card_idx: Optional[int] = None
 
 # TODO: intialize elsewhere
 # TODO: add modifiers
@@ -53,7 +53,3 @@ char = Character(name=CHAR_NAME, health=Health(char_lib[CHAR_NAME].base_health))
 
 # Monsters. The monsters are implemented as a list of monsters
 monsters = [Monster(name=MONSTER_NAME, health=Health(monster_lib[MONSTER_NAME].base_health))]
-
-# Current monsters' moves. The current monsters' moves are implemented as a dictionary mapping
-# monster_id to a move_name
-monster_moves = {0: None}
