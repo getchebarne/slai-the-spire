@@ -6,11 +6,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from game import context
+from game.drawer import draw_state_dec
 from game.lib.card import card_lib
 from game.lib.monster import monster_lib
 from game.lib.move import move_lib
 from game.pipeline.pipeline import EffectPipeline
-from game.drawer import draw_state_dec
 
 
 if TYPE_CHECKING:

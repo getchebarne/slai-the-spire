@@ -2,8 +2,8 @@ import importlib
 import sqlite3
 from dataclasses import dataclass
 
-from game.constants import DB_PATH
 from game.ai.base import BaseAI
+from game.constants import DB_PATH
 
 
 @dataclass
