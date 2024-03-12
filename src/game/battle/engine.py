@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from game import ai
 from game import context
 from game.lib.card import card_lib
 from game.lib.monster import monster_lib
+from game.lib.move import move_lib
 from game.pipeline.pipeline import EffectPipeline
 
 
@@ -31,6 +31,7 @@ class Action:
     index: Optional[int]
 
 
+# TODO: reset block at start of turn
 class BattleEngine:
     def __init__(self, agent: BaseAgent):
         self.agent = agent
@@ -59,7 +60,7 @@ class BattleEngine:
             raise ValueError(f"Can't play {card_name} with {context.energy.current} energy")
 
         # Set active card
-        context.active_card = card_name
+        context.active_card_idx = card_idx
 
     def _char_turn_start(self) -> None:
         # Draw cards from draw pile
@@ -71,7 +72,8 @@ class BattleEngine:
 
         # Update monsters' moves. TODO: fix, use ai
         for monster in context.monsters:
-            monster.current_move_name = random.choice(list(monster_lib[monster.name].moves.keys()))
+            monster_ai = monster_lib[monster.name].ai
+            monster.current_move_name = monster_ai.next_move_name(monster.current_move_name)
 
     def _char_turn_end(self) -> None:
         # Discard hand
@@ -95,17 +97,15 @@ class BattleEngine:
     def _monsters_turn_end(self) -> None:
         # Update monsters' moves
         for monster in context.monsters:
-            # TODO: implement base ai class
-            # TODO: write function to get ai class from monster name instead of using getattr
-            monster_ai = getattr(ai, monster.name)
+            monster_ai = monster_lib[monster.name].ai
             monster.current_move_name = monster_ai.next_move_name(monster.current_move_name)
 
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
-        if context.active_card is None:
+        if context.active_card_idx is None:
             raise ValueError("No active card to play")
 
         # Get active card's effects
-        card_name = context.active_card
+        card_name = context.hand[context.active_card_idx]
         card_info = card_lib[card_name]
         effects = card_info.card_logic.use(monster_idx)
 
@@ -121,13 +121,13 @@ class BattleEngine:
         context.energy.current -= card_info.card_cost
 
         # Clear active card
-        context.active_card = None
+        context.active_card_idx = None
 
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
         for monster in context.monsters:
-            move = monster_lib[monster.name].moves[monster.current_move_name]
-            effects = move.use(monster)
+            move_logic = move_lib[(monster.name, monster.current_move_name)]
+            effects = move_logic.use(monster)
             self.effect_pipeline(effects)
 
     def _char_turn(self) -> None:
@@ -176,7 +176,9 @@ class BattleEngine:
             self._char_turn_end()
 
             # Monsters' turn
+            self._monsters_turn_start()
             self._monsters_turn()
+            self._monsters_turn_end()
 
     @staticmethod
     def is_over() -> bool:

@@ -3,13 +3,13 @@ import sqlite3
 from dataclasses import dataclass
 
 from game.constants import DB_PATH
-from game.logic.move.base import BaseMoveLogic
+from game.ai.base import BaseAI
 
 
 @dataclass
 class MonsterEntry:
     base_health: int
-    moves: dict[str, BaseMoveLogic]
+    ai: BaseAI
 
 
 # Connect to the SQLite database
@@ -20,15 +20,8 @@ connection.row_factory = sqlite3.Row
 cursor = connection.cursor()
 
 # Execute database query
-cursor.execute(
-    """
-    SELECT
-        *
-    FROM
-        MonsterLib
-        JOIN MonsterMoves USING (monster_name)
-    """
-)
+cursor.execute("SELECT * FROM MonsterLib")
+
 # Initialize monster library. The monster library is implemented as a dictionary mapping
 # monster_name to a MonsterEntry instance
 monster_lib = {}
@@ -37,18 +30,11 @@ monster_lib = {}
 rows = cursor.fetchall()
 for row in rows:
     monster_name = row["monster_name"]
-    move_name = row["move_name"]
+    base_health = row["base_health"]
 
-    # Get the move's logic
-    logic_module = importlib.import_module(f"game.logic.move.{move_name.lower()}")
-    move_logic = getattr(logic_module, f"{move_name}Logic")()
+    # Get the monster's AI
+    ai_module = importlib.import_module(f"game.ai.{monster_name.lower()}")
+    ai = getattr(ai_module, f"{monster_name}AI")()
 
-    # If monster_name is not in monster_lib, create a new MonsterEntry instance
-    if monster_name not in monster_lib:
-        monster_lib[monster_name] = MonsterEntry(
-            base_health=row["base_health"], moves={move_name: move_logic}
-        )
-
-    # If monster_name is in monster_lib, add move_name to the monster's moves
-    else:
-        monster_lib[monster_name].moves[move_name] = move_logic
+    # Add monster to monster_lib
+    monster_lib[monster_name] = MonsterEntry(base_health=base_health, ai=ai)
