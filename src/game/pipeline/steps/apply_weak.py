@@ -1,18 +1,12 @@
-from game.effects.base import BaseEffect
-from game.effects.card import CardEffect
-from game.effects.monster import MonsterEffect
 from game.pipeline.steps.base import BaseStep
-from game.pipeline.steps.base import NewEffects
 
 
 WEAK_FACTOR = 0.75
 
 
 class ApplyWeak(BaseStep):
-    def _apply_effect(self, effect: BaseEffect) -> NewEffects:
+    def _apply_effect(self, effect: BaseEffect) -> None:
         effect.damage = int(effect.damage * WEAK_FACTOR)
-
-        return NewEffects()
 
     def _condition(self, effect: BaseEffect) -> bool:
         return (

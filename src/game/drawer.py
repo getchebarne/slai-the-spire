@@ -2,10 +2,9 @@ import os
 from functools import wraps
 from typing import Any, Callable
 
+import pandas as pd
+
 from game import context
-from game.core.entity import Block
-from game.core.entity import Entity
-from game.core.entity import Health
 from game.lib.card import card_lib
 
 
@@ -43,27 +42,25 @@ def hand_str() -> str:
     return str_
 
 
-def health_str(health: Health) -> str:
-    return f"\u2764\uFE0F {health.current}/{health.max}"
-
-
-def block_str(block: Block) -> str:
-    return f"\U0001F6E1 {block.current}"
-
-
-def entity_str(entity: Entity) -> str:
-    return f"{entity.name} {health_str(entity.health)} {block_str(entity.block)}"
+def entity_str(entity: pd.Series) -> str:
+    return (
+        f"{entity['entity_name']} "
+        f"\u2764\uFE0F {entity['entity_current_health']}/{entity['entity_max_health']}"
+        f"\U0001F6E1 {entity['entity_current_block']}"
+    )
 
 
 def draw() -> None:
     print(state_str())
     print(energy_str())
     print(hand_str())
-    for monster in context.monsters:
+    for monster_entity_id in context.monster_entity_ids():
+        monster = context.entities.loc[monster_entity_id]
+
         # Print to the right side of the terminal
         print(f"{entity_str(monster):>{N_TERM_COLS}}")
 
-    print(entity_str(context.char))
+    print(entity_str(context.entities.loc[context.char_entity_id()]))
     print("-" * N_TERM_COLS)
 
 

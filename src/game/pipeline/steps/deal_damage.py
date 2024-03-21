@@ -1,22 +1,23 @@
 from game.core.effect import Effect
 from game.core.effect import EffectType
 from game.pipeline.steps.base import BaseStep
-from game.pipeline.steps.base import NewEffects
+from game.context import entities
 
 
 class DealDamage(BaseStep):
-    def _apply_effect(self, effect: Effect) -> NewEffects:
+    def _apply_effect(self, effect: Effect) -> None:
         damage = effect.value
-        target = effect.target
+        target_entity_id = effect.target_entity_id
 
         # Remove block
-        dmg_over_block = max(0, damage - target.block.current)
-        target.block.current = max(0, target.block.current - damage)
-
+        dmg_over_block = max(0, damage - entities.loc[target_entity_id, "entity_current_block"])
+        entities.loc[target_entity_id, "entity_current_block"] = max(
+            0, entities.loc[target_entity_id, "entity_current_block"] - damage
+        )
         # Remove health
-        target.health.current = max(0, target.health.current - dmg_over_block)
-
-        return NewEffects()
+        entities.loc[target_entity_id, "entity_current_health"] = max(
+            0, entities.loc[target_entity_id, "entity_current_health"] - dmg_over_block
+        )
 
     def _condition(self, effect: Effect) -> bool:
         return effect.type == EffectType.DAMAGE
