@@ -33,11 +33,11 @@ class EffectPipeline:
         while effect_queue:
             effect = effect_queue.popleft()
             for step in self._steps:
-                new_effects = step(effect)
+                add_to_bot_effects, add_to_top_effects = step(effect)
 
                 # Add new effects to the queue
-                effect_queue.extend(new_effects.add_to_bot)
-                effect_queue.extendleft(new_effects.add_to_top)
+                effect_queue.extend(add_to_bot_effects)
+                effect_queue.extendleft(add_to_top_effects)
 
     def __str__(self) -> str:
         return "\n".join([f"{step.priority} : {step.__class__.__name__}" for step in self._steps])

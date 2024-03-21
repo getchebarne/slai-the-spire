@@ -7,5 +7,5 @@ from game.logic.card.base import BaseCardLogic
 
 
 class DefendLogic(BaseCardLogic):
-    def use(self, monster_idx: Optional[int] = None) -> list[Effect]:
-        return [Effect(EffectType.BLOCK, 5, context.char, context.char)]
+    def use(self, target_monster_id: Optional[int] = None) -> list[Effect]:
+        return [Effect(context.char_entity_id(), context.char_entity_id(), EffectType.BLOCK, 5)]

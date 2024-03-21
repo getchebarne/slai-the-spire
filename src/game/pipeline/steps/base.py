@@ -1,33 +1,38 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import List
 
 from game.core.effect import Effect
 
 
-# TODO: review if this is the best solution
-@dataclass
-class NewEffects:
-    add_to_bot: List[Effect] = field(default_factory=list)
-    add_to_top: List[Effect] = field(default_factory=list)
-
-
 class BaseStep(ABC):
-    def __call__(self, effect: Effect) -> NewEffects:
+    def __call__(self, effect: Effect) -> tuple[list[Effect], list[Effect]]:
         if self._condition(effect):
-            return self._apply_effect(effect)
+            # Apply effect
+            self._apply_effect(effect)
 
-        return NewEffects()
+            # Return new effects
+            return (
+                self._add_to_bot_effects(effect),
+                self._add_to_top_effects(effect),
+            )
+
+        # Otherwise, return empty lists
+        return [], []
 
     @abstractmethod
-    def _apply_effect(self, effect: Effect) -> NewEffects:
+    def _apply_effect(self, effect: Effect) -> None:
         raise NotImplementedError
 
     @abstractmethod
     def _condition(self, effect: Effect) -> bool:
         raise NotImplementedError
+
+    def _add_to_bot_effects(self, effect: Effect) -> list[Effect]:
+        return []
+
+    def _add_to_top_effects(self, effect: Effect) -> list[Effect]:
+        return []
 
     @property
     def priority(self) -> int:

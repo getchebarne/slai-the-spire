@@ -9,7 +9,7 @@ from game.logic.card.base import BaseCardLogic
 @dataclass
 class CardEntry:
     card_desc: str
-    card_cost: int
+    card_cost: int  # TODO: change name to card_base_cost
     card_type: str
     card_rarity: str
     card_logic: BaseCardLogic

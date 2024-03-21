@@ -6,5 +6,5 @@ from game.core.effect import Effect
 
 class BaseCardLogic(ABC):
     @abstractmethod
-    def use(self, monster_idx: Optional[int] = None) -> list[Effect]:
+    def use(self, target_monster_id: Optional[int] = None) -> list[Effect]:
         raise NotImplementedError
