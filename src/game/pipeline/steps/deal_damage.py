@@ -1,7 +1,7 @@
+from game.context import entities
 from game.core.effect import Effect
 from game.core.effect import EffectType
 from game.pipeline.steps.base import BaseStep
-from game.context import entities
 
 
 class DealDamage(BaseStep):
