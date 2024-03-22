@@ -3,6 +3,7 @@
 from game.pipeline.steps.deal_damage import DealDamage
 from game.pipeline.steps.gain_block import GainBlock
 
+
 # from game.pipeline.steps.gain_str import GainStrength
 # from game.pipeline.steps.gain_weak import GainWeak
 

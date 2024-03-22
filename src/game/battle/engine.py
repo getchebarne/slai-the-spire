@@ -53,9 +53,9 @@ class BattleEngine:
             monster = context.entities.loc[monster_entity_id]
 
             monster_ai = monster_lib[monster["entity_name"]].ai
-            context.monster_moves.loc[monster_entity_id, "current_move_name"] = (
-                monster_ai.first_move_name()
-            )
+            context.monster_moves.loc[
+                monster_entity_id, "current_move_name"
+            ] = monster_ai.first_move_name()
 
         # TODO: register relics?
 
