@@ -52,13 +52,11 @@ def draw() -> None:
     print(state_str())
     print(energy_str())
     print(hand_str())
-    for monster_entity_id in context.monster_entity_ids():
-        monster_data = context.entities[monster_entity_id]
-
+    for _, monster_data in context.get_monsters():
         # Print to the right side of the terminal
         print(f"{entity_str(monster_data):>{N_TERM_COLS}}")
 
-    print(entity_str(context.entities[context.char_entity_id()]))
+    print(entity_str(context.get_char()[1]))
     print("-" * N_TERM_COLS)
 
 

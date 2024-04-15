@@ -19,20 +19,6 @@ class BattleState(Enum):
     NONE = 2
 
 
-# TODO: define elsewhere
-def monster_entity_ids() -> Generator[int, None, None]:
-    for entity_id, entity_data in entities.items():
-        if not entity_data.is_char:
-            yield entity_id
-
-
-# TODO: define elsewhere
-def char_entity_id() -> int:
-    for entity_id, entity_data in entities.items():
-        if entity_data.is_char:
-            return entity_id
-
-
 # Battle state
 state = BattleState.NONE
 
@@ -60,9 +46,6 @@ energy = Energy(max=3, current=3)
 # Active card
 active_card_idx: Optional[int] = None
 
-# TODO: intialize elsewhere
-# TODO: add modifiers
-
 
 @dataclass
 class EntityData:
@@ -73,6 +56,24 @@ class EntityData:
     is_char: bool
 
 
+# TODO: define elsewhere
+def get_monsters() -> Generator[tuple[int, EntityData], None, None]:
+    for entity_id, entity_data in entities.items():
+        if not entity_data.is_char:
+            yield entity_id, entity_data
+
+
+# TODO: define elsewhere
+def get_char() -> tuple[int, EntityData]:
+    for entity_id, entity_data in entities.items():
+        if entity_data.is_char:
+            return entity_id, entity_data
+
+    raise ValueError("No character found")
+
+
+# TODO: intialize elsewhere
+# TODO: add modifiers
 entities = {
     0: EntityData(
         name=CHAR_NAME,
