@@ -19,5 +19,5 @@ class RandomAgent(BaseAgent):
             return Action(ActionType.SELECT_CARD, card_idx)
 
         if context.state == BattleState.AWAIT_TARGET:
-            monster_entity_id = np.random.choice(context.monster_entity_ids())
+            monster_entity_id = np.random.choice(list(context.monster_entity_ids()))
             return Action(ActionType.SELECT_TARGET, monster_entity_id)

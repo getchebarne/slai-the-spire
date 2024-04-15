@@ -50,12 +50,10 @@ class BattleEngine:
 
         # Get first move from monsters
         for monster_entity_id in context.monster_entity_ids():
-            monster = context.entities.loc[monster_entity_id]
+            monster_data = context.entities[monster_entity_id]
 
-            monster_ai = monster_lib[monster["entity_name"]].ai
-            context.monster_moves.loc[
-                monster_entity_id, "current_move_name"
-            ] = monster_ai.first_move_name()
+            monster_ai = monster_lib[monster_data.name].ai
+            context.monster_moves[monster_entity_id] = monster_ai.first_move_name()
 
         # TODO: register relics?
 
@@ -81,7 +79,7 @@ class BattleEngine:
         context.energy.current = context.energy.max
 
         # Reset block
-        context.entities.loc[context.char_entity_id(), "entity_current_block"] = 0
+        context.entities[context.char_entity_id()].current_block = 0
 
     def _char_turn_end(self) -> None:
         # Discard hand
@@ -102,22 +100,22 @@ class BattleEngine:
     def _monsters_turn_start(self) -> None:
         for monster_entity_id in context.monster_entity_ids():
             # Reset block
-            context.entities.loc[monster_entity_id, "entity_current_block"] = 0
+            context.entities[monster_entity_id].current_block = 0
 
     def _monsters_turn_end(self) -> None:
         # Update monsters' moves
         for monster_entity_id in context.monster_entity_ids():
-            monster = context.entities.loc[monster_entity_id]
+            monster_data = context.entities[monster_entity_id]
 
             # Get monster's AI
-            monster_ai = monster_lib[monster["entity_name"]].ai
+            monster_ai = monster_lib[monster_data.name].ai
 
             # Get monster's current move
-            current_move_name = context.monster_moves.loc[monster_entity_id, "current_move_name"]
+            current_move_name = context.monster_moves[monster_entity_id]
 
             # Set monster's next move
             next_move_name = monster_ai.next_move_name(current_move_name)
-            context.monster_moves.loc[monster_entity_id, "current_move_name"] = next_move_name
+            context.monster_moves[monster_entity_id] = next_move_name
 
     @draw_state_dec
     def _play_card(self, monster_idx: Optional[int] = None) -> None:
@@ -147,11 +145,11 @@ class BattleEngine:
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
         for monster_entity_id in context.monster_entity_ids():
-            monster = context.entities.loc[monster_entity_id]
+            monster_data = context.entities[monster_entity_id]
 
             # Get monster's move logic
-            current_move_name = context.monster_moves.loc[monster_entity_id, "current_move_name"]
-            move_logic = move_lib[(monster["entity_name"], current_move_name)]
+            current_move_name = context.monster_moves[monster_entity_id]
+            move_logic = move_lib[(monster_data.name, current_move_name)]
 
             # Get effects
             effects = move_logic.use(monster_entity_id)
@@ -209,7 +207,7 @@ class BattleEngine:
 
     @staticmethod
     def is_over() -> bool:
-        return context.entities.loc[context.char_entity_id(), "entity_current_health"] <= 0 or all(
-            context.entities.loc[monster_entity_id, "entity_current_health"] <= 0
+        return context.entities[context.char_entity_id()].current_health <= 0 or all(
+            context.entities[monster_entity_id].current_health <= 0
             for monster_entity_id in context.monster_entity_ids()
         )

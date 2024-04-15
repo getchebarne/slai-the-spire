@@ -2,8 +2,6 @@ import os
 from functools import wraps
 from typing import Any, Callable
 
-import pandas as pd
-
 from game import context
 from game.lib.card import card_lib
 
@@ -42,11 +40,11 @@ def hand_str() -> str:
     return str_
 
 
-def entity_str(entity: pd.Series) -> str:
+def entity_str(entity: context.EntityData) -> str:
     return (
-        f"{entity['entity_name']} "
-        f"\u2764\uFE0F {entity['entity_current_health']}/{entity['entity_max_health']}"
-        f"\U0001F6E1 {entity['entity_current_block']}"
+        f"{entity.name} "
+        f"\u2764\uFE0F {entity.current_health}/{entity.max_health}"
+        f"\U0001F6E1 {entity.current_block}"
     )
 
 
@@ -55,12 +53,12 @@ def draw() -> None:
     print(energy_str())
     print(hand_str())
     for monster_entity_id in context.monster_entity_ids():
-        monster = context.entities.loc[monster_entity_id]
+        monster_data = context.entities[monster_entity_id]
 
         # Print to the right side of the terminal
-        print(f"{entity_str(monster):>{N_TERM_COLS}}")
+        print(f"{entity_str(monster_data):>{N_TERM_COLS}}")
 
-    print(entity_str(context.entities.loc[context.char_entity_id()]))
+    print(entity_str(context.entities[context.char_entity_id()]))
     print("-" * N_TERM_COLS)
 
 

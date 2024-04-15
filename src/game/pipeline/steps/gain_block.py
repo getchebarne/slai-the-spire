@@ -1,4 +1,4 @@
-from game.context import entities
+from game import context
 from game.core.effect import Effect
 from game.core.effect import EffectType
 from game.pipeline.steps.base import BaseStep
@@ -12,8 +12,8 @@ class GainBlock(BaseStep):
         block = effect.value
         target_entity_id = effect.target_entity_id
 
-        entities.loc[target_entity_id, "entity_current_block"] = min(
-            MAX_BLOCK, entities.loc[target_entity_id, "entity_current_block"] + block
+        context.entities[target_entity_id].current_block = min(
+            MAX_BLOCK, context.entities[target_entity_id].current_block + block
         )
 
     def _condition(self, effect: Effect) -> bool:

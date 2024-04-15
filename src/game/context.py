@@ -1,7 +1,6 @@
 from enum import Enum
-from typing import Optional
-
-import pandas as pd
+from dataclasses import dataclass
+from typing import Optional, Generator
 
 from game.core.energy import Energy
 from game.lib.char import char_lib
@@ -21,17 +20,17 @@ class BattleState(Enum):
 
 
 # TODO: define elsewhere
-def monster_entity_ids() -> list[int]:
-    return entities[~entities["entity_is_char"]].index.tolist()
+def monster_entity_ids() -> Generator[int, None, None]:
+    for entity_id, entity_data in entities.items():
+        if not entity_data.is_char:
+            yield entity_id
 
 
 # TODO: define elsewhere
 def char_entity_id() -> int:
-    id_ = entities[entities["entity_is_char"]].index
-    if len(id_) != 1:
-        raise ValueError("There should be exactly one character entity")
-
-    return id_[0]
+    for entity_id, entity_data in entities.items():
+        if entity_data.is_char:
+            return entity_id
 
 
 # Battle state
@@ -64,36 +63,31 @@ active_card_idx: Optional[int] = None
 # TODO: intialize elsewhere
 # TODO: add modifiers
 
-# Entities
-entities = pd.DataFrame(
-    {
-        "entity_id": [0, 1],
-        "entity_name": [CHAR_NAME, MONSTER_NAME],
-        "entity_current_health": [
-            char_lib[CHAR_NAME].base_health,
-            monster_lib[MONSTER_NAME].base_health,
-        ],
-        "entity_max_health": [
-            char_lib[CHAR_NAME].base_health,
-            monster_lib[MONSTER_NAME].base_health,
-        ],
-        "entity_current_block": [0, 0],
-        "entity_is_char": [True, False],
-    },
-).set_index("entity_id")
 
-# Entity modifiers
-entities_modifiers = pd.DataFrame(
-    {
-        "entity_id": [],
-        "modifier_name": [],
-        "modifier_current_stacks": [],
-    }
-)
-# Monster moves
-monster_moves = pd.DataFrame(
-    {
-        "entity_id": [1],
-        "current_move_name": None,
-    }
-).set_index("entity_id")
+@dataclass
+class EntityData:
+    name: str
+    current_health: int
+    max_health: int
+    current_block: int
+    is_char: bool
+
+
+entities = {
+    0: EntityData(
+        name=CHAR_NAME,
+        current_health=char_lib[CHAR_NAME].base_health,
+        max_health=char_lib[CHAR_NAME].base_health,
+        current_block=0,
+        is_char=True,
+    ),
+    1: EntityData(
+        name=MONSTER_NAME,
+        current_health=monster_lib[MONSTER_NAME].base_health,
+        max_health=monster_lib[MONSTER_NAME].base_health,
+        current_block=0,
+        is_char=False,
+    ),
+}
+entity_modifiers = {(0, "strength"): 1}
+monster_moves = {1: None}
