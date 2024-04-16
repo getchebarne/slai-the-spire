@@ -1,10 +1,15 @@
-from game.effects.base import BaseEffect
+from game.core.effect import Effect
+from game import context
 from game.pipeline.steps.base import BaseStep
 
 
 class GainStrength(BaseStep):
-    def _apply_effect(self, effect: BaseEffect) -> None:
-        effect.target.modifiers.strength.stack.increase(effect.plus_str)
+    def _apply_effect(self, effect: Effect) -> None:
+        # TODO: use defaultdict?
+        if (effect.source_entity_id, "Strength") in context.entity_modifiers:
+            context.entity_modifiers[(effect.source_entity_id, "Strength")] += effect.value
+        else:
+            context.entity_modifiers[(effect.source_entity_id, "Strength")] = effect.value
 
-    def _condition(self, effect: BaseEffect) -> bool:
-        return effect.plus_str is not None
+    def _condition(self, effect: Effect) -> bool:
+        return True
