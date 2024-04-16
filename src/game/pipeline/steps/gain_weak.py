@@ -1,10 +1,15 @@
-from game.effects.base import BaseEffect
+from game.core.effect import Effect
+from game import context
 from game.pipeline.steps.base import BaseStep
 
 
 class GainWeak(BaseStep):
-    def _apply_effect(self, effect: BaseEffect) -> None:
-        effect.target.modifiers.weak.stack.increase(effect.weak)
+    def _apply_effect(self, effect: Effect) -> None:
+        # TODO: use defaultdict
+        if (effect.source_entity_id, "Weak") in context.entity_modifiers:
+            context.entity_modifiers[(effect.source_entity_id, "Weak")] += effect.value
+        else:
+            context.entity_modifiers[(effect.source_entity_id, "Weak")] = effect.value
 
-    def _condition(self, effect: BaseEffect) -> bool:
-        return effect.weak is not None
+    def _condition(self, effect: Effect) -> bool:
+        return True
