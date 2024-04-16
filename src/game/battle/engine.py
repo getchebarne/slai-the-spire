@@ -10,6 +10,7 @@ from game.drawer import draw_state_dec
 from game.lib.card import card_lib
 from game.lib.monster import monster_lib
 from game.lib.move import move_lib
+from game.lib.modifier import modifier_lib
 from game.pipeline.pipeline import EffectPipeline
 
 
@@ -76,10 +77,30 @@ class BattleEngine:
         # Reset energy
         context.energy.current = context.energy.max
 
+        # Queue modifier effects
+        char_id, _ = context.get_char()
+        for (entity_id, modifier_name), stacks in context.entity_modifiers.items():
+            if entity_id == char_id:
+                modifier_entry = modifier_lib[modifier_name]
+                effects = modifier_entry.modifier_logic.at_start_of_turn(entity_id, stacks)
+                self.effect_pipeline(effects)
+
         # Reset block
         context.get_char()[1].current_block = 0
 
     def _char_turn_end(self) -> None:
+        # Queue modifier effects
+        char_id, _ = context.get_char()
+        for (entity_id, modifier_name), stacks in context.entity_modifiers.items():
+            if entity_id == char_id:
+                modifier_entry = modifier_lib[modifier_name]
+                effects = modifier_entry.modifier_logic.at_end_of_turn(entity_id, stacks)
+                self.effect_pipeline(effects)
+
+                # Decrease stacks if the modifier stacks duration. TODO: remove if 0
+                if modifier_entry.modifier_stacks_duration:
+                    context.entity_modifiers[(entity_id, modifier_name)] = max(0, stacks - 1)
+
         # Discard hand
         context.disc_pile.extend(context.hand)
         context.hand = []
@@ -97,12 +118,30 @@ class BattleEngine:
 
     def _monsters_turn_start(self) -> None:
         for monster_id, _ in context.get_monsters():
+            # Queue modifier effects
+            for (entity_id, modifier_name), stacks in context.entity_modifiers.items():
+                if entity_id == monster_id:
+                    modifier_entry = modifier_lib[modifier_name]
+                    effects = modifier_entry.modifier_logic.at_start_of_turn(entity_id, stacks)
+                    self.effect_pipeline(effects)
+
             # Reset block
             context.entities[monster_id].current_block = 0
 
     def _monsters_turn_end(self) -> None:
         # Update monsters' moves
         for monster_id, monster_data in context.get_monsters():
+            # Queue modifier effects
+            for (entity_id, modifier_name), stacks in context.entity_modifiers.items():
+                if entity_id == monster_id:
+                    modifier_entry = modifier_lib[modifier_name]
+                    effects = modifier_entry.modifier_logic.at_end_of_turn(entity_id, stacks)
+                    self.effect_pipeline(effects)
+
+                    # Decrease stacks if the modifier stacks duration. TODO: remove if 0
+                    if modifier_entry.modifier_stacks_duration:
+                        context.entity_modifiers[(entity_id, modifier_name)] = max(0, stacks - 1)
+
             # Get monster's AI
             monster_ai = monster_lib[monster_data.name].ai
 

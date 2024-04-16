@@ -10,7 +10,6 @@ class EffectType(Enum):
     BLOCK = 1
     WEAK = 2
     PLUS_STR = 3
-    POISON_DECREASE = 4
 
     def __str__(self) -> str:
         return self.name
