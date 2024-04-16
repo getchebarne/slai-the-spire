@@ -90,5 +90,5 @@ entities = {
         is_char=False,
     ),
 }
-entity_modifiers = {(0, "strength"): 1}
+entity_modifiers = {(0, "Strength"): 1, (1, "Poison"): 3}
 monster_moves = {1: None}
