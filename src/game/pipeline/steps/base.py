@@ -3,13 +3,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from game.core.effect import Effect
+from game.context import Context
 
 
 class BaseStep(ABC):
-    def __call__(self, effect: Effect) -> tuple[list[Effect], list[Effect]]:
-        if self._condition(effect):
+    def __call__(self, context: Context, effect: Effect) -> tuple[list[Effect], list[Effect]]:
+        if self._condition(context, effect):
             # Apply effect
-            self._apply_effect(effect)
+            self._apply_effect(context, effect)
 
             # Return new effects
             return (
@@ -21,11 +22,11 @@ class BaseStep(ABC):
         return [], []
 
     @abstractmethod
-    def _apply_effect(self, effect: Effect) -> None:
+    def _apply_effect(self, context: Context, effect: Effect) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def _condition(self, effect: Effect) -> bool:
+    def _condition(self, context: Context, effect: Effect) -> bool:
         raise NotImplementedError
 
     def _add_to_bot_effects(self, effect: Effect) -> list[Effect]:

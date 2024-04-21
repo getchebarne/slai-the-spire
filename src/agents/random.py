@@ -1,7 +1,7 @@
 import numpy as np
 
 from agents.base import BaseAgent
-from game import context
+from game.context import Context
 from game.battle.engine import Action
 from game.battle.engine import ActionType
 from game.context import BattleState
@@ -9,7 +9,7 @@ from game.context import BattleState
 
 class RandomAgent(BaseAgent):
     # TODO: choose more actions other than card index
-    def select_action(self) -> Action:
+    def select_action(self, context: Context) -> Action:
         if context.state == BattleState.DEFAULT:
             if context.energy.current == 0:
                 # TODO: play `Neutralize` if it's in hand

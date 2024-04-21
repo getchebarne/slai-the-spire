@@ -1,1 +1,1 @@
-from game.ai.dummy import DummyAI
+from game.ai.dummy import DummyAI  # noqa

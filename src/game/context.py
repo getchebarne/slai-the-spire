@@ -3,13 +3,6 @@ from dataclasses import dataclass
 from typing import Optional, Generator
 
 from game.core.energy import Energy
-from game.lib.char import char_lib
-from game.lib.monster import monster_lib
-
-
-# TODO: parametrize
-CHAR_NAME = "Silent"
-MONSTER_NAME = "Dummy"
 
 
 # TODO: define elsewhere
@@ -19,76 +12,76 @@ class BattleState(Enum):
     NONE = 2
 
 
-# Battle state
-state = BattleState.NONE
-
-# Cards
-deck: list[str] = [
-    "Strike",
-    "Strike",
-    "Strike",
-    "Strike",
-    "Strike",
-    "Defend",
-    "Defend",
-    "Defend",
-    "Defend",
-    "Defend",
-    "Neutralize",
-]
-hand: list[str] = []
-draw_pile: list[str] = []
-disc_pile: list[str] = []
-
-# Energy
-energy = Energy(max=3, current=3)
-
-# Active card
-active_card_idx: Optional[int] = None
-
-
 @dataclass
 class EntityData:
     name: str
-    current_health: int
     max_health: int
-    current_block: int
-    is_char: bool
+    current_health: Optional[int] = None
+    current_block: int = 0
+
+    def __post_init__(self):
+        if self.current_health is None:
+            self.current_health = self.max_health
 
 
-# TODO: define elsewhere
-def get_monsters() -> Generator[tuple[int, EntityData], None, None]:
-    for entity_id, entity_data in entities.items():
-        if not entity_data.is_char:
-            yield entity_id, entity_data
+class Context:
+    CHAR_ENTITY_ID = 0
 
+    def __init__(
+        self,
+        entities: dict[int, EntityData],
+        entity_modifiers: dict[tuple[int, str], int] = {},
+        monster_moves: dict[int, Optional[str]] = {},
+        deck: list[str] = [],
+        hand: list[str] = [],
+        draw_pile: list[str] = [],
+        disc_pile: list[str] = [],
+        active_card_idx: Optional[int] = None,
+        energy: Energy = Energy(max=3, current=3),
+        state: BattleState = BattleState.NONE,
+    ):
+        self.entities = entities
+        self.entity_modifiers = entity_modifiers
+        self.monster_moves = monster_moves
+        self.deck = deck
+        self.hand = hand
+        self.draw_pile = draw_pile
+        self.disc_pile = disc_pile
+        self.active_card_idx = active_card_idx
+        self.energy = energy
+        self.state = state
 
-# TODO: define elsewhere
-def get_char() -> tuple[int, EntityData]:
-    for entity_id, entity_data in entities.items():
-        if entity_data.is_char:
-            return entity_id, entity_data
+        # Setup
+        self._setup()
 
-    raise ValueError("No character found")
+    def _setup(self) -> None:
+        # Initialize monster moves. TODO: fix
+        if self.monster_moves == {}:
+            self.monster_moves = {
+                entity_id: None
+                for entity_id in self.entities
+                if entity_id != Context.CHAR_ENTITY_ID
+            }
+        # Initialize deck. TODO: use starter deck from database
+        if self.deck == []:
+            self.deck = [
+                "Strike",
+                "Strike",
+                "Strike",
+                "Strike",
+                "Strike",
+                "Defend",
+                "Defend",
+                "Defend",
+                "Defend",
+                "Defend",
+                "Neutralize",
+            ]
 
+    def get_monsters(self) -> Generator[tuple[int, EntityData], None, None]:
+        for entity_id, entity_data in self.entities.items():
+            if entity_id != Context.CHAR_ENTITY_ID:
+                yield entity_id, entity_data
 
-# TODO: intialize elsewhere
-# TODO: add modifiers
-entities = {
-    0: EntityData(
-        name=CHAR_NAME,
-        current_health=char_lib[CHAR_NAME].base_health,
-        max_health=char_lib[CHAR_NAME].base_health,
-        current_block=0,
-        is_char=True,
-    ),
-    1: EntityData(
-        name=MONSTER_NAME,
-        current_health=monster_lib[MONSTER_NAME].base_health,
-        max_health=monster_lib[MONSTER_NAME].base_health,
-        current_block=0,
-        is_char=False,
-    ),
-}
-entity_modifiers = {(0, "Strength"): 1, (1, "Poison"): 3}
-monster_moves = {1: None}
+    def get_char(self) -> tuple[int, EntityData]:
+        return Context.CHAR_ENTITY_ID, self.entities[Context.CHAR_ENTITY_ID]

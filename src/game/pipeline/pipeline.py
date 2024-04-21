@@ -5,6 +5,7 @@ from collections import deque
 from typing import List
 
 from game.core.effect import Effect
+from game.context import Context
 from game.pipeline.steps.base import BaseStep
 from game.pipeline.steps.deal_damage import DealDamage
 from game.pipeline.steps.gain_block import GainBlock
@@ -27,13 +28,13 @@ class EffectPipeline:
 
         insort(self._steps, step)
 
-    def __call__(self, effects: List[Effect]) -> None:
+    def __call__(self, context: Context, effects: List[Effect]) -> None:
         effect_queue = deque(effects)
 
         while effect_queue:
             effect = effect_queue.popleft()
             for step in self._steps:
-                add_to_bot_effects, add_to_top_effects = step(effect)
+                add_to_bot_effects, add_to_top_effects = step(context, effect)
 
                 # Add new effects to the queue
                 effect_queue.extend(add_to_bot_effects)
