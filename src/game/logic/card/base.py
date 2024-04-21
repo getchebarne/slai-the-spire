@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from game.core.effect import Effect
-from game.context import Context
+from src.game.core.effect import Effect
+from src.game.context import Context
 
 
 class BaseCardLogic(ABC):

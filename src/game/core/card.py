@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from game.logic.card.base import BaseCardLogic
+from src.game.logic.card.base import BaseCardLogic
 
 
 # TODO: add card upgrade

@@ -1,8 +1,8 @@
 import importlib
 import sqlite3
 
-from game.constants import DB_PATH
-from game.logic.move.base import BaseMoveLogic
+from src.game.constants import DB_PATH
+from src.game.logic.move.base import BaseMoveLogic
 
 
 # Connect to the SQLite database
@@ -26,7 +26,7 @@ for row in rows:
     move_name = row["move_name"]
 
     # Get the move's logic
-    logic_module = importlib.import_module(f"game.logic.move.{move_name.lower()}")
+    logic_module = importlib.import_module(f"src.game.logic.move.{move_name.lower()}")
     move_logic = getattr(logic_module, f"{move_name}Logic")()
 
     # Add move to move_lib

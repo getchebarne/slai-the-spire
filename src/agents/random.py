@@ -1,10 +1,10 @@
 import numpy as np
 
-from agents.base import BaseAgent
-from game.context import Context
-from game.battle.engine import Action
-from game.battle.engine import ActionType
-from game.context import BattleState
+from src.agents.base import BaseAgent
+from src.game.context import Context
+from src.game.battle.engine import Action
+from src.game.battle.engine import ActionType
+from src.game.context import BattleState
 
 
 class RandomAgent(BaseAgent):

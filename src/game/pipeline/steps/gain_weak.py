@@ -1,6 +1,6 @@
-from game.core.effect import Effect
-from game.context import Context
-from game.pipeline.steps.base import BaseStep
+from src.game.core.effect import Effect
+from src.game.context import Context
+from src.game.pipeline.steps.base import BaseStep
 
 
 class GainWeak(BaseStep):

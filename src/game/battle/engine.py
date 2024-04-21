@@ -5,17 +5,17 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from game.lib.card import card_lib
-from game.lib.monster import monster_lib
-from game.lib.move import move_lib
-from game.lib.modifier import modifier_lib
-from game.pipeline.pipeline import EffectPipeline
-from game.context import Context
-from game.context import BattleState
+from src.game.lib.card import card_lib
+from src.game.lib.monster import monster_lib
+from src.game.lib.move import move_lib
+from src.game.lib.modifier import modifier_lib
+from src.game.pipeline.pipeline import EffectPipeline
+from src.game.context import Context
+from src.game.context import BattleState
 
 
 if TYPE_CHECKING:
-    from agents.base import BaseAgent
+    from src.agents.base import BaseAgent
 
 
 NUM_CARDS_DRAWN_PER_TURN = 5
@@ -72,7 +72,7 @@ class BattleEngine:
 
     def _char_turn_start(self) -> None:
         # Draw cards from draw pile
-        for _ in range(NUM_CARDS_DRAWN_PER_TURN):
+        for _ in range(min(len(self.context.draw_pile), NUM_CARDS_DRAWN_PER_TURN)):
             self._draw_one_card()
 
         # Reset energy
@@ -155,14 +155,14 @@ class BattleEngine:
             next_move_name = monster_ai.next_move_name(current_move_name)
             self.context.monster_moves[monster_id] = next_move_name
 
-    def _play_card(self, monster_idx: Optional[int] = None) -> None:
+    def _play_card(self, monster_entity_id: Optional[int] = None) -> None:
         if self.context.active_card_idx is None:
             raise ValueError("No active card to play")
 
         # Get active card's effects
         card_name = self.context.hand[self.context.active_card_idx]
         card_info = card_lib[card_name]
-        effects = card_info.card_logic.use(self.context, monster_idx)
+        effects = card_info.card_logic.use(self.context, monster_entity_id)
 
         # Apply targeted effects
         self.effect_pipeline(self.context, effects)
@@ -229,15 +229,25 @@ class BattleEngine:
 
     def run(self) -> None:
         while not self.is_over():
-            # Character's turn
-            self._char_turn_start()
-            self._char_turn()
-            self._char_turn_end()
+            self.run_one_turn()
 
-            # Monsters' turn
-            self._monsters_turn_start()
-            self._monsters_turn()
-            self._monsters_turn_end()
+    # TODO: revise name
+    def run_one_turn(self) -> None:
+        # Character's turn
+        self.run_char_turn()
+
+        # Monsters' turn
+        self.run_monsters_turn()
+
+    def run_char_turn(self) -> None:
+        self._char_turn_start()
+        self._char_turn()
+        self._char_turn_end()
+
+    def run_monsters_turn(self) -> None:
+        self._monsters_turn_start()
+        self._monsters_turn()
+        self._monsters_turn_end()
 
     def is_over(self) -> bool:
         return self.context.get_char()[1].current_health <= 0 or all(

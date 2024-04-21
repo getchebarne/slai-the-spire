@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from game.battle.engine import Action
+from src.game.battle.engine import Action
 
 
 class BaseAgent(ABC):

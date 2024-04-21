@@ -2,8 +2,8 @@ import importlib
 import sqlite3
 from dataclasses import dataclass
 
-from game.constants import DB_PATH
-from game.logic.card.base import BaseCardLogic
+from src.game.constants import DB_PATH
+from src.game.logic.card.base import BaseCardLogic
 
 
 @dataclass
@@ -34,7 +34,7 @@ for row in cursor.fetchall():
     card_name = row["card_name"]
 
     # Get the card's logic
-    logic_module = importlib.import_module(f"game.logic.card.{card_name.lower()}")
+    logic_module = importlib.import_module(f"src.game.logic.card.{card_name.lower()}")
     card_logic = getattr(logic_module, f"{card_name}Logic")()
 
     # Create a CardEntry instance and add it to the card library

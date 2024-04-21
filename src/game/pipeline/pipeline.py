@@ -4,11 +4,11 @@ from bisect import insort
 from collections import deque
 from typing import List
 
-from game.core.effect import Effect
-from game.context import Context
-from game.pipeline.steps.base import BaseStep
-from game.pipeline.steps.deal_damage import DealDamage
-from game.pipeline.steps.gain_block import GainBlock
+from src.game.core.effect import Effect
+from src.game.context import Context
+from src.game.pipeline.steps.base import BaseStep
+from src.game.pipeline.steps.deal_damage import DealDamage
+from src.game.pipeline.steps.gain_block import GainBlock
 
 
 DEFAULT_STEPS = {DealDamage(), GainBlock()}
