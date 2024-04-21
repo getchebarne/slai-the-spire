@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from game.core.effect import Effect
-from game.context import Context
+from src.game.core.effect import Effect
+from src.game.context import Context
 
 
 class BaseStep(ABC):
@@ -37,7 +37,7 @@ class BaseStep(ABC):
 
     @property
     def priority(self) -> int:
-        from game.pipeline.steps.order import STEP_ORDER
+        from src.game.pipeline.steps.order import STEP_ORDER
 
         return STEP_ORDER.index(self.__class__)
 

@@ -2,8 +2,8 @@ import importlib
 import sqlite3
 from dataclasses import dataclass
 
-from game.constants import DB_PATH
-from game.logic.card.base import BaseCardLogic
+from src.game.constants import DB_PATH
+from src.game.logic.card.base import BaseCardLogic
 
 
 @dataclass
@@ -33,7 +33,7 @@ for row in cursor.fetchall():
     modifier_name = row["modifier_name"]
 
     # Get the modifier's logic
-    logic_module = importlib.import_module(f"game.logic.modifier.{modifier_name.lower()}")
+    logic_module = importlib.import_module(f"src.game.logic.modifier.{modifier_name.lower()}")
     modifier_logic = getattr(logic_module, f"{modifier_name}Logic")()
 
     # Create a ModifierEntry instance and add it to the modifier library

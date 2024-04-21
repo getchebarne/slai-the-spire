@@ -1,4 +1,4 @@
-from game.logic.modifier.base import BaseModifierLogic
+from src.game.logic.modifier.base import BaseModifierLogic
 
 
 class StrengthLogic(BaseModifierLogic):

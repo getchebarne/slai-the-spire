@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from game.core.entity import Entity
+from src.game.core.entity import Entity
 
 
 @dataclass

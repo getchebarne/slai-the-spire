@@ -1,7 +1,7 @@
-from agents.random import RandomAgent
-from game.battle.engine import BattleEngine
-from game.context import Context
-from game.context import EntityData
+from src.agents.random import RandomAgent
+from src.game.battle.engine import BattleEngine
+from src.game.context import Context
+from src.game.context import EntityData
 
 if __name__ == "__main__":
     # Instantiate the agent

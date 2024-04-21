@@ -1,7 +1,7 @@
 import sqlite3
 from dataclasses import dataclass
 
-from game.constants import DB_PATH
+from src.game.constants import DB_PATH
 
 
 @dataclass

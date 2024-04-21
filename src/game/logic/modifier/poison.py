@@ -1,6 +1,6 @@
-from game.core.effect import Effect
-from game.core.effect import EffectType
-from game.logic.modifier.base import BaseModifierLogic
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
+from src.game.logic.modifier.base import BaseModifierLogic
 
 
 class PoisonLogic(BaseModifierLogic):

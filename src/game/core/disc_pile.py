@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List
 
-from game.core.card import Card
+from src.game.core.card import Card
 
 
 @dataclass

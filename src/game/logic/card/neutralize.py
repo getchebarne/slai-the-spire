@@ -1,7 +1,7 @@
-from game.context import Context
-from game.core.effect import Effect
-from game.core.effect import EffectType
-from game.logic.card.base import BaseCardLogic
+from src.game.context import Context
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
+from src.game.logic.card.base import BaseCardLogic
 
 
 class NeutralizeLogic(BaseCardLogic):

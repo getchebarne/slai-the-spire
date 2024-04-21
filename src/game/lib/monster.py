@@ -2,8 +2,8 @@ import importlib
 import sqlite3
 from dataclasses import dataclass
 
-from game.ai.base import BaseAI
-from game.constants import DB_PATH
+from src.game.ai.base import BaseAI
+from src.game.constants import DB_PATH
 
 
 @dataclass
@@ -33,7 +33,7 @@ for row in rows:
     base_health = row["base_health"]
 
     # Get the monster's AI
-    ai_module = importlib.import_module(f"game.ai.{monster_name.lower()}")
+    ai_module = importlib.import_module(f"src.game.ai.{monster_name.lower()}")
     ai = getattr(ai_module, f"{monster_name}AI")()
 
     # Add monster to monster_lib

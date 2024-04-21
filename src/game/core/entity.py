@@ -2,7 +2,7 @@ from abc import ABC
 from dataclasses import dataclass, field
 from typing import Optional
 
-from game.core.modifier import Modifier
+from src.game.core.modifier import Modifier
 
 
 MAX_BLOCK = 999

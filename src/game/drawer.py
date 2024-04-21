@@ -2,11 +2,11 @@ import os
 from functools import wraps
 from typing import Any, Callable
 
-from game.context import Context
-from game.context import EntityData
-from game.core.energy import Energy
-from game.context import BattleState
-from game.lib.card import card_lib
+from src.game.context import Context
+from src.game.context import EntityData
+from src.game.core.energy import Energy
+from src.game.context import BattleState
+from src.game.lib.card import card_lib
 
 
 N_TERM_COLS, _ = os.get_terminal_size()

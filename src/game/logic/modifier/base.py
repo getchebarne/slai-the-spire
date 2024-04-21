@@ -1,8 +1,8 @@
 from abc import ABC
 from typing import Optional
 
-from game.core.effect import Effect
-from game.core.entity import Entity
+from src.game.core.effect import Effect
+from src.game.core.entity import Entity
 
 
 class BaseModifierLogic(ABC):

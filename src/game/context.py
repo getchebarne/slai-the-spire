@@ -2,7 +2,7 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Generator
 
-from game.core.energy import Energy
+from src.game.core.energy import Energy
 
 
 # TODO: define elsewhere

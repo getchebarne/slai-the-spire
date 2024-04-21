@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from game.core.entity import Entity
+from src.game.core.entity import Entity
 
 
 @dataclass
