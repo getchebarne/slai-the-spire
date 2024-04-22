@@ -72,7 +72,7 @@ class BattleEngine:
 
     def _char_turn_start(self) -> None:
         # Draw cards from draw pile
-        for _ in range(min(len(self.context.draw_pile), NUM_CARDS_DRAWN_PER_TURN)):
+        for _ in range(NUM_CARDS_DRAWN_PER_TURN):
             self._draw_one_card()
 
         # Reset energy

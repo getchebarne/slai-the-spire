@@ -7,11 +7,22 @@ from typing import List
 from src.game.core.effect import Effect
 from src.game.context import Context
 from src.game.pipeline.steps.base import BaseStep
+from src.game.pipeline.steps.apply_str import ApplyStrength
+from src.game.pipeline.steps.apply_weak import ApplyWeak
 from src.game.pipeline.steps.deal_damage import DealDamage
 from src.game.pipeline.steps.gain_block import GainBlock
+from src.game.pipeline.steps.gain_str import GainStrength
+from src.game.pipeline.steps.gain_weak import GainWeak
 
 
-DEFAULT_STEPS = {DealDamage(), GainBlock()}
+DEFAULT_STEPS = {
+    DealDamage(),
+    GainBlock(),
+    ApplyWeak(),
+    ApplyStrength(),
+    GainStrength(),
+    GainWeak(),
+}
 
 
 class EffectPipeline:

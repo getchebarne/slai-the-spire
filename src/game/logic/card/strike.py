@@ -4,6 +4,9 @@ from src.game.core.effect import EffectType
 from src.game.logic.card.base import BaseCardLogic
 
 
+DAMAGE = 6
+
+
 class StrikeLogic(BaseCardLogic):
     def use(self, context: Context, target_monster_id: int) -> list[Effect]:
-        return [Effect(context.get_char()[0], target_monster_id, EffectType.DAMAGE, 6)]
+        return [Effect(context.get_char()[0], target_monster_id, EffectType.DAMAGE, DAMAGE)]
