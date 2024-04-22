@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from bisect import insort
 from collections import deque
-from typing import List
 
 from src.game.context import Context
 from src.game.core.effect import Effect
@@ -28,7 +27,7 @@ DEFAULT_STEPS = {
 class EffectPipeline:
     def __init__(self):
         # Initialize w/ default steps. TODO: can this be improved?
-        self._steps: List[BaseStep] = []
+        self._steps: list[BaseStep] = []
 
         for step in DEFAULT_STEPS:
             self.add_step(step)
@@ -39,7 +38,7 @@ class EffectPipeline:
 
         insort(self._steps, step)
 
-    def __call__(self, context: Context, effects: List[Effect]) -> None:
+    def __call__(self, context: Context, effects: list[Effect]) -> None:
         effect_queue = deque(effects)
 
         while effect_queue:
