@@ -1,4 +1,5 @@
 from enum import Enum
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional, Generator
 
@@ -62,6 +63,10 @@ class Context:
                 for entity_id in self.entities
                 if entity_id != Context.CHAR_ENTITY_ID
             }
+
+        # Transform entity_modifiers into a defaultdict
+        self.entity_modifiers = defaultdict(lambda: 0, self.entity_modifiers)
+
         # Initialize deck. TODO: use starter deck from database
         if self.deck == []:
             self.deck = [
