@@ -5,13 +5,16 @@ from src.game.context import EntityData
 from src.game.logic.card.defend import BLOCK
 
 
+MONSTER_ENTITY_ID = 1
+
+
 def test_base():
     # Instantiate the Agent, Context, and Engine
     agent = RandomAgent()
     context = Context(
         entities={
             0: EntityData(name="Silent", max_health=50),
-            1: EntityData(name="Dummy", max_health=50),
+            MONSTER_ENTITY_ID: EntityData(name="Dummy", max_health=50),
         },
         hand=["Defend"],
         active_card_idx=0,
