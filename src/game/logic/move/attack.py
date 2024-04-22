@@ -7,4 +7,4 @@ from src.game.logic.move.base import BaseMoveLogic
 class AttackLogic(BaseMoveLogic):
     # TODO: improve owner def
     def use(self, context: Context, source_entity_id: int) -> list[Effect]:
-        return [Effect(source_entity_id, context.get_char()[0], EffectType.DAMAGE, 6)]
+        return [Effect(source_entity_id, context.CHAR_ENTITY_ID, EffectType.DAMAGE, 6)]

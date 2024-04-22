@@ -11,6 +11,6 @@ WEAK = 1
 class NeutralizeLogic(BaseCardLogic):
     def use(self, context: Context, target_monster_id: int) -> list[Effect]:
         return [
-            Effect(context.get_char()[0], target_monster_id, EffectType.DAMAGE, DAMAGE),
-            Effect(context.get_char()[0], target_monster_id, EffectType.WEAK, WEAK),
+            Effect(context.CHAR_ENTITY_ID, target_monster_id, EffectType.DAMAGE, DAMAGE),
+            Effect(context.CHAR_ENTITY_ID, target_monster_id, EffectType.WEAK, WEAK),
         ]

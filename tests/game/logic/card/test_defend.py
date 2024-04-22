@@ -19,10 +19,10 @@ def test_base():
     engine = BattleEngine(agent, context)
 
     # Store previous block
-    prev_block = context.get_char()[1].current_block
+    prev_block = context.entities[context.CHAR_ENTITY_ID].current_block
 
     # Play the card
     engine._play_card()
 
     # Assert that the character's block has increased by BLOCK
-    assert context.get_char()[1].current_block == prev_block + BLOCK
+    assert context.entities[context.CHAR_ENTITY_ID].current_block == prev_block + BLOCK

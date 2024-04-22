@@ -19,7 +19,7 @@ def test_base():
     engine = BattleEngine(agent, context)
 
     # Store previous health
-    prev_block = context.get_char()[1].current_health
+    prev_block = context.entities[context.CHAR_ENTITY_ID].current_health
 
     # Play the card
     engine._play_card(monster_entity_id=1)

@@ -11,4 +11,4 @@ BLOCK = 5
 
 class DefendLogic(BaseCardLogic):
     def use(self, context: Context, target_monster_id: Optional[int] = None) -> list[Effect]:
-        return [Effect(context.get_char()[0], context.get_char()[0], EffectType.BLOCK, BLOCK)]
+        return [Effect(context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID, EffectType.BLOCK, BLOCK)]

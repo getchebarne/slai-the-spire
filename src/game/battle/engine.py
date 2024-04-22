@@ -79,21 +79,19 @@ class BattleEngine:
         self.context.energy.current = self.context.energy.max
 
         # Queue modifier effects
-        char_id, _ = self.context.get_char()
         for (entity_id, modifier_name), stacks in self.context.entity_modifiers.items():
-            if entity_id == char_id:
+            if entity_id == self.context.CHAR_ENTITY_ID:
                 modifier_entry = modifier_lib[modifier_name]
                 effects = modifier_entry.modifier_logic.at_start_of_turn(entity_id, stacks)
                 self.effect_pipeline(self.context, effects)
 
         # Reset block
-        self.context.get_char()[1].current_block = 0
+        self.context.entities[self.context.CHAR_ENTITY_ID].current_block = 0
 
     def _char_turn_end(self) -> None:
         # Queue modifier effects
-        char_id, _ = self.context.get_char()
         for (entity_id, modifier_name), stacks in self.context.entity_modifiers.items():
-            if entity_id == char_id:
+            if entity_id == self.context.CHAR_ENTITY_ID:
                 modifier_entry = modifier_lib[modifier_name]
                 effects = modifier_entry.modifier_logic.at_end_of_turn(entity_id, stacks)
                 self.effect_pipeline(self.context, effects)
@@ -250,6 +248,6 @@ class BattleEngine:
         self._monsters_turn_end()
 
     def is_over(self) -> bool:
-        return self.context.get_char()[1].current_health <= 0 or all(
+        return self.context.entities[self.context.CHAR_ENTITY_ID].current_health <= 0 or all(
             monster_data.current_health <= 0 for _, monster_data in self.context.get_monsters()
         )

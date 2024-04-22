@@ -87,6 +87,3 @@ class Context:
         for entity_id, entity_data in self.entities.items():
             if entity_id != Context.CHAR_ENTITY_ID:
                 yield entity_id, entity_data
-
-    def get_char(self) -> tuple[int, EntityData]:
-        return Context.CHAR_ENTITY_ID, self.entities[Context.CHAR_ENTITY_ID]
