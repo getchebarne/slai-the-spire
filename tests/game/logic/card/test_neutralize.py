@@ -20,7 +20,7 @@ def test_base():
     engine = BattleEngine(agent, context)
 
     # Store previous health & weak
-    prev_health = context.get_char()[1].current_health
+    prev_health = context.entities[context.CHAR_ENTITY_ID].current_health
     prev_weak = context.entity_modifiers[(1, "Weak")]
 
     # Play the card

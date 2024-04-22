@@ -59,7 +59,7 @@ def draw(context: Context) -> None:
         # Print to the right side of the terminal
         print(f"{entity_str(monster_data):>{N_TERM_COLS}}")
 
-    print(entity_str(context.get_char()[1]))
+    print(entity_str(context.entities[context.CHAR_ENTITY_ID]))
     print("-" * N_TERM_COLS)
 
 
