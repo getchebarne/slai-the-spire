@@ -4,11 +4,11 @@ from bisect import insort
 from collections import deque
 from typing import List
 
-from src.game.core.effect import Effect
 from src.game.context import Context
-from src.game.pipeline.steps.base import BaseStep
+from src.game.core.effect import Effect
 from src.game.pipeline.steps.apply_str import ApplyStrength
 from src.game.pipeline.steps.apply_weak import ApplyWeak
+from src.game.pipeline.steps.base import BaseStep
 from src.game.pipeline.steps.deal_damage import DealDamage
 from src.game.pipeline.steps.gain_block import GainBlock
 from src.game.pipeline.steps.gain_str import GainStrength

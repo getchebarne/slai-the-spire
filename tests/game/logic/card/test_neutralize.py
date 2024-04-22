@@ -1,7 +1,7 @@
+from src.agents.random import RandomAgent
+from src.game.battle.engine import BattleEngine
 from src.game.context import Context
 from src.game.context import EntityData
-from src.game.battle.engine import BattleEngine
-from src.agents.random import RandomAgent
 from src.game.logic.card.neutralize import DAMAGE
 from src.game.logic.card.neutralize import WEAK
 
