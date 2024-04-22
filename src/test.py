@@ -3,6 +3,7 @@ from src.game.battle.engine import BattleEngine
 from src.game.context import Context
 from src.game.context import EntityData
 
+
 if __name__ == "__main__":
     # Instantiate the agent
     agent = RandomAgent()

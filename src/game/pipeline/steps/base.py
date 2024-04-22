@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from src.game.core.effect import Effect
 from src.game.context import Context
+from src.game.core.effect import Effect
 
 
 class BaseStep(ABC):

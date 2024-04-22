@@ -1,7 +1,7 @@
-from enum import Enum
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Generator
+from enum import Enum
+from typing import Generator, Optional
 
 from src.game.core.energy import Energy
 

@@ -1,5 +1,5 @@
-from src.game.core.effect import Effect
 from src.game.context import Context
+from src.game.core.effect import Effect
 from src.game.pipeline.steps.base import BaseStep
 
 
