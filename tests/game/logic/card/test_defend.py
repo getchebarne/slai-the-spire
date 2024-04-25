@@ -13,7 +13,7 @@ def test_base():
     agent = RandomAgent()
     context = Context(
         entities={
-            0: EntityData(name="Silent", max_health=50),
+            Context.CHAR_ENTITY_ID: EntityData(name="Silent", max_health=50),
             MONSTER_ENTITY_ID: EntityData(name="Dummy", max_health=50),
         },
         hand=["Defend"],
