@@ -14,7 +14,7 @@ def test_base():
     agent = RandomAgent()
     context = Context(
         entities={
-            0: EntityData(name="Silent", max_health=50),
+            Context.CHAR_ENTITY_ID: EntityData(name="Silent", max_health=50),
             MONSTER_ENTITY_ID: EntityData(name="Dummy", max_health=50),
         },
         hand=["Neutralize"],
@@ -23,7 +23,7 @@ def test_base():
     engine = BattleEngine(agent, context)
 
     # Store previous health & weak
-    prev_health = context.entities[context.CHAR_ENTITY_ID].current_health
+    prev_health = context.entities[MONSTER_ENTITY_ID].current_health
     prev_weak = context.entity_modifiers[(MONSTER_ENTITY_ID, "Weak")]
 
     # Play the card

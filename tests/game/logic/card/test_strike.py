@@ -13,7 +13,7 @@ def test_base():
     agent = RandomAgent()
     context = Context(
         entities={
-            0: EntityData(name="Silent", max_health=50),
+            Context.CHAR_ENTITY_ID: EntityData(name="Silent", max_health=50),
             MONSTER_ENTITY_ID: EntityData(name="Dummy", max_health=50),
         },
         hand=["Strike"],
@@ -22,7 +22,7 @@ def test_base():
     engine = BattleEngine(agent, context)
 
     # Store previous health
-    prev_block = context.entities[context.CHAR_ENTITY_ID].current_health
+    prev_block = context.entities[MONSTER_ENTITY_ID].current_health
 
     # Play the card
     engine._play_card(MONSTER_ENTITY_ID)
