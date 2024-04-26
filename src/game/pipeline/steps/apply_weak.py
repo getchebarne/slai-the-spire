@@ -9,7 +9,7 @@ WEAK_FACTOR = 0.75
 
 class ApplyWeak(BaseStep):
     def _apply_effect(self, context: Context, effect: Effect) -> None:
-        effect.value = int(effect.damage * WEAK_FACTOR)
+        effect.value = int(effect.value * WEAK_FACTOR)
 
     def _condition(self, context: Context, effect: Effect) -> bool:
         return (
