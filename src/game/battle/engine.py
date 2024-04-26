@@ -179,13 +179,17 @@ class BattleEngine:
     def _monsters_turn(self) -> None:
         # TODO: find way to improve this
         for monster_id, monster_data in self.context.get_monsters():
-            # Get monster's move logic
-            current_move_name = self.context.monster_moves[monster_id]
-            move_logic = move_lib[(monster_data.name, current_move_name)]
+            self._execute_monster_move(monster_id)
 
-            # Get effects
-            effects = move_logic.use(self.context, monster_id)
-            self.effect_pipeline(self.context, effects)
+    def _execute_monster_move(self, monster_entity_id: int) -> None:
+        # Get monster's move logic
+        monster_name = self.context.entities[monster_entity_id].name
+        current_move_name = self.context.monster_moves[monster_entity_id]
+        move_logic = move_lib[(monster_name, current_move_name)]
+
+        # Get effects
+        effects = move_logic.use(self.context, monster_entity_id)
+        self.effect_pipeline(self.context, effects)
 
     def _char_turn(self) -> None:
         while not self.is_over():

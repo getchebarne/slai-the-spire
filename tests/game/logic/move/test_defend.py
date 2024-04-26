@@ -2,7 +2,7 @@ from src.agents.random import RandomAgent
 from src.game.battle.engine import BattleEngine
 from src.game.context import Context
 from src.game.context import EntityData
-from src.game.logic.card.strike import DAMAGE
+from src.game.logic.move.defend import BLOCK
 
 
 MONSTER_ENTITY_ID = 1
@@ -16,16 +16,14 @@ def test_base():
             Context.CHAR_ENTITY_ID: EntityData(name="Silent", max_health=50),
             MONSTER_ENTITY_ID: EntityData(name="Dummy", max_health=50),
         },
-        hand=["Strike"],
-        active_card_idx=0,
+        monster_moves={MONSTER_ENTITY_ID: "Defend"},
     )
     engine = BattleEngine(agent, context)
+    # Store previous block
+    prev_block = context.entities[MONSTER_ENTITY_ID].current_health
 
-    # Store previous health
-    prev_health = context.entities[MONSTER_ENTITY_ID].current_health
+    # Execute the move
+    engine._execute_monster_move(MONSTER_ENTITY_ID)
 
-    # Play the card
-    engine._play_card(MONSTER_ENTITY_ID)
-
-    # Assert that the monster's health has decreased by DAMAGE
-    assert context.entities[MONSTER_ENTITY_ID].current_health == prev_health - DAMAGE
+    # Assert that the monster's block has increased by BLOCK
+    assert context.entities[MONSTER_ENTITY_ID].current_health == prev_block + BLOCK
