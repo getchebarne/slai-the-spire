@@ -51,10 +51,11 @@ class BattleEngine:
         self.context.draw_pile = self.context.deck.copy()
         random.shuffle(self.context.draw_pile)
 
-        # Get first move from monsters
+        # Get first move from monsters. TODO: improve
         for monster_id, monster_data in self.context.get_monsters():
-            monster_ai = monster_lib[monster_data.name].ai
-            self.context.monster_moves[monster_id] = monster_ai.first_move_name()
+            if self.context.monster_moves[monster_id] is None:
+                monster_ai = monster_lib[monster_data.name].ai
+                self.context.monster_moves[monster_id] = monster_ai.first_move_name()
 
         # TODO: register relics?
 
