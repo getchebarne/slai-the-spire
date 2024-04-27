@@ -10,6 +10,8 @@ class EffectType(Enum):
     BLOCK = 1
     WEAK = 2
     PLUS_STR = 3
+    DRAW_CARD = 4
+    HEAL = 5
 
     def __str__(self) -> str:
         return self.name

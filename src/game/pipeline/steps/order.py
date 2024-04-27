@@ -4,6 +4,7 @@ from src.game.pipeline.steps.deal_damage import DealDamage
 from src.game.pipeline.steps.gain_block import GainBlock
 from src.game.pipeline.steps.gain_str import GainStrength
 from src.game.pipeline.steps.gain_weak import GainWeak
+from src.game.pipeline.steps.draw_card import DrawCard
 
 
 # TODO: this is a temporary solution to easily set the steps' priority
@@ -25,5 +26,9 @@ STEP_ORDER_MODIFIERS = [
     GainWeak,
     GainStrength,
 ]
+# Other. TODO: revise
+STEP_ORDER_OTHER = [
+    DrawCard,
+]
 # All
-STEP_ORDER = STEP_ORDER_BLOCK + STEP_ORDER_DAMAGE + STEP_ORDER_MODIFIERS
+STEP_ORDER = STEP_ORDER_BLOCK + STEP_ORDER_DAMAGE + STEP_ORDER_MODIFIERS + STEP_ORDER_OTHER
