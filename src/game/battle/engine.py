@@ -10,6 +10,9 @@ from src.game.context import Context
 from src.game.lib.card import card_lib
 from src.game.lib.modifier import modifier_lib
 from src.game.lib.monster import monster_lib
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
+from src.game.lib.relic import relic_lib
 from src.game.lib.move import move_lib
 from src.game.pipeline.pipeline import EffectPipeline
 
@@ -72,10 +75,11 @@ class BattleEngine:
         self.context.active_card_idx = card_idx
 
     def _char_turn_start(self) -> None:
-        # Draw cards from draw pile
-        for _ in range(NUM_CARDS_DRAWN_PER_TURN):
-            self._draw_one_card()
-
+        # Draw cards from draw pile. TODO: make source entity id and target entity id optional in
+        # Effect
+        self.effect_pipeline(
+            self.context, [Effect(None, None, EffectType.DRAW_CARD, NUM_CARDS_DRAWN_PER_TURN)]
+        )
         # Reset energy
         self.context.energy.current = self.context.energy.max
 
@@ -104,17 +108,6 @@ class BattleEngine:
         # Discard hand
         self.context.disc_pile.extend(self.context.hand)
         self.context.hand = []
-
-    def _draw_one_card(self) -> None:
-        # If the draw pile is empty, shuffle the discard pile and send it to the draw pile
-        if len(self.context.draw_pile) == 0:
-            random.shuffle(self.context.disc_pile)
-            self.context.draw_pile = self.context.disc_pile
-            self.context.disc_pile = []
-
-        # Draw one card from draw pile
-        self.context.hand.append(self.context.draw_pile[0])
-        self.context.draw_pile = self.context.draw_pile[1:]
 
     def _monsters_turn_start(self) -> None:
         for monster_id, _ in self.context.get_monsters():
@@ -231,8 +224,28 @@ class BattleEngine:
         self.context.state = BattleState.DEFAULT
 
     def run(self) -> None:
+        # Battle start
+        self.battle_start()
+
         while not self.is_over():
             self.run_one_turn()
+
+        # Battle end
+        self.battle_end()
+
+    def battle_start(self) -> None:
+        # Queue relic effects
+        for relic in self.context.relics:
+            relic_entry = relic_lib[relic]
+            effects = relic_entry.relic_logic.at_start_of_battle(self.context)
+            self.effect_pipeline(self.context, effects)
+
+    def battle_end(self) -> None:
+        # Queue relic effects
+        for relic in self.context.relics:
+            relic_entry = relic_lib[relic]
+            effects = relic_entry.relic_logic.at_end_of_battle(self.context)
+            self.effect_pipeline(self.context, effects)
 
     # TODO: revise name
     def run_one_turn(self) -> None:

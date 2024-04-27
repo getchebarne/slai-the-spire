@@ -33,6 +33,7 @@ class Context:
         entities: dict[int, EntityData],
         entity_modifiers: dict[tuple[int, str], int] = {},
         monster_moves: dict[int, Optional[str]] = {},
+        relics: list[str] = [],
         deck: list[str] = [],
         hand: list[str] = [],
         draw_pile: list[str] = [],
@@ -44,6 +45,7 @@ class Context:
         self.entities = entities
         self.entity_modifiers = entity_modifiers
         self.monster_moves = monster_moves
+        self.relics = relics
         self.deck = deck
         self.hand = hand
         self.draw_pile = draw_pile
