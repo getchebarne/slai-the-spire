@@ -3,14 +3,13 @@ from src.game.battle.engine import BattleEngine
 from src.game.context import Context
 from src.game.context import EntityData
 from src.game.logic.card.strike import DAMAGE
-from src.game.pipeline.steps.apply_weak import \
-    WEAK_FACTOR  # TODO: create game constants module?
+from src.game.pipeline.steps.apply_weak import WEAK_FACTOR  # TODO: create game constants module?
 
 
 MONSTER_ENTITY_ID = 1
+WEAK_STACKS = 2
 
 
-# TODO: test that stacks decrease by 1 @ end of turn
 def test_base():
     # Instantiate the Agent, Context, and Engine
     agent = RandomAgent()
@@ -19,7 +18,7 @@ def test_base():
             Context.CHAR_ENTITY_ID: EntityData(name="Silent", max_health=50),
             MONSTER_ENTITY_ID: EntityData(name="Dummy", max_health=50),
         },
-        entity_modifiers={(Context.CHAR_ENTITY_ID, "Weak"): 1},
+        entity_modifiers={(Context.CHAR_ENTITY_ID, "Weak"): WEAK_STACKS},
         hand=["Strike"],
         active_card_idx=0,
     )
@@ -35,3 +34,9 @@ def test_base():
     assert context.entities[MONSTER_ENTITY_ID].current_health == prev_health - int(
         DAMAGE * WEAK_FACTOR
     )
+
+    # Call the character's end of turn
+    engine._char_turn_end()
+
+    # Assert that the character's weak stacks have decreased by 1
+    assert context.entity_modifiers[(Context.CHAR_ENTITY_ID, "Weak")] == WEAK_STACKS - 1
