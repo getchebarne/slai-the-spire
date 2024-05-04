@@ -3,12 +3,14 @@ from src.game.battle.engine import BattleEngine
 from src.game.context import Context
 from src.game.context import EntityData
 from src.game.logic.card.strike import DAMAGE
-from src.game.pipeline.steps.apply_weak import WEAK_FACTOR  # TODO: create game constants module?
+from src.game.pipeline.steps.apply_weak import \
+    WEAK_FACTOR  # TODO: create game constants module?
 
 
 MONSTER_ENTITY_ID = 1
 
 
+# TODO: test that stacks decrease by 1 @ end of turn
 def test_base():
     # Instantiate the Agent, Context, and Engine
     agent = RandomAgent()

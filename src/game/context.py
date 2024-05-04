@@ -6,6 +6,9 @@ from typing import Generator, Optional
 from src.game.core.energy import Energy
 
 
+STARTING_ENERGY = 3
+
+
 # TODO: define elsewhere
 class BattleState(Enum):
     DEFAULT = 0
@@ -31,27 +34,29 @@ class Context:
     def __init__(
         self,
         entities: dict[int, EntityData],
-        entity_modifiers: dict[tuple[int, str], int] = {},
-        monster_moves: dict[int, Optional[str]] = {},
-        relics: list[str] = [],
-        deck: list[str] = [],
-        hand: list[str] = [],
-        draw_pile: list[str] = [],
-        disc_pile: list[str] = [],
+        entity_modifiers: Optional[dict[tuple[int, str], int]] = None,
+        monster_moves: Optional[dict[int, Optional[str]]] = None,
+        relics: Optional[list[str]] = None,
+        deck: Optional[list[str]] = None,
+        hand: Optional[list[str]] = None,
+        draw_pile: Optional[list[str]] = None,
+        disc_pile: Optional[list[str]] = None,
         active_card_idx: Optional[int] = None,
-        energy: Energy = Energy(max=3, current=3),
+        energy: Optional[Energy] = None,
         state: BattleState = BattleState.NONE,
     ):
         self.entities = entities
-        self.entity_modifiers = entity_modifiers
-        self.monster_moves = monster_moves
-        self.relics = relics
-        self.deck = deck
-        self.hand = hand
-        self.draw_pile = draw_pile
-        self.disc_pile = disc_pile
+
+        # Initialize optional parameters
+        self.entity_modifiers = entity_modifiers or {}
+        self.monster_moves = monster_moves or {}
+        self.relics = relics or []
+        self.deck = deck or []
+        self.hand = hand or []
+        self.draw_pile = draw_pile or []
+        self.disc_pile = disc_pile or []
         self.active_card_idx = active_card_idx
-        self.energy = energy
+        self.energy = energy or Energy(max=STARTING_ENERGY)
         self.state = state
 
         # Setup

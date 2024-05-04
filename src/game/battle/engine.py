@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING, Optional
 
 from src.game.context import BattleState
 from src.game.context import Context
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
 from src.game.lib.card import card_lib
 from src.game.lib.modifier import modifier_lib
 from src.game.lib.monster import monster_lib
-from src.game.core.effect import Effect
-from src.game.core.effect import EffectType
-from src.game.lib.relic import relic_lib
 from src.game.lib.move import move_lib
+from src.game.lib.relic import relic_lib
 from src.game.pipeline.pipeline import EffectPipeline
 
 
@@ -90,6 +90,12 @@ class BattleEngine:
                 effects = modifier_entry.modifier_logic.at_start_of_turn(entity_id, stacks)
                 self.effect_pipeline(self.context, effects)
 
+        # Queue relic effects. TODO: append to modifier effects and call effect_pipeline once?
+        for relic in self.context.relics:
+            relic_entry = relic_lib[relic]
+            effects = relic_entry.relic_logic.at_start_of_turn(self.context)
+            self.effect_pipeline(self.context, effects)
+
         # Reset block
         self.context.entities[self.context.CHAR_ENTITY_ID].current_block = 0
 
@@ -104,6 +110,12 @@ class BattleEngine:
                 # Decrease stacks if the modifier stacks duration. TODO: remove if 0
                 if modifier_entry.modifier_stacks_duration:
                     self.context.entity_modifiers[(entity_id, modifier_name)] = max(0, stacks - 1)
+
+        # Queue relic effects. TODO: append to modifier effects and call effect_pipeline once?
+        for relic in self.context.relics:
+            relic_entry = relic_lib[relic]
+            effects = relic_entry.relic_logic.at_end_of_turn(self.context)
+            self.effect_pipeline(self.context, effects)
 
         # Discard hand
         self.context.disc_pile.extend(self.context.hand)
