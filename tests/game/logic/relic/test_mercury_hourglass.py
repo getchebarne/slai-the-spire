@@ -29,7 +29,7 @@ def test_base():
     prev_char_health = context.entities[Context.CHAR_ENTITY_ID].current_health
     prev_monster_health = {
         entity_id: entitiy_data.current_health
-        for entity_id, entitiy_data in context.get_monsters()
+        for entity_id, entitiy_data in context.get_monster_data()
     }
     # Start character's turn
     engine._char_turn_start()

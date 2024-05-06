@@ -10,10 +10,10 @@ BLOCK = 6
 
 
 class OrichalcumLogic(BaseRelicLogic):
-    def at_end_of_turn(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+    def char_turn_end(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
         if context.entities[context.CHAR_ENTITY_ID].current_block == 0:
             return [
-                Effect(context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID, EffectType.BLOCK, BLOCK)
+                Effect(EffectType.BLOCK, BLOCK, context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID)
             ]
 
         return []

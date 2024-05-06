@@ -10,8 +10,8 @@ DAMAGE = 3
 
 
 class MercuryHourglassLogic(BaseRelicLogic):
-    def at_start_of_turn(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+    def char_turn_start(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
         return [
-            Effect(context.CHAR_ENTITY_ID, monster_entity_id, EffectType.DAMAGE, DAMAGE)
-            for monster_entity_id, _ in context.get_monsters()
+            Effect(EffectType.DAMAGE, DAMAGE, context.CHAR_ENTITY_ID, monster_entity_id)
+            for monster_entity_id, _ in context.get_monster_data()
         ]

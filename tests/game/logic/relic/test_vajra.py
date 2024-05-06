@@ -2,7 +2,7 @@ from src.agents.random import RandomAgent
 from src.game.battle.engine import BattleEngine
 from src.game.context import Context
 from src.game.context import EntityData
-from src.game.logic.relic.vajra import PLUS_STR
+from src.game.logic.relic.vajra import GAIN_STR
 
 
 MONSTER_ENTITY_ID = 1
@@ -26,5 +26,5 @@ def test_base():
     # Start the battle
     engine.battle_start()
 
-    # Assert that the character's strength has increased by PLUS_STR
-    assert context.entity_modifiers[(context.CHAR_ENTITY_ID, "Strength")] == prev_str + PLUS_STR
+    # Assert that the character's strength has increased by GAIN_STR
+    assert context.entity_modifiers[(context.CHAR_ENTITY_ID, "Strength")] == prev_str + GAIN_STR

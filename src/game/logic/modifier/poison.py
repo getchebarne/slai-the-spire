@@ -12,5 +12,5 @@ class PoisonLogic(BaseModifierLogic):
 
         return [
             # TODO: this pierces block
-            Effect(source_entity_id, source_entity_id, EffectType.DAMAGE, stacks)
+            Effect(EffectType.DAMAGE, stacks, source_entity_id, source_entity_id)
         ]

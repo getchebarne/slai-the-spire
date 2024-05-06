@@ -6,14 +6,14 @@ from src.game.core.effect import Effect
 
 
 class BaseRelicLogic(ABC):
-    def at_start_of_turn(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+    def char_turn_start(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
         return []
 
-    def at_end_of_turn(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+    def char_turn_end(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
         return []
 
-    def at_start_of_battle(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+    def battle_start(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
         return []
 
-    def at_end_of_battle(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+    def battle_end(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
         return []

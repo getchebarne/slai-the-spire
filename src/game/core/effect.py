@@ -9,7 +9,7 @@ class EffectType(Enum):
     DAMAGE = 0
     BLOCK = 1
     WEAK = 2
-    PLUS_STR = 3
+    GAIN_STR = 3
     DRAW_CARD = 4
     HEAL = 5
 
@@ -20,10 +20,10 @@ class EffectType(Enum):
 @dataclass
 class Effect:
     # TODO: add created_by
-    source_entity_id: int
-    target_entity_id: int
     type: EffectType
-    value: Optional[int]  # TODO: add default
+    value: int
+    source_entity_id: Optional[int] = None
+    target_entity_id: Optional[int] = None
 
     def __str__(self) -> str:
         return f"{self.type}: {self.value}"
