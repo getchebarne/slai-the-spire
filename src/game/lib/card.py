@@ -6,13 +6,13 @@ from src.game.constants import DB_PATH
 from src.game.logic.card.base import BaseCardLogic
 
 
-@dataclass
+@dataclass(frozen=True)
 class CardEntry:
-    card_desc: str
-    card_cost: int  # TODO: change name to card_base_cost
-    card_type: str
-    card_rarity: str
-    card_logic: BaseCardLogic
+    description: str
+    cost: int  # TODO: change name to card_base_cost
+    type: str
+    rarity: str
+    logic: BaseCardLogic
 
 
 # Connect to the SQLite database
@@ -35,13 +35,13 @@ for row in cursor.fetchall():
 
     # Get the card's logic
     logic_module = importlib.import_module(f"src.game.logic.card.{card_name.lower()}")
-    card_logic = getattr(logic_module, f"{card_name}Logic")()
+    logic_instance = getattr(logic_module, f"{card_name}Logic")()
 
     # Create a CardEntry instance and add it to the card library
     card_lib[card_name] = CardEntry(
-        card_desc=row["card_desc"],
-        card_cost=row["card_cost"],
-        card_type=row["card_type"],
-        card_rarity=row["card_rarity"],
-        card_logic=card_logic,
+        description=row["card_desc"],
+        cost=row["card_cost"],
+        type=row["card_type"],
+        rarity=row["card_rarity"],
+        logic=logic_instance,
     )

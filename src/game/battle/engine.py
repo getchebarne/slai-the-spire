@@ -65,11 +65,11 @@ class BattleEngine:
     def _select_card(self, card_idx: int) -> None:
         # Get card from hand
         card_name = self.context.hand[card_idx]
-        card_info = card_lib[card_name]
+        card_data = card_lib[card_name]
 
         # Check the player has enough energy to play the card
         # TODO: cards can have variable cost
-        if self.context.energy.current < card_info.card_cost:
+        if self.context.energy.current < card_data.cost:
             raise ValueError(f"Can't play {card_name} with {self.context.energy.current} energy")
 
         # Set active card
@@ -84,17 +84,13 @@ class BattleEngine:
         effects = [Effect(EffectType.DRAW_CARD, NUM_CARDS_DRAWN_PER_TURN)]
 
         # Relic and modifier effects
-        for modifier_name, modifier_stacks in self.context.get_entity_modifiers(
-            Context.CHAR_ENTITY_ID
-        ):
+        for modifier_name, stacks in self.context.get_entity_modifiers(Context.CHAR_ENTITY_ID):
             modifier_entry = modifier_lib[modifier_name]
-            effects += modifier_entry.modifier_logic.at_start_of_turn(
-                Context.CHAR_ENTITY_ID, modifier_stacks
-            )
+            effects += modifier_entry.logic.at_start_of_turn(Context.CHAR_ENTITY_ID, stacks)
 
         for relic_name in self.context.relics:
             relic_entry = relic_lib[relic_name]
-            effects += relic_entry.relic_logic.char_turn_start(
+            effects += relic_entry.logic.char_turn_start(
                 self.context
             )  # TODO: rename to _char_turn_start
 
@@ -108,20 +104,16 @@ class BattleEngine:
         effects = []
 
         # Relic and modifier effects
-        for modifier_name, modifier_stacks in self.context.get_entity_modifiers(
-            Context.CHAR_ENTITY_ID
-        ):
+        for modifier_name, stacks in self.context.get_entity_modifiers(Context.CHAR_ENTITY_ID):
             modifier_entry = modifier_lib[modifier_name]
-            effects += modifier_entry.modifier_logic.at_end_of_turn(
-                Context.CHAR_ENTITY_ID, modifier_stacks
-            )
+            effects += modifier_entry.logic.at_end_of_turn(Context.CHAR_ENTITY_ID, stacks)
             # Decrease stacks if the modifier stacks duration
-            if modifier_entry.modifier_stacks_duration:
+            if modifier_entry.stacks_duration:
                 self.context.decrease_entity_modifer_stacks(Context.CHAR_ENTITY_ID, modifier_name)
 
         for relic_name in self.context.relics:
             relic_entry = relic_lib[relic_name]
-            effects += relic_entry.relic_logic.char_turn_end(
+            effects += relic_entry.logic.char_turn_end(
                 self.context
             )  # TODO: rename to _char_turn_end
 
@@ -135,11 +127,9 @@ class BattleEngine:
     def _monsters_turn_start(self) -> None:
         for entity_id, _ in self.context.get_monster_data():
             # Modifier effects
-            for modifier_name, modifier_stacks in self.context.get_entity_modifiers(entity_id):
+            for modifier_name, stacks in self.context.get_entity_modifiers(entity_id):
                 modifier_entry = modifier_lib[modifier_name]
-                effects = modifier_entry.modifier_logic.at_start_of_turn(
-                    entity_id, modifier_stacks
-                )
+                effects = modifier_entry.logic.at_start_of_turn(entity_id, stacks)
                 self.effect_pipeline(self.context, effects)
 
             # Reset block
@@ -148,15 +138,13 @@ class BattleEngine:
     def _monsters_turn_end(self) -> None:
         for entity_id, monster_data in self.context.get_monster_data():
             # Modifier effects
-            for modifier_name, modifier_stacks in self.context.get_entity_modifiers(entity_id):
+            for modifier_name, stacks in self.context.get_entity_modifiers(entity_id):
                 modifier_entry = modifier_lib[modifier_name]
-                effects = modifier_entry.modifier_logic.at_start_of_turn(
-                    entity_id, modifier_stacks
-                )
+                effects = modifier_entry.logic.at_start_of_turn(entity_id, stacks)
                 self.effect_pipeline(self.context, effects)
 
                 # Decrease stacks if the modifier stacks duration
-                if modifier_entry.modifier_stacks_duration:
+                if modifier_entry.stacks_duration:
                     self.context.decrease_entity_modifer_stacks(entity_id, modifier_name)
 
             # Update monster's move
@@ -171,8 +159,8 @@ class BattleEngine:
 
         # Get active card's effects
         card_name = self.context.hand[self.context.active_card_idx]
-        card_info = card_lib[card_name]
-        effects = card_info.card_logic.use(self.context, monster_entity_id)
+        card_data = card_lib[card_name]
+        effects = card_data.logic.use(self.context, monster_entity_id)
 
         # Apply effects
         self.effect_pipeline(self.context, effects)
@@ -183,7 +171,7 @@ class BattleEngine:
         self.context.disc_pile.append(card_name)
 
         # Substract energy spent. TODO: cards can have variable cost
-        self.context.energy.current -= card_info.card_cost
+        self.context.energy.current -= card_data.cost
 
         # Clear active card
         self.context.active_card_idx = None
@@ -255,14 +243,14 @@ class BattleEngine:
         # Queue relic effects
         for relic in self.context.relics:
             relic_entry = relic_lib[relic]
-            effects = relic_entry.relic_logic.battle_start(self.context)
+            effects = relic_entry.logic.battle_start(self.context)
             self.effect_pipeline(self.context, effects)
 
     def battle_end(self) -> None:
         # Queue relic effects
         for relic in self.context.relics:
             relic_entry = relic_lib[relic]
-            effects = relic_entry.relic_logic.battle_end(self.context)
+            effects = relic_entry.logic.battle_end(self.context)
             self.effect_pipeline(self.context, effects)
 
     # TODO: revise name

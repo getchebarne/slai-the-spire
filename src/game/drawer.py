@@ -24,7 +24,7 @@ def energy_str(energy: Energy) -> str:
 
 
 def card_str(card_name: str) -> str:
-    return f"({card_lib[card_name].card_cost}) {card_name}"
+    return f"({card_lib[card_name].cost}) {card_name}"
 
 
 def hand_str(hand: list[str], active_card_idx: int) -> str:

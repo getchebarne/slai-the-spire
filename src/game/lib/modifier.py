@@ -8,10 +8,10 @@ from src.game.logic.card.base import BaseCardLogic
 
 @dataclass
 class ModifierEntry:
-    modifier_desc: str
-    modifier_stacks_duration: bool
-    modifier_stacks_counter: bool
-    modifier_logic: BaseCardLogic
+    description: str
+    stacks_duration: bool
+    stacks_counter: bool
+    logic: BaseCardLogic
 
 
 # Connect to the SQLite database
@@ -34,12 +34,12 @@ for row in cursor.fetchall():
 
     # Get the modifier's logic
     logic_module = importlib.import_module(f"src.game.logic.modifier.{modifier_name.lower()}")
-    modifier_logic = getattr(logic_module, f"{modifier_name}Logic")()
+    logic_instance = getattr(logic_module, f"{modifier_name}Logic")()
 
     # Create a ModifierEntry instance and add it to the modifier library
     modifier_lib[modifier_name] = ModifierEntry(
-        modifier_desc=row["modifier_desc"],
-        modifier_stacks_duration=row["stacks_duration"],
-        modifier_stacks_counter=row["stacks_counter"],
-        modifier_logic=modifier_logic,
+        description=row["modifier_desc"],
+        stacks_duration=row["stacks_duration"],
+        stacks_counter=row["stacks_counter"],
+        logic=logic_instance,
     )
