@@ -10,4 +10,4 @@ DAMAGE = 6
 class AttackLogic(BaseMoveLogic):
     # TODO: improve owner def
     def use(self, context: Context, source_entity_id: int) -> list[Effect]:
-        return [Effect(source_entity_id, context.CHAR_ENTITY_ID, EffectType.DAMAGE, DAMAGE)]
+        return [Effect(EffectType.DAMAGE, DAMAGE, source_entity_id, context.CHAR_ENTITY_ID)]

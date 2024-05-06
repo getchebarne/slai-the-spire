@@ -10,4 +10,4 @@ class GainStrength(BaseStep):
         context.entity_modifiers[(effect.target_entity_id, "Strength")] += effect.value
 
     def _condition(self, context: Context, effect: Effect) -> bool:
-        return effect.type == EffectType.PLUS_STR
+        return effect.type == EffectType.GAIN_STR

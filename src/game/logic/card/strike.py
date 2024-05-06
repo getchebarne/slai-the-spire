@@ -9,4 +9,4 @@ DAMAGE = 6
 
 class StrikeLogic(BaseCardLogic):
     def use(self, context: Context, target_monster_id: int) -> list[Effect]:
-        return [Effect(context.CHAR_ENTITY_ID, target_monster_id, EffectType.DAMAGE, DAMAGE)]
+        return [Effect(EffectType.DAMAGE, DAMAGE, context.CHAR_ENTITY_ID, target_monster_id)]

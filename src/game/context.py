@@ -63,7 +63,7 @@ class Context:
         self._setup()
 
     def _setup(self) -> None:
-        # Initialize monster moves. TODO: fix
+        # Initialize monster moves. TODO: improve this whole first move business
         if self.monster_moves == {}:
             self.monster_moves = {
                 entity_id: None
@@ -90,7 +90,24 @@ class Context:
                 "Neutralize",
             ]
 
-    def get_monsters(self) -> Generator[tuple[int, EntityData], None, None]:
+    def get_monster_data(self) -> Generator[tuple[int, EntityData], None, None]:
         for entity_id, entity_data in self.entities.items():
             if entity_id != Context.CHAR_ENTITY_ID:
                 yield entity_id, entity_data
+
+    def get_char_data(self) -> EntityData:
+        return self.entities[Context.CHAR_ENTITY_ID]
+
+    def get_entity_modifiers(self, entity_id: int) -> Generator[tuple[str, int], None, None]:
+        for (_entity_id, modifier_name), stacks in self.entity_modifiers.items():
+            if _entity_id == entity_id:
+                yield modifier_name, stacks
+
+    def decrease_entity_modifer_stacks(
+        self, entity_id: int, modifier_name: str, amount: int = 1
+    ) -> None:
+        self.entity_modifiers[(entity_id, modifier_name)] -= amount
+
+        # Remove modifier if it has no stacks left
+        if self.entity_modifiers[(entity_id, modifier_name)] <= 0:
+            del self.entity_modifiers[(entity_id, modifier_name)]

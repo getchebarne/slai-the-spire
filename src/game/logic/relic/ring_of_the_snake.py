@@ -10,5 +10,5 @@ DRAW = 2
 
 
 class RingOfTheSnakeLogic(BaseRelicLogic):
-    def at_start_of_battle(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
-        return [Effect(context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID, EffectType.DRAW_CARD, DRAW)]
+    def battle_start(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+        return [Effect(EffectType.DRAW_CARD, DRAW, context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID)]

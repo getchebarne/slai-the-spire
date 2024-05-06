@@ -55,7 +55,7 @@ def draw(context: Context) -> None:
     print(state_str(context.state))
     print(energy_str(context.energy))
     print(hand_str(context.hand, context.active_card_idx))
-    for _, monster_data in context.get_monsters():
+    for _, monster_data in context.get_monster_data():
         # Print to the right side of the terminal
         print(f"{entity_str(monster_data):>{N_TERM_COLS}}")
 

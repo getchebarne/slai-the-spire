@@ -10,5 +10,5 @@ HEAL = 6
 
 
 class BurningBloodLogic(BaseRelicLogic):
-    def at_end_of_battle(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
-        return [Effect(context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID, EffectType.HEAL, HEAL)]
+    def battle_end(self, context: Context, count: Optional[int] = 0) -> list[Effect]:
+        return [Effect(EffectType.HEAL, HEAL, context.CHAR_ENTITY_ID, context.CHAR_ENTITY_ID)]
