@@ -25,9 +25,9 @@ NUM_CARDS_DRAWN_PER_TURN = 5
 
 
 class ActionType(Enum):
-    SELECT_CARD = 0
-    SELECT_TARGET = 1
-    END_TURN = 2
+    SELECT_CARD = "SELECT_CARD"
+    SELECT_TARGET = "SELECT_TARGET"
+    END_TURN = "END_TURN"
 
 
 @dataclass

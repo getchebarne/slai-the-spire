@@ -11,9 +11,9 @@ STARTING_ENERGY = 3
 
 # TODO: define elsewhere
 class BattleState(Enum):
-    DEFAULT = 0
-    AWAIT_TARGET = 1
-    NONE = 2
+    DEFAULT = "DEFAULT"
+    AWAIT_TARGET = "AWAIT_TARGET"
+    NONE = "NONE"
 
 
 @dataclass
@@ -90,13 +90,13 @@ class Context:
                 "Neutralize",
             ]
 
+    def get_char_data(self) -> EntityData:
+        return self.entities[Context.CHAR_ENTITY_ID]
+
     def get_monster_data(self) -> Generator[tuple[int, EntityData], None, None]:
         for entity_id, entity_data in self.entities.items():
             if entity_id != Context.CHAR_ENTITY_ID:
                 yield entity_id, entity_data
-
-    def get_char_data(self) -> EntityData:
-        return self.entities[Context.CHAR_ENTITY_ID]
 
     def get_entity_modifiers(self, entity_id: int) -> Generator[tuple[str, int], None, None]:
         for (_entity_id, modifier_name), stacks in self.entity_modifiers.items():
