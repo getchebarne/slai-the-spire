@@ -7,7 +7,7 @@ from src.game.constants import DB_PATH
 @dataclass
 class CharEntry:
     base_health: int
-    start_relic_name: str
+    starter_relic_name: str
 
 
 # Connect to the SQLite database

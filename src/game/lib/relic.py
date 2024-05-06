@@ -8,9 +8,9 @@ from src.game.logic.relic.base import BaseRelicLogic
 
 @dataclass
 class RelicEntry:
-    relic_desc: str
-    relic_rarity: str
-    relic_logic: BaseRelicLogic
+    description: str
+    rarity: str
+    logic: BaseRelicLogic
 
 
 # Connect to the SQLite database
@@ -31,13 +31,13 @@ for row in cursor.fetchall():
 
     # Get the relic's logic
     script_name = relic_name.lower().replace(" ", "_")
-    relic_logic_name = f"{relic_name.title().replace(' ', '')}Logic"
+    logic_name = f"{relic_name.title().replace(' ', '')}Logic"
     logic_module = importlib.import_module(f"src.game.logic.relic.{script_name}")
-    relic_logic = getattr(logic_module, relic_logic_name)()
+    logic_instance = getattr(logic_module, logic_name)()
 
     # Create a RelicEntry instance and add it to the relic library
     relic_lib[relic_name] = RelicEntry(
-        relic_desc=row["relic_desc"],
-        relic_rarity=row["relic_rarity"],
-        relic_logic=relic_logic,
+        description=row["relic_desc"],
+        rarity=row["relic_rarity"],
+        logic=logic_instance,
     )
