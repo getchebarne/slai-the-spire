@@ -2,7 +2,7 @@ import os
 from functools import wraps
 from typing import Any, Callable
 
-from src.game.context import BattleState
+from src.game.core.state import BattleState
 from src.game.context import Context
 from src.game.context import EntityData
 from src.game.core.energy import Energy
