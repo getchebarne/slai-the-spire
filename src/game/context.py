@@ -1,19 +1,12 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from enum import Enum
 from typing import Generator, Optional
 
 from src.game.core.energy import Energy
+from src.game.core.state import BattleState
 
 
 STARTING_ENERGY = 3
-
-
-# TODO: define elsewhere
-class BattleState(Enum):
-    DEFAULT = "DEFAULT"
-    AWAIT_TARGET = "AWAIT_TARGET"
-    NONE = "NONE"
 
 
 @dataclass

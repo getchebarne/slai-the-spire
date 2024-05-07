@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from src.game.context import BattleState
+from src.game.core.state import BattleState
 from src.game.context import Context
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
