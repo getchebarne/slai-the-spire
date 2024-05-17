@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from src.game.core.components import BaseComponent
 
 
 class EffectType(Enum):
@@ -14,13 +18,20 @@ class EffectType(Enum):
     HEAL = "HEAL"
 
 
+class SelectionType(Enum):
+    NONE = "NONE"
+    SPECIFIC = "SPECIFIC"
+    RANDOM = "RANDOM"
+    ALL = "ALL"
+
+
 @dataclass
 class Effect:
     # TODO: add created_by
     type: EffectType
     value: int
-    source_entity_id: Optional[int] = None
-    target_entity_id: Optional[int] = None
+    query_components: list[type[BaseComponent]]
+    selection_type: SelectionType
 
     def __str__(self) -> str:
         return f"{self.type}: {self.value}"

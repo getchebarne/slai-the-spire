@@ -3,8 +3,8 @@ import numpy as np
 from src.agents.base import BaseAgent
 from src.game.battle.engine import Action
 from src.game.battle.engine import ActionType
-from src.game.core.state import BattleState
 from src.game.context import Context
+from src.game.core.state import BattleState
 
 
 class RandomAgent(BaseAgent):

@@ -24,7 +24,7 @@ cursor.execute("SELECT * FROM MonsterLib")
 
 # Initialize monster library. The monster library is implemented as a dictionary mapping
 # monster_name to a MonsterEntry instance
-monster_lib = {}
+monster_lib: dict[str, MonsterEntry] = {}
 
 # Fetch all rows. TODO: wrap in function
 rows = cursor.fetchall()

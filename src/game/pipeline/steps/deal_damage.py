@@ -1,23 +1,23 @@
-from src.game.context import Context
+from src.game.core.components import BlockComponent
+from src.game.core.components import HealthComponent
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
+from src.game.core.manager import ECSManager
 from src.game.pipeline.steps.base import BaseStep
 
 
 class DealDamage(BaseStep):
-    def _apply_effect(self, context: Context, effect: Effect) -> None:
+    def _apply_effect(self, manager: ECSManager, target_entity_id: int, effect: Effect) -> None:
         damage = effect.value
-        target_entity_id = effect.target_entity_id
+        block_component = manager.get_component_for_entity(target_entity_id, BlockComponent)
+        health_component = manager.get_component_for_entity(target_entity_id, HealthComponent)
 
         # Remove block
-        dmg_over_block = max(0, damage - context.entities[target_entity_id].current_block)
-        context.entities[target_entity_id].current_block = max(
-            0, context.entities[target_entity_id].current_block - damage
-        )
-        # Remove health
-        context.entities[target_entity_id].current_health = max(
-            0, context.entities[target_entity_id].current_health - dmg_over_block
-        )
+        dmg_over_block = max(0, damage - block_component.current)
+        block_component.current = max(0, block_component.current - damage)
 
-    def _condition(self, context: Context, effect: Effect) -> bool:
+        # Remove health
+        health_component.current = max(0, health_component.current - dmg_over_block)
+
+    def _condition(self, effect: Effect) -> bool:
         return effect.type == EffectType.DAMAGE
