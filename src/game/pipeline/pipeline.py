@@ -5,6 +5,7 @@ from collections import deque
 
 from src.game.context import Context
 from src.game.core.effect import Effect
+from src.game.core.manager import ECSManager
 from src.game.pipeline.steps.apply_str import ApplyStrength
 from src.game.pipeline.steps.apply_weak import ApplyWeak
 from src.game.pipeline.steps.base import BaseStep
@@ -20,12 +21,12 @@ from src.game.pipeline.steps.heal import Heal
 DEFAULT_STEPS = {
     DealDamage(),
     GainBlock(),
-    ApplyWeak(),
-    ApplyStrength(),
-    GainStrength(),
-    GainWeak(),
-    DrawCard(),
-    Heal(),
+    #     ApplyWeak(),
+    #     ApplyStrength(),
+    #     GainStrength(),
+    #     GainWeak(),
+    #     DrawCard(),
+    #     Heal(),
 }
 
 
@@ -43,17 +44,17 @@ class EffectPipeline:
 
         insort(self._steps, step)
 
-    def __call__(self, context: Context, effects: list[Effect]) -> None:
-        effect_queue = deque(effects)
+    def __call__(self, manager: ECSManager, target_entity_id: int, effect: Effect) -> None:
+        effect_queue = deque([effect])
 
         while effect_queue:
             effect = effect_queue.popleft()
             for step in self._steps:
-                add_to_bot_effects, add_to_top_effects = step(context, effect)
+                add_to_bot_effects, add_to_top_effects = step(manager, target_entity_id, effect)
 
-                # Add new effects to the queue
-                effect_queue.extend(add_to_bot_effects)
-                effect_queue.extendleft(add_to_top_effects)
+                # Add new effects to the queue. TODO: reactivate
+                # effect_queue.extend(add_to_bot_effects)
+                # effect_queue.extendleft(add_to_top_effects)
 
     def __str__(self) -> str:
         return "\n".join([f"{step.priority} : {step.__class__.__name__}" for step in self._steps])

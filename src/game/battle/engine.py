@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from src.game.core.state import BattleState
 from src.game.context import Context
+from src.game.core.components import MonsterComponent
+from src.game.core.components import MonsterMoveComponent
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
+from src.game.core.state import BattleState
 from src.game.lib.card import card_lib
 from src.game.lib.modifier import modifier_lib
 from src.game.lib.monster import monster_lib
@@ -55,8 +57,8 @@ class BattleEngine:
         random.shuffle(self.context.draw_pile)
 
         # Get first move from monsters. TODO: improve
-        for monster_id, monster_data in self.context.get_monster_data():
-            if self.context.monster_moves[monster_id] is None:
+        for entitiy_id in self.context.get_entities_with_component(MonsterComponent):
+            if self.context.get_component(entitiy_id, MonsterMoveComponent).move:
                 monster_ai = monster_lib[monster_data.name].ai
                 self.context.monster_moves[monster_id] = monster_ai.first_move_name()
 

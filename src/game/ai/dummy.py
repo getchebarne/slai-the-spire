@@ -4,7 +4,10 @@ from typing import Optional
 
 class DummyAI:
     def next_move_name(self, current_move_name: Optional[str]) -> str:
-        if current_move_name == "Attack":
+        if current_move_name is None:
+            return random.choice(["Attack", "Defend"])
+
+        elif current_move_name == "Attack":
             return "Defend"
 
         elif current_move_name == "Defend":
@@ -12,6 +15,3 @@ class DummyAI:
 
         else:
             raise ValueError(f"Unknown move {current_move_name}")
-
-    def first_move_name(self) -> str:
-        return random.choice(["Attack", "Defend"])
