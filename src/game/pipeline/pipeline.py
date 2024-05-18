@@ -5,7 +5,7 @@ from collections import deque
 
 from src.game.context import Context
 from src.game.core.effect import Effect
-from src.game.core.manager import ECSManager
+from src.game.ecs.manager import ECSManager
 from src.game.pipeline.steps.apply_str import ApplyStrength
 from src.game.pipeline.steps.apply_weak import ApplyWeak
 from src.game.pipeline.steps.base import BaseStep

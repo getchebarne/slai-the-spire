@@ -6,11 +6,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from src.game.context import Context
-from src.game.core.components import MonsterComponent
-from src.game.core.components import MonsterMoveComponent
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
 from src.game.core.state import BattleState
+from src.game.ecs.components import MonsterComponent
+from src.game.ecs.components import MonsterMoveComponent
 from src.game.lib.card import card_lib
 from src.game.lib.modifier import modifier_lib
 from src.game.lib.monster import monster_lib

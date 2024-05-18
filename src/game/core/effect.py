@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
-    from src.game.core.components import BaseComponent
+    from src.game.ecs.components import BaseComponent
 
 
 class EffectType(Enum):

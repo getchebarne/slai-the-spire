@@ -1,8 +1,8 @@
 from collections import defaultdict
 from typing import Generator, Optional
 
-from src.game.core.components import BaseComponent
 from src.game.core.state import BattleState
+from src.game.ecs.components import BaseComponent
 
 
 STARTING_ENERGY = 3
