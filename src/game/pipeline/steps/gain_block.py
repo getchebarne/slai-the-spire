@@ -1,7 +1,7 @@
-from src.game.core.components import BlockComponent
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
-from src.game.core.manager import ECSManager
+from src.game.ecs.components import BlockComponent
+from src.game.ecs.manager import ECSManager
 from src.game.pipeline.steps.base import BaseStep
 
 

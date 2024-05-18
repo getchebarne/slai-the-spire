@@ -1,40 +1,40 @@
-from src.game.core.components import ActiveCardComponent
-from src.game.core.components import BlockComponent
-from src.game.core.components import CardInHandComponent
-from src.game.core.components import CharacterComponent
-from src.game.core.components import EffectsOnUseComponent
-from src.game.core.components import HealthComponent
-from src.game.core.components import MonsterComponent
-from src.game.core.components import NameComponent
-from src.game.core.components import TargetComponent
-from src.game.core.effect import Effect
-from src.game.core.effect import EffectType
-from src.game.core.effect import SelectionType
-from src.game.core.manager import ECSManager
-from src.game.core.systems import ApplyEffectsSystem
-from src.game.core.systems import PlayCardSystem
-from src.game.core.systems import TargetEffectsSystem
+from src.game.ecs.components import ActiveCardComponent
+from src.game.ecs.components import BlockComponent
+from src.game.ecs.components import CardCostComponent
+from src.game.ecs.components import CardInHandComponent
+from src.game.ecs.components import CharacterComponent
+from src.game.ecs.components import EffectQueryComponentsComponent
+from src.game.ecs.components import EffectSelectionTypeComponent
+from src.game.ecs.components import EnergyComponent
+from src.game.ecs.components import GainBlockEffectComponent
+from src.game.ecs.components import HealthComponent
+from src.game.ecs.components import MonsterComponent
+from src.game.ecs.components import HasEffectsComponent
+from src.game.ecs.components import NameComponent
+from src.game.ecs.components import SelectionType
+from src.game.ecs.components import TargetComponent
+from src.game.ecs.manager import ECSManager
+from src.game.ecs.systems import GainBlockSystem
+from src.game.ecs.systems import PlayCardSystem
+from src.game.ecs.systems import TargetEffectsSystem
 
 
-systems = [PlayCardSystem(), TargetEffectsSystem(), ApplyEffectsSystem()]
+systems = [PlayCardSystem(), TargetEffectsSystem(), GainBlockSystem()]
 
 manager = ECSManager()
 
-# Create "Strike" card in the hand
-strike_entity_id = manager.create_entity(
-    CardInHandComponent(position=0),
-    NameComponent(value="Strike"),
-    EffectsOnUseComponent(
-        effects=[Effect(EffectType.DAMAGE, 6, [MonsterComponent], SelectionType.SPECIFIC)]
-    ),
+# Create a "GainBlock" effect
+gain_block_entity_id = manager.create_entity(
+    GainBlockEffectComponent(value=5),
+    EffectQueryComponentsComponent([CharacterComponent]),
+    EffectSelectionTypeComponent(SelectionType.NONE),
 )
 # Create "Defend" card in the hand
 defend_entity_id = manager.create_entity(
-    CardInHandComponent(position=1),
-    NameComponent(value="Defend"),
-    EffectsOnUseComponent(
-        effects=[Effect(EffectType.BLOCK, 5, [CharacterComponent], SelectionType.NONE)]
-    ),
+    NameComponent("Defend"),
+    CardCostComponent(1),
+    HasEffectsComponent([gain_block_entity_id]),
+    CardInHandComponent(position=0),
 )
 # Create a character
 char_entity_id = manager.create_entity(
@@ -50,13 +50,20 @@ monster_entity_id = manager.create_entity(
     HealthComponent(50),
     BlockComponent(),
 )
+# Create the energy
+energy_entity_id = manager.create_entity(EnergyComponent(3))
+
 # Set the active card
 manager.add_component(defend_entity_id, ActiveCardComponent())
 
 # Set the target entity
-manager.add_component(monster_entity_id, TargetComponent())
+# manager.add_component(monster_entity_id, TargetComponent())
 
 # Game loop
 while True:
+    print(manager.get_component_for_entity(char_entity_id, BlockComponent).current)
     for system in systems:
         system(manager)
+
+    print(manager.get_component_for_entity(char_entity_id, BlockComponent).current)
+    break

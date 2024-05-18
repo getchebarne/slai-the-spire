@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from src.game.core.effect import Effect
-from src.game.core.manager import ECSManager
+from src.game.ecs.manager import ECSManager
 
 
 class BaseStep(ABC):

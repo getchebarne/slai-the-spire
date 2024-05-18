@@ -1,8 +1,8 @@
 from itertools import count
 from typing import Iterator
 
-from src.game.core.components import BaseComponent
 from src.game.core.state import BattleState
+from src.game.ecs.components import BaseComponent
 
 
 # TODO: implement cache functions
