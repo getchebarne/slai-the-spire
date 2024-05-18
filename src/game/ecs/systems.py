@@ -12,6 +12,7 @@ from src.game.ecs.components import EffectToBeTargetedComponent
 from src.game.ecs.components import EnergyComponent
 from src.game.ecs.components import GainBlockEffectComponent
 from src.game.ecs.components import HasEffectsComponent
+from src.game.ecs.components import HealthComponent
 from src.game.ecs.components import SelectionType
 from src.game.ecs.components import TargetComponent
 from src.game.ecs.manager import ECSManager
@@ -65,6 +66,10 @@ class PlayCardSystem(BaseSystem):
 # TODO: add effect source to trigger additional effects (e.g., thorns)
 class TargetEffectsSystem(BaseSystem):
     def __call__(self, manager: ECSManager) -> None:
+        # Create a list of effect entities to untag after targeting
+        effect_entity_ids_to_untag = []
+
+        # Iterate over the effects to be targeted
         for effect_entity_id, (
             _,
             effect_selection_type_component,
@@ -109,12 +114,14 @@ class TargetEffectsSystem(BaseSystem):
                 effect_entity_id, EffectApplyToComponent(entity_ids=target_entity_ids)
             )
 
-        # Remove the effects to be targeted
-        # manager.remove_component(entity_id, EffectsToBeTargetedComponent)
+        # Untag the effects
+        for effect_entity_id in effect_entity_ids_to_untag:
+            manager.remove_component(effect_entity_id, EffectToBeTargetedComponent)
 
 
 class GainBlockSystem(BaseSystem):
     def __call__(self, manager: ECSManager) -> None:
+        effect_entity_ids_to_untag = []
         for effect_entity_id, (
             gain_block_effect_component,
             effect_apply_to_component,
@@ -123,3 +130,36 @@ class GainBlockSystem(BaseSystem):
                 manager.get_component_for_entity(
                     target_entity_id, BlockComponent
                 ).current += gain_block_effect_component.value
+
+            effect_entity_ids_to_untag.append(effect_entity_id)
+
+        for effect_entity_id in effect_entity_ids_to_untag:
+            manager.remove_component(effect_entity_id, EffectApplyToComponent)
+
+
+class DealDamageSystem(BaseSystem):
+    def __call__(self, manager: ECSManager) -> None:
+        effect_entity_ids_to_untag = []
+        for effect_entity_id, (
+            deal_damage_effect_component,
+            effect_apply_to_component,
+        ) in manager.get_components(DealDamageEffectComponent, EffectApplyToComponent):
+            for target_entity_id in effect_apply_to_component.entity_ids:
+                damage = deal_damage_effect_component.value
+                block_component = manager.get_component_for_entity(
+                    target_entity_id, BlockComponent
+                )
+                health_component = manager.get_component_for_entity(
+                    target_entity_id, HealthComponent
+                )
+                # Remove block
+                dmg_over_block = max(0, damage - block_component.current)
+                block_component.current = max(0, block_component.current - damage)
+
+                # Remove health
+                health_component.current = max(0, health_component.current - dmg_over_block)
+
+            effect_entity_ids_to_untag.append(effect_entity_id)
+
+        for effect_entity_id in effect_entity_ids_to_untag:
+            manager.remove_component(effect_entity_id, EffectApplyToComponent)
