@@ -1,24 +1,24 @@
-from src.game.ecs.components import ActiveCardComponent
-from src.game.ecs.components import BlockComponent
-from src.game.ecs.components import CardCostComponent
-from src.game.ecs.components import CardInHandComponent
-from src.game.ecs.components import CharacterComponent
-from src.game.ecs.components import DealDamageEffectComponent
-from src.game.ecs.components import EffectQueryComponentsComponent
-from src.game.ecs.components import EffectSelectionTypeComponent
-from src.game.ecs.components import EnergyComponent
-from src.game.ecs.components import GainBlockEffectComponent
-from src.game.ecs.components import HasEffectsComponent
-from src.game.ecs.components import HealthComponent
-from src.game.ecs.components import MonsterComponent
-from src.game.ecs.components import NameComponent
-from src.game.ecs.components import SelectionType
-from src.game.ecs.components import TargetComponent
+from src.game.ecs.components.cards import ActiveCardComponent
+from src.game.ecs.components.cards import CardCostComponent
+from src.game.ecs.components.cards import CardInHandComponent
+from src.game.ecs.components.common import NameComponent
+from src.game.ecs.components.creatures import BlockComponent
+from src.game.ecs.components.creatures import CharacterComponent
+from src.game.ecs.components.creatures import HealthComponent
+from src.game.ecs.components.creatures import MonsterComponent
+from src.game.ecs.components.effects import DealDamageEffectComponent
+from src.game.ecs.components.effects import EffectQueryComponentsComponent
+from src.game.ecs.components.effects import EffectSelectionType
+from src.game.ecs.components.effects import EffectSelectionTypeComponent
+from src.game.ecs.components.effects import GainBlockEffectComponent
+from src.game.ecs.components.effects import HasEffectsComponent
+from src.game.ecs.components.energy import EnergyComponent
+from src.game.ecs.components.target import TargetComponent
 from src.game.ecs.manager import ECSManager
-from src.game.ecs.systems import GainBlockSystem
-from src.game.ecs.systems import PlayCardSystem
-from src.game.ecs.systems import TargetEffectsSystem
-from src.game.ecs.systems import DealDamageSystem
+from src.game.ecs.systems.effect import DealDamageSystem
+from src.game.ecs.systems.effect import GainBlockSystem
+from src.game.ecs.systems.engine import PlayCardSystem
+from src.game.ecs.systems.engine import TargetEffectsSystem
 
 
 systems = [PlayCardSystem(), TargetEffectsSystem(), GainBlockSystem(), DealDamageSystem()]
@@ -29,13 +29,13 @@ manager = ECSManager()
 gain_block_entity_id = manager.create_entity(
     GainBlockEffectComponent(value=5),
     EffectQueryComponentsComponent([CharacterComponent]),
-    EffectSelectionTypeComponent(SelectionType.NONE),
+    EffectSelectionTypeComponent(EffectSelectionType.NONE),
 )
 # Create a "DealDamage" effect
 deal_damage_entity_id = manager.create_entity(
     DealDamageEffectComponent(value=6),
     EffectQueryComponentsComponent([MonsterComponent]),
-    EffectSelectionTypeComponent(SelectionType.SPECIFIC),
+    EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
 )
 # Create "Defend" card in the hand
 defend_entity_id = manager.create_entity(
