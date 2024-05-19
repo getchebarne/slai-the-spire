@@ -13,7 +13,7 @@ class ECSManager:
         self._components: dict[type[BaseComponent], set[int]] = dict()
         self._entities: dict[int, dict[type[BaseComponent], BaseComponent]] = dict()
         self._dead_entities: set[int] = set()  # TODO: unused for now
-        self._entity_count = count(start=1, step=1)
+        self._entity_count: count = count(start=1, step=1)
 
     def create_entity(self, *components: BaseComponent) -> int:
         # Get the next entity identifier
