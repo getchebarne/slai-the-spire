@@ -9,7 +9,7 @@ class CardCostComponent(BaseComponent):
 
 
 @dataclass
-class ActiveCardComponent(BaseComponent):
+class CardIsActiveComponent(BaseComponent):
     pass
 
 
@@ -19,12 +19,22 @@ class CardInDeckComponent(BaseComponent):
 
 
 @dataclass
-class CardInHandComponent(BaseComponent):
-    position: int
+class CardInPileComponent(BaseComponent):
+    """
+    For cards that are either in the discard pile or draw pile.
+    Used by the ShuffleDiscardPileIntoDrawPile.
+    """
+
+    pass
 
 
 @dataclass
 class CardInDrawPileComponent(BaseComponent):
+    position: int
+
+
+@dataclass
+class CardInHandComponent(BaseComponent):
     position: int
 
 

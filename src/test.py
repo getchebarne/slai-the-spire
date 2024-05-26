@@ -1,6 +1,6 @@
-from src.game.ecs.components.cards import ActiveCardComponent
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardInHandComponent
+from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import CharacterComponent
@@ -69,8 +69,8 @@ monster_entity_id = manager.create_entity(
 energy_entity_id = manager.create_entity(EnergyComponent(3))
 
 # Set the active card
-manager.add_component(defend_entity_id, ActiveCardComponent())
-# manager.add_component(strike_entity_id, ActiveCardComponent())
+manager.add_component(defend_entity_id, CardIsActiveComponent())
+# manager.add_component(strike_entity_id, CardIsActiveComponent())
 
 # Set the target entity
 manager.add_component(monster_entity_id, TargetComponent())
