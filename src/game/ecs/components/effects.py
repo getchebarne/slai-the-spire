@@ -25,6 +25,31 @@ class DealDamageEffectComponent(BaseComponent):
 
 
 @dataclass
+class DiscardEffectComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class GainWeakEffectComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class DrawCardEffectComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class ShuffleDiscardPileIntoDrawPileEffectComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class ShuffleDeckIntoDrawPileEffectComponent(BaseComponent):
+    pass
+
+
+@dataclass
 class EffectSelectionTypeComponent(BaseComponent):
     value: EffectSelectionType
 
@@ -41,9 +66,9 @@ class HasEffectsComponent(BaseComponent):
 
 @dataclass
 class EffectToBeTargetedComponent(BaseComponent):
-    pass
+    priority: int
 
 
 @dataclass
 class EffectApplyToComponent(BaseComponent):
-    entity_ids: int
+    entity_ids: list[int]

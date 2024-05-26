@@ -6,9 +6,11 @@ from src.game.ecs.manager import ECSManager
 
 
 def create_dummy(manager: ECSManager) -> int:
+    base_health = 30
+
     return manager.create_entity(
         MonsterComponent(),
         NameComponent("Dummy"),
-        HealthComponent(30),
+        HealthComponent(base_health),
         BlockComponent(),
     )

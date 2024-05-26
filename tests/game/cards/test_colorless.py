@@ -1,5 +1,5 @@
-from src.game.ecs.components.cards import ActiveCardComponent
 from src.game.ecs.components.cards import CardCostComponent
+from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.effects import DealDamageEffectComponent
@@ -29,7 +29,7 @@ def test_strike() -> None:
 
     # Create a Strike card entity & set it as active
     strike_entity_id = create_strike(manager)
-    manager.add_component(strike_entity_id, ActiveCardComponent())
+    manager.add_component(strike_entity_id, CardIsActiveComponent())
 
     # Get the Strike card's effect entity ids
     effect_entity_ids = manager.get_component_for_entity(
@@ -76,7 +76,7 @@ def test_defend() -> None:
 
     # Create a Defend card entity & set it as active
     defend_entity_id = create_defend(manager)
-    manager.add_component(defend_entity_id, ActiveCardComponent())
+    manager.add_component(defend_entity_id, CardIsActiveComponent())
 
     # Get the Defend card's effect entity ids
     effect_entity_ids = manager.get_component_for_entity(
