@@ -27,6 +27,11 @@ class DiscardCardEffectComponent(BaseComponent):
 
 
 @dataclass
+class DiscardHandAtEndOfTurnEffect(BaseComponent):
+    pass
+
+
+@dataclass
 class GainWeakEffectComponent(BaseComponent):
     value: int
 

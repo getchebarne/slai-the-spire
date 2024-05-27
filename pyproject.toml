@@ -20,6 +20,7 @@ pytest = "^8.1.1"
 force_single_line = true
 single_line_exclusions = ["typing", "abc", "dataclasses"]
 lines_after_imports = 2
+line_length = 99
 
 [tool.black]
 line-length = 99

@@ -1,11 +1,9 @@
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import \
-    ShuffleDeckIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import ShuffleDeckIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
-from src.game.ecs.systems.shuffle_deck_into_draw_pile import \
-    ShuffleDeckIntoDrawPileSystem
+from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDrawPileSystem
 
 
 # TODO: test w/ different seeds
