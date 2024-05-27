@@ -1,11 +1,11 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import \
-    ShuffleDiscardPileIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
-from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import \
-    ShuffleDiscardPileIntoDrawPileSystem
+from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import (
+    ShuffleDiscardPileIntoDrawPileSystem,
+)
 
 
 # TODO: change number of cards in draw and discard piles

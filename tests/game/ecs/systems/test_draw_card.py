@@ -4,8 +4,7 @@ from src.game.ecs.components.cards import CardInPileComponent
 from src.game.ecs.components.effects import DrawCardEffectComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectToBeDispatchedComponent
-from src.game.ecs.components.effects import \
-    ShuffleDiscardPileIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.draw_card import DrawCardSystem
 
