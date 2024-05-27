@@ -1,36 +1,36 @@
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
-from src.game.ecs.components.cards import CardInPileComponent
-from src.game.ecs.components.effects import EffectApplyToComponent
+from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import \
     ShuffleDeckIntoDrawPileEffectComponent
-from src.game.ecs.factories.decks.silent import create_starter_deck
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.shuffle_deck_into_draw_pile import \
     ShuffleDeckIntoDrawPileSystem
 
 
-# TODO: change number of cards in draw and discard piles
+# TODO: test w/ different seeds
 def test_base() -> None:
     # Instance ECS manager
     manager = ECSManager()
 
     # Create a starter deck
-    card_in_deck_entity_ids = create_starter_deck(manager)
+    num_cards = 10
+    card_in_deck_entity_ids = [
+        manager.create_entity(CardInDeckComponent()) for _ in range(num_cards)
+    ]
 
     # Create effect to shuffle the deck into the draw pile
     # TODO: should it be passed through the targeting system?
-    manager.create_entity(
-        ShuffleDeckIntoDrawPileEffectComponent(), EffectApplyToComponent(card_in_deck_entity_ids)
-    )
+    manager.create_entity(ShuffleDeckIntoDrawPileEffectComponent(), EffectIsDispatchedComponent())
+
     # Run the system
     ShuffleDeckIntoDrawPileSystem().process(manager)
 
     # Get all cards in the draw pile
     card_in_draw_pile_entity_ids = []
     positions = []
-    for card_in_draw_pile_entity_id, (_, card_in_draw_pile_component) in manager.get_components(
-        CardInPileComponent, CardInDrawPileComponent
+    for card_in_draw_pile_entity_id, card_in_draw_pile_component in manager.get_component(
+        CardInDrawPileComponent
     ):
         card_in_draw_pile_entity_ids.append(card_in_draw_pile_entity_id)
         positions.append(card_in_draw_pile_component.position)

@@ -41,3 +41,8 @@ class CardInHandComponent(BaseComponent):
 @dataclass
 class CardInDiscardPileComponent(BaseComponent):
     pass
+
+
+@dataclass
+class CardHasEffectsComponent(BaseComponent):
+    effect_entity_ids: list[int]

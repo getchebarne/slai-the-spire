@@ -2,8 +2,8 @@ from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardInPileComponent
 from src.game.ecs.components.effects import DrawCardEffectComponent
-from src.game.ecs.components.effects import EffectApplyToComponent
-from src.game.ecs.components.effects import EffectToBeTargetedComponent
+from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.effects import \
     ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
@@ -18,8 +18,7 @@ def test_base() -> None:
     # Create `num_cards` cards in the draw pile and `num_cards` cards in the hand
     num_cards = 5
     card_in_draw_pile_entity_ids = [
-        manager.create_entity(CardInPileComponent(), CardInDrawPileComponent(i))
-        for i in range(num_cards)
+        manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)
     ]
     card_in_hand_entity_ids = [
         manager.create_entity(CardInHandComponent(i)) for i in range(num_cards)
@@ -28,10 +27,7 @@ def test_base() -> None:
     # Create effect to shuffle the discard pile into the draw pile
     # TODO: should it be passed through the targeting system?
     num_draw = 3
-    manager.create_entity(
-        DrawCardEffectComponent(num_draw),
-        EffectApplyToComponent(card_in_draw_pile_entity_ids.copy()),
-    )
+    manager.create_entity(DrawCardEffectComponent(num_draw), EffectIsDispatchedComponent())
 
     # Run the system
     DrawCardSystem().process(manager)
@@ -81,10 +77,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     # Create effect to shuffle the discard pile into the draw pile
     # TODO: should it be passed through the targeting system?
     num_draw = 3
-    manager.create_entity(
-        DrawCardEffectComponent(num_draw),
-        EffectApplyToComponent(card_in_draw_pile_entity_ids.copy()),
-    )
+    manager.create_entity(DrawCardEffectComponent(num_draw), EffectIsDispatchedComponent())
 
     # Run the system
     DrawCardSystem().process(manager)
@@ -112,7 +105,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     # created w/ priority 0
     query_result = list(
         manager.get_components(
-            ShuffleDiscardPileIntoDrawPileEffectComponent, EffectToBeTargetedComponent
+            ShuffleDiscardPileIntoDrawPileEffectComponent, EffectToBeDispatchedComponent
         )
     )
     assert len(query_result) == 1
@@ -122,7 +115,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
 
     # Assert one and only one effect to draw the remaining cards has been created w/ priority 1
     query_result = list(
-        manager.get_components(DrawCardEffectComponent, EffectToBeTargetedComponent)
+        manager.get_components(DrawCardEffectComponent, EffectToBeDispatchedComponent)
     )
     assert len(query_result) == 1
 

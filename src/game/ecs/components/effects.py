@@ -4,9 +4,6 @@ from enum import Enum
 from src.game.ecs.components.base import BaseComponent
 
 
-MAX_BLOCK = 999
-
-
 class EffectSelectionType(Enum):
     NONE = "NONE"
     SPECIFIC = "SPECIFIC"
@@ -25,7 +22,7 @@ class DealDamageEffectComponent(BaseComponent):
 
 
 @dataclass
-class DiscardEffectComponent(BaseComponent):
+class DiscardCardEffectComponent(BaseComponent):
     value: int
 
 
@@ -60,15 +57,10 @@ class EffectQueryComponentsComponent(BaseComponent):
 
 
 @dataclass
-class HasEffectsComponent(BaseComponent):
-    entity_ids: list[int]  # TODO: rename?
-
-
-@dataclass
-class EffectToBeTargetedComponent(BaseComponent):
+class EffectToBeDispatchedComponent(BaseComponent):
     priority: int
 
 
 @dataclass
-class EffectApplyToComponent(BaseComponent):
-    entity_ids: list[int]
+class EffectIsDispatchedComponent(BaseComponent):
+    pass

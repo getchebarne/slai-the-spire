@@ -1,7 +1,6 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
-from src.game.ecs.components.cards import CardInPileComponent
-from src.game.ecs.components.effects import EffectApplyToComponent
+from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import \
     ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
@@ -16,38 +15,19 @@ def test_base() -> None:
 
     # Create `num_cards` cards in the draw pile and `num_cards` cards in the discard pile
     num_cards = 5
-    card_in_draw_pile_entity_ids = [
-        manager.create_entity(CardInPileComponent(), CardInDrawPileComponent(i))
-        for i in range(num_cards)
-    ]
-    card_in_discard_pile_entity_ids = [
-        manager.create_entity(CardInPileComponent(), CardInDiscardPileComponent())
-        for i in range(num_cards)
-    ]
-    card_in_pile_entity_ids = card_in_draw_pile_entity_ids + card_in_discard_pile_entity_ids
+    _ = [manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)]
+    _ = [manager.create_entity(CardInDiscardPileComponent()) for i in range(num_cards)]
 
     # Create effect to shuffle the discard pile into the draw pile
-    # TODO: should it be passed through the targeting system?
     manager.create_entity(
         ShuffleDiscardPileIntoDrawPileEffectComponent(),
-        EffectApplyToComponent(card_in_pile_entity_ids),
+        EffectIsDispatchedComponent(),
     )
     # Run the system
     ShuffleDiscardPileIntoDrawPileSystem().process(manager)
 
     # Assert there's no cards in the discard pile
     assert len(list(manager.get_component(CardInDiscardPileComponent))) == 0
-
-    # Assert all cards in a pile are in the discard pile
-    card_in_pile_entity_ids = [
-        card_in_pile_entity_id
-        for card_in_pile_entity_id, _ in manager.get_component(CardInPileComponent)
-    ]
-    card_in_draw_pile_entity_ids = [
-        card_in_draw_pile_entity_id
-        for card_in_draw_pile_entity_id, _ in manager.get_component(CardInPileComponent)
-    ]
-    assert sorted(card_in_pile_entity_ids) == sorted(card_in_draw_pile_entity_ids)
 
     # Assert the card's positions range from 0 to 2 * `num_cards` - 1
     card_in_draw_pile_positions = [
@@ -64,16 +44,14 @@ def test_empty_discard_pile() -> None:
     # Create `num_cards` cards in the draw pile
     num_cards = 10
     card_in_draw_pile_entity_ids = [
-        manager.create_entity(CardInPileComponent(), CardInDrawPileComponent(i))
-        for i in range(num_cards)
+        manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)
     ]
     prev_positions = list(range(num_cards))
 
     # Create effect to shuffle the discard pile into the draw pile
-    # TODO: should these be passed through the targeting system?
     manager.create_entity(
         ShuffleDiscardPileIntoDrawPileEffectComponent(),
-        EffectApplyToComponent(card_in_draw_pile_entity_ids),
+        EffectIsDispatchedComponent(),
     )
     # Run system
     ShuffleDiscardPileIntoDrawPileSystem().process(manager)
