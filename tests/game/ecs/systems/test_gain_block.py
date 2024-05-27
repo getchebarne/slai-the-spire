@@ -1,5 +1,8 @@
 from src.game.ecs.components.creatures import BlockComponent
-from src.game.ecs.components.effects import EffectApplyToComponent
+from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectQueryComponentsComponent
+from src.game.ecs.components.effects import EffectSelectionType
+from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.components.effects import GainBlockEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.gain_block import GainBlockSystem
@@ -17,7 +20,10 @@ def test_base() -> None:
     # Create effect to add `block` block to the entity
     block = 6
     manager.create_entity(
-        GainBlockEffectComponent(block), EffectApplyToComponent([target_entity_id])
+        GainBlockEffectComponent(block),
+        EffectQueryComponentsComponent([BlockComponent]),
+        EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        EffectIsDispatchedComponent(),
     )
 
     # Run the system
@@ -45,7 +51,10 @@ def test_capped() -> None:
     # Create effect to add `block` block to the entity
     block = 6
     manager.create_entity(
-        GainBlockEffectComponent(block), EffectApplyToComponent([target_entity_id])
+        GainBlockEffectComponent(block),
+        EffectQueryComponentsComponent([BlockComponent]),
+        EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        EffectIsDispatchedComponent(),
     )
 
     # Run the system

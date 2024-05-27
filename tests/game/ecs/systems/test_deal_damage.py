@@ -1,7 +1,10 @@
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.effects import DealDamageEffectComponent
-from src.game.ecs.components.effects import EffectApplyToComponent
+from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectQueryComponentsComponent
+from src.game.ecs.components.effects import EffectSelectionType
+from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.deal_damage import DealDamageSystem
 
@@ -17,7 +20,10 @@ def test_wo_block() -> None:
     # Create effect to deal `damage` damage to the entity
     damage = 6
     manager.create_entity(
-        DealDamageEffectComponent(damage), EffectApplyToComponent([target_entity_id])
+        DealDamageEffectComponent(damage),
+        EffectQueryComponentsComponent([HealthComponent]),
+        EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        EffectIsDispatchedComponent(),
     )
 
     # Run the system
@@ -47,7 +53,10 @@ def test_w_block_lower_than_damage() -> None:
     # Create effect to deal `damage` damage to the entity
     damage = 6
     manager.create_entity(
-        DealDamageEffectComponent(damage), EffectApplyToComponent([target_entity_id])
+        DealDamageEffectComponent(damage),
+        EffectQueryComponentsComponent([HealthComponent]),
+        EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        EffectIsDispatchedComponent(),
     )
 
     # Run the system
@@ -77,7 +86,10 @@ def test_w_block_higher_than_damage() -> None:
     # Create effect to deal `damage` damage to the entity
     damage = 6
     manager.create_entity(
-        DealDamageEffectComponent(damage), EffectApplyToComponent([target_entity_id])
+        DealDamageEffectComponent(damage),
+        EffectQueryComponentsComponent([HealthComponent]),
+        EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        EffectIsDispatchedComponent(),
     )
 
     # Run the system

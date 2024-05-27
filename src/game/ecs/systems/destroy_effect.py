@@ -1,14 +1,13 @@
-from src.game.ecs.components.effects import EffectApplyToComponent
+from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.systems.base import ProcessStatus
 
 
-class DestroyEffect(BaseSystem):
+# TODO: think about changing how the whole effect duplication thing is implemented
+class DestroyEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (draw_card_effect_component, effect_apply_to_component) = next(
-            manager.get_components(EffectApplyToComponent)
-        )
+        effect_entity_id, _ = next(manager.get_component(EffectIsDispatchedComponent))
         manager.destroy_entity(effect_entity_id)
 
         return ProcessStatus.COMPLETE
