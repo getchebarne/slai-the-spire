@@ -27,7 +27,7 @@ class DealDamageEffectComponent(BaseComponent):
 
 @dataclass
 class DiscardCardEffectComponent(BaseComponent):
-    value: int
+    pass
 
 
 @dataclass

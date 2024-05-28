@@ -19,16 +19,6 @@ class CardInDeckComponent(BaseComponent):
 
 
 @dataclass
-class CardInPileComponent(BaseComponent):
-    """
-    For cards that are either in the discard pile or draw pile.
-    Used by the ShuffleDiscardPileIntoDrawPile.
-    """
-
-    pass
-
-
-@dataclass
 class CardInDrawPileComponent(BaseComponent):
     position: int
 
