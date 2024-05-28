@@ -1,8 +1,6 @@
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
+from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.components.effects import GainBlockEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.gain_block import GainBlockSystem
@@ -15,16 +13,13 @@ def test_base() -> None:
     # Create a target entity w/ a block component
     max_block = 999
     current_block = 0
-    target_entity_id = manager.create_entity(BlockComponent(max=max_block, current=current_block))
+    target_entity_id = manager.create_entity(
+        BlockComponent(max=max_block, current=current_block), EffectTargetComponent()
+    )
 
     # Create effect to add `block` block to the entity
     block = 6
-    manager.create_entity(
-        GainBlockEffectComponent(block),
-        EffectQueryComponentsComponent([BlockComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
-        EffectIsDispatchedComponent(),
-    )
+    manager.create_entity(GainBlockEffectComponent(block), EffectIsDispatchedComponent())
 
     # Run the system
     GainBlockSystem().process(manager)
@@ -46,16 +41,13 @@ def test_capped() -> None:
     # Create a target entity w/ a block component
     max_block = 999
     current_block = 997
-    target_entity_id = manager.create_entity(BlockComponent(max=max_block, current=current_block))
+    target_entity_id = manager.create_entity(
+        BlockComponent(max=max_block, current=current_block), EffectTargetComponent()
+    )
 
     # Create effect to add `block` block to the entity
     block = 6
-    manager.create_entity(
-        GainBlockEffectComponent(block),
-        EffectQueryComponentsComponent([BlockComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
-        EffectIsDispatchedComponent(),
-    )
+    manager.create_entity(GainBlockEffectComponent(block), EffectIsDispatchedComponent())
 
     # Run the system
     GainBlockSystem().process(manager)

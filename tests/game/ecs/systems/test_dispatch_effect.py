@@ -4,6 +4,7 @@ from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.dispatch_effect import DispatchEffectSystem
 
 
+# TODO: improve this test
 def test_base() -> None:
     # Instance ECS manager
     manager = ECSManager()
@@ -25,3 +26,6 @@ def test_base() -> None:
 
     # Assert there's one effect that has been dispatched
     assert len(list(manager.get_component(EffectIsDispatchedComponent))) == 1
+
+    # Assert there's `num_effects` + 1 effects (since one of them was duplicated)
+    assert len(manager._entities) == num_effects + 1

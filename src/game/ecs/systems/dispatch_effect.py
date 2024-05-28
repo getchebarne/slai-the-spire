@@ -5,7 +5,7 @@ from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.systems.base import ProcessStatus
 
 
-# TODO: revise if effects need to be dispatched every loop?
+# TODO: revisit if effects need to be dispatched every loop?
 class DispatchEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         for effect_entity_id, effect_to_be_dispatched_component in manager.get_component(
@@ -13,14 +13,19 @@ class DispatchEffectSystem(BaseSystem):
         ):
             # Only dispatch highest priority effect
             if effect_to_be_dispatched_component.priority == 0:
-                manager.add_component(effect_entity_id, EffectIsDispatchedComponent())
-                untag_effect_entity_id = effect_entity_id
+                dispatch_effect_entity_id = effect_entity_id
 
             else:
                 # TODO: maybe this is wrong, the effect may not be completely processed
                 effect_to_be_dispatched_component.priority -= 1
 
-        # Untag the effect that was dispatched
-        manager.remove_component(untag_effect_entity_id, EffectToBeDispatchedComponent)
+        # Untag the dispatched effect
+        manager.remove_component(dispatch_effect_entity_id, EffectToBeDispatchedComponent)
+
+        # Duplicate dispatched effect so that it can be modified by the downstream systems and tag
+        # it
+        manager.add_component(
+            manager.duplicate_entity(dispatch_effect_entity_id), EffectIsDispatchedComponent()
+        )
 
         return ProcessStatus.COMPLETE
