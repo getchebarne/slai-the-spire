@@ -8,7 +8,11 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class RefillEnergySystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        _ = next(manager.get_components(EffectIsDispatchedComponent, RefillEnergyEffect))
+        try:
+            next(manager.get_components(EffectIsDispatchedComponent, RefillEnergyEffect))
+
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # TODO: check there's only one energy entity?
         _, energy_component = list(manager.get_component(EnergyComponent))[0]

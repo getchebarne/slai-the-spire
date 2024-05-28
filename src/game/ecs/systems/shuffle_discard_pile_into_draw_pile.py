@@ -11,14 +11,19 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class ShuffleDiscardPileIntoDrawPileSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (
-            shuffle_discard_pile_into_draw_pile_effect_component,
-            effect_apply_to_component,
-        ) = next(
-            manager.get_components(
-                ShuffleDiscardPileIntoDrawPileEffectComponent, EffectIsDispatchedComponent
+        try:
+            effect_entity_id, (
+                shuffle_discard_pile_into_draw_pile_effect_component,
+                effect_apply_to_component,
+            ) = next(
+                manager.get_components(
+                    ShuffleDiscardPileIntoDrawPileEffectComponent, EffectIsDispatchedComponent
+                )
             )
-        )
+
+        except StopIteration:
+            return ProcessStatus.PASS
+
         # Get all cards in the discard and draw piles
         card_in_draw_piles = list(manager.get_component(CardInDrawPileComponent))
         card_in_discard_piles = list(manager.get_component(CardInDiscardPileComponent))

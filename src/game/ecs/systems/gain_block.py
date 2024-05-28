@@ -9,9 +9,13 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class GainBlockSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (_, gain_block_effect_component) = next(
-            manager.get_components(EffectIsDispatchedComponent, GainBlockEffectComponent)
-        )
+        try:
+            effect_entity_id, (_, gain_block_effect_component) = next(
+                manager.get_components(EffectIsDispatchedComponent, GainBlockEffectComponent)
+            )
+
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # Get target entities
         target_entity_ids = [

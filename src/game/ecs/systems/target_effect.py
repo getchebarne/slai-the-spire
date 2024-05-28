@@ -12,17 +12,21 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class TargetEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (
-            _,
-            effect_query_components_component,
-            effect_selection_type_component,
-        ) = next(
-            manager.get_components(
-                EffectIsDispatchedComponent,
-                EffectQueryComponentsComponent,
-                EffectSelectionTypeComponent,
+        try:
+            effect_entity_id, (
+                _,
+                effect_query_components_component,
+                effect_selection_type_component,
+            ) = next(
+                manager.get_components(
+                    EffectIsDispatchedComponent,
+                    EffectQueryComponentsComponent,
+                    EffectSelectionTypeComponent,
+                )
             )
-        )
+
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # Get the entities that match the effect's potential targets
         query_target_entity_ids = [

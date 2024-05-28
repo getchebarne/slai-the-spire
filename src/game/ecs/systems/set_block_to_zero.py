@@ -9,9 +9,14 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class SetBlockToZeroSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, _ = next(
-            manager.get_components(EffectIsDispatchedComponent, SetBlockToZeroEffect)
-        )
+        try:
+            effect_entity_id, _ = next(
+                manager.get_components(EffectIsDispatchedComponent, SetBlockToZeroEffect)
+            )
+
+        except StopIteration:
+            return ProcessStatus.PASS
+
         # Get target entities
         target_entity_ids = [
             target_entity_id

@@ -9,7 +9,13 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class DiscardHandAtEndOfTurnSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        _ = next(manager.get_components(DiscardHandAtEndOfTurnEffect, EffectIsDispatchedComponent))
+        try:
+            _ = next(
+                manager.get_components(DiscardHandAtEndOfTurnEffect, EffectIsDispatchedComponent)
+            )
+
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # Get all cards in the hand
         card_in_hand_entity_ids = [

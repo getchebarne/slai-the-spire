@@ -8,6 +8,7 @@ from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.systems.base import ProcessStatus
 
 
+# TODO: use next here?
 class PlayCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         query_result = list(manager.get_component(CardIsActiveComponent))

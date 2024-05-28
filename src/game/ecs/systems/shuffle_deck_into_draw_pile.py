@@ -11,14 +11,18 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class ShuffleDeckIntoDrawPileSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (
-            shuffle_deck_into_draw_pile_effect_component,
-            effect_apply_to_component,
-        ) = next(
-            manager.get_components(
-                ShuffleDeckIntoDrawPileEffectComponent, EffectIsDispatchedComponent
+        try:
+            effect_entity_id, (
+                shuffle_deck_into_draw_pile_effect_component,
+                effect_apply_to_component,
+            ) = next(
+                manager.get_components(
+                    ShuffleDeckIntoDrawPileEffectComponent, EffectIsDispatchedComponent
+                )
             )
-        )
+
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # Get all cards in the deck
         card_in_decks = list(manager.get_component(CardInDeckComponent))

@@ -7,6 +7,7 @@ from src.game.ecs.manager import ECSManager
 class ProcessStatus(Enum):
     COMPLETE = "COMPLETE"
     INCOMPLETE = "INCOMPLETE"
+    PASS = "PASS"
 
 
 # TODO: add priority
