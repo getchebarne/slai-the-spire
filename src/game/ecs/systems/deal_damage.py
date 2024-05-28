@@ -10,9 +10,13 @@ from src.game.ecs.systems.base import ProcessStatus
 
 class DealDamageSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (_, deal_damage_effect_component) = next(
-            manager.get_components(EffectIsDispatchedComponent, DealDamageEffectComponent)
-        )
+        try:
+            effect_entity_id, (_, deal_damage_effect_component) = next(
+                manager.get_components(EffectIsDispatchedComponent, DealDamageEffectComponent)
+            )
+
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # Get target entities
         target_entity_ids = [

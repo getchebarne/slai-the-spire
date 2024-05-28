@@ -15,9 +15,14 @@ MAX_HAND_SIZE = 10
 
 class DrawCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        effect_entity_id, (draw_card_effect_component, effect_apply_to_component) = next(
-            manager.get_components(DrawCardEffectComponent, EffectIsDispatchedComponent)
-        )
+        try:
+            effect_entity_id, (draw_card_effect_component, effect_apply_to_component) = next(
+                manager.get_components(DrawCardEffectComponent, EffectIsDispatchedComponent)
+            )
+
+        except StopIteration:
+            return ProcessStatus.PASS
+
         # Get cards in draw pile and sort them according to their position
         card_in_draw_piles = list(manager.get_component(CardInDrawPileComponent))
         card_in_draw_piles.sort(key=lambda x: x[1].position)
