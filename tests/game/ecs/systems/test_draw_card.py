@@ -1,6 +1,5 @@
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardInPileComponent
 from src.game.ecs.components.effects import DrawCardEffectComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectToBeDispatchedComponent
@@ -66,8 +65,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     # Create `num_cards` cards in the draw pile and `num_cards` cards in the hand
     num_cards = 2
     card_in_draw_pile_entity_ids = [
-        manager.create_entity(CardInPileComponent(), CardInDrawPileComponent(i))
-        for i in range(num_cards)
+        manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)
     ]
     card_in_hand_entity_ids = [
         manager.create_entity(CardInHandComponent(i)) for i in range(num_cards)

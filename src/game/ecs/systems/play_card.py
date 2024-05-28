@@ -1,5 +1,7 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
+from src.game.ecs.components.cards import CardInDiscardPileComponent
+from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.energy import EnergyComponent
@@ -41,7 +43,9 @@ class PlayCardSystem(BaseSystem):
                 effect_entity_id, EffectToBeDispatchedComponent(priority=priority)
             )
 
-        # Untag the active card
+        # Untag the active card & send it to the discard pile
         manager.remove_component(card_entity_id, CardIsActiveComponent)
+        manager.remove_component(card_entity_id, CardInHandComponent)
+        manager.add_component(card_entity_id, CardInDiscardPileComponent())
 
         return ProcessStatus.COMPLETE
