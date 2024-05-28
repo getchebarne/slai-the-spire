@@ -2,9 +2,7 @@ from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.effects import DealDamageEffectComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
+from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.deal_damage import DealDamageSystem
 
@@ -15,16 +13,13 @@ def test_wo_block() -> None:
 
     # Create a target entity w/ health and block components
     max_health = 50
-    target_entity_id = manager.create_entity(HealthComponent(max_health), BlockComponent())
+    target_entity_id = manager.create_entity(
+        HealthComponent(max_health), BlockComponent(), EffectTargetComponent()
+    )
 
     # Create effect to deal `damage` damage to the entity
     damage = 6
-    manager.create_entity(
-        DealDamageEffectComponent(damage),
-        EffectQueryComponentsComponent([HealthComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
-        EffectIsDispatchedComponent(),
-    )
+    manager.create_entity(DealDamageEffectComponent(damage), EffectIsDispatchedComponent())
 
     # Run the system
     DealDamageSystem().process(manager)
@@ -47,17 +42,12 @@ def test_w_block_lower_than_damage() -> None:
     max_health = 50
     current_block = 4
     target_entity_id = manager.create_entity(
-        HealthComponent(max_health), BlockComponent(current=current_block)
+        HealthComponent(max_health), BlockComponent(current=current_block), EffectTargetComponent()
     )
 
     # Create effect to deal `damage` damage to the entity
     damage = 6
-    manager.create_entity(
-        DealDamageEffectComponent(damage),
-        EffectQueryComponentsComponent([HealthComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
-        EffectIsDispatchedComponent(),
-    )
+    manager.create_entity(DealDamageEffectComponent(damage), EffectIsDispatchedComponent())
 
     # Run the system
     DealDamageSystem().process(manager)
@@ -80,17 +70,12 @@ def test_w_block_higher_than_damage() -> None:
     max_health = 50
     current_block = 8
     target_entity_id = manager.create_entity(
-        HealthComponent(max_health), BlockComponent(current=current_block)
+        HealthComponent(max_health), BlockComponent(current=current_block), EffectTargetComponent()
     )
 
     # Create effect to deal `damage` damage to the entity
     damage = 6
-    manager.create_entity(
-        DealDamageEffectComponent(damage),
-        EffectQueryComponentsComponent([HealthComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
-        EffectIsDispatchedComponent(),
-    )
+    manager.create_entity(DealDamageEffectComponent(damage), EffectIsDispatchedComponent())
 
     # Run the system
     DealDamageSystem().process(manager)

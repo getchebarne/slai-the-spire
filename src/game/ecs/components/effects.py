@@ -6,9 +6,13 @@ from src.game.ecs.components.base import BaseComponent
 
 class EffectSelectionType(Enum):
     NONE = "NONE"
-    SPECIFIC = "SPECIFIC"
-    RANDOM = "RANDOM"
     ALL = "ALL"
+    RANDOM = "RANDOM"
+
+
+@dataclass
+class EffectTargetComponent(BaseComponent):
+    pass
 
 
 @dataclass
@@ -24,6 +28,16 @@ class DealDamageEffectComponent(BaseComponent):
 @dataclass
 class DiscardCardEffectComponent(BaseComponent):
     value: int
+
+
+@dataclass
+class SetBlockToZeroEffect(BaseComponent):
+    pass
+
+
+@dataclass
+class RefillEnergyEffect(BaseComponent):
+    pass
 
 
 @dataclass
