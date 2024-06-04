@@ -9,16 +9,15 @@ from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.systems.base import ProcessStatus
 
 
 class PlayCardSystem(BaseSystem):
-    def process(self, manager: ECSManager) -> ProcessStatus:
+    def process(self, manager: ECSManager) -> None:
         try:
             card_entity_id, _ = next(manager.get_component(CardIsPlayedComponent))
 
         except StopIteration:
-            return ProcessStatus.PASS
+            return
 
         # Get the card's cost
         card_cost = manager.get_component_for_entity(card_entity_id, CardCostComponent).value
@@ -49,4 +48,4 @@ class PlayCardSystem(BaseSystem):
             EffectSelectionTypeComponent(EffectSelectionType.NONE),
         )
 
-        return ProcessStatus.COMPLETE
+        return

@@ -40,15 +40,5 @@ class MonsterMoveComponent(BaseComponent):
 
 
 @dataclass
-class MonsterIsTurnComponent(BaseComponent):
-    pass
-
-
-@dataclass
-class MonsterPendingTurnComponent(BaseComponent):
-    pass
-
-
-@dataclass
 class IsTurnComponent(BaseComponent):
     pass

@@ -5,18 +5,17 @@ from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.systems.base import ProcessStatus
 
 
 class DealDamageSystem(BaseSystem):
-    def process(self, manager: ECSManager) -> ProcessStatus:
+    def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (_, deal_damage_effect_component) = next(
                 manager.get_components(EffectIsTargetedComponent, DealDamageEffectComponent)
             )
 
         except StopIteration:
-            return ProcessStatus.PASS
+            return
 
         # Get target entities
         target_entity_ids = [
@@ -35,4 +34,4 @@ class DealDamageSystem(BaseSystem):
             # Remove health
             health_component.current = max(0, health_component.current - damage_over_block)
 
-        return ProcessStatus.COMPLETE
+        return
