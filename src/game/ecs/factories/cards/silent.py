@@ -1,4 +1,5 @@
 from src.game.ecs.components.cards import CardCostComponent
+from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.common import DescriptionComponent
@@ -12,7 +13,6 @@ from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.components.effects import GainBlockEffectComponent
 from src.game.ecs.components.effects import GainWeakEffectComponent
-from src.game.ecs.components.effects import HasEffectsComponent
 from src.game.ecs.manager import ECSManager
 
 
@@ -39,7 +39,7 @@ def create_neutralize(manager: ECSManager) -> int:
         NameComponent("Neutralize"),
         DescriptionComponent("Deal 3 damage. Apply 1 Weak."),
         CardCostComponent(base_cost),
-        HasEffectsComponent([deal_damage_entity_id, gain_weak_entity_id]),
+        CardHasEffectsComponent([deal_damage_entity_id, gain_weak_entity_id]),
     )
 
 
@@ -66,5 +66,5 @@ def create_survivor(manager: ECSManager) -> int:
         NameComponent("Survivor"),
         DescriptionComponent("Gain 8 block. Discard 1 card."),
         CardCostComponent(base_cost),
-        HasEffectsComponent([gain_block_entity_id, discard_entity_id]),
+        CardHasEffectsComponent([gain_block_entity_id, discard_entity_id]),
     )

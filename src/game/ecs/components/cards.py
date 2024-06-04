@@ -9,7 +9,22 @@ class CardCostComponent(BaseComponent):
 
 
 @dataclass
-class CardIsActiveComponent(BaseComponent):
+class CardRequiresTargetComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CardIsSelectedComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CardIsPlayedComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CardTargetComponent(BaseComponent):
     pass
 
 
@@ -35,4 +50,4 @@ class CardInDiscardPileComponent(BaseComponent):
 
 @dataclass
 class CardHasEffectsComponent(BaseComponent):
-    effect_entity_ids: list[int]
+    effect_entity_ids: list[int]  # TODO: can be None

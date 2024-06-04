@@ -1,5 +1,5 @@
 from src.game.ecs.components.creatures import BlockComponent
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.components.effects import SetBlockToZeroEffect
 from src.game.ecs.manager import ECSManager
@@ -11,7 +11,7 @@ class SetBlockToZeroSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         try:
             effect_entity_id, _ = next(
-                manager.get_components(EffectIsDispatchedComponent, SetBlockToZeroEffect)
+                manager.get_components(EffectIsTargetedComponent, SetBlockToZeroEffect)
             )
 
         except StopIteration:

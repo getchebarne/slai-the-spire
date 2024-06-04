@@ -2,29 +2,32 @@ from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.effects import DrawCardEffectComponent
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.systems.base import ProcessStatus
 
 
 MAX_HAND_SIZE = 10
 
 
 class DrawCardSystem(BaseSystem):
-    def process(self, manager: ECSManager) -> ProcessStatus:
+    def process(self, manager: ECSManager) -> None:
         try:
-            effect_entity_id, (draw_card_effect_component, effect_apply_to_component) = next(
-                manager.get_components(DrawCardEffectComponent, EffectIsDispatchedComponent)
+            effect_entity_id, (draw_card_effect_component, _) = next(
+                manager.get_components(DrawCardEffectComponent, EffectIsTargetedComponent)
             )
 
         except StopIteration:
-            return ProcessStatus.PASS
+            return
 
         # Get cards in draw pile and sort them according to their position
+        card_in_discard_piles = list(manager.get_component(CardInDiscardPileComponent))
         card_in_draw_piles = list(manager.get_component(CardInDrawPileComponent))
+        if len(card_in_discard_piles) == 0 and len(card_in_draw_piles) == 0:
+            return
+
         card_in_draw_piles.sort(key=lambda x: x[1].position)
         hand_size = len(list(manager.get_components(CardInHandComponent)))
 
@@ -65,7 +68,7 @@ class DrawCardSystem(BaseSystem):
                 DrawCardEffectComponent(draw_card_effect_component.value - num_cards_drawn),
                 EffectToBeDispatchedComponent(priority=1),
             )
-            return ProcessStatus.INCOMPLETE
+            return
 
         # Update the positions of cards in the draw pile based on the number of cards drawn
         for card_in_draw_pile_entity_id, card_in_draw_pile_component in manager.get_component(
@@ -73,4 +76,4 @@ class DrawCardSystem(BaseSystem):
         ):
             card_in_draw_pile_component.position -= num_cards_drawn
 
-        return ProcessStatus.COMPLETE
+        return

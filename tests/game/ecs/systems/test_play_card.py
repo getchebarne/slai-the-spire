@@ -4,7 +4,7 @@ from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardIsActiveComponent
+from src.game.ecs.components.cards import CardIsSelectedComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.components.effects import EffectToBeDispatchedComponent
@@ -30,7 +30,7 @@ def test_base() -> None:
         CardHasEffectsComponent(effect_entity_ids),
         CardCostComponent(card_cost),
         CardInHandComponent(position=0),
-        CardIsActiveComponent(),
+        CardIsSelectedComponent(),
     )
 
     # Create an energy entity
@@ -57,7 +57,7 @@ def test_base() -> None:
 
     # Verifiy the card is no longer active, that it's no longer in the hand, and that it's now in
     # the discard pile
-    assert manager.get_component_for_entity(card_entity_id, CardIsActiveComponent) is None
+    assert manager.get_component_for_entity(card_entity_id, CardIsSelectedComponent) is None
     assert manager.get_component_for_entity(card_entity_id, CardInHandComponent) is None
     assert card_entity_id in [
         card_in_discard_pile_entity_id
@@ -74,7 +74,7 @@ def test_insufficient_energy() -> None:
     manager.create_entity(
         CardCostComponent(card_cost),
         CardInHandComponent(position=0),
-        CardIsActiveComponent(),
+        CardIsSelectedComponent(),
     )
 
     # Create an energy entity such that `base_energy` < `card_cost`
