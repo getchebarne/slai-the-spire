@@ -2,6 +2,7 @@ from src.game.combat import input as input_
 from src.game.combat.action import ActionType
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
+from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.cards import CardRequiresTargetComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
@@ -44,7 +45,7 @@ class HandleInputSystem(BaseSystem):
             manager.add_component(card_is_selected_entity_id, CardIsPlayedComponent())
 
             # Select
-            manager.add_component(action_target_entity_id, IsSelectedComponent())
+            manager.add_component(action_target_entity_id, CardTargetComponent())
 
         # Confirm
         if action_type == ActionType.CONFIRM:

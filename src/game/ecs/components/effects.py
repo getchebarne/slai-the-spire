@@ -85,5 +85,10 @@ class EffectIsDispatchedComponent(BaseComponent):
 
 
 @dataclass
+class EffectIsWaitingInputTargetComponent(BaseComponent):
+    pass
+
+
+@dataclass
 class EffectIsTargetedComponent(BaseComponent):
     pass
