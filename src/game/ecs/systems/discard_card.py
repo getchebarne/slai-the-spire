@@ -5,19 +5,18 @@ from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.systems.base import ProcessStatus
 
 
 # TODO: can this be faster? maybe the sort slows things down
 class DiscardCardSystem(BaseSystem):
-    def process(self, manager: ECSManager) -> ProcessStatus:
+    def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (draw_card_effect_component, _) = next(
                 manager.get_components(DiscardCardEffectComponent, EffectIsTargetedComponent)
             )
 
         except StopIteration:
-            return ProcessStatus.PASS
+            return
 
         # Get target entities
         target_entity_ids = [

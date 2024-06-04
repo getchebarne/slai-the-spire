@@ -16,6 +16,7 @@ class EffectTargetComponent(BaseComponent):
     pass
 
 
+# TODO: swap name order (e.g., EffectGainBlockComponent)
 @dataclass
 class GainBlockEffectComponent(BaseComponent):
     value: int
@@ -61,6 +62,7 @@ class ShuffleDeckIntoDrawPileEffectComponent(BaseComponent):
     pass
 
 
+# TODO: consolidate effect targeting data
 @dataclass
 class EffectSelectionTypeComponent(BaseComponent):
     value: EffectSelectionType
@@ -71,6 +73,7 @@ class EffectQueryComponentsComponent(BaseComponent):
     value: list[type[BaseComponent]]
 
 
+# TODO: improve effect lifecycle nomeclature
 @dataclass
 class EffectToBeDispatchedComponent(BaseComponent):
     priority: int

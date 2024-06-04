@@ -14,10 +14,10 @@ class DescriptionComponent(BaseComponent):
 
 
 @dataclass
-class IsSelectedComponent(BaseComponent):
+class CanBeSelectedComponent(BaseComponent):
     pass
 
 
 @dataclass
-class CanBeSelectedComponent(BaseComponent):
+class IsSelectedComponent(BaseComponent):
     pass

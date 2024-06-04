@@ -14,11 +14,6 @@ class CardRequiresTargetComponent(BaseComponent):
 
 
 @dataclass
-class CardIsSelectedComponent(BaseComponent):
-    pass
-
-
-@dataclass
 class CardIsPlayedComponent(BaseComponent):
     pass
 

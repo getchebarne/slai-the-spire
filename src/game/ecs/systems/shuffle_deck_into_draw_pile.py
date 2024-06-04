@@ -6,11 +6,10 @@ from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import ShuffleDeckIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.systems.base import ProcessStatus
 
 
 class ShuffleDeckIntoDrawPileSystem(BaseSystem):
-    def process(self, manager: ECSManager) -> ProcessStatus:
+    def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (shuffle_deck_into_draw_pile_effect_component, _) = next(
                 manager.get_components(
@@ -19,7 +18,7 @@ class ShuffleDeckIntoDrawPileSystem(BaseSystem):
             )
 
         except StopIteration:
-            return ProcessStatus.PASS
+            return
 
         # Get all cards in the deck
         card_in_decks = list(manager.get_component(CardInDeckComponent))
@@ -31,4 +30,4 @@ class ShuffleDeckIntoDrawPileSystem(BaseSystem):
         for position, (card_in_deck_entity_id, _) in enumerate(card_in_decks):
             manager.add_component(card_in_deck_entity_id, CardInDrawPileComponent(position))
 
-        return ProcessStatus.COMPLETE
+        return

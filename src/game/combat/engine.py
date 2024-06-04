@@ -18,6 +18,7 @@ class CombatEngine:
         input_.action = agent.select_action(view)
 
     def _is_game_over(self, manager: ECSManager) -> bool:
+        # TODO: assume there's only one character
         return all(
             [
                 character_health_component.current <= 0
