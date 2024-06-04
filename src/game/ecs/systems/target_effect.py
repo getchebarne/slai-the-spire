@@ -1,20 +1,18 @@
 import random
 
-from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
+from src.game.ecs.components.effects import EffectIsWaitingInputTargetComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
 
-# TODO: add tests
 # TODO: check targeted entities are alive
-# TODO: improve
 # TODO: query dispatched effects only, check if they need to be targeted here
 class TargetEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
@@ -59,10 +57,11 @@ class TargetEffectSystem(BaseSystem):
                 target_entity_ids = [random.choice(query_target_entity_ids)]
 
             elif effect_selection_type_component.value == EffectSelectionType.SPECIFIC:
-                if len(query_target_entity_ids) == 1:
+                if len(query_target_entity_ids) <= 1:
                     target_entity_ids = query_target_entity_ids
 
                 else:
+                    # TODO: fix, this is broken
                     is_selected_entity_ids = [
                         is_selected_entity_id
                         for is_selected_entity_id, _ in manager.get_component(IsSelectedComponent)
@@ -71,9 +70,9 @@ class TargetEffectSystem(BaseSystem):
                         target_entity_ids = is_selected_entity_ids
 
                     else:
-                        for query_target_entity_id in query_target_entity_ids:
-                            manager.add_component(query_target_entity_id, CanBeSelectedComponent())
-
+                        manager.add_component(
+                            effect_entity_id, EffectIsWaitingInputTargetComponent()
+                        )
                         return
 
             # Tag target entities

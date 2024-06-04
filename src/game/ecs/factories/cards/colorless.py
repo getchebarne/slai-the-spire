@@ -2,6 +2,7 @@ from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardRequiresTargetComponent
+from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import CharacterComponent
@@ -21,8 +22,8 @@ def create_strike(manager: ECSManager) -> int:
     # Create a "DealDamage" effect
     deal_damage_entity_id = manager.create_entity(
         DealDamageEffectComponent(base_damage),
-        EffectQueryComponentsComponent([MonsterComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
+        EffectQueryComponentsComponent([MonsterComponent, CardTargetComponent]),
+        EffectSelectionTypeComponent(EffectSelectionType.NONE),
     )
 
     # Create "Strike" card in the deck and return its entity_id
