@@ -1,25 +1,32 @@
-import numpy as np
+import random
+from typing import Optional
 
 from src.agents.base import BaseAgent
-from src.game.battle.engine import Action
-from src.game.battle.engine import ActionType
-from src.game.context import Context
-from src.game.core.state import BattleState
+from src.game.combat.action import Action
+from src.game.combat.action import ActionType
+from src.game.combat.view import CombatView
 
 
 class RandomAgent(BaseAgent):
-    # TODO: choose more actions other than card index
-    def select_action(self, context: Context) -> Action:
-        if context.state == BattleState.DEFAULT:
-            if context.energy.current == 0:
-                # TODO: play `Neutralize` if it's in hand
-                return Action(ActionType.END_TURN, None)
+    def select_action(self, combat_view: CombatView) -> Optional[Action]:
+        if not (
+            any([card.can_be_selected for card in combat_view.hand])
+            or any([monster.can_be_selected for monster in combat_view.monsters])
+        ):
+            # TODO: fix
+            return None
 
-            card_idx = np.random.choice(range(len(context.hand)))
-            return Action(ActionType.SELECT_CARD, card_idx)
+        # If there's no more energy, end the turn
+        if combat_view.energy.current == 0:
+            return Action(ActionType.END_TURN)
 
-        if context.state == BattleState.AWAIT_TARGET:
-            monster_entity_id = np.random.choice(
-                [monster_id for monster_id, _ in context.get_monster_data()]
-            )
-            return Action(ActionType.SELECT_TARGET, monster_entity_id)
+        if not any([card.is_selected for card in combat_view.hand]):
+            # Select random card in hand
+            return Action(ActionType.SELECT_CARD, random.choice(combat_view.hand).entity_id)
+
+        if not any([monster.can_be_selected for monster in combat_view.monsters]):
+            # Confirm the selected card
+            return Action(ActionType.CONFIRM)
+
+        # Select random monster
+        return Action(ActionType.SELECT_MONSTER, random.choice(combat_view.monsters).entity_id)

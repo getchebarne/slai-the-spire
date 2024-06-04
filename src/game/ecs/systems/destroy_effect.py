@@ -1,4 +1,4 @@
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.systems.base import ProcessStatus
@@ -8,11 +8,10 @@ from src.game.ecs.systems.base import ProcessStatus
 class DestroyEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         try:
-            effect_entity_id, _ = next(manager.get_component(EffectIsDispatchedComponent))
+            effect_entity_id, _ = next(manager.get_component(EffectIsTargetedComponent))
+            manager.destroy_entity(effect_entity_id)
 
         except StopIteration:
             return ProcessStatus.PASS
-
-        manager.destroy_entity(effect_entity_id)
 
         return ProcessStatus.COMPLETE

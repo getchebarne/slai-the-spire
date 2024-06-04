@@ -30,9 +30,25 @@ class CharacterComponent(BaseComponent):
 
 @dataclass
 class MonsterComponent(BaseComponent):
-    pass
+    position: int
 
 
 @dataclass
 class MonsterMoveComponent(BaseComponent):
-    move: Optional[str] = None  # TODO: change default
+    name: str
+    effect_entity_ids: list[int]
+
+
+@dataclass
+class MonsterIsTurnComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class MonsterPendingTurnComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class IsTurnComponent(BaseComponent):
+    pass

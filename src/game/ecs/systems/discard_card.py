@@ -1,7 +1,7 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.effects import DiscardCardEffectComponent
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -12,8 +12,8 @@ from src.game.ecs.systems.base import ProcessStatus
 class DiscardCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         try:
-            effect_entity_id, (draw_card_effect_component, effect_apply_to_component) = next(
-                manager.get_components(DiscardCardEffectComponent, EffectIsDispatchedComponent)
+            effect_entity_id, (draw_card_effect_component, _) = next(
+                manager.get_components(DiscardCardEffectComponent, EffectIsTargetedComponent)
             )
 
         except StopIteration:
@@ -24,7 +24,6 @@ class DiscardCardSystem(BaseSystem):
             target_entity_id
             for target_entity_id, _ in manager.get_component(EffectTargetComponent)
         ]
-
         # Get cards in hand and sort them according to their position
         card_in_hands = list(manager.get_component(CardInHandComponent))
         card_in_hands.sort(key=lambda card_in_hand: card_in_hand[1].position)

@@ -2,7 +2,7 @@ import random
 
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import ShuffleDeckIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -12,12 +12,9 @@ from src.game.ecs.systems.base import ProcessStatus
 class ShuffleDeckIntoDrawPileSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         try:
-            effect_entity_id, (
-                shuffle_deck_into_draw_pile_effect_component,
-                effect_apply_to_component,
-            ) = next(
+            effect_entity_id, (shuffle_deck_into_draw_pile_effect_component, _) = next(
                 manager.get_components(
-                    ShuffleDeckIntoDrawPileEffectComponent, EffectIsDispatchedComponent
+                    ShuffleDeckIntoDrawPileEffectComponent, EffectIsTargetedComponent
                 )
             )
 

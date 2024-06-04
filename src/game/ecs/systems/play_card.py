@@ -1,8 +1,10 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
-from src.game.ecs.components.cards import CardInDiscardPileComponent
-from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardIsActiveComponent
+from src.game.ecs.components.cards import CardIsPlayedComponent
+from src.game.ecs.components.effects import DiscardCardEffectComponent
+from src.game.ecs.components.effects import EffectQueryComponentsComponent
+from src.game.ecs.components.effects import EffectSelectionType
+from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
@@ -10,17 +12,13 @@ from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.systems.base import ProcessStatus
 
 
-# TODO: use next here?
 class PlayCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
-        query_result = list(manager.get_component(CardIsActiveComponent))
-        if len(query_result) == 0:
-            return ProcessStatus.COMPLETE
+        try:
+            card_entity_id, _ = next(manager.get_component(CardIsPlayedComponent))
 
-        if len(query_result) > 1:
-            raise ValueError("There can only be one active card at a time")
-
-        card_entity_id, _ = query_result[0]
+        except StopIteration:
+            return ProcessStatus.PASS
 
         # Get the card's cost
         card_cost = manager.get_component_for_entity(card_entity_id, CardCostComponent).value
@@ -40,12 +38,15 @@ class PlayCardSystem(BaseSystem):
             ).effect_entity_ids
         ):
             manager.add_component(
-                effect_entity_id, EffectToBeDispatchedComponent(priority=priority)
+                effect_entity_id,
+                EffectToBeDispatchedComponent(priority=priority + 1),  # TODO: revisit
             )
 
-        # Untag the active card & send it to the discard pile
-        manager.remove_component(card_entity_id, CardIsActiveComponent)
-        manager.remove_component(card_entity_id, CardInHandComponent)
-        manager.add_component(card_entity_id, CardInDiscardPileComponent())
+        manager.create_entity(
+            DiscardCardEffectComponent(),
+            EffectToBeDispatchedComponent(priority=0),
+            EffectQueryComponentsComponent([CardIsPlayedComponent]),
+            EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        )
 
         return ProcessStatus.COMPLETE

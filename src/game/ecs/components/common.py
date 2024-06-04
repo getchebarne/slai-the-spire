@@ -11,3 +11,13 @@ class NameComponent(BaseComponent):
 @dataclass
 class DescriptionComponent(BaseComponent):
     value: str
+
+
+@dataclass
+class IsSelectedComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CanBeSelectedComponent(BaseComponent):
+    pass

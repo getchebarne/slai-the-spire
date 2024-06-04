@@ -1,15 +1,12 @@
 from itertools import count
-from typing import Iterator
+from typing import Iterator, Optional
 
-from src.game.core.state import BattleState
 from src.game.ecs.components.base import BaseComponent
 
 
 # TODO: implement cache functions
 class ECSManager:
-    def __init__(self, state: BattleState = BattleState.NONE):
-        self.state = state
-
+    def __init__(self):
         self._components: dict[type[BaseComponent], set[int]] = dict()
         self._entities: dict[int, dict[type[BaseComponent], BaseComponent]] = dict()
         self._dead_entities: set[int] = set()  # TODO: unused for now
@@ -67,9 +64,12 @@ class ECSManager:
 
         return new_entity
 
+    def get_entity(self, entity: int) -> dict[type[BaseComponent], BaseComponent]:
+        return self._entities[entity]
+
     def get_component_for_entity(
         self, entity: int, component_type: type[BaseComponent]
-    ) -> BaseComponent:
+    ) -> Optional[BaseComponent]:
         # TODO: improve error messages
         try:
             components = self._entities[entity]
@@ -92,6 +92,14 @@ class ECSManager:
                 yield entity, [self._entities[entity][ct] for ct in component_types]
         except KeyError:
             pass
+
+    def destroy_component(self, component_type: type[BaseComponent]) -> None:
+        if component_type in self._components:
+            self._components.pop(component_type)
+
+        for entity, entity_components in self._entities.items():
+            if component_type in entity_components:
+                entity_components.pop(component_type)
 
     def add_component(self, entity: int, component_instance: BaseComponent) -> None:
         # Get the component's type

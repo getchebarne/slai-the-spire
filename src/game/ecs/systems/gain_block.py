@@ -1,5 +1,5 @@
 from src.game.ecs.components.creatures import BlockComponent
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.components.effects import GainBlockEffectComponent
 from src.game.ecs.manager import ECSManager
@@ -11,7 +11,7 @@ class GainBlockSystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         try:
             effect_entity_id, (_, gain_block_effect_component) = next(
-                manager.get_components(EffectIsDispatchedComponent, GainBlockEffectComponent)
+                manager.get_components(EffectIsTargetedComponent, GainBlockEffectComponent)
             )
 
         except StopIteration:

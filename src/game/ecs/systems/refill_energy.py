@@ -1,4 +1,4 @@
-from src.game.ecs.components.effects import EffectIsDispatchedComponent
+from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import RefillEnergyEffect
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
@@ -9,7 +9,7 @@ from src.game.ecs.systems.base import ProcessStatus
 class RefillEnergySystem(BaseSystem):
     def process(self, manager: ECSManager) -> ProcessStatus:
         try:
-            next(manager.get_components(EffectIsDispatchedComponent, RefillEnergyEffect))
+            next(manager.get_components(EffectIsTargetedComponent, RefillEnergyEffect))
 
         except StopIteration:
             return ProcessStatus.PASS

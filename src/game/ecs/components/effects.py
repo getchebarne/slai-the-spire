@@ -8,6 +8,7 @@ class EffectSelectionType(Enum):
     NONE = "NONE"
     ALL = "ALL"
     RANDOM = "RANDOM"
+    SPECIFIC = "SPECIFIC"
 
 
 @dataclass
@@ -37,11 +38,6 @@ class SetBlockToZeroEffect(BaseComponent):
 
 @dataclass
 class RefillEnergyEffect(BaseComponent):
-    pass
-
-
-@dataclass
-class DiscardHandAtEndOfTurnEffect(BaseComponent):
     pass
 
 
@@ -82,4 +78,9 @@ class EffectToBeDispatchedComponent(BaseComponent):
 
 @dataclass
 class EffectIsDispatchedComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class EffectIsTargetedComponent(BaseComponent):
     pass
