@@ -2,8 +2,8 @@ from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.effects import DrawCardEffectComponent
+from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
-from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -56,17 +56,17 @@ class DrawCardSystem(BaseSystem):
         # into the draw pile and another effect to draw the remaining cards
         if len(card_in_draw_piles) == 0 and num_cards_drawn < draw_card_effect_component.value:
             for effect_entity_id, effect_to_be_dispatched_component in manager.get_component(
-                EffectToBeDispatchedComponent
+                EffectIsQueuedComponent
             ):
                 effect_to_be_dispatched_component.priority += 2
 
             manager.create_entity(
                 ShuffleDiscardPileIntoDrawPileEffectComponent(),
-                EffectToBeDispatchedComponent(priority=0),
+                EffectIsQueuedComponent(priority=0),
             )
             manager.create_entity(
                 DrawCardEffectComponent(draw_card_effect_component.value - num_cards_drawn),
-                EffectToBeDispatchedComponent(priority=1),
+                EffectIsQueuedComponent(priority=1),
             )
             return
 

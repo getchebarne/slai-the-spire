@@ -1,7 +1,6 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInDeckComponent
-from src.game.ecs.components.cards import CardRequiresTargetComponent
 from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import NameComponent
@@ -33,7 +32,6 @@ def create_strike(manager: ECSManager) -> int:
         DescriptionComponent("Deal 6 damage."),
         CardCostComponent(base_cost),
         CardHasEffectsComponent([deal_damage_entity_id]),
-        CardRequiresTargetComponent(),  # TODO: revisit, this might be not needed
     )
 
 

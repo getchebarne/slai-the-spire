@@ -2,7 +2,7 @@ from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.effects import DrawCardEffectComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import EffectToBeDispatchedComponent
+from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.draw_card import DrawCardSystem
@@ -102,7 +102,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     # created w/ priority 0
     query_result = list(
         manager.get_components(
-            ShuffleDiscardPileIntoDrawPileEffectComponent, EffectToBeDispatchedComponent
+            ShuffleDiscardPileIntoDrawPileEffectComponent, EffectIsQueuedComponent
         )
     )
     assert len(query_result) == 1
@@ -111,9 +111,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     assert effect_to_be_targeted_component.priority == 0
 
     # Assert one and only one effect to draw the remaining cards has been created w/ priority 1
-    query_result = list(
-        manager.get_components(DrawCardEffectComponent, EffectToBeDispatchedComponent)
-    )
+    query_result = list(manager.get_components(DrawCardEffectComponent, EffectIsQueuedComponent))
     assert len(query_result) == 1
 
     _, (draw_card_effect_component, effect_to_be_targeted_component) = query_result[0]

@@ -2,10 +2,10 @@ from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
 from src.game.ecs.components.effects import DiscardCardEffectComponent
+from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
-from src.game.ecs.components.effects import EffectToBeDispatchedComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -38,12 +38,13 @@ class PlayCardSystem(BaseSystem):
         ):
             manager.add_component(
                 effect_entity_id,
-                EffectToBeDispatchedComponent(priority=priority + 1),  # TODO: revisit
+                EffectIsQueuedComponent(priority=priority + 1),  # TODO: revisit
             )
 
+        # Create effect to discard the played card
         manager.create_entity(
             DiscardCardEffectComponent(),
-            EffectToBeDispatchedComponent(priority=0),
+            EffectIsQueuedComponent(priority=0),
             EffectQueryComponentsComponent([CardIsPlayedComponent]),
             EffectSelectionTypeComponent(EffectSelectionType.NONE),
         )
