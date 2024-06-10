@@ -1,5 +1,5 @@
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import EffectToBeDispatchedComponent
+from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.dispatch_effect import DispatchEffectSystem
 
@@ -11,13 +11,13 @@ def test_base() -> None:
 
     # Create effects
     num_effects = 3
-    _ = [manager.create_entity(EffectToBeDispatchedComponent(i)) for i in range(num_effects)]
+    _ = [manager.create_entity(EffectIsQueuedComponent(i)) for i in range(num_effects)]
 
     # Run the system
     DispatchEffectSystem().process(manager)
 
     # Verify there's `num_effects` - 1 effects left to be dispatched
-    query_result = list(manager.get_component(EffectToBeDispatchedComponent))
+    query_result = list(manager.get_component(EffectIsQueuedComponent))
     assert len(query_result) == num_effects - 1
 
     # Assert the priorities of the effects range from 0 to `num_effects` - 2. TODO: improve

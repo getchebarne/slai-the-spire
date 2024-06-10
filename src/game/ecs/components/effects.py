@@ -12,6 +12,16 @@ class EffectSelectionType(Enum):
 
 
 @dataclass
+class EffectSelectionTypeComponent(BaseComponent):
+    value: EffectSelectionType
+
+
+@dataclass
+class EffectQueryComponentsComponent(BaseComponent):
+    value: list[type[BaseComponent]]
+
+
+@dataclass
 class EffectTargetComponent(BaseComponent):
     pass
 
@@ -62,20 +72,10 @@ class ShuffleDeckIntoDrawPileEffectComponent(BaseComponent):
     pass
 
 
-# TODO: consolidate effect targeting data
+# TODO: improve effect lifecycle nomenclature
+# TODO: remame priority to position
 @dataclass
-class EffectSelectionTypeComponent(BaseComponent):
-    value: EffectSelectionType
-
-
-@dataclass
-class EffectQueryComponentsComponent(BaseComponent):
-    value: list[type[BaseComponent]]
-
-
-# TODO: improve effect lifecycle nomeclature
-@dataclass
-class EffectToBeDispatchedComponent(BaseComponent):
+class EffectIsQueuedComponent(BaseComponent):
     priority: int
 
 
@@ -85,10 +85,20 @@ class EffectIsDispatchedComponent(BaseComponent):
 
 
 @dataclass
-class EffectIsWaitingInputTargetComponent(BaseComponent):
+class EffectIsPendingInputTargetsComponent(BaseComponent):
     pass
 
 
 @dataclass
 class EffectIsTargetedComponent(BaseComponent):
     pass
+
+
+@dataclass
+class EffectNumberOfTargetsComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class EffectIsHaltedComponent(BaseComponent):
+    priority: int

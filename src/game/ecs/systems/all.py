@@ -11,14 +11,12 @@ from src.game.ecs.systems.process_monster_turn import ProcessMonsterTurnSystem
 from src.game.ecs.systems.refill_energy import RefillEnergySystem
 from src.game.ecs.systems.set_block_to_zero import SetBlockToZeroSystem
 from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDrawPileSystem
-from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import (
-    ShuffleDiscardPileIntoDrawPileSystem,
-)
+from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import \
+    ShuffleDiscardPileIntoDrawPileSystem
 from src.game.ecs.systems.target_effect import TargetEffectSystem
 
 
 ALL_SYSTEMS = [
-    EnableInputSystem(),
     HandleInputSystem(),
     ProcessMonsterTurnSystem(),
     PlayCardSystem(),
@@ -33,4 +31,5 @@ ALL_SYSTEMS = [
     RefillEnergySystem(),
     SetBlockToZeroSystem(),
     DestroyEffectSystem(),
+    EnableInputSystem(),
 ]

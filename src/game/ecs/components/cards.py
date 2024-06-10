@@ -9,11 +9,6 @@ class CardCostComponent(BaseComponent):
 
 
 @dataclass
-class CardRequiresTargetComponent(BaseComponent):
-    pass
-
-
-@dataclass
 class CardIsPlayedComponent(BaseComponent):
     pass
 

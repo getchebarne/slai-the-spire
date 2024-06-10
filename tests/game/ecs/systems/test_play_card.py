@@ -7,7 +7,7 @@ from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsSelectedComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
-from src.game.ecs.components.effects import EffectToBeDispatchedComponent
+from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.play_card import PlayCardSystem
@@ -44,9 +44,7 @@ def test_base() -> None:
     for priority, effect_entity_id in enumerate(effect_entity_ids):
         assert (
             priority
-            == manager.get_component_for_entity(
-                effect_entity_id, EffectToBeDispatchedComponent
-            ).priority
+            == manager.get_component_for_entity(effect_entity_id, EffectIsQueuedComponent).priority
         )
 
     # Verify the current energy has been decreased by `card_cost`
