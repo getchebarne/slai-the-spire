@@ -42,3 +42,19 @@ class MonsterMoveComponent(BaseComponent):
 @dataclass
 class IsTurnComponent(BaseComponent):
     pass
+
+
+# TODO: move elsewhere
+@dataclass
+class DummyAIComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class MonsterPendingMoveUpdateComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class MonsterReadyToEndTurnComponent(BaseComponent):
+    pass

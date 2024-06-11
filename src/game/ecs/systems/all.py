@@ -1,9 +1,11 @@
+from src.game.ecs.systems.ai_dummy import AIDummySystem
 from src.game.ecs.systems.deal_damage import DealDamageSystem
 from src.game.ecs.systems.destroy_effect import DestroyEffectSystem
 from src.game.ecs.systems.discard_card import DiscardCardSystem
 from src.game.ecs.systems.dispatch_effect import DispatchEffectSystem
 from src.game.ecs.systems.draw_card import DrawCardSystem
 from src.game.ecs.systems.enable_input import EnableInputSystem
+from src.game.ecs.systems.end_monster_turn import EndMonsterTurnSystem
 from src.game.ecs.systems.gain_block import GainBlockSystem
 from src.game.ecs.systems.handle_input import HandleInputSystem
 from src.game.ecs.systems.play_card import PlayCardSystem
@@ -19,6 +21,8 @@ from src.game.ecs.systems.target_effect import TargetEffectSystem
 ALL_SYSTEMS = [
     HandleInputSystem(),
     ProcessMonsterTurnSystem(),
+    EndMonsterTurnSystem(),
+    AIDummySystem(),
     PlayCardSystem(),
     DispatchEffectSystem(),
     TargetEffectSystem(),
