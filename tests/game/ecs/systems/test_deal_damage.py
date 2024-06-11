@@ -1,6 +1,6 @@
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import HealthComponent
-from src.game.ecs.components.effects import DealDamageEffectComponent
+from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
@@ -19,7 +19,7 @@ def test_wo_block() -> None:
 
     # Create effect to deal `damage` damage to the entity
     damage = 6
-    manager.create_entity(DealDamageEffectComponent(damage), EffectIsDispatchedComponent())
+    manager.create_entity(EffectDealDamageComponent(damage), EffectIsDispatchedComponent())
 
     # Run the system
     DealDamageSystem().process(manager)
@@ -47,7 +47,7 @@ def test_w_block_lower_than_damage() -> None:
 
     # Create effect to deal `damage` damage to the entity
     damage = 6
-    manager.create_entity(DealDamageEffectComponent(damage), EffectIsDispatchedComponent())
+    manager.create_entity(EffectDealDamageComponent(damage), EffectIsDispatchedComponent())
 
     # Run the system
     DealDamageSystem().process(manager)
@@ -75,7 +75,7 @@ def test_w_block_higher_than_damage() -> None:
 
     # Create effect to deal `damage` damage to the entity
     damage = 6
-    manager.create_entity(DealDamageEffectComponent(damage), EffectIsDispatchedComponent())
+    manager.create_entity(EffectDealDamageComponent(damage), EffectIsDispatchedComponent())
 
     # Run the system
     DealDamageSystem().process(manager)

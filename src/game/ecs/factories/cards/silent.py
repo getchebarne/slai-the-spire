@@ -6,13 +6,13 @@ from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.effects import DealDamageEffectComponent
+from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import DiscardEffectComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
-from src.game.ecs.components.effects import GainBlockEffectComponent
-from src.game.ecs.components.effects import GainWeakEffectComponent
+from src.game.ecs.components.effects import EffectGainBlockComponent
+from src.game.ecs.components.effects import EffectGainWeakComponent
 from src.game.ecs.manager import ECSManager
 
 
@@ -23,13 +23,13 @@ def create_neutralize(manager: ECSManager) -> int:
 
     # Create a "DealDamage" effect
     deal_damage_entity_id = manager.create_entity(
-        DealDamageEffectComponent(base_damage),
+        EffectDealDamageComponent(base_damage),
         EffectQueryComponentsComponent([MonsterComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
     )
     # Create a "GainWeak" effect
     gain_weak_entity_id = manager.create_entity(
-        GainWeakEffectComponent(base_weak),
+        EffectGainWeakComponent(base_weak),
         EffectQueryComponentsComponent([MonsterComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
     )
@@ -50,7 +50,7 @@ def create_survivor(manager: ECSManager) -> int:
 
     # Create a "GainBlock" effect
     gain_block_entity_id = manager.create_entity(
-        GainBlockEffectComponent(base_block),
+        EffectGainBlockComponent(base_block),
         EffectQueryComponentsComponent([CharacterComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.NONE),
     )

@@ -1,7 +1,7 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
-from src.game.ecs.components.effects import DiscardCardEffectComponent
+from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
@@ -43,7 +43,7 @@ class PlayCardSystem(BaseSystem):
 
         # Create effect to discard the played card
         manager.create_entity(
-            DiscardCardEffectComponent(),
+            EffectDiscardCardComponent(),
             EffectIsQueuedComponent(priority=0),
             EffectQueryComponentsComponent([CardIsPlayedComponent]),
             EffectSelectionTypeComponent(EffectSelectionType.NONE),

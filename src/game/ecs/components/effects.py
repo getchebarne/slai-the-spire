@@ -28,47 +28,47 @@ class EffectTargetComponent(BaseComponent):
 
 # TODO: swap name order (e.g., EffectGainBlockComponent)
 @dataclass
-class GainBlockEffectComponent(BaseComponent):
+class EffectGainBlockComponent(BaseComponent):
     value: int
 
 
 @dataclass
-class DealDamageEffectComponent(BaseComponent):
+class EffectDealDamageComponent(BaseComponent):
     value: int
 
 
 @dataclass
-class DiscardCardEffectComponent(BaseComponent):
+class EffectDiscardCardComponent(BaseComponent):
     pass
 
 
 @dataclass
-class SetBlockToZeroEffect(BaseComponent):
+class EffectSetBlockToZero(BaseComponent):
     pass
 
 
 @dataclass
-class RefillEnergyEffect(BaseComponent):
+class EffectRefillEnergy(BaseComponent):
     pass
 
 
 @dataclass
-class GainWeakEffectComponent(BaseComponent):
+class EffectGainWeakComponent(BaseComponent):
     value: int
 
 
 @dataclass
-class DrawCardEffectComponent(BaseComponent):
+class EffectDrawCardComponent(BaseComponent):
     value: int
 
 
 @dataclass
-class ShuffleDiscardPileIntoDrawPileEffectComponent(BaseComponent):
+class EffectShuffleDiscardPileIntoDrawPileComponent(BaseComponent):
     pass
 
 
 @dataclass
-class ShuffleDeckIntoDrawPileEffectComponent(BaseComponent):
+class EffectShuffleDeckIntoDrawPileComponent(BaseComponent):
     pass
 
 

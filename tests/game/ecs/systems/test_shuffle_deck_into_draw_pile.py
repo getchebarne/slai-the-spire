@@ -1,7 +1,7 @@
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import ShuffleDeckIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDrawPileSystem
 
@@ -19,7 +19,7 @@ def test_base() -> None:
 
     # Create effect to shuffle the deck into the draw pile
     # TODO: should it be passed through the targeting system?
-    manager.create_entity(ShuffleDeckIntoDrawPileEffectComponent(), EffectIsDispatchedComponent())
+    manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsDispatchedComponent())
 
     # Run the system
     ShuffleDeckIntoDrawPileSystem().process(manager)

@@ -1,6 +1,6 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.effects import DiscardCardEffectComponent
+from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
@@ -19,7 +19,7 @@ def test_base() -> None:
     ]
 
     # Create effect to shuffle the discard pile into the draw pile
-    manager.create_entity(DiscardCardEffectComponent(), EffectIsDispatchedComponent())
+    manager.create_entity(EffectDiscardCardComponent(), EffectIsDispatchedComponent())
 
     # Set a card as the target of the discard effect
     target_entity_id = card_in_hand_entity_ids[len(card_in_hand_entity_ids) // 2]

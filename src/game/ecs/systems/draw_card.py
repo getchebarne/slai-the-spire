@@ -1,10 +1,10 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.effects import DrawCardEffectComponent
+from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
-from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import EffectShuffleDiscardPileIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -16,7 +16,7 @@ class DrawCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (draw_card_effect_component, _) = next(
-                manager.get_components(DrawCardEffectComponent, EffectIsTargetedComponent)
+                manager.get_components(EffectDrawCardComponent, EffectIsTargetedComponent)
             )
 
         except StopIteration:
@@ -61,11 +61,11 @@ class DrawCardSystem(BaseSystem):
                 effect_to_be_dispatched_component.priority += 2
 
             manager.create_entity(
-                ShuffleDiscardPileIntoDrawPileEffectComponent(),
+                EffectShuffleDiscardPileIntoDrawPileComponent(),
                 EffectIsQueuedComponent(priority=0),
             )
             manager.create_entity(
-                DrawCardEffectComponent(draw_card_effect_component.value - num_cards_drawn),
+                EffectDrawCardComponent(draw_card_effect_component.value - num_cards_drawn),
                 EffectIsQueuedComponent(priority=1),
             )
             return

@@ -1,7 +1,7 @@
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
-from src.game.ecs.components.effects import SetBlockToZeroEffect
+from src.game.ecs.components.effects import EffectSetBlockToZero
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.set_block_to_zero import SetBlockToZeroSystem
 
@@ -18,7 +18,7 @@ def test_base() -> None:
     )
 
     # Create effect to set the entity's block to 0
-    manager.create_entity(SetBlockToZeroEffect(), EffectIsDispatchedComponent())
+    manager.create_entity(EffectSetBlockToZero(), EffectIsDispatchedComponent())
 
     # Run the system
     SetBlockToZeroSystem().process(manager)
