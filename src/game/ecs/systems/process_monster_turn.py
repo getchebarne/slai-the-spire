@@ -1,9 +1,9 @@
-from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.effects import DrawCardEffectComponent
+from src.game.ecs.components.creatures import MonsterMoveComponent
+from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
+from src.game.ecs.components.creatures import MonsterReadyToEndTurnComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
-from src.game.ecs.components.effects import RefillEnergyEffect
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -19,26 +19,18 @@ class ProcessMonsterTurnSystem(BaseSystem):
         except StopIteration:
             return
 
-        # Execute move
-        # print("executing move")
-        # # Update move
-        # print("updating move")
+        # Get the monster's current move
+        monster_move_component = manager.get_component_for_entity(
+            is_turn_monster_entity_id, MonsterMoveComponent
+        )
 
-        # Untag
-        manager.remove_component(is_turn_monster_entity_id, IsTurnComponent)
+        # Tag the move's effects to be dispatched
+        for priority, effect_entity_id in enumerate(monster_move_component.effect_entity_ids):
+            manager.add_component(
+                effect_entity_id,
+                EffectIsQueuedComponent(priority=priority + 1),  # TODO: revisit
+            )
 
-        # Pass IsTurn to next monster
-        monster_is_turn_position = monster_component.position
-        for monster_entity_id, monster_component in manager.get_component(MonsterComponent):
-            if monster_component.position == monster_is_turn_position + 1:
-                # It's the next monster
-                manager.add_component(monster_entity_id, IsTurnComponent())
-
-                return
-
-        # It's the player's turn. TODO: will probably have to create a "CharacterTurnStartEffect"
-        # or sth like that
-        char_entity_id, _ = next(manager.get_component(CharacterComponent))
-        manager.add_component(char_entity_id, IsTurnComponent())
-        manager.create_entity(RefillEnergyEffect(), EffectIsQueuedComponent(0))
-        manager.create_entity(DrawCardEffectComponent(5), EffectIsQueuedComponent(1))
+        # Tag monster as pending move update & ready to end its turn
+        manager.add_component(is_turn_monster_entity_id, MonsterPendingMoveUpdateComponent())
+        manager.add_component(is_turn_monster_entity_id, MonsterReadyToEndTurnComponent())
