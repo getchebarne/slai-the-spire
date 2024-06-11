@@ -2,8 +2,8 @@ from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardIsSelectedComponent
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import HealthComponent
-from src.game.ecs.components.effects import DealDamageEffectComponent
-from src.game.ecs.components.effects import GainBlockEffectComponent
+from src.game.ecs.components.effects import EffectDealDamageComponent
+from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import HasEffectsComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.components.target import TargetComponent
@@ -52,7 +52,7 @@ def test_strike() -> None:
 
     # Assert the Dummy's health has been reduced by Strike's base damage
     base_damage = manager.get_component_for_entity(
-        effect_entity_ids[0], DealDamageEffectComponent
+        effect_entity_ids[0], EffectDealDamageComponent
     ).value
     assert (
         manager.get_component_for_entity(dummy_entity_id, HealthComponent).current
@@ -96,7 +96,7 @@ def test_defend() -> None:
 
     # Assert the Character's block has been increased by Defend's base block
     base_block = manager.get_component_for_entity(
-        effect_entity_ids[0], GainBlockEffectComponent
+        effect_entity_ids[0], EffectGainBlockComponent
     ).value
     assert (
         manager.get_component_for_entity(char_entity_id, BlockComponent).current

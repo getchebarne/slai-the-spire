@@ -3,7 +3,7 @@ import random
 from src.game.ecs.components.cards import CardInDeckComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
-from src.game.ecs.components.effects import ShuffleDeckIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -13,7 +13,7 @@ class ShuffleDeckIntoDrawPileSystem(BaseSystem):
         try:
             effect_entity_id, (shuffle_deck_into_draw_pile_effect_component, _) = next(
                 manager.get_components(
-                    ShuffleDeckIntoDrawPileEffectComponent, EffectIsTargetedComponent
+                    EffectShuffleDeckIntoDrawPileComponent, EffectIsTargetedComponent
                 )
             )
 

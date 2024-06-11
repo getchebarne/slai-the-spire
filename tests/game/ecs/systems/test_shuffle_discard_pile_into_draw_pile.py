@@ -1,10 +1,11 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import ShuffleDiscardPileIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import EffectShuffleDiscardPileIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
-from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import \
-    ShuffleDiscardPileIntoDrawPileSystem
+from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import (
+    ShuffleDiscardPileIntoDrawPileSystem,
+)
 
 
 # TODO: change number of cards in draw and discard piles
@@ -19,7 +20,7 @@ def test_base() -> None:
 
     # Create effect to shuffle the discard pile into the draw pile
     manager.create_entity(
-        ShuffleDiscardPileIntoDrawPileEffectComponent(),
+        EffectShuffleDiscardPileIntoDrawPileComponent(),
         EffectIsDispatchedComponent(),
     )
     # Run the system
@@ -49,7 +50,7 @@ def test_empty_discard_pile() -> None:
 
     # Create effect to shuffle the discard pile into the draw pile
     manager.create_entity(
-        ShuffleDiscardPileIntoDrawPileEffectComponent(),
+        EffectShuffleDiscardPileIntoDrawPileComponent(),
         EffectIsDispatchedComponent(),
     )
     # Run system

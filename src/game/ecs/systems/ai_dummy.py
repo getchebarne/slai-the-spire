@@ -4,11 +4,11 @@ from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import MonsterMoveComponent
 from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
-from src.game.ecs.components.effects import DealDamageEffectComponent
+from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
-from src.game.ecs.components.effects import GainBlockEffectComponent
+from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -36,7 +36,7 @@ class AIDummySystem(BaseSystem):
                     "Attack",
                     [
                         manager.create_entity(
-                            DealDamageEffectComponent(0),
+                            EffectDealDamageComponent(0),
                             EffectQueryComponentsComponent([CharacterComponent]),
                             EffectSelectionTypeComponent(EffectSelectionType.NONE),
                         )
@@ -49,7 +49,7 @@ class AIDummySystem(BaseSystem):
                 monster_move_component.name = "Defend"
                 monster_move_component.effect_entity_ids = [
                     manager.create_entity(
-                        GainBlockEffectComponent(100),
+                        EffectGainBlockComponent(100),
                         EffectQueryComponentsComponent([MonsterComponent, IsTurnComponent]),
                         EffectSelectionTypeComponent(EffectSelectionType.NONE),
                     ),
@@ -59,7 +59,7 @@ class AIDummySystem(BaseSystem):
                 monster_move_component.name = "Attack"
                 monster_move_component.effect_entity_ids = [
                     manager.create_entity(
-                        DealDamageEffectComponent(0),
+                        EffectDealDamageComponent(0),
                         EffectQueryComponentsComponent([CharacterComponent]),
                         EffectSelectionTypeComponent(EffectSelectionType.NONE),
                     )

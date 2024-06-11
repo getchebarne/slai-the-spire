@@ -5,9 +5,9 @@ from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.effects import DrawCardEffectComponent
+from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
-from src.game.ecs.components.effects import ShuffleDeckIntoDrawPileEffectComponent
+from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.all import ALL_SYSTEMS
 
@@ -38,8 +38,8 @@ class CombatEngine:
         )
 
     def _init(self, manager: ECSManager) -> None:
-        manager.create_entity(ShuffleDeckIntoDrawPileEffectComponent(), EffectIsQueuedComponent(0))
-        manager.create_entity(DrawCardEffectComponent(5), EffectIsQueuedComponent(1))
+        manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsQueuedComponent(0))
+        manager.create_entity(EffectDrawCardComponent(5), EffectIsQueuedComponent(1))
         manager.add_component(
             next(manager.get_component(CharacterComponent))[0], IsTurnComponent()
         )

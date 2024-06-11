@@ -2,9 +2,9 @@ from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import MonsterReadyToEndTurnComponent
-from src.game.ecs.components.effects import DrawCardEffectComponent
+from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
-from src.game.ecs.components.effects import RefillEnergyEffect
+from src.game.ecs.components.effects import EffectRefillEnergy
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -40,5 +40,5 @@ class EndMonsterTurnSystem(BaseSystem):
         # or sth like that
         char_entity_id, _ = next(manager.get_component(CharacterComponent))
         manager.add_component(char_entity_id, IsTurnComponent())
-        manager.create_entity(RefillEnergyEffect(), EffectIsQueuedComponent(0))
-        manager.create_entity(DrawCardEffectComponent(5), EffectIsQueuedComponent(1))
+        manager.create_entity(EffectRefillEnergy(), EffectIsQueuedComponent(0))
+        manager.create_entity(EffectDrawCardComponent(5), EffectIsQueuedComponent(1))

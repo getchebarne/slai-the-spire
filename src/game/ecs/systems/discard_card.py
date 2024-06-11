@@ -1,6 +1,6 @@
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.effects import DiscardCardEffectComponent
+from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
@@ -12,7 +12,7 @@ class DiscardCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (draw_card_effect_component, _) = next(
-                manager.get_components(DiscardCardEffectComponent, EffectIsTargetedComponent)
+                manager.get_components(EffectDiscardCardComponent, EffectIsTargetedComponent)
             )
 
         except StopIteration:
