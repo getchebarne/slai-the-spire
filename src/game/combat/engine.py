@@ -1,5 +1,6 @@
 from src.agents.base import BaseAgent
 from src.game.combat import input as input_
+from src.game.combat.drawer import drawer
 from src.game.combat.view import combat_view
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
@@ -9,7 +10,6 @@ from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.all import ALL_SYSTEMS
-from src.game.combat.drawer import drawer
 
 
 class CombatEngine:

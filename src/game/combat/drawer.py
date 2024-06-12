@@ -1,13 +1,13 @@
 import os
 from typing import Optional
 
+from src.game.combat.view import Block
+from src.game.combat.view import Card
+from src.game.combat.view import Character
 from src.game.combat.view import CombatView
 from src.game.combat.view import Energy
-from src.game.combat.view import Character
-from src.game.combat.view import Card
-from src.game.combat.view import Monster
 from src.game.combat.view import Health
-from src.game.combat.view import Block
+from src.game.combat.view import Monster
 
 
 N_TERM_COLS, _ = os.get_terminal_size()

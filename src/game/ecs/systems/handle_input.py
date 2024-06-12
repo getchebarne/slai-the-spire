@@ -7,6 +7,7 @@ from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
+from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -61,4 +62,4 @@ class HandleInputSystem(BaseSystem):
             # Begin monsters' turn. TODO: add a special trigger for this
             for monster_entity_id, monster_component in manager.get_component(MonsterComponent):
                 if monster_component.position == 0:
-                    manager.add_component(monster_entity_id, IsTurnComponent())
+                    manager.add_component(monster_entity_id, TurnStartComponent())
