@@ -3,9 +3,8 @@ from src.game.combat import input as input_
 from src.game.combat.view import combat_view
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
-from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.effects import EffectDrawCardComponent
+from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
@@ -13,8 +12,7 @@ from src.game.ecs.systems.all import ALL_SYSTEMS
 
 
 class CombatEngine:
-
-    def _character_turn(self, manager: ECSManager, agent: BaseAgent) -> None:
+    def _get_action(self, manager: ECSManager, agent: BaseAgent) -> None:
         view = combat_view(manager)
         input_.action = agent.select_action(view)
         print(input_.action)
@@ -37,15 +35,16 @@ class CombatEngine:
             ]
         )
 
-    def _init(self, manager: ECSManager) -> None:
+    def _combat_start(self, manager: ECSManager) -> None:
+        # Queue an effect to shuffle the deck into the draw pile
         manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsQueuedComponent(0))
-        manager.create_entity(EffectDrawCardComponent(5), EffectIsQueuedComponent(1))
-        manager.add_component(
-            next(manager.get_component(CharacterComponent))[0], IsTurnComponent()
-        )
+
+        # Start the character's turn
+        character_entity_id, _ = next(manager.get_component(CharacterComponent))
+        manager.add_component(character_entity_id, TurnStartComponent())
 
     def run(self, manager: ECSManager, agent: BaseAgent) -> None:
-        self._init(manager)
+        self._combat_start(manager)
 
         i = 0
         while not self._is_game_over(manager):
@@ -57,7 +56,7 @@ class CombatEngine:
             print(view.energy)
 
             # Run systems
-            self._character_turn(manager, agent)
+            self._get_action(manager, agent)
             for system in ALL_SYSTEMS:
                 system.process(manager)
 

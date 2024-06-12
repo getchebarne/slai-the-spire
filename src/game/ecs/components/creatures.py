@@ -58,3 +58,8 @@ class MonsterPendingMoveUpdateComponent(BaseComponent):
 @dataclass
 class MonsterReadyToEndTurnComponent(BaseComponent):
     pass
+
+
+@dataclass
+class TurnStartComponent(BaseComponent):
+    pass
