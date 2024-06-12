@@ -9,7 +9,7 @@ from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.all import ALL_SYSTEMS
-from src.game.combat.drawer import draw_view
+from src.game.combat.drawer import drawer
 
 
 class CombatEngine:
@@ -50,7 +50,7 @@ class CombatEngine:
 
         while not self._is_game_over(manager):
             view = combat_view(manager)
-            draw_view(view)
+            drawer(view)
 
             # Get action from agent
             self._get_action(manager, agent)
