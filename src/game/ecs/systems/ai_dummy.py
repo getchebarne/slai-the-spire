@@ -13,6 +13,10 @@ from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
 
+BASE_DAMAGE = 15
+BASE_BLOCK = 15
+
+
 # TODO: improve how moves are defined
 class AIDummySystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
@@ -36,7 +40,7 @@ class AIDummySystem(BaseSystem):
                     "Attack",
                     [
                         manager.create_entity(
-                            EffectDealDamageComponent(10),
+                            EffectDealDamageComponent(BASE_DAMAGE),
                             EffectQueryComponentsComponent([CharacterComponent]),
                             EffectSelectionTypeComponent(EffectSelectionType.NONE),
                         )
@@ -49,7 +53,7 @@ class AIDummySystem(BaseSystem):
                 monster_move_component.name = "Defend"
                 monster_move_component.effect_entity_ids = [
                     manager.create_entity(
-                        EffectGainBlockComponent(10),
+                        EffectGainBlockComponent(BASE_BLOCK),
                         EffectQueryComponentsComponent([MonsterComponent, IsTurnComponent]),
                         EffectSelectionTypeComponent(EffectSelectionType.NONE),
                     ),
@@ -59,7 +63,7 @@ class AIDummySystem(BaseSystem):
                 monster_move_component.name = "Attack"
                 monster_move_component.effect_entity_ids = [
                     manager.create_entity(
-                        EffectDealDamageComponent(10),
+                        EffectDealDamageComponent(BASE_DAMAGE),
                         EffectQueryComponentsComponent([CharacterComponent]),
                         EffectSelectionTypeComponent(EffectSelectionType.NONE),
                     )
