@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardInDiscardPileComponent
@@ -12,6 +13,7 @@ from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.creatures import MonsterComponent
+from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 
@@ -66,6 +68,12 @@ class Character(Creature):
 
 
 @dataclass
+class EffectPendingInputTarget:
+    entity_id: int
+    # TODO: add name
+
+
+@dataclass
 class CombatView:
     character: Character
     monsters: list[Monster]
@@ -73,6 +81,16 @@ class CombatView:
     draw_pile: set[Card]
     discard_pile: set[Card]
     energy: Energy
+    effect: Optional[EffectPendingInputTarget]
+
+
+def effect_view(manager: ECSManager) -> Optional[EffectPendingInputTarget]:
+    try:
+        effect_entity_id, _ = next(manager.get_component(EffectIsPendingInputTargetsComponent))
+        return EffectPendingInputTarget(effect_entity_id)
+
+    except StopIteration:
+        return None
 
 
 def character_view(manager: ECSManager) -> Character:
@@ -237,4 +255,5 @@ def combat_view(manager: ECSManager) -> CombatView:
         draw_pile=draw_pile_view(manager),
         discard_pile=discard_pile_view(manager),
         energy=energy_view(manager),
+        effect=effect_view(manager),
     )

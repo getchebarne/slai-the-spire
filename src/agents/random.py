@@ -16,6 +16,15 @@ class RandomAgent(BaseAgent):
             # TODO: fix
             return None
 
+        if combat_view.effect is not None:
+            # TODO: only applies to survivor's discard for now, fix
+            return Action(
+                ActionType.SELECT_CARD,
+                random.choice(
+                    [card for card in combat_view.hand if card.can_be_selected]
+                ).entity_id,
+            )
+
         # If there's no more energy, end the turn
         if combat_view.energy.current == 0:
             return Action(ActionType.END_TURN)
