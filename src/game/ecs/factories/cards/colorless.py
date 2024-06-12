@@ -25,7 +25,7 @@ def create_strike(manager: ECSManager) -> int:
         EffectSelectionTypeComponent(EffectSelectionType.NONE),
     )
 
-    # Create "Strike" card in the deck and return its entity_id
+    # Create "Strike" card in deck and return its entity_id
     return manager.create_entity(
         CardInDeckComponent(),
         NameComponent("Strike"),
@@ -46,7 +46,7 @@ def create_defend(manager: ECSManager) -> int:
         EffectSelectionTypeComponent(EffectSelectionType.NONE),  # TODO: revisit
     )
 
-    # Create "Defend" card in the deck and return its id
+    # Create "Defend" card in deck and return its id
     return manager.create_entity(
         CardInDeckComponent(),
         NameComponent("Defend"),

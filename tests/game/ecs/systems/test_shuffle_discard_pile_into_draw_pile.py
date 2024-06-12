@@ -13,7 +13,7 @@ def test_base() -> None:
     # Instance ECS manager
     manager = ECSManager()
 
-    # Create `num_cards` cards in the draw pile and `num_cards` cards in the discard pile
+    # Create `num_cards` cards in draw pile and `num_cards` cards in discard pile
     num_cards = 5
     _ = [manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)]
     _ = [manager.create_entity(CardInDiscardPileComponent()) for i in range(num_cards)]
@@ -26,7 +26,7 @@ def test_base() -> None:
     # Run the system
     ShuffleDiscardPileIntoDrawPileSystem().process(manager)
 
-    # Assert there's no cards in the discard pile
+    # Assert there's no cards in discard pile
     assert len(list(manager.get_component(CardInDiscardPileComponent))) == 0
 
     # Assert the card's positions range from 0 to 2 * `num_cards` - 1
@@ -41,7 +41,7 @@ def test_empty_discard_pile() -> None:
     # Instance ECS manager
     manager = ECSManager()
 
-    # Create `num_cards` cards in the draw pile
+    # Create `num_cards` cards in draw pile
     num_cards = 10
     card_in_draw_pile_entity_ids = [
         manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)

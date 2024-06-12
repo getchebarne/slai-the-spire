@@ -12,7 +12,7 @@ def test_base() -> None:
     # Instance ECS manager
     manager = ECSManager()
 
-    # Create `num_cards` in the hand
+    # Create `num_cards` in hand
     num_cards = 5
     card_in_hand_entity_ids = [
         manager.create_entity(CardInHandComponent(i)) for i in range(num_cards)

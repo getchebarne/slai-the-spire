@@ -24,7 +24,7 @@ def test_base() -> None:
     # Run the system
     ShuffleDeckIntoDrawPileSystem().process(manager)
 
-    # Get all cards in the draw pile
+    # Get all cards in draw pile
     card_in_draw_pile_entity_ids = []
     positions = []
     for card_in_draw_pile_entity_id, card_in_draw_pile_component in manager.get_component(
@@ -33,7 +33,7 @@ def test_base() -> None:
         card_in_draw_pile_entity_ids.append(card_in_draw_pile_entity_id)
         positions.append(card_in_draw_pile_component.position)
 
-    # Assert all cards in the deck are in the draw pile
+    # Assert all cards in deck are in draw pile
     assert sorted(card_in_deck_entity_ids) == sorted(card_in_draw_pile_entity_ids)
 
     # Assert the cards' positions range from 0 to `len(card_in_deck_entity_ids)`
