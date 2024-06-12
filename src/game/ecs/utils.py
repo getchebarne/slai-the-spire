@@ -11,12 +11,8 @@ def add_effect_to_top(manager: ECSManager, *components: BaseComponent) -> None:
 
 
 def add_effect_to_bot(manager: ECSManager, *components: BaseComponent) -> None:
-    max_priority = None
+    max_priority = -1
     for _, effect_is_queued_component in manager.get_component(EffectIsQueuedComponent):
-        if max_priority is None:
-            max_priority = effect_is_queued_component.priority
-            continue
-
         if effect_is_queued_component.priority > max_priority:
             max_priority = effect_is_queued_component.priority
 

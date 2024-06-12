@@ -9,7 +9,6 @@ from src.game.ecs.systems.end_monster_turn import EndMonsterTurnSystem
 from src.game.ecs.systems.gain_block import GainBlockSystem
 from src.game.ecs.systems.handle_input import HandleInputSystem
 from src.game.ecs.systems.play_card import PlayCardSystem
-from src.game.ecs.systems.process_monster_turn import ProcessMonsterTurnSystem
 from src.game.ecs.systems.refill_energy import RefillEnergySystem
 from src.game.ecs.systems.set_block_to_zero import SetBlockToZeroSystem
 from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDrawPileSystem
@@ -22,7 +21,6 @@ from src.game.ecs.systems.turn_start import TurnStartSystem
 ALL_SYSTEMS = [
     HandleInputSystem(),
     TurnStartSystem(),
-    ProcessMonsterTurnSystem(),
     EndMonsterTurnSystem(),
     AIDummySystem(),
     PlayCardSystem(),

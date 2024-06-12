@@ -8,6 +8,7 @@ from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
 
+# TODO: maybe consolidate into single EndTurn system?
 class EndMonsterTurnSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
@@ -31,7 +32,7 @@ class EndMonsterTurnSystem(BaseSystem):
         for monster_entity_id, monster_component in manager.get_component(MonsterComponent):
             if monster_component.position == monster_is_turn_position + 1:
                 # It's the next monster
-                manager.add_component(monster_entity_id, IsTurnComponent())
+                manager.add_component(monster_entity_id, TurnStartComponent())
 
                 return
 
