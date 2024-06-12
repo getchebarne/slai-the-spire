@@ -20,13 +20,13 @@ class ShuffleDeckIntoDrawPileSystem(BaseSystem):
         except StopIteration:
             return
 
-        # Get all cards in the deck
+        # Get all cards in deck
         card_in_decks = list(manager.get_component(CardInDeckComponent))
 
         # Shuffle positions
         random.shuffle(card_in_decks)
 
-        # Add each card in the deck to the draw pile in a random position
+        # Add each card in deck to the draw pile in a random position
         for position, (card_in_deck_entity_id, _) in enumerate(card_in_decks):
             manager.add_component(card_in_deck_entity_id, CardInDrawPileComponent(position))
 

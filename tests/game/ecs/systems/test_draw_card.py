@@ -13,7 +13,7 @@ def test_base() -> None:
     # Instance ECS manager
     manager = ECSManager()
 
-    # Create `num_cards` cards in the draw pile and `num_cards` cards in the hand
+    # Create `num_cards` cards in draw pile and `num_cards` cards in hand
     num_cards = 5
     card_in_draw_pile_entity_ids = [
         manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)
@@ -30,14 +30,14 @@ def test_base() -> None:
     # Run the system
     DrawCardSystem().process(manager)
 
-    # Assert the previous cards in the hand are still there and in the same position
+    # Assert the previous cards in hand are still there and in the same position
     for i, card_in_hand_entity_id in enumerate(card_in_hand_entity_ids):
         assert (
             manager.get_component_for_entity(card_in_hand_entity_id, CardInHandComponent).position
             == i
         )
 
-    # Assert the top `num_draw` cards from the draw pile are now in the hand and that their
+    # Assert the top `num_draw` cards from the draw pile are now in hand and that their
     # position ranges from `num_cards` to `num_cards` + `num_draw` - 1
     for i, card_in_draw_pile_entity_id in enumerate(card_in_draw_pile_entity_ids[:num_draw]):
         assert (
@@ -47,7 +47,7 @@ def test_base() -> None:
             == num_cards + i
         )
 
-    # Assert the rest of the cards are still in the draw pile, and that their position has been
+    # Assert the rest of the cards are still in draw pile, and that their position has been
     # updated correctly
     for i, card_in_draw_pile_entity_id in enumerate(card_in_draw_pile_entity_ids[num_draw:]):
         assert (
@@ -62,7 +62,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     # Instance ECS manager
     manager = ECSManager()
 
-    # Create `num_cards` cards in the draw pile and `num_cards` cards in the hand
+    # Create `num_cards` cards in draw pile and `num_cards` cards in hand
     num_cards = 2
     card_in_draw_pile_entity_ids = [
         manager.create_entity(CardInDrawPileComponent(i)) for i in range(num_cards)
@@ -79,14 +79,14 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     # Run the system
     DrawCardSystem().process(manager)
 
-    # Assert the previous cards in the hand are still there and in the same position
+    # Assert the previous cards in hand are still there and in the same position
     for i, card_in_hand_entity_id in enumerate(card_in_hand_entity_ids):
         assert (
             manager.get_component_for_entity(card_in_hand_entity_id, CardInHandComponent).position
             == i
         )
 
-    # Assert all cards previously in the draw pile are now in the hand
+    # Assert all cards previously in draw pile are now in hand
     for i, card_in_draw_pile_entity_id in enumerate(card_in_draw_pile_entity_ids):
         assert (
             manager.get_component_for_entity(

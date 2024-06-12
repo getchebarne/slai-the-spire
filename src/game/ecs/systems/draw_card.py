@@ -52,7 +52,7 @@ class DrawCardSystem(BaseSystem):
                 )
                 hand_size += 1
 
-        # Update the positions of cards in the draw pile based on the number of cards drawn
+        # Update the positions of cards in draw pile based on the number of cards drawn
         for card_in_draw_pile_entity_id, card_in_draw_pile_component in manager.get_component(
             CardInDrawPileComponent
         ):

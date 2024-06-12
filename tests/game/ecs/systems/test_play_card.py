@@ -53,7 +53,7 @@ def test_base() -> None:
         == base_energy - card_cost
     )
 
-    # Verifiy the card is no longer active, that it's no longer in the hand, and that it's now in
+    # Verifiy the card is no longer active, that it's no longer in hand, and that it's now in
     # the discard pile
     assert manager.get_component_for_entity(card_entity_id, CardIsSelectedComponent) is None
     assert manager.get_component_for_entity(card_entity_id, CardInHandComponent) is None

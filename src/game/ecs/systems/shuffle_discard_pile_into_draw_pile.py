@@ -28,13 +28,13 @@ class ShuffleDiscardPileIntoDrawPileSystem(BaseSystem):
         positions = list(range(len(card_in_draw_piles + card_in_discard_piles)))
         random.shuffle(positions)
 
-        # Shuffle cards in the draw pile
+        # Shuffle cards in draw pile
         for (card_in_draw_pile_entity_id, card_in_draw_pile_component), position in zip(
             card_in_draw_piles, positions[: len(card_in_draw_piles)]
         ):
             card_in_draw_pile_component.position = position
 
-        # Shuffle cards in the discard pile
+        # Shuffle cards in discard pile
         for (card_in_discard_pile_entity_id, card_in_discard_pile_component), position in zip(
             card_in_discard_piles, positions[len(card_in_draw_piles) :]
         ):

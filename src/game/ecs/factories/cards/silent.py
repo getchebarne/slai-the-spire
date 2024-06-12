@@ -34,7 +34,7 @@ def create_neutralize(manager: ECSManager) -> int:
         EffectQueryComponentsComponent([MonsterComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
     )
-    # Create "Neutralize" card in the deck and return its id
+    # Create "Neutralize" card in deck and return its id
     return manager.create_entity(
         CardInDeckComponent(),
         NameComponent("Neutralize"),
@@ -62,7 +62,7 @@ def create_survivor(manager: ECSManager) -> int:
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
         EffectNumberOfTargetsComponent(base_discard),
     )
-    # Create "Survivor" card in the deck and return its id
+    # Create "Survivor" card in deck and return its id
     return manager.create_entity(
         CardInDeckComponent(),
         NameComponent("Survivor"),

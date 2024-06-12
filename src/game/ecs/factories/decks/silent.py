@@ -1,6 +1,5 @@
 from src.game.ecs.factories.cards.colorless import create_defend
 from src.game.ecs.factories.cards.colorless import create_strike
-
 # from src.game.ecs.factories.cards.silent import create_neutralize
 from src.game.ecs.factories.cards.silent import create_survivor
 from src.game.ecs.manager import ECSManager
