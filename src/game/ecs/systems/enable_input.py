@@ -29,6 +29,8 @@ def _card_requires_target(card_entity_id: int, manager: ECSManager) -> bool:
 # TODO: improve this, it's a bit bad
 class EnableInputSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
+        manager.destroy_component(CanBeSelectedComponent)
+
         try:
             # If it's not the character's turn, disable input
             next(manager.get_components(CharacterComponent, IsTurnComponent))

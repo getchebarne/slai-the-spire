@@ -65,6 +65,11 @@ def _handle_effect_selection_type_specific(
             )
 
         manager.destroy_component(EffectIsHaltedComponent)
+        manager.destroy_component(EffectIsPendingInputTargetsComponent)
+
+        # TODO: move this elsewhere
+        for is_selected_entity_id in is_selected_entity_ids:
+            manager.remove_component(is_selected_entity_id, IsSelectedComponent)
 
         return is_selected_entity_ids
 
@@ -84,7 +89,6 @@ def _handle_effect_selection_type_specific(
 
 
 # TODO: check targeted entities are alive
-# TODO: query dispatched effects only, check if they need to be targeted here
 class TargetEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:

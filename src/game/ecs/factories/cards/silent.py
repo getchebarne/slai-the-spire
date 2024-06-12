@@ -6,10 +6,11 @@ from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.effects import DiscardEffectComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
+from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectGainWeakComponent
+from src.game.ecs.components.effects import EffectNumberOfTargetsComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
@@ -56,9 +57,10 @@ def create_survivor(manager: ECSManager) -> int:
     )
     # Create a "Discard" effect
     discard_entity_id = manager.create_entity(
-        DiscardEffectComponent(base_discard),
+        EffectDiscardCardComponent(),
         EffectQueryComponentsComponent([CardInHandComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
+        EffectNumberOfTargetsComponent(base_discard),
     )
     # Create "Survivor" card in the deck and return its id
     return manager.create_entity(
