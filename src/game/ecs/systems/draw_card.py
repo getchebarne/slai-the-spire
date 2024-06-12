@@ -52,6 +52,12 @@ class DrawCardSystem(BaseSystem):
                 )
                 hand_size += 1
 
+        # Update the positions of cards in the draw pile based on the number of cards drawn
+        for card_in_draw_pile_entity_id, card_in_draw_pile_component in manager.get_component(
+            CardInDrawPileComponent
+        ):
+            card_in_draw_pile_component.position -= num_cards_drawn
+
         # Check if the draw pile ran out. If it did, create an effect to shuffle the discard pile
         # into the draw pile and another effect to draw the remaining cards
         if len(card_in_draw_piles) == 0 and num_cards_drawn < draw_card_effect_component.value:
@@ -61,11 +67,3 @@ class DrawCardSystem(BaseSystem):
             )
             add_effect_to_top(manager, EffectShuffleDiscardPileIntoDrawPileComponent())
             return
-
-        # Update the positions of cards in the draw pile based on the number of cards drawn
-        for card_in_draw_pile_entity_id, card_in_draw_pile_component in manager.get_component(
-            CardInDrawPileComponent
-        ):
-            card_in_draw_pile_component.position -= num_cards_drawn
-
-        return
