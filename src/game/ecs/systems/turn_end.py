@@ -35,6 +35,11 @@ class TurnEndSystem(BaseSystem):
                     EffectSelectionTypeComponent(EffectSelectionType.ALL),
                 ),
             )
+            # Start monsters' turn
+            for monster_entity_id, monster_component in manager.get_component(MonsterComponent):
+                if monster_component.position == 0:
+                    manager.add_component(monster_entity_id, TurnStartComponent())
+                    break
 
         # Monster-only effects
         monster_component = manager.get_component_for_entity(creature_entity_id, MonsterComponent)

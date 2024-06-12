@@ -22,8 +22,8 @@ from src.game.ecs.systems.turn_start import TurnStartSystem
 ALL_SYSTEMS = [
     HandleInputSystem(),
     TurnStartSystem(),
-    ProcessMonsterTurnSystem(),
     TurnEndSystem(),
+    ProcessMonsterTurnSystem(),
     AIDummySystem(),
     PlayCardSystem(),
     DispatchEffectSystem(),
