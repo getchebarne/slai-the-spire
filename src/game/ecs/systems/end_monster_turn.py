@@ -2,9 +2,8 @@ from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import MonsterReadyToEndTurnComponent
-from src.game.ecs.components.effects import EffectDrawCardComponent
+from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
-from src.game.ecs.components.effects import EffectRefillEnergy
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -36,9 +35,6 @@ class EndMonsterTurnSystem(BaseSystem):
 
                 return
 
-        # It's the player's turn. TODO: will probably have to create a "CharacterTurnStartEffect"
-        # or sth like that
+        # It's the player's turn
         char_entity_id, _ = next(manager.get_component(CharacterComponent))
-        manager.add_component(char_entity_id, IsTurnComponent())
-        manager.create_entity(EffectRefillEnergy(), EffectIsQueuedComponent(0))
-        manager.create_entity(EffectDrawCardComponent(5), EffectIsQueuedComponent(1))
+        manager.add_component(char_entity_id, TurnStartComponent())

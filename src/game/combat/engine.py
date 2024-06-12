@@ -9,13 +9,13 @@ from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.all import ALL_SYSTEMS
+from src.game.combat.drawer import draw_view
 
 
 class CombatEngine:
     def _get_action(self, manager: ECSManager, agent: BaseAgent) -> None:
         view = combat_view(manager)
         input_.action = agent.select_action(view)
-        print(input_.action)
 
     def _is_game_over(self, manager: ECSManager) -> bool:
         # TODO: assume there's only one character
@@ -35,6 +35,7 @@ class CombatEngine:
             ]
         )
 
+    # TODO: this will have to be a system to activate on combat start effects, e.g., relics
     def _combat_start(self, manager: ECSManager) -> None:
         # Queue an effect to shuffle the deck into the draw pile
         manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsQueuedComponent(0))
@@ -44,23 +45,16 @@ class CombatEngine:
         manager.add_component(character_entity_id, TurnStartComponent())
 
     def run(self, manager: ECSManager, agent: BaseAgent) -> None:
+        # Start combat
         self._combat_start(manager)
 
-        i = 0
         while not self._is_game_over(manager):
             view = combat_view(manager)
-            print(view.monsters)
-            print(view.character)
-            print(view.hand)
-            print(view.discard_pile)
-            print(view.energy)
+            draw_view(view)
+
+            # Get action from agent
+            self._get_action(manager, agent)
 
             # Run systems
-            self._get_action(manager, agent)
             for system in ALL_SYSTEMS:
                 system.process(manager)
-
-            print("######################")
-            i += 1
-            # if i > 3:
-            #     exit()
