@@ -11,9 +11,10 @@ agent = RandomAgent()
 combat_engine = CombatEngine()
 manager = ECSManager()
 
-create_dummy(manager)
-create_silent(manager)
 create_starter_deck(manager)
 create_energy(manager)
+
+dummy_entity_id = create_dummy(manager)
+silent_entity_id = create_silent(manager)
 
 combat_engine.run(manager, agent)

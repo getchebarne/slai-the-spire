@@ -6,13 +6,13 @@ from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import DiscardEffectComponent
+from src.game.ecs.components.effects import EffectDealDamageComponent
+from src.game.ecs.components.effects import EffectGainBlockComponent
+from src.game.ecs.components.effects import EffectGainWeakComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
 from src.game.ecs.components.effects import EffectSelectionTypeComponent
-from src.game.ecs.components.effects import EffectGainBlockComponent
-from src.game.ecs.components.effects import EffectGainWeakComponent
 from src.game.ecs.manager import ECSManager
 
 

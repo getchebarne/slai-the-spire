@@ -16,10 +16,12 @@ from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDraw
 from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import \
     ShuffleDiscardPileIntoDrawPileSystem
 from src.game.ecs.systems.target_effect import TargetEffectSystem
+from src.game.ecs.systems.turn_start import TurnStartSystem
 
 
 ALL_SYSTEMS = [
     HandleInputSystem(),
+    TurnStartSystem(),
     ProcessMonsterTurnSystem(),
     EndMonsterTurnSystem(),
     AIDummySystem(),

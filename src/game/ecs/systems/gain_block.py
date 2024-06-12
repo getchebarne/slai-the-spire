@@ -1,7 +1,7 @@
 from src.game.ecs.components.creatures import BlockComponent
+from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
-from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
