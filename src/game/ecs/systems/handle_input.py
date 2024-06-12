@@ -67,3 +67,4 @@ class HandleInputSystem(BaseSystem):
             for monster_entity_id, monster_component in manager.get_component(MonsterComponent):
                 if monster_component.position == 0:
                     manager.add_component(monster_entity_id, TurnStartComponent())
+                    break

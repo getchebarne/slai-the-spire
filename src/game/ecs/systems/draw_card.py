@@ -2,11 +2,11 @@ from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
-from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectShuffleDiscardPileIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
+from src.game.ecs.utils import add_effect_to_top
 
 
 MAX_HAND_SIZE = 10
@@ -55,19 +55,11 @@ class DrawCardSystem(BaseSystem):
         # Check if the draw pile ran out. If it did, create an effect to shuffle the discard pile
         # into the draw pile and another effect to draw the remaining cards
         if len(card_in_draw_piles) == 0 and num_cards_drawn < draw_card_effect_component.value:
-            for effect_entity_id, effect_to_be_dispatched_component in manager.get_component(
-                EffectIsQueuedComponent
-            ):
-                effect_to_be_dispatched_component.priority += 2
-
-            manager.create_entity(
-                EffectShuffleDiscardPileIntoDrawPileComponent(),
-                EffectIsQueuedComponent(priority=0),
-            )
-            manager.create_entity(
+            add_effect_to_top(
+                manager,
                 EffectDrawCardComponent(draw_card_effect_component.value - num_cards_drawn),
-                EffectIsQueuedComponent(priority=1),
             )
+            add_effect_to_top(manager, EffectShuffleDiscardPileIntoDrawPileComponent())
             return
 
         # Update the positions of cards in the draw pile based on the number of cards drawn
