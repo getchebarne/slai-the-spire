@@ -1,10 +1,11 @@
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import MonsterMoveComponent
+from src.game.ecs.components.creatures import MonsterCurrentMoveComponent
+from src.game.ecs.components.creatures import MonsterHasMovesComponent
+from src.game.ecs.components.creatures import MonsterMoveHasEffectsComponent
 from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
-from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectRefillEnergy
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -23,22 +24,28 @@ class TurnStartSystem(BaseSystem):
 
         # Character-only effects
         if manager.get_component_for_entity(creature_entity_id, CharacterComponent) is not None:
-            add_effect_to_bot(manager, EffectDrawCardComponent(5))
-            add_effect_to_bot(manager, EffectRefillEnergy())
+            add_effect_to_bot(manager, manager.create_entity(EffectDrawCardComponent(5)))
+            add_effect_to_bot(manager, manager.create_entity(EffectRefillEnergy()))
 
         # Monster-only effects
         elif manager.get_component_for_entity(creature_entity_id, MonsterComponent) is not None:
             # Get the monster's current move
-            monster_move_component = manager.get_component_for_entity(
-                creature_entity_id, MonsterMoveComponent
-            )
+            for move_entity_id in manager.get_component_for_entity(
+                creature_entity_id, MonsterHasMovesComponent
+            ).move_entity_ids:
+                if (
+                    manager.get_component_for_entity(move_entity_id, MonsterCurrentMoveComponent)
+                    is not None
+                ):
+                    # Tag the move's effects to be dispatched
+                    for priority, effect_entity_id in enumerate(
+                        manager.get_component_for_entity(
+                            move_entity_id, MonsterMoveHasEffectsComponent
+                        ).effect_entity_ids
+                    ):
+                        add_effect_to_bot(manager, effect_entity_id)
 
-            # Tag the move's effects to be dispatched
-            for priority, effect_entity_id in enumerate(monster_move_component.effect_entity_ids):
-                manager.add_component(
-                    effect_entity_id,
-                    EffectIsQueuedComponent(priority=priority + 1),  # TODO: revisit
-                )
+                    break
 
         # Untag creature & tag it w/ IsTurnComponent
         manager.remove_component(creature_entity_id, TurnStartComponent)

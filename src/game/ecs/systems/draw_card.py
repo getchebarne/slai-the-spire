@@ -63,7 +63,11 @@ class DrawCardSystem(BaseSystem):
         if len(card_in_draw_piles) == 0 and num_cards_drawn < draw_card_effect_component.value:
             add_effect_to_top(
                 manager,
-                EffectDrawCardComponent(draw_card_effect_component.value - num_cards_drawn),
+                manager.create_entity(
+                    EffectDrawCardComponent(draw_card_effect_component.value - num_cards_drawn)
+                ),
             )
-            add_effect_to_top(manager, EffectShuffleDiscardPileIntoDrawPileComponent())
+            add_effect_to_top(
+                manager, manager.create_entity(EffectShuffleDiscardPileIntoDrawPileComponent())
+            )
             return

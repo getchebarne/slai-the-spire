@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from src.game.ecs.components.base import BaseComponent
+from src.game.ecs.components.base import BaseRelationshipComponent
 
 
 MAX_BLOCK = 999
@@ -34,12 +35,6 @@ class MonsterComponent(BaseComponent):
 
 
 @dataclass
-class MonsterMoveComponent(BaseComponent):
-    name: str
-    effect_entity_ids: list[int]
-
-
-@dataclass
 class IsTurnComponent(BaseComponent):
     pass
 
@@ -62,4 +57,24 @@ class TurnStartComponent(BaseComponent):
 
 @dataclass
 class TurnEndComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class MonsterMoveComponent(BaseComponent):
+    name: str
+
+
+@dataclass
+class MonsterMoveHasEffectsComponent(BaseRelationshipComponent):
+    effect_entity_ids: list[int]
+
+
+@dataclass
+class MonsterHasMovesComponent(BaseRelationshipComponent):
+    move_entity_ids: list[int]
+
+
+@dataclass
+class MonsterCurrentMoveComponent(BaseRelationshipComponent):
     pass
