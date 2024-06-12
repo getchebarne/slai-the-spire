@@ -29,9 +29,11 @@ class TurnEndSystem(BaseSystem):
         if manager.get_component_for_entity(creature_entity_id, CharacterComponent) is not None:
             add_effect_to_bot(
                 manager,
-                EffectDiscardCardComponent(),
-                EffectQueryComponentsComponent([CardInHandComponent]),
-                EffectSelectionTypeComponent(EffectSelectionType.ALL),
+                manager.create_entity(
+                    EffectDiscardCardComponent(),
+                    EffectQueryComponentsComponent([CardInHandComponent]),
+                    EffectSelectionTypeComponent(EffectSelectionType.ALL),
+                ),
             )
 
         # Monster-only effects

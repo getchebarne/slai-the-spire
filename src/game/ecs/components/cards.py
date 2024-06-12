@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from src.game.ecs.components.base import BaseComponent
+from src.game.ecs.components.base import BaseRelationshipComponent
 
 
 @dataclass
@@ -39,5 +40,5 @@ class CardInDiscardPileComponent(BaseComponent):
 
 
 @dataclass
-class CardHasEffectsComponent(BaseComponent):
-    effect_entity_ids: list[int]  # TODO: can be None
+class CardHasEffectsComponent(BaseRelationshipComponent):
+    effect_entity_ids: list[int]
