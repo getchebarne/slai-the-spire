@@ -21,7 +21,7 @@ def create_dummy(manager: ECSManager) -> int:
     base_health = 30
 
     # Create moves
-    base_damage = 15
+    base_damage = 5
     attack_move_entity_id = manager.create_entity(
         MonsterMoveComponent("Attack"),
         MonsterMoveHasEffectsComponent(
@@ -34,7 +34,7 @@ def create_dummy(manager: ECSManager) -> int:
             ]
         ),
     )
-    base_block = 15
+    base_block = 5
     defend_move_entity_id = manager.create_entity(
         MonsterMoveComponent("Defend"),
         MonsterMoveHasEffectsComponent(
