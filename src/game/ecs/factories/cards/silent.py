@@ -61,6 +61,7 @@ def create_survivor(manager: ECSManager) -> int:
         EffectQueryComponentsComponent([CardInHandComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
         EffectNumberOfTargetsComponent(base_discard),
+        NameComponent("Discard"),
     )
     # Create "Survivor" card in deck and return its id
     return manager.create_entity(

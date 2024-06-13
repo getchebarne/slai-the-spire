@@ -1,9 +1,11 @@
 from src.agents.base import BaseAgent
 from src.game.combat import input as input_
+from src.game.combat.action import Action
 from src.game.combat.drawer import drawer
 from src.game.combat.view import combat_view
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
+from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
@@ -13,9 +15,20 @@ from src.game.ecs.systems.all import ALL_SYSTEMS
 
 
 class CombatEngine:
-    def _get_action(self, manager: ECSManager, agent: BaseAgent) -> None:
+    def _agent_should_make_action(self, manager: ECSManager) -> bool:
+        # If it's not the character's turn, return False
+        if len(list(manager.get_components(CharacterComponent, IsTurnComponent))) == 0:
+            return False
+
+        # If there's queued effects, return False
+        if len(list(manager.get_component(EffectIsQueuedComponent))) > 0:
+            return False
+
+        return True
+
+    def _get_action(self, manager: ECSManager, agent: BaseAgent) -> Action:
         view = combat_view(manager)
-        input_.action = agent.select_action(view)
+        return agent.select_action(view)
 
     def _is_game_over(self, manager: ECSManager) -> bool:
         # TODO: assume there's only one character
@@ -53,7 +66,9 @@ class CombatEngine:
             drawer(view)
 
             # Get action from agent
-            self._get_action(manager, agent)
+            input_.action = None
+            if self._agent_should_make_action(manager):
+                input_.action = self._get_action(manager, agent)
 
             # Run systems
             for system in ALL_SYSTEMS:

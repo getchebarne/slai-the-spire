@@ -38,11 +38,9 @@ class TurnStartSystem(BaseSystem):
                     is not None
                 ):
                     # Tag the move's effects to be dispatched
-                    for priority, effect_entity_id in enumerate(
-                        manager.get_component_for_entity(
-                            move_entity_id, MonsterMoveHasEffectsComponent
-                        ).effect_entity_ids
-                    ):
+                    for effect_entity_id in manager.get_component_for_entity(
+                        move_entity_id, MonsterMoveHasEffectsComponent
+                    ).effect_entity_ids:
                         add_effect_to_bot(manager, effect_entity_id)
 
                     break
