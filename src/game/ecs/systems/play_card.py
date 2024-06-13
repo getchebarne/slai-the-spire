@@ -1,6 +1,7 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
+from src.game.ecs.components.cards import CardLastPlayedComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
@@ -35,7 +36,7 @@ class PlayCardSystem(BaseSystem):
             manager,
             manager.create_entity(
                 EffectDiscardCardComponent(),
-                EffectQueryComponentsComponent([CardIsPlayedComponent]),
+                EffectQueryComponentsComponent([CardLastPlayedComponent]),
                 EffectSelectionTypeComponent(EffectSelectionType.NONE),
             ),
         )
@@ -47,5 +48,10 @@ class PlayCardSystem(BaseSystem):
             ).effect_entity_ids
         ):
             add_effect_to_bot(manager, effect_entity_id)
+
+        # Untag & retag the card
+        manager.destroy_component(CardIsPlayedComponent)
+        manager.destroy_component(CardLastPlayedComponent)
+        manager.add_component(card_entity_id, CardLastPlayedComponent())
 
         return

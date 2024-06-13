@@ -57,6 +57,7 @@ class EnableInputSystem(BaseSystem):
 
         # At this point, if it's the character's turn, there's no queued effects, and there's no
         # effects pending input targets, all cards in hand are selectable
+        # TODO: only tag cards w/ cost leq than current energy
         for card_in_hand_entity_id, _ in manager.get_component(CardInHandComponent):
             manager.add_component(card_in_hand_entity_id, CanBeSelectedComponent())
 
