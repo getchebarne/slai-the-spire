@@ -14,6 +14,7 @@ from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
+from src.game.ecs.components.effects import EffectNumberOfTargetsComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 
@@ -58,7 +59,6 @@ class Creature:
 # TODO: add intent
 @dataclass
 class Monster(Creature):
-    is_selected: bool
     can_be_selected: bool
 
 
@@ -67,10 +67,12 @@ class Character(Creature):
     pass
 
 
+# TODO: improve how this is implemented
 @dataclass
-class EffectPendingInputTarget:
+class EffectIsPendingInputTargets:
     entity_id: int
-    # TODO: add name
+    name: str
+    number_of_targets: int
 
 
 @dataclass
@@ -81,13 +83,21 @@ class CombatView:
     draw_pile: set[Card]
     discard_pile: set[Card]
     energy: Energy
-    effect: Optional[EffectPendingInputTarget]
+    effect: Optional[EffectIsPendingInputTargets]
 
 
-def effect_view(manager: ECSManager) -> Optional[EffectPendingInputTarget]:
+def effect_is_pending_input_targets_view(
+    manager: ECSManager,
+) -> Optional[EffectIsPendingInputTargets]:
     try:
-        effect_entity_id, _ = next(manager.get_component(EffectIsPendingInputTargetsComponent))
-        return EffectPendingInputTarget(effect_entity_id)
+        effect_entity_id, (_, name_component, effect_number_of_targets_component) = next(
+            manager.get_components(
+                EffectIsPendingInputTargetsComponent, NameComponent, EffectNumberOfTargetsComponent
+            )
+        )
+        return EffectIsPendingInputTargets(
+            effect_entity_id, name_component.value, effect_number_of_targets_component.value
+        )
 
     except StopIteration:
         return None
@@ -120,11 +130,6 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
                 name_component.value,
                 Health(health_component.max, health_component.current),
                 Block(block_component.max, block_component.current),
-                (
-                    False
-                    if manager.get_component_for_entity(entity_id, IsSelectedComponent) is None
-                    else True
-                ),
                 (
                     False
                     if manager.get_component_for_entity(entity_id, CanBeSelectedComponent) is None
@@ -255,5 +260,5 @@ def combat_view(manager: ECSManager) -> CombatView:
         draw_pile=draw_pile_view(manager),
         discard_pile=discard_pile_view(manager),
         energy=energy_view(manager),
-        effect=effect_view(manager),
+        effect=effect_is_pending_input_targets_view(manager),
     )

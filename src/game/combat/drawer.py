@@ -5,6 +5,7 @@ from src.game.combat.view import Block
 from src.game.combat.view import Card
 from src.game.combat.view import Character
 from src.game.combat.view import CombatView
+from src.game.combat.view import EffectIsPendingInputTargets
 from src.game.combat.view import Energy
 from src.game.combat.view import Health
 from src.game.combat.view import Monster
@@ -43,7 +44,21 @@ def _creature_str(creature: Character | Monster) -> str:
     return f"{creature.name} {_health_str(creature.health)} {_block_str(creature.block)}"
 
 
+def _effect_is_pending_input_targets_str(
+    effect_is_pending_input_targets: EffectIsPendingInputTargets,
+) -> str:
+    return (
+        f"{effect_is_pending_input_targets.name} | "
+        f"{effect_is_pending_input_targets.number_of_targets}"
+    )
+
+
 def _view_str(view: CombatView) -> str:
+    # Effect
+    effect_str = "None"
+    if view.effect is not None:
+        effect_str = _effect_is_pending_input_targets_str(view.effect)
+
     # Monsters
     monster_strs = [_creature_str(monster) for monster in view.monsters]
     right_justified_monsters = "\n".join(
@@ -60,7 +75,9 @@ def _view_str(view: CombatView) -> str:
     separator = "-" * N_TERM_COLS
 
     return (
-        right_justified_monsters
+        effect_str
+        + "\n"
+        + right_justified_monsters
         + "\n"
         + character_str
         + "\n\n"
