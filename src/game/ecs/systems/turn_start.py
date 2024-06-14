@@ -6,7 +6,11 @@ from src.game.ecs.components.creatures import MonsterHasMovesComponent
 from src.game.ecs.components.creatures import MonsterMoveHasEffectsComponent
 from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
+from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectRefillEnergy
+from src.game.ecs.components.effects import EffectSelectionType
+from src.game.ecs.components.effects import EffectSelectionTypeComponent
+from src.game.ecs.components.effects import EffectSetBlockToZero
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.utils import add_effect_to_bot
@@ -22,10 +26,22 @@ class TurnStartSystem(BaseSystem):
         except StopIteration:
             return
 
+        # Common effects
+        add_effect_to_bot(
+            manager,
+            manager.create_entity(
+                EffectSetBlockToZero(),
+                EffectQueryComponentsComponent(
+                    [IsTurnComponent],
+                ),
+                EffectSelectionTypeComponent(EffectSelectionType.NONE),
+            ),
+        )
+
         # Character-only effects
         if manager.get_component_for_entity(creature_entity_id, CharacterComponent) is not None:
-            add_effect_to_bot(manager, manager.create_entity(EffectDrawCardComponent(5)))
             add_effect_to_bot(manager, manager.create_entity(EffectRefillEnergy()))
+            add_effect_to_bot(manager, manager.create_entity(EffectDrawCardComponent(5)))
 
         # Monster-only effects
         elif manager.get_component_for_entity(creature_entity_id, MonsterComponent) is not None:
