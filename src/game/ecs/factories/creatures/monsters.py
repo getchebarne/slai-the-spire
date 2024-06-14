@@ -8,6 +8,7 @@ from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import MonsterHasMovesComponent
 from src.game.ecs.components.creatures import MonsterMoveComponent
 from src.game.ecs.components.creatures import MonsterMoveHasEffectsComponent
+from src.game.ecs.components.creatures import MonsterMoveIntentComponent
 from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
@@ -30,6 +31,7 @@ def create_dummy(manager: ECSManager) -> int:
                 )
             ]
         ),
+        MonsterMoveIntentComponent(damage=base_damage, times=1, block=False),
     )
     base_block = 5
     defend_move_entity_id = manager.create_entity(
@@ -42,6 +44,7 @@ def create_dummy(manager: ECSManager) -> int:
                 )
             ]
         ),
+        MonsterMoveIntentComponent(damage=0, times=0, block=True),
     )
     return manager.create_entity(
         MonsterComponent(0),

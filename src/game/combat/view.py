@@ -13,6 +13,9 @@ from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import CharacterComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.creatures import MonsterComponent
+from src.game.ecs.components.creatures import MonsterCurrentMoveComponent
+from src.game.ecs.components.creatures import MonsterHasMovesComponent
+from src.game.ecs.components.creatures import MonsterMoveIntentComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
 from src.game.ecs.components.effects import EffectNumberOfTargetsComponent
 from src.game.ecs.components.energy import EnergyComponent
@@ -56,10 +59,18 @@ class Creature:
     block: Block
 
 
+@dataclass
+class Intent:
+    damage: int
+    times: int
+    block: bool
+
+
 # TODO: add intent
 @dataclass
 class Monster(Creature):
     can_be_selected: bool
+    intent: Intent
 
 
 @dataclass
@@ -124,6 +135,20 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
         health_component,
         block_component,
     ) in manager.get_components(MonsterComponent, NameComponent, HealthComponent, BlockComponent):
+        # Get the monster's current move
+        intent_component = None
+        for move_entity_id in manager.get_component_for_entity(
+            entity_id, MonsterHasMovesComponent
+        ).move_entity_ids:
+            if (
+                manager.get_component_for_entity(move_entity_id, MonsterCurrentMoveComponent)
+                is not None
+            ):
+                intent_component = manager.get_component_for_entity(
+                    move_entity_id, MonsterMoveIntentComponent
+                )
+                break
+
         monsters.append(
             Monster(
                 entity_id,
@@ -134,6 +159,11 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
                     False
                     if manager.get_component_for_entity(entity_id, CanBeSelectedComponent) is None
                     else True
+                ),
+                intent=(
+                    Intent(intent_component.damage, intent_component.times, intent_component.block)
+                    if intent_component is not None
+                    else None
                 ),
             )
         )

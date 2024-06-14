@@ -8,6 +8,7 @@ from src.game.combat.view import Creature
 from src.game.combat.view import EffectIsPendingInputTargets
 from src.game.combat.view import Energy
 from src.game.combat.view import Health
+from src.game.combat.view import Intent
 
 
 N_TERM_COLS, _ = os.get_terminal_size()
@@ -52,6 +53,22 @@ def _effect_is_pending_input_targets_str(
     )
 
 
+def _intent_str(intent: Optional[Intent]) -> str:
+    str_ = ""
+    if intent is None:
+        return str_
+
+    if intent.damage:
+        str_ = f"{str_} \U0001F5E1 {intent.damage}"
+        if intent.times > 1:
+            str_ = f"{str_} x {intent.times}"
+
+    if intent.block:
+        str_ = f"{str_} \U0001F6E1"
+
+    return str_
+
+
 def _view_str(view: CombatView) -> str:
     # Effect
     effect_str = "None"
@@ -59,7 +76,9 @@ def _view_str(view: CombatView) -> str:
         effect_str = _effect_is_pending_input_targets_str(view.effect)
 
     # Monsters
-    monster_strs = [_creature_str(monster) for monster in view.monsters]
+    monster_strs = [
+        f"{_intent_str(monster.intent)} {_creature_str(monster)}" for monster in view.monsters
+    ]
     right_justified_monsters = "\n".join(
         [f"{monster_str:>{N_TERM_COLS}}" for monster_str in monster_strs]
     )
