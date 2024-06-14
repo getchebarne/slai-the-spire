@@ -1,8 +1,9 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInHandComponent
+from src.game.ecs.components.cards import CardIsActiveComponent
+from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
-from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -18,7 +19,7 @@ def _card_requires_target(manager: ECSManager, card_entity_id: int) -> bool:
         effect_query_components_component = manager.get_component_for_entity(
             effect_entity_id, EffectQueryComponentsComponent
         )
-        if IsSelectedComponent in effect_query_components_component.value:
+        if CardTargetComponent in effect_query_components_component.value:
             return True
 
     return False
@@ -56,7 +57,7 @@ class EnableInputSystem(BaseSystem):
                 manager.add_component(card_in_hand_entity_id, CanBeSelectedComponent())
 
         # If there's a card selected in hand that requires a target, monsters can be selected
-        query_result = list(manager.get_components(CardInHandComponent, IsSelectedComponent))
+        query_result = list(manager.get_component(CardIsActiveComponent))
         if query_result:
             card_is_selected_entity_id, _ = query_result[0]
 
