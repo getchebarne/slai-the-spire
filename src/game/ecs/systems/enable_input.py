@@ -1,7 +1,6 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.creatures import MonsterComponent
@@ -19,7 +18,7 @@ def _card_requires_target(manager: ECSManager, card_entity_id: int) -> bool:
         effect_query_components_component = manager.get_component_for_entity(
             effect_entity_id, EffectQueryComponentsComponent
         )
-        if CardTargetComponent in effect_query_components_component.value:
+        if IsSelectedComponent in effect_query_components_component.value:
             return True
 
     return False

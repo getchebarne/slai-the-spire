@@ -2,7 +2,6 @@ from src.game.combat import input as input_
 from src.game.combat.action import ActionType
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
-from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.creatures import CharacterComponent
@@ -17,7 +16,7 @@ def _promote_card_from_selected_to_played(manager: ECSManager) -> None:
     card_entity_id, _ = next(manager.get_components(CardInHandComponent, IsSelectedComponent))
 
     # Untag card as selected & tag it as played
-    manager.remove_component(card_entity_id, IsSelectedComponent)
+    # manager.remove_component(card_entity_id, IsSelectedComponent)
     manager.add_component(card_entity_id, CardIsPlayedComponent())
 
 
@@ -37,7 +36,7 @@ def _handle_select_monster(manager: ECSManager, action_target_entity_id: int) ->
     _promote_card_from_selected_to_played(manager)
 
     # Tag monster as card's target
-    manager.add_component(action_target_entity_id, CardTargetComponent())
+    manager.add_component(action_target_entity_id, IsSelectedComponent())
 
 
 def _handle_end_turn(manager: ECSManager) -> None:

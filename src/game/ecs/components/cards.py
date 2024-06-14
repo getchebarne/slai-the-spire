@@ -42,8 +42,3 @@ class CardInDiscardPileComponent(BaseComponent):
 @dataclass
 class CardHasEffectsComponent(BaseRelationshipComponent):
     effect_entity_ids: list[int]
-
-
-@dataclass
-class CardLastPlayedComponent(BaseComponent):
-    pass
