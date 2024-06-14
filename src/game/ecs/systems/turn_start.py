@@ -8,8 +8,6 @@ from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectRefillEnergy
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.components.effects import EffectSetBlockToZero
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -34,7 +32,6 @@ class TurnStartSystem(BaseSystem):
                 EffectQueryComponentsComponent(
                     [IsTurnComponent],
                 ),
-                EffectSelectionTypeComponent(EffectSelectionType.NONE),
             ),
         )
 

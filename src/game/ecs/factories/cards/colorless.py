@@ -9,8 +9,6 @@ from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.manager import ECSManager
 
 
@@ -22,7 +20,6 @@ def create_strike(manager: ECSManager) -> int:
     deal_damage_entity_id = manager.create_entity(
         EffectDealDamageComponent(base_damage),
         EffectQueryComponentsComponent([MonsterComponent, CardTargetComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
     )
 
     # Create "Strike" card in deck and return its entity_id
@@ -41,9 +38,7 @@ def create_defend(manager: ECSManager) -> int:
 
     # Create a "GainBlock" effect
     gain_block_entity_id = manager.create_entity(
-        EffectGainBlockComponent(base_block),
-        EffectQueryComponentsComponent([CharacterComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),  # TODO: revisit
+        EffectGainBlockComponent(base_block), EffectQueryComponentsComponent([CharacterComponent])
     )
 
     # Create "Defend" card in deck and return its id

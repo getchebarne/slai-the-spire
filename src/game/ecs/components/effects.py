@@ -5,7 +5,6 @@ from src.game.ecs.components.base import BaseComponent
 
 
 class EffectSelectionType(Enum):
-    NONE = "NONE"
     ALL = "ALL"
     RANDOM = "RANDOM"
     SPECIFIC = "SPECIFIC"

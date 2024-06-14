@@ -5,8 +5,6 @@ from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -33,7 +31,6 @@ class PlayCardSystem(BaseSystem):
             manager.create_entity(
                 EffectDiscardCardComponent(),
                 EffectQueryComponentsComponent([CardInHandComponent, CardIsActiveComponent]),
-                EffectSelectionTypeComponent(EffectSelectionType.NONE),
             ),
         )
 
