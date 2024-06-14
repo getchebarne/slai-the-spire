@@ -3,12 +3,11 @@ from typing import Optional
 
 from src.game.combat.view import Block
 from src.game.combat.view import Card
-from src.game.combat.view import Character
 from src.game.combat.view import CombatView
+from src.game.combat.view import Creature
 from src.game.combat.view import EffectIsPendingInputTargets
 from src.game.combat.view import Energy
 from src.game.combat.view import Health
-from src.game.combat.view import Monster
 
 
 N_TERM_COLS, _ = os.get_terminal_size()
@@ -40,7 +39,7 @@ def _block_str(block: Block) -> str:
     return f"\U0001F6E1 {block.current}"
 
 
-def _creature_str(creature: Character | Monster) -> str:
+def _creature_str(creature: Creature) -> str:
     return f"{creature.name} {_health_str(creature.health)} {_block_str(creature.block)}"
 
 

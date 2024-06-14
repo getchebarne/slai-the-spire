@@ -67,9 +67,9 @@ def _handle_effect_selection_type_specific(
         manager.destroy_component(EffectIsHaltedComponent)
         manager.destroy_component(EffectIsPendingInputTargetsComponent)
 
-        # TODO: move this elsewhere
-        for is_selected_entity_id in is_selected_entity_ids:
-            manager.remove_component(is_selected_entity_id, IsSelectedComponent)
+        # # TODO: move this elsewhere
+        # for is_selected_entity_id in is_selected_entity_ids:
+        #     manager.remove_component(is_selected_entity_id, IsSelectedComponent)
 
         return is_selected_entity_ids
 
