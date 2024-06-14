@@ -4,8 +4,7 @@ from typing import Optional
 
 
 class ActionType(Enum):
-    SELECT_CARD = "SELECT_CARD"
-    SELECT_MONSTER = "SELECT_MONSTER"
+    SELECT_ENTITY = "SELECT_ENTITY"
     CONFIRM = "CONFIRM"
     END_TURN = "END_TURN"
 

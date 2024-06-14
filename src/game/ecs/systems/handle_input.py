@@ -1,6 +1,6 @@
 from src.game.combat import input as input_
 from src.game.combat.action import ActionType
-from src.game.ecs.components.cards import CardInHandComponent
+from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
@@ -11,32 +11,15 @@ from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
 
-def _promote_card_from_selected_to_played(manager: ECSManager) -> None:
-    # Get currently selected card
-    card_entity_id, _ = next(manager.get_components(CardInHandComponent, IsSelectedComponent))
-
-    # Untag card as selected & tag it as played
-    # manager.remove_component(card_entity_id, IsSelectedComponent)
-    manager.add_component(card_entity_id, CardIsPlayedComponent())
-
-
-def _handle_select_card(manager: ECSManager, action_target_entity_id: int) -> None:
-    # Deselect current selected entities
-    manager.destroy_component(IsSelectedComponent)
-
-    # Tag card as selected
+def _handle_select_entity(manager: ECSManager, action_target_entity_id: int) -> None:
+    # Tag the entitiy as selected
     manager.add_component(action_target_entity_id, IsSelectedComponent())
 
 
 def _handle_confirm(manager: ECSManager) -> None:
-    _promote_card_from_selected_to_played(manager)
-
-
-def _handle_select_monster(manager: ECSManager, action_target_entity_id: int) -> None:
-    _promote_card_from_selected_to_played(manager)
-
-    # Tag monster as card's target
-    manager.add_component(action_target_entity_id, IsSelectedComponent())
+    # Get active card & tag it as played
+    card_entity_id, _ = next(manager.get_components(CardIsActiveComponent))
+    manager.add_component(card_entity_id, CardIsPlayedComponent())
 
 
 def _handle_end_turn(manager: ECSManager) -> None:
@@ -50,6 +33,9 @@ def _handle_end_turn(manager: ECSManager) -> None:
 
 class HandleInputSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
+        # Clear previous selection
+        manager.destroy_component(IsSelectedComponent)
+
         if input_.action is None:
             return
 
@@ -67,16 +53,12 @@ class HandleInputSystem(BaseSystem):
             raise ValueError(f"Entity {action_target_entity_id} cannot be selected")
 
         # Select card
-        if action_type == ActionType.SELECT_CARD:
-            _handle_select_card(manager, action_target_entity_id)
+        if action_type == ActionType.SELECT_ENTITY:
+            _handle_select_entity(manager, action_target_entity_id)
 
         # Confirm
         if action_type == ActionType.CONFIRM:
             _handle_confirm(manager)
-
-        # Select monster
-        if action_type == ActionType.SELECT_MONSTER:
-            _handle_select_monster(manager, action_target_entity_id)
 
         # End turn
         if action_type == ActionType.END_TURN:

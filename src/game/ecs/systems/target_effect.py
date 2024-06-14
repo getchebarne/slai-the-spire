@@ -1,7 +1,7 @@
 import random
 from typing import Optional
 
-from src.game.ecs.components.common import IsSelectedComponent
+from src.game.ecs.components.effects import EffectInputTargetComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectIsHaltedComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
@@ -45,7 +45,7 @@ def _handle_effect_selection_type_specific(
     # Get currently selected entity ids
     is_selected_entity_ids = [
         is_selected_entity_id
-        for is_selected_entity_id, _ in manager.get_component(IsSelectedComponent)
+        for is_selected_entity_id, _ in manager.get_component(EffectInputTargetComponent)
     ]
 
     # Check if the effect's target entities have been selected
@@ -66,10 +66,6 @@ def _handle_effect_selection_type_specific(
 
         manager.destroy_component(EffectIsHaltedComponent)
         manager.destroy_component(EffectIsPendingInputTargetsComponent)
-
-        # # TODO: move this elsewhere
-        # for is_selected_entity_id in is_selected_entity_ids:
-        #     manager.remove_component(is_selected_entity_id, IsSelectedComponent)
 
         return is_selected_entity_ids
 

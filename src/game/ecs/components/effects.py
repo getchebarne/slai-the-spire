@@ -102,3 +102,8 @@ class EffectNumberOfTargetsComponent(BaseComponent):
 @dataclass
 class EffectIsHaltedComponent(BaseComponent):
     priority: int
+
+
+@dataclass
+class EffectInputTargetComponent(BaseComponent):
+    pass
