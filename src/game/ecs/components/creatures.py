@@ -78,3 +78,10 @@ class MonsterHasMovesComponent(BaseRelationshipComponent):
 @dataclass
 class MonsterCurrentMoveComponent(BaseRelationshipComponent):
     pass
+
+
+@dataclass
+class MonsterMoveIntentComponent(BaseComponent):
+    damage: int
+    times: int
+    block: bool
