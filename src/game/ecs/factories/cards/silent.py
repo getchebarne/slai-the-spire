@@ -28,6 +28,7 @@ def create_neutralize(manager: ECSManager) -> int:
         EffectQueryComponentsComponent([MonsterComponent]),
         EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
     )
+
     # Create a "GainWeak" effect
     gain_weak_entity_id = manager.create_entity(
         EffectGainWeakComponent(base_weak),
@@ -51,10 +52,9 @@ def create_survivor(manager: ECSManager) -> int:
 
     # Create a "GainBlock" effect
     gain_block_entity_id = manager.create_entity(
-        EffectGainBlockComponent(base_block),
-        EffectQueryComponentsComponent([CharacterComponent]),
-        EffectSelectionTypeComponent(EffectSelectionType.NONE),
+        EffectGainBlockComponent(base_block), EffectQueryComponentsComponent([CharacterComponent])
     )
+
     # Create a "Discard" effect
     discard_entity_id = manager.create_entity(
         EffectDiscardCardComponent(),

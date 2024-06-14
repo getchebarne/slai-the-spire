@@ -12,8 +12,6 @@ from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.manager import ECSManager
 
 
@@ -29,7 +27,6 @@ def create_dummy(manager: ECSManager) -> int:
                 manager.create_entity(
                     EffectDealDamageComponent(base_damage),
                     EffectQueryComponentsComponent([CharacterComponent]),
-                    EffectSelectionTypeComponent(EffectSelectionType.NONE),
                 )
             ]
         ),
@@ -42,7 +39,6 @@ def create_dummy(manager: ECSManager) -> int:
                 manager.create_entity(
                     EffectGainBlockComponent(base_block),
                     EffectQueryComponentsComponent([MonsterComponent, IsTurnComponent]),
-                    EffectSelectionTypeComponent(EffectSelectionType.NONE),
                 )
             ]
         ),

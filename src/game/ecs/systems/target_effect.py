@@ -16,7 +16,7 @@ from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
 
-def _handle_effect_selection_type_none(query_target_entity_ids: list[int]) -> list[int]:
+def _handle_effect_selection_component_none(query_target_entity_ids: list[int]) -> list[int]:
     if len(query_target_entity_ids) > 1:
         raise ValueError("Too many entities to apply effect")
 
@@ -105,10 +105,7 @@ class TargetEffectSystem(BaseSystem):
         )
 
         # TODO: improve this, it's horrendous
-        if (
-            effect_query_components_component is not None
-            and effect_selection_type_component is not None
-        ):
+        if effect_query_components_component is not None:
             # Get the entities that match the effect's potential target entities
             query_target_entity_ids = [
                 query_entity_id
@@ -117,8 +114,10 @@ class TargetEffectSystem(BaseSystem):
                 )
             ]
             # Resolve target entity
-            if effect_selection_type_component.value == EffectSelectionType.NONE:
-                target_entity_ids = _handle_effect_selection_type_none(query_target_entity_ids)
+            if effect_selection_type_component is None:
+                target_entity_ids = _handle_effect_selection_component_none(
+                    query_target_entity_ids
+                )
 
             elif effect_selection_type_component.value == EffectSelectionType.ALL:
                 target_entity_ids = _handle_effect_selection_type_all(query_target_entity_ids)
