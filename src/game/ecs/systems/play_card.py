@@ -41,4 +41,5 @@ class PlayCardSystem(BaseSystem):
             add_effect_to_bot(manager, effect_entity_id)
 
         # Untag the card
+        # TODO: improve
         manager.destroy_component(CardIsPlayedComponent)

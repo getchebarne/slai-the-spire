@@ -1,6 +1,7 @@
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import CharacterComponent
+from src.game.ecs.components.creatures import CreatureComponent
 from src.game.ecs.components.creatures import DummyAIComponent
 from src.game.ecs.components.creatures import HealthComponent
 from src.game.ecs.components.creatures import IsTurnComponent
@@ -47,8 +48,9 @@ def create_dummy(manager: ECSManager) -> int:
         MonsterMoveIntentComponent(damage=0, times=0, block=True),
     )
     return manager.create_entity(
-        MonsterComponent(0),
         NameComponent("Dummy"),
+        CreatureComponent(),
+        MonsterComponent(0),
         DummyAIComponent(),
         HealthComponent(base_health),
         BlockComponent(),

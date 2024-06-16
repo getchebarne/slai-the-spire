@@ -1,9 +1,9 @@
 from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import TurnEndComponent
-from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
+from src.game.ecs.utils import effect_queue_is_empty
+from src.game.ecs.utils import trigger_creature_turn_end
 
 
 # TODO: maybe consolidate into single EndTurn system?
@@ -17,10 +17,11 @@ class ProcessMonsterTurnSystem(BaseSystem):
         except StopIteration:
             return
 
-        # Check if there's effects left to be processed
-        if len(list(manager.get_component(EffectIsQueuedComponent))) > 0:
+        # Check if there's effects in the queue
+        # TODO improve comment
+        if not effect_queue_is_empty(manager):
             return
 
         # If not, end the monster's turn
         manager.remove_component(monster_entity_id, IsTurnComponent)
-        manager.add_component(monster_entity_id, TurnEndComponent())
+        trigger_creature_turn_end(manager, monster_entity_id)

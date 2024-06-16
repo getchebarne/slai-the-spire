@@ -16,13 +16,8 @@ class GainBlockSystem(BaseSystem):
         except StopIteration:
             return
 
-        # Get target entities
-        target_entity_ids = [
-            target_entity_id
-            for target_entity_id, _ in manager.get_component(EffectTargetComponent)
-        ]
         block = gain_block_effect_component.value
-        for target_entity_id in target_entity_ids:
+        for target_entity_id, _ in manager.get_component(EffectTargetComponent):
             block_component = manager.get_component_for_entity(target_entity_id, BlockComponent)
             block_component.current = min(block_component.current + block, block_component.max)
 

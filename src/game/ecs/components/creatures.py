@@ -25,6 +25,11 @@ class BlockComponent(BaseComponent):
 
 
 @dataclass
+class CreatureComponent(BaseComponent):
+    pass
+
+
+@dataclass
 class CharacterComponent(BaseComponent):
     pass
 
@@ -85,3 +90,33 @@ class MonsterMoveIntentComponent(BaseComponent):
     damage: int
     times: int
     block: bool
+
+
+@dataclass
+class CreatureHasModifiersComponent(BaseRelationshipComponent):
+    modifier_entity_ids: list[int]
+
+
+@dataclass
+class ModifierStacksComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class ModifierMinimumStacksComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class ModifierStacksDurationComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class ModifierWeakComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class IsEndingTurnComponent(BaseComponent):
+    pass

@@ -1,5 +1,6 @@
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.creatures import CharacterComponent
+from src.game.ecs.components.creatures import CreatureComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
 from src.game.ecs.components.creatures import TurnEndComponent
@@ -11,22 +12,29 @@ from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.utils import add_effect_to_bot
+from src.game.ecs.utils import effect_queue_is_empty
 
 
 # TODO: split into two systems, one for character and one for monster
 class TurnEndSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
-            creature_entity_id, _ = next(manager.get_component(TurnEndComponent))
+            creature_entity_id, _ = next(
+                manager.get_components(CreatureComponent, TurnEndComponent)
+            )
 
         except StopIteration:
             return
 
+        if not effect_queue_is_empty(manager):
+            return
+
         # TODO: reorder
-        manager.remove_component(creature_entity_id, TurnEndComponent)
+        manager.destroy_component(TurnEndComponent)
 
         # Character-only effects
         if manager.get_component_for_entity(creature_entity_id, CharacterComponent) is not None:
+            # TODO: move
             add_effect_to_bot(
                 manager,
                 manager.create_entity(
