@@ -11,7 +11,9 @@ from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.creatures import BlockComponent
 from src.game.ecs.components.creatures import CharacterComponent
+from src.game.ecs.components.creatures import CreatureHasModifiersComponent
 from src.game.ecs.components.creatures import HealthComponent
+from src.game.ecs.components.creatures import ModifierStacksComponent
 from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.creatures import MonsterCurrentMoveComponent
 from src.game.ecs.components.creatures import MonsterHasMovesComponent
@@ -52,11 +54,19 @@ class Block:
 
 
 @dataclass
+class Modifier:
+    entity_id: int
+    name: str
+    stacks: Optional[int]
+
+
+@dataclass
 class Creature:
     entity_id: int
     name: str
     health: Health
     block: Block
+    modifiers: list[Modifier]
 
 
 @dataclass
@@ -118,11 +128,13 @@ def character_view(manager: ECSManager) -> Character:
     entity_id, (_, name_component, health_component, block_component) = next(
         manager.get_components(CharacterComponent, NameComponent, HealthComponent, BlockComponent)
     )
+
     return Character(
         entity_id,
         name_component.value,
         Health(health_component.max, health_component.current),
         Block(block_component.max, block_component.current),
+        modifiers=None,  # TODO: enable
     )
 
 
@@ -149,12 +161,32 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
                 )
                 break
 
+        # Modifiers
+        creature_has_modifiers_component = manager.get_component_for_entity(
+            entity_id, CreatureHasModifiersComponent
+        )
+        modifiers = []
+        if creature_has_modifiers_component is not None:
+            for modifier_entity_id in creature_has_modifiers_component.modifier_entity_ids:
+                name = manager.get_component_for_entity(modifier_entity_id, NameComponent).value
+                modifier_stacks_component = manager.get_component_for_entity(
+                    modifier_entity_id, ModifierStacksComponent
+                )
+                if modifier_stacks_component is not None:
+                    stacks = modifier_stacks_component.value
+
+                else:
+                    stacks = None
+
+                modifiers.append(Modifier(modifier_entity_id, name, stacks))
+
         monsters.append(
             Monster(
                 entity_id,
                 name_component.value,
                 Health(health_component.max, health_component.current),
                 Block(block_component.max, block_component.current),
+                modifiers,
                 (
                     False
                     if manager.get_component_for_entity(entity_id, CanBeSelectedComponent) is None

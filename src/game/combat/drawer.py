@@ -41,7 +41,10 @@ def _block_str(block: Block) -> str:
 
 
 def _creature_str(creature: Creature) -> str:
-    return f"{creature.name} {_health_str(creature.health)} {_block_str(creature.block)}"
+    return (
+        f"{creature.name} {_health_str(creature.health)} {_block_str(creature.block)}"
+        f"{creature.modifiers}"
+    )
 
 
 def _effect_is_pending_input_targets_str(

@@ -52,11 +52,6 @@ class EffectRefillEnergy(BaseComponent):
 
 
 @dataclass
-class EffectGainWeakComponent(BaseComponent):
-    value: int
-
-
-@dataclass
 class EffectDrawCardComponent(BaseComponent):
     value: int
 
@@ -105,4 +100,14 @@ class EffectIsHaltedComponent(BaseComponent):
 
 @dataclass
 class EffectInputTargetComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class EffectModifierDeltaComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class EffectCreateWeakComponent(BaseComponent):
     pass

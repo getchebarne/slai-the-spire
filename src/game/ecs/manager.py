@@ -102,6 +102,9 @@ class ECSManager:
                 entity_components.pop(component_type)
 
     def add_component(self, entity: int, component_instance: BaseComponent) -> None:
+        if type(component_instance) is type:
+            raise ValueError("you're stupid")
+
         # Get the component's type
         component_type = type(component_instance)
 
