@@ -1,16 +1,16 @@
+from src.game.ecs.components.actors import ActorComponent
+from src.game.ecs.components.actors import BlockComponent
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import DummyAIComponent
+from src.game.ecs.components.actors import HealthComponent
+from src.game.ecs.components.actors import IsTurnComponent
+from src.game.ecs.components.actors import MonsterComponent
+from src.game.ecs.components.actors import MonsterHasMovesComponent
+from src.game.ecs.components.actors import MonsterMoveComponent
+from src.game.ecs.components.actors import MonsterMoveHasEffectsComponent
+from src.game.ecs.components.actors import MonsterMoveIntentComponent
+from src.game.ecs.components.actors import MonsterPendingMoveUpdateComponent
 from src.game.ecs.components.common import NameComponent
-from src.game.ecs.components.creatures import BlockComponent
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import CreatureComponent
-from src.game.ecs.components.creatures import DummyAIComponent
-from src.game.ecs.components.creatures import HealthComponent
-from src.game.ecs.components.creatures import IsTurnComponent
-from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import MonsterHasMovesComponent
-from src.game.ecs.components.creatures import MonsterMoveComponent
-from src.game.ecs.components.creatures import MonsterMoveHasEffectsComponent
-from src.game.ecs.components.creatures import MonsterMoveIntentComponent
-from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -49,7 +49,7 @@ def create_dummy(manager: ECSManager) -> int:
     )
     return manager.create_entity(
         NameComponent("Dummy"),
-        CreatureComponent(),
+        ActorComponent(),
         MonsterComponent(0),
         DummyAIComponent(),
         HealthComponent(base_health),

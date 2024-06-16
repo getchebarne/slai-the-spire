@@ -1,6 +1,6 @@
-from src.game.ecs.components.creatures import CreatureHasModifiersComponent
-from src.game.ecs.components.creatures import ModifierStacksDurationComponent
-from src.game.ecs.components.creatures import TurnEndComponent
+from src.game.ecs.components.actors import ActorHasModifiersComponent
+from src.game.ecs.components.actors import ModifierStacksDurationComponent
+from src.game.ecs.components.actors import TurnEndComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectModifierDeltaComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -28,16 +28,16 @@ def effect_queue_is_empty(manager: ECSManager) -> bool:
 
 
 # TODO: may need to reimplement as system
-def trigger_creature_turn_end(manager: ECSManager, creature_entity_id: int) -> None:
-    # Tag creature
-    manager.add_component(creature_entity_id, TurnEndComponent())
+def trigger_actor_turn_end(manager: ECSManager, actor_entity_id: int) -> None:
+    # Tag actor
+    manager.add_component(actor_entity_id, TurnEndComponent())
 
-    # Tag creature's modifiers
-    creature_has_modifiers_component = manager.get_component_for_entity(
-        creature_entity_id, CreatureHasModifiersComponent
+    # Tag actor's modifiers
+    actor_has_modifiers_component = manager.get_component_for_entity(
+        actor_entity_id, ActorHasModifiersComponent
     )
-    if creature_has_modifiers_component is not None:
-        for modifier_entity_id in creature_has_modifiers_component.modifier_entity_ids:
+    if actor_has_modifiers_component is not None:
+        for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
             manager.add_component(modifier_entity_id, TurnEndComponent())
 
         add_effect_to_bot(

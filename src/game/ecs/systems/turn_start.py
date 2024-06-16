@@ -1,10 +1,10 @@
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import IsTurnComponent
-from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import MonsterCurrentMoveComponent
-from src.game.ecs.components.creatures import MonsterHasMovesComponent
-from src.game.ecs.components.creatures import MonsterMoveHasEffectsComponent
-from src.game.ecs.components.creatures import TurnStartComponent
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import IsTurnComponent
+from src.game.ecs.components.actors import MonsterComponent
+from src.game.ecs.components.actors import MonsterCurrentMoveComponent
+from src.game.ecs.components.actors import MonsterHasMovesComponent
+from src.game.ecs.components.actors import MonsterMoveHasEffectsComponent
+from src.game.ecs.components.actors import TurnStartComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectRefillEnergy
@@ -19,7 +19,7 @@ from src.game.ecs.utils import add_effect_to_bot
 class TurnStartSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
-            creature_entity_id, _ = next(manager.get_component(TurnStartComponent))
+            actor_entity_id, _ = next(manager.get_component(TurnStartComponent))
 
         except StopIteration:
             return
@@ -36,15 +36,15 @@ class TurnStartSystem(BaseSystem):
         )
 
         # Character-only effects
-        if manager.get_component_for_entity(creature_entity_id, CharacterComponent) is not None:
+        if manager.get_component_for_entity(actor_entity_id, CharacterComponent) is not None:
             add_effect_to_bot(manager, manager.create_entity(EffectRefillEnergy()))
             add_effect_to_bot(manager, manager.create_entity(EffectDrawCardComponent(5)))
 
         # Monster-only effects
-        elif manager.get_component_for_entity(creature_entity_id, MonsterComponent) is not None:
+        elif manager.get_component_for_entity(actor_entity_id, MonsterComponent) is not None:
             # Get the monster's current move
             for move_entity_id in manager.get_component_for_entity(
-                creature_entity_id, MonsterHasMovesComponent
+                actor_entity_id, MonsterHasMovesComponent
             ).move_entity_ids:
                 if (
                     manager.get_component_for_entity(move_entity_id, MonsterCurrentMoveComponent)
@@ -58,6 +58,6 @@ class TurnStartSystem(BaseSystem):
 
                     break
 
-        # Untag creature & tag it w/ IsTurnComponent
-        manager.remove_component(creature_entity_id, TurnStartComponent)
-        manager.add_component(creature_entity_id, IsTurnComponent())
+        # Untag actor & tag it w/ IsTurnComponent
+        manager.remove_component(actor_entity_id, TurnStartComponent)
+        manager.add_component(actor_entity_id, IsTurnComponent())

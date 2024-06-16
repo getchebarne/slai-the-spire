@@ -1,5 +1,5 @@
-from src.game.ecs.components.creatures import BlockComponent
-from src.game.ecs.components.creatures import HealthComponent
+from src.game.ecs.components.actors import BlockComponent
+from src.game.ecs.components.actors import HealthComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent

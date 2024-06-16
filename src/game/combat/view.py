@@ -1,6 +1,15 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from src.game.ecs.components.actors import ActorHasModifiersComponent
+from src.game.ecs.components.actors import BlockComponent
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import HealthComponent
+from src.game.ecs.components.actors import ModifierStacksComponent
+from src.game.ecs.components.actors import MonsterComponent
+from src.game.ecs.components.actors import MonsterCurrentMoveComponent
+from src.game.ecs.components.actors import MonsterHasMovesComponent
+from src.game.ecs.components.actors import MonsterMoveIntentComponent
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
@@ -9,15 +18,6 @@ from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.common import NameComponent
-from src.game.ecs.components.creatures import BlockComponent
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import CreatureHasModifiersComponent
-from src.game.ecs.components.creatures import HealthComponent
-from src.game.ecs.components.creatures import ModifierStacksComponent
-from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import MonsterCurrentMoveComponent
-from src.game.ecs.components.creatures import MonsterHasMovesComponent
-from src.game.ecs.components.creatures import MonsterMoveIntentComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
 from src.game.ecs.components.effects import EffectNumberOfTargetsComponent
 from src.game.ecs.components.energy import EnergyComponent
@@ -61,7 +61,7 @@ class Modifier:
 
 
 @dataclass
-class Creature:
+class Actor:
     entity_id: int
     name: str
     health: Health
@@ -78,13 +78,13 @@ class Intent:
 
 # TODO: add intent
 @dataclass
-class Monster(Creature):
+class Monster(Actor):
     can_be_selected: bool
     intent: Intent
 
 
 @dataclass
-class Character(Creature):
+class Character(Actor):
     pass
 
 
@@ -162,12 +162,12 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
                 break
 
         # Modifiers
-        creature_has_modifiers_component = manager.get_component_for_entity(
-            entity_id, CreatureHasModifiersComponent
+        actor_has_modifiers_component = manager.get_component_for_entity(
+            entity_id, ActorHasModifiersComponent
         )
         modifiers = []
-        if creature_has_modifiers_component is not None:
-            for modifier_entity_id in creature_has_modifiers_component.modifier_entity_ids:
+        if actor_has_modifiers_component is not None:
+            for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
                 name = manager.get_component_for_entity(modifier_entity_id, NameComponent).value
                 modifier_stacks_component = manager.get_component_for_entity(
                     modifier_entity_id, ModifierStacksComponent

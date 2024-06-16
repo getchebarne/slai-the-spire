@@ -1,10 +1,10 @@
 import os
 from typing import Optional
 
+from src.game.combat.view import Actor
 from src.game.combat.view import Block
 from src.game.combat.view import Card
 from src.game.combat.view import CombatView
-from src.game.combat.view import Creature
 from src.game.combat.view import EffectIsPendingInputTargets
 from src.game.combat.view import Energy
 from src.game.combat.view import Health
@@ -40,10 +40,9 @@ def _block_str(block: Block) -> str:
     return f"\U0001F6E1 {block.current}"
 
 
-def _creature_str(creature: Creature) -> str:
+def _actor_str(actor: Actor) -> str:
     return (
-        f"{creature.name} {_health_str(creature.health)} {_block_str(creature.block)}"
-        f"{creature.modifiers}"
+        f"{actor.name} {_health_str(actor.health)} {_block_str(actor.block)}" f"{actor.modifiers}"
     )
 
 
@@ -80,14 +79,14 @@ def _view_str(view: CombatView) -> str:
 
     # Monsters
     monster_strs = [
-        f"{_intent_str(monster.intent)} {_creature_str(monster)}" for monster in view.monsters
+        f"{_intent_str(monster.intent)} {_actor_str(monster)}" for monster in view.monsters
     ]
     right_justified_monsters = "\n".join(
         [f"{monster_str:>{N_TERM_COLS}}" for monster_str in monster_strs]
     )
 
     # Character
-    character_str = _creature_str(view.character)
+    character_str = _actor_str(view.character)
 
     # Energy & hand
     energy_hand_str = f"{_energy_str(view.energy)} | {_hand_str(view.hand)}"

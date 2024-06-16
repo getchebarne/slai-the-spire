@@ -1,3 +1,6 @@
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import ModifierWeakComponent
+from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInDeckComponent
@@ -5,9 +8,6 @@ from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import DescriptionComponent
 from src.game.ecs.components.common import NameComponent
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import ModifierWeakComponent
-from src.game.ecs.components.creatures import MonsterComponent
 from src.game.ecs.components.effects import EffectCreateWeakComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent

@@ -1,4 +1,4 @@
-from src.game.ecs.components.creatures import BlockComponent
+from src.game.ecs.components.actors import BlockComponent
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.components.effects import EffectSetBlockToZero
