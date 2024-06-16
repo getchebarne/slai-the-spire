@@ -3,11 +3,11 @@ from src.game.combat import input as input_
 from src.game.combat.action import Action
 from src.game.combat.drawer import drawer
 from src.game.combat.view import combat_view
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import HealthComponent
-from src.game.ecs.components.creatures import IsTurnComponent
-from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import TurnStartComponent
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import HealthComponent
+from src.game.ecs.components.actors import IsTurnComponent
+from src.game.ecs.components.actors import MonsterComponent
+from src.game.ecs.components.actors import TurnStartComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager

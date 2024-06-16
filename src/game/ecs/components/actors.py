@@ -25,7 +25,7 @@ class BlockComponent(BaseComponent):
 
 
 @dataclass
-class CreatureComponent(BaseComponent):
+class ActorComponent(BaseComponent):
     pass
 
 
@@ -93,7 +93,7 @@ class MonsterMoveIntentComponent(BaseComponent):
 
 
 @dataclass
-class CreatureHasModifiersComponent(BaseRelationshipComponent):
+class ActorHasModifiersComponent(BaseRelationshipComponent):
     modifier_entity_ids: list[int]
 
 

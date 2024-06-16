@@ -1,8 +1,8 @@
-from src.game.ecs.components.creatures import CreatureComponent
-from src.game.ecs.components.creatures import CreatureHasModifiersComponent
-from src.game.ecs.components.creatures import IsEndingTurnComponent
-from src.game.ecs.components.creatures import ModifierStacksDurationComponent
-from src.game.ecs.components.creatures import TurnEndComponent
+from src.game.ecs.components.actors import ActorComponent
+from src.game.ecs.components.actors import ActorHasModifiersComponent
+from src.game.ecs.components.actors import IsEndingTurnComponent
+from src.game.ecs.components.actors import ModifierStacksDurationComponent
+from src.game.ecs.components.actors import TurnEndComponent
 from src.game.ecs.components.effects import EffectModifierDeltaComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.manager import ECSManager
@@ -14,19 +14,17 @@ from src.game.ecs.utils import add_effect_to_bot
 class TurnEndingSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
-            creature_entity_id, _ = next(
-                manager.get_component(CreatureComponent, IsEndingTurnComponent)
-            )
+            actor_entity_id, _ = next(manager.get_component(ActorComponent, IsEndingTurnComponent))
 
         except StopIteration:
             return
 
         # Common effects
-        creature_has_modifiers_component = manager.get_component_for_entity(
-            creature_entity_id, CreatureHasModifiersComponent
+        actor_has_modifiers_component = manager.get_component_for_entity(
+            actor_entity_id, ActorHasModifiersComponent
         )
-        if creature_has_modifiers_component is not None:
-            for modifier_entity_id in creature_has_modifiers_component.modifier_entity_ids:
+        if actor_has_modifiers_component is not None:
+            for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
                 # Tag modifier w/ TurnEnd
                 manager.add_component(modifier_entity_id, TurnEndComponent())
 
@@ -42,4 +40,4 @@ class TurnEndingSystem(BaseSystem):
 
         # Untag & retag
         manager.destroy_component(IsEndingTurnComponent)
-        manager.add_component(creature_entity_id, TurnEndComponent())
+        manager.add_component(actor_entity_id, TurnEndComponent())

@@ -1,7 +1,7 @@
-from src.game.ecs.components.creatures import CreatureComponent
-from src.game.ecs.components.creatures import CreatureHasModifiersComponent
-from src.game.ecs.components.creatures import ModifierMinimumStacksComponent
-from src.game.ecs.components.creatures import ModifierStacksComponent
+from src.game.ecs.components.actors import ActorComponent
+from src.game.ecs.components.actors import ActorHasModifiersComponent
+from src.game.ecs.components.actors import ModifierMinimumStacksComponent
+from src.game.ecs.components.actors import ModifierStacksComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
@@ -11,12 +11,12 @@ from src.game.ecs.systems.base import BaseSystem
 
 class CheckModifierStacks(BaseSystem):
     def process(self, manager: ECSManager) -> None:
-        for creature_entity_id, _ in manager.get_component(CreatureComponent):
-            creature_has_modifiers_component = manager.get_component_for_entity(
-                creature_entity_id, CreatureHasModifiersComponent
+        for actor_entity_id, _ in manager.get_component(ActorComponent):
+            actor_has_modifiers_component = manager.get_component_for_entity(
+                actor_entity_id, ActorHasModifiersComponent
             )
-            if creature_has_modifiers_component is not None:
-                for modifier_entity_id in creature_has_modifiers_component.modifier_entity_ids:
+            if actor_has_modifiers_component is not None:
+                for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
                     modifier_stacks_component = manager.get_component_for_entity(
                         modifier_entity_id, ModifierStacksComponent
                     )
@@ -31,6 +31,6 @@ class CheckModifierStacks(BaseSystem):
                     ):
                         # Destroy
                         manager.destroy_entity(modifier_entity_id)
-                        creature_has_modifiers_component.modifier_entity_ids.remove(
+                        actor_has_modifiers_component.modifier_entity_ids.remove(
                             modifier_entity_id
                         )

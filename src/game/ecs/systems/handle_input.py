@@ -1,14 +1,14 @@
 from src.game.combat import input as input_
 from src.game.combat.action import ActionType
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import IsTurnComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.utils import trigger_creature_turn_end
+from src.game.ecs.utils import trigger_actor_turn_end
 
 
 def _handle_select_entity(manager: ECSManager, action_target_entity_id: int) -> None:
@@ -29,7 +29,7 @@ def _handle_end_turn(manager: ECSManager) -> None:
     # Finish its turn and trigger its turn end. TODO: improve comment
     manager.remove_component(character_entity_id, IsTurnComponent)
     # manager.add_component(character_entity_id, TurnEndComponent())
-    trigger_creature_turn_end(manager, character_entity_id)
+    trigger_actor_turn_end(manager, character_entity_id)
 
 
 class HandleInputSystem(BaseSystem):

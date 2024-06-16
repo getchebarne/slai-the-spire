@@ -1,8 +1,8 @@
+from src.game.ecs.components.actors import ActorHasModifiersComponent
+from src.game.ecs.components.actors import ModifierMinimumStacksComponent
+from src.game.ecs.components.actors import ModifierStacksDurationComponent
+from src.game.ecs.components.actors import ModifierWeakComponent
 from src.game.ecs.components.common import NameComponent
-from src.game.ecs.components.creatures import CreatureHasModifiersComponent
-from src.game.ecs.components.creatures import ModifierMinimumStacksComponent
-from src.game.ecs.components.creatures import ModifierStacksDurationComponent
-from src.game.ecs.components.creatures import ModifierWeakComponent
 from src.game.ecs.components.effects import EffectCreateWeakComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
@@ -18,14 +18,14 @@ class CreateModifierWeakSystem(BaseSystem):
 
         if query_result:
             for target_entity_id, _ in manager.get_component(EffectTargetComponent):
-                creature_has_modifiers_component = manager.get_component_for_entity(
-                    target_entity_id, CreatureHasModifiersComponent
+                actor_has_modifiers_component = manager.get_component_for_entity(
+                    target_entity_id, ActorHasModifiersComponent
                 )
-                if creature_has_modifiers_component is None:
-                    creature_has_modifiers_component = CreatureHasModifiersComponent([])
-                    manager.add_component(target_entity_id, creature_has_modifiers_component)
+                if actor_has_modifiers_component is None:
+                    actor_has_modifiers_component = ActorHasModifiersComponent([])
+                    manager.add_component(target_entity_id, actor_has_modifiers_component)
 
-                for modifier_entity_id in creature_has_modifiers_component.modifier_entity_ids:
+                for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
                     if (
                         manager.get_component_for_entity(modifier_entity_id, ModifierWeakComponent)
                         is not None
@@ -33,7 +33,7 @@ class CreateModifierWeakSystem(BaseSystem):
                         return
 
                 # Create a weak modifier entity
-                creature_has_modifiers_component.modifier_entity_ids.append(
+                actor_has_modifiers_component.modifier_entity_ids.append(
                     manager.create_entity(
                         NameComponent("Weak"),
                         ModifierWeakComponent(),

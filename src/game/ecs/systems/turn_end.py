@@ -1,10 +1,10 @@
+from src.game.ecs.components.actors import ActorComponent
+from src.game.ecs.components.actors import CharacterComponent
+from src.game.ecs.components.actors import MonsterComponent
+from src.game.ecs.components.actors import MonsterPendingMoveUpdateComponent
+from src.game.ecs.components.actors import TurnEndComponent
+from src.game.ecs.components.actors import TurnStartComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.creatures import CharacterComponent
-from src.game.ecs.components.creatures import CreatureComponent
-from src.game.ecs.components.creatures import MonsterComponent
-from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
-from src.game.ecs.components.creatures import TurnEndComponent
-from src.game.ecs.components.creatures import TurnStartComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
@@ -19,9 +19,7 @@ from src.game.ecs.utils import effect_queue_is_empty
 class TurnEndSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
-            creature_entity_id, _ = next(
-                manager.get_components(CreatureComponent, TurnEndComponent)
-            )
+            actor_entity_id, _ = next(manager.get_components(ActorComponent, TurnEndComponent))
 
         except StopIteration:
             return
@@ -33,7 +31,7 @@ class TurnEndSystem(BaseSystem):
         manager.destroy_component(TurnEndComponent)
 
         # Character-only effects
-        if manager.get_component_for_entity(creature_entity_id, CharacterComponent) is not None:
+        if manager.get_component_for_entity(actor_entity_id, CharacterComponent) is not None:
             # TODO: move
             add_effect_to_bot(
                 manager,
@@ -50,10 +48,10 @@ class TurnEndSystem(BaseSystem):
                     break
 
         # Monster-only effects
-        monster_component = manager.get_component_for_entity(creature_entity_id, MonsterComponent)
+        monster_component = manager.get_component_for_entity(actor_entity_id, MonsterComponent)
         if monster_component is not None:
             # Tag monster as pending move update
-            manager.add_component(creature_entity_id, MonsterPendingMoveUpdateComponent())
+            manager.add_component(actor_entity_id, MonsterPendingMoveUpdateComponent())
 
             # Pass IsTurn to next monster
             monster_is_turn_position = monster_component.position

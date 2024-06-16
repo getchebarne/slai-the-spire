@@ -1,10 +1,10 @@
 import random
 
-from src.game.ecs.components.creatures import DummyAIComponent
-from src.game.ecs.components.creatures import MonsterCurrentMoveComponent
-from src.game.ecs.components.creatures import MonsterHasMovesComponent
-from src.game.ecs.components.creatures import MonsterMoveComponent
-from src.game.ecs.components.creatures import MonsterPendingMoveUpdateComponent
+from src.game.ecs.components.actors import DummyAIComponent
+from src.game.ecs.components.actors import MonsterCurrentMoveComponent
+from src.game.ecs.components.actors import MonsterHasMovesComponent
+from src.game.ecs.components.actors import MonsterMoveComponent
+from src.game.ecs.components.actors import MonsterPendingMoveUpdateComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 
