@@ -1,4 +1,4 @@
-from src.game.ecs.components.actors import ActorHasModifiersComponent
+from src.game.ecs.components.actors import ModifierParentActorComponent
 from src.game.ecs.components.actors import ModifierStacksDurationComponent
 from src.game.ecs.components.actors import TurnEndComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
@@ -33,19 +33,17 @@ def trigger_actor_turn_end(manager: ECSManager, actor_entity_id: int) -> None:
     manager.add_component(actor_entity_id, TurnEndComponent())
 
     # Tag actor's modifiers
-    actor_has_modifiers_component = manager.get_component_for_entity(
-        actor_entity_id, ActorHasModifiersComponent
-    )
-    if actor_has_modifiers_component is not None:
-        for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
+    for modifier_entity_id, modifier_parent_actor_component in manager.get_component(
+        ModifierParentActorComponent
+    ):
+        if modifier_parent_actor_component.actor_entity_id == actor_entity_id:
             manager.add_component(modifier_entity_id, TurnEndComponent())
 
-        add_effect_to_bot(
-            manager,
-            manager.create_entity(
-                EffectModifierDeltaComponent(-1),
-                EffectQueryComponentsComponent(
-                    [TurnEndComponent, ModifierStacksDurationComponent]
-                ),
-            ),
-        )
+    # Create effect to decrease modifier stacks
+    add_effect_to_bot(
+        manager,
+        manager.create_entity(
+            EffectModifierDeltaComponent(-1),
+            EffectQueryComponentsComponent([TurnEndComponent, ModifierStacksDurationComponent]),
+        ),
+    )

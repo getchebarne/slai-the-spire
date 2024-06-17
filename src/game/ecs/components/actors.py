@@ -93,11 +93,6 @@ class MonsterMoveIntentComponent(BaseComponent):
 
 
 @dataclass
-class ActorHasModifiersComponent(BaseRelationshipComponent):
-    modifier_entity_ids: list[int]
-
-
-@dataclass
 class ModifierStacksComponent(BaseComponent):
     value: int
 
@@ -120,3 +115,8 @@ class ModifierWeakComponent(BaseComponent):
 @dataclass
 class IsEndingTurnComponent(BaseComponent):
     pass
+
+
+@dataclass
+class ModifierParentActorComponent(BaseRelationshipComponent):
+    actor_entity_id: int

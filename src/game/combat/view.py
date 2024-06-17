@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from src.game.ecs.components.actors import ActorHasModifiersComponent
 from src.game.ecs.components.actors import BlockComponent
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.actors import HealthComponent
+from src.game.ecs.components.actors import ModifierParentActorComponent
 from src.game.ecs.components.actors import ModifierStacksComponent
 from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.actors import MonsterCurrentMoveComponent
@@ -162,23 +162,22 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
                 break
 
         # Modifiers
-        actor_has_modifiers_component = manager.get_component_for_entity(
-            entity_id, ActorHasModifiersComponent
-        )
         modifiers = []
-        if actor_has_modifiers_component is not None:
-            for modifier_entity_id in actor_has_modifiers_component.modifier_entity_ids:
-                name = manager.get_component_for_entity(modifier_entity_id, NameComponent).value
-                modifier_stacks_component = manager.get_component_for_entity(
-                    modifier_entity_id, ModifierStacksComponent
+        for modifier_entity_id, (
+            mod_name_component,
+            modifier_parent_actor_component,
+            modifier_stacks_component,
+        ) in manager.get_components(
+            NameComponent, ModifierParentActorComponent, ModifierStacksComponent
+        ):
+            if modifier_parent_actor_component.actor_entity_id == entity_id:
+                modifiers.append(
+                    Modifier(
+                        modifier_entity_id,
+                        mod_name_component.value,
+                        modifier_stacks_component.value,
+                    )
                 )
-                if modifier_stacks_component is not None:
-                    stacks = modifier_stacks_component.value
-
-                else:
-                    stacks = None
-
-                modifiers.append(Modifier(modifier_entity_id, name, stacks))
 
         monsters.append(
             Monster(
