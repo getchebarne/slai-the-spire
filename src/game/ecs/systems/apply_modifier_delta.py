@@ -1,5 +1,5 @@
-from src.game.ecs.components.actors import ModifierStacksComponent
 from src.game.ecs.components.actors import ModifierMinimumStacksComponent
+from src.game.ecs.components.actors import ModifierStacksComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectModifierDeltaComponent
 from src.game.ecs.components.effects import EffectTargetComponent

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from src.game.ecs.components.base import BaseComponent
+from src.game.ecs.components.base import BaseRelationshipComponent
 
 
 class EffectSelectionType(Enum):
@@ -25,7 +26,6 @@ class EffectTargetComponent(BaseComponent):
     pass
 
 
-# TODO: swap name order (e.g., EffectGainBlockComponent)
 @dataclass
 class EffectGainBlockComponent(BaseComponent):
     value: int
@@ -111,3 +111,8 @@ class EffectModifierDeltaComponent(BaseComponent):
 @dataclass
 class EffectCreateWeakComponent(BaseComponent):
     pass
+
+
+@dataclass
+class EffectParentComponent(BaseRelationshipComponent):
+    entity_id: int

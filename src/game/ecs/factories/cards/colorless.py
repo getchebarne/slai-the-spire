@@ -34,7 +34,7 @@ def create_strike(manager: ECSManager) -> int:
 
 def create_defend(manager: ECSManager) -> int:
     base_cost = 1
-    base_block = 5
+    base_block = 0
 
     # Create a "GainBlock" effect
     gain_block_entity_id = manager.create_entity(
