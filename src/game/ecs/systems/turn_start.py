@@ -1,9 +1,9 @@
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
-from src.game.ecs.components.actors import MonsterCurrentMoveComponent
-from src.game.ecs.components.actors import MonsterHasMovesComponent
-from src.game.ecs.components.actors import MonsterMoveHasEffectsComponent
+from src.game.ecs.components.actors import MonsterMoveComponent
+from src.game.ecs.components.actors import MonsterMoveIsQueuedComponent
+from src.game.ecs.components.actors import MonsterMoveParentComponent
 from src.game.ecs.components.actors import TurnStartComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -43,20 +43,11 @@ class TurnStartSystem(BaseSystem):
         # Monster-only effects
         elif manager.get_component_for_entity(actor_entity_id, MonsterComponent) is not None:
             # Get the monster's current move
-            for move_entity_id in manager.get_component_for_entity(
-                actor_entity_id, MonsterHasMovesComponent
-            ).move_entity_ids:
-                if (
-                    manager.get_component_for_entity(move_entity_id, MonsterCurrentMoveComponent)
-                    is not None
-                ):
-                    # Tag the move's effects to be dispatched
-                    for effect_entity_id in manager.get_component_for_entity(
-                        move_entity_id, MonsterMoveHasEffectsComponent
-                    ).effect_entity_ids:
-                        add_effect_to_bot(manager, effect_entity_id)
-
-                    break
+            for move_entity_id, (monster_move_parent_component, _) in manager.get_components(
+                MonsterMoveParentComponent, MonsterMoveComponent
+            ):
+                if monster_move_parent_component.entity_id == actor_entity_id:
+                    manager.add_component(move_entity_id, MonsterMoveIsQueuedComponent())
 
         # Untag actor & tag it w/ IsTurnComponent
         manager.remove_component(actor_entity_id, TurnStartComponent)

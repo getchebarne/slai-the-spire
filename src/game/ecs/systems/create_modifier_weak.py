@@ -1,5 +1,5 @@
 from src.game.ecs.components.actors import ModifierMinimumStacksComponent
-from src.game.ecs.components.actors import ModifierParentActorComponent
+from src.game.ecs.components.actors import ModifierParentComponent
 from src.game.ecs.components.actors import ModifierStacksDurationComponent
 from src.game.ecs.components.actors import ModifierWeakComponent
 from src.game.ecs.components.common import NameComponent
@@ -20,10 +20,10 @@ class CreateModifierWeakSystem(BaseSystem):
         if query_result:
             for target_entity_id, _ in manager.get_component(EffectTargetComponent):
                 modifier_already_exists = False
-                for _, (modifier_parent_actor_component, _) in manager.get_components(
-                    ModifierParentActorComponent, ModifierWeakComponent
+                for _, (modifier_parent_component, _) in manager.get_components(
+                    ModifierParentComponent, ModifierWeakComponent
                 ):
-                    if modifier_parent_actor_component.actor_entity_id == target_entity_id:
+                    if modifier_parent_component.actor_entity_id == target_entity_id:
                         # Modifier already exists for parent actor
                         modifier_already_exists = True
                         break
@@ -34,7 +34,7 @@ class CreateModifierWeakSystem(BaseSystem):
                 # Create modifier instance
                 manager.create_entity(
                     NameComponent("Weak"),
-                    ModifierParentActorComponent(target_entity_id),
+                    ModifierParentComponent(target_entity_id),
                     ModifierWeakComponent(),
                     ModifierMinimumStacksComponent(1),
                     ModifierStacksDurationComponent(),

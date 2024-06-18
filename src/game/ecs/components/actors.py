@@ -65,23 +65,26 @@ class TurnEndComponent(BaseComponent):
     pass
 
 
-@dataclass
 class MonsterMoveComponent(BaseComponent):
-    name: str
+    pass
+
+
+class MonsterMoveIsQueuedComponent(BaseComponent):
+    pass
 
 
 @dataclass
-class MonsterMoveHasEffectsComponent(BaseRelationshipComponent):
-    effect_entity_ids: list[int]
+class MonsterMoveParentComponent(BaseComponent):
+    entity_id: int
 
 
 @dataclass
-class MonsterHasMovesComponent(BaseRelationshipComponent):
-    move_entity_ids: list[int]
+class MonsterMoveDummyAttackComponent(BaseComponent):
+    pass
 
 
 @dataclass
-class MonsterCurrentMoveComponent(BaseRelationshipComponent):
+class MonsterMoveDummyDefendComponent(BaseComponent):
     pass
 
 
@@ -118,5 +121,5 @@ class IsEndingTurnComponent(BaseComponent):
 
 
 @dataclass
-class ModifierParentActorComponent(BaseRelationshipComponent):
+class ModifierParentComponent(BaseRelationshipComponent):
     actor_entity_id: int

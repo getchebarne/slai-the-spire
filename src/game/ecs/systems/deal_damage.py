@@ -17,7 +17,7 @@ class DealDamageSystem(BaseSystem):
         except StopIteration:
             return
 
-        damage = deal_damage_effect_component.value
+        damage = int(deal_damage_effect_component.value)
         for target_entity_id, _ in manager.get_component(EffectTargetComponent):
             block_component = manager.get_component_for_entity(target_entity_id, BlockComponent)
             health_component = manager.get_component_for_entity(target_entity_id, HealthComponent)

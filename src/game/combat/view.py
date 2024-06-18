@@ -4,12 +4,11 @@ from typing import Optional
 from src.game.ecs.components.actors import BlockComponent
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.actors import HealthComponent
-from src.game.ecs.components.actors import ModifierParentActorComponent
+from src.game.ecs.components.actors import ModifierParentComponent
 from src.game.ecs.components.actors import ModifierStacksComponent
 from src.game.ecs.components.actors import MonsterComponent
-from src.game.ecs.components.actors import MonsterCurrentMoveComponent
-from src.game.ecs.components.actors import MonsterHasMovesComponent
-from src.game.ecs.components.actors import MonsterMoveIntentComponent
+# from src.game.ecs.components.actors import MonsterMoveIntentComponent
+# from src.game.ecs.components.actors import MonsterMoveIsCurrentComponent
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
@@ -147,30 +146,30 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
         health_component,
         block_component,
     ) in manager.get_components(MonsterComponent, NameComponent, HealthComponent, BlockComponent):
-        # Get the monster's current move
-        intent_component = None
-        for move_entity_id in manager.get_component_for_entity(
-            entity_id, MonsterHasMovesComponent
-        ).move_entity_ids:
-            if (
-                manager.get_component_for_entity(move_entity_id, MonsterCurrentMoveComponent)
-                is not None
-            ):
-                intent_component = manager.get_component_for_entity(
-                    move_entity_id, MonsterMoveIntentComponent
-                )
-                break
+        # # Get the monster's current move
+        # intent_component = None
+        # for move_entity_id in manager.get_component_for_entity(
+        #     entity_id, MonsterHasMovesComponent
+        # ).move_entity_ids:
+        #     if (
+        #         manager.get_component_for_entity(move_entity_id, MonsterMoveIsCurrentComponent)
+        #         is not None
+        #     ):
+        #         intent_component = manager.get_component_for_entity(
+        #             move_entity_id, MonsterMoveIntentComponent
+        #         )
+        #         break
 
         # Modifiers
         modifiers = []
         for modifier_entity_id, (
             mod_name_component,
-            modifier_parent_actor_component,
+            modifier_parent_component,
             modifier_stacks_component,
         ) in manager.get_components(
-            NameComponent, ModifierParentActorComponent, ModifierStacksComponent
+            NameComponent, ModifierParentComponent, ModifierStacksComponent
         ):
-            if modifier_parent_actor_component.actor_entity_id == entity_id:
+            if modifier_parent_component.actor_entity_id == entity_id:
                 modifiers.append(
                     Modifier(
                         modifier_entity_id,
@@ -191,11 +190,7 @@ def monsters_view(manager: ECSManager) -> list[Monster]:
                     if manager.get_component_for_entity(entity_id, CanBeSelectedComponent) is None
                     else True
                 ),
-                intent=(
-                    Intent(intent_component.damage, intent_component.times, intent_component.block)
-                    if intent_component is not None
-                    else None
-                ),
+                intent=None,  # TODO: reenalbe
             )
         )
 
