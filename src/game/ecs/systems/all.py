@@ -15,6 +15,7 @@ from src.game.ecs.systems.draw_card import DrawCardSystem
 from src.game.ecs.systems.enable_input import EnableInputSystem
 from src.game.ecs.systems.gain_block import GainBlockSystem
 from src.game.ecs.systems.handle_input import HandleInputSystem
+from src.game.ecs.systems.intent_dummy import IntentDummySystem
 from src.game.ecs.systems.move_defend_dummy import MoveDummyDefendSystem
 from src.game.ecs.systems.move_dummy_attack import MoveDummyAttackSystem
 from src.game.ecs.systems.play_card import PlayCardSystem
@@ -40,6 +41,7 @@ ALL_SYSTEMS = [
     BeforeTurnEndSystem(),
     TurnEndSystem(),
     AIDummySystem(),
+    IntentDummySystem(),
     CardStrikeSystem(),
     CardDefendSystem(),
     CardNeutralizeSystem(),

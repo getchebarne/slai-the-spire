@@ -1,9 +1,7 @@
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
-from src.game.ecs.components.actors import MonsterMoveComponent
 from src.game.ecs.components.actors import MonsterMoveIsQueuedComponent
-from src.game.ecs.components.actors import MonsterMoveParentComponent
 from src.game.ecs.components.actors import TurnStartComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -42,12 +40,8 @@ class TurnStartSystem(BaseSystem):
 
         # Monster-only effects
         elif manager.get_component_for_entity(actor_entity_id, MonsterComponent) is not None:
-            # Get the monster's current move
-            for move_entity_id, (monster_move_parent_component, _) in manager.get_components(
-                MonsterMoveParentComponent, MonsterMoveComponent
-            ):
-                if monster_move_parent_component.entity_id == actor_entity_id:
-                    manager.add_component(move_entity_id, MonsterMoveIsQueuedComponent())
+            # Queue the monster's move
+            manager.add_component(actor_entity_id, MonsterMoveIsQueuedComponent())
 
         # Untag actor & tag it w/ IsTurnComponent
         manager.remove_component(actor_entity_id, TurnStartComponent)

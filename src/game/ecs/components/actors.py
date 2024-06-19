@@ -65,17 +65,8 @@ class TurnEndComponent(BaseComponent):
     pass
 
 
-class MonsterMoveComponent(BaseComponent):
-    pass
-
-
 class MonsterMoveIsQueuedComponent(BaseComponent):
     pass
-
-
-@dataclass
-class MonsterMoveParentComponent(BaseComponent):
-    entity_id: int
 
 
 @dataclass
@@ -89,10 +80,18 @@ class MonsterMoveDummyDefendComponent(BaseComponent):
 
 
 @dataclass
-class MonsterMoveIntentComponent(BaseComponent):
-    damage: int
-    times: int
-    block: bool
+class MonsterIntentDamageComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class MonsterIntentTimesComponent(BaseComponent):
+    value: int
+
+
+@dataclass
+class MonsterIntentBlockComponent(BaseComponent):
+    pass
 
 
 @dataclass

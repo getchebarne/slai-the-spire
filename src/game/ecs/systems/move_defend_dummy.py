@@ -2,7 +2,6 @@ from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.actors import MonsterMoveDummyDefendComponent
 from src.game.ecs.components.actors import MonsterMoveIsQueuedComponent
-from src.game.ecs.components.actors import MonsterMoveParentComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectParentComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -18,21 +17,17 @@ BLOCK = 5
 class MoveDummyDefendSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         query_result = list(
-            manager.get_components(
-                MonsterMoveDummyDefendComponent,
-                MonsterMoveIsQueuedComponent,
-                MonsterMoveParentComponent,
-            )
+            manager.get_components(MonsterMoveDummyDefendComponent, MonsterMoveIsQueuedComponent)
         )
         if query_result:
-            move_entity_id, (_, _, monster_move_parent_component) = query_result[0]
+            monster_entity_id, _ = query_result[0]
             add_effect_to_bot(
                 manager,
                 manager.create_entity(
                     EffectGainBlockComponent(BLOCK),
                     EffectQueryComponentsComponent([MonsterComponent, IsTurnComponent]),
-                    EffectParentComponent(monster_move_parent_component.entity_id),
+                    EffectParentComponent(monster_entity_id),
                 ),
             )
 
-            manager.remove_component(move_entity_id, MonsterMoveIsQueuedComponent)
+            manager.remove_component(monster_entity_id, MonsterMoveIsQueuedComponent)

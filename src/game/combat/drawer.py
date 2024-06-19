@@ -8,6 +8,8 @@ from src.game.combat.view.actor import HealthView
 from src.game.combat.view.card import CardView
 from src.game.combat.view.effect import EffectView
 from src.game.combat.view.energy import EnergyView
+from src.game.combat.view.monster import IntentView
+from src.game.combat.view.monster import MonsterView
 
 
 N_TERM_COLS, _ = os.get_terminal_size()
@@ -51,20 +53,25 @@ def _effect_str(effect_view: Optional[EffectView]) -> str:
     return f"{effect_view.type} | {effect_view.number_of_targets}"
 
 
-# def _intent_str(intent: Optional[Intent]) -> str:
-#     str_ = ""
-#     if intent is None:
-#         return str_
+def _intent_str(intent_view: Optional[IntentView]) -> str:
+    str_ = ""
+    if intent_view is None:
+        return str_
 
-#     if intent.damage:
-#         str_ = f"{str_} \U0001F5E1 {intent.damage}"
-#         if intent.times > 1:
-#             str_ = f"{str_} x {intent.times}"
+    if intent_view.damage is not None:
+        str_ = f"{str_} \U0001F5E1 {intent_view.damage}"
 
-#     if intent.block:
-#         str_ = f"{str_} \U0001F6E1"
+    if intent_view.times is not None:
+        str_ = f"{str_} x {intent_view.times}"
 
-#     return str_
+    if intent_view.block:
+        str_ = f"{str_} \U0001F6E1"
+
+    return str_
+
+
+def _monster_str(monster_view: MonsterView) -> str:
+    return f"{_intent_str(monster_view.intent)} | {_actor_str(monster_view)}"
 
 
 def _view_str(view: CombatView) -> str:
@@ -72,7 +79,7 @@ def _view_str(view: CombatView) -> str:
     effect_str = _effect_str(view.effect)
 
     # Monsters
-    monster_strs = [f"{_actor_str(monster)}" for monster in view.monsters]
+    monster_strs = [f"{_monster_str(monster)}" for monster in view.monsters]
     right_justified_monsters = "\n".join(
         [f"{monster_str:>{N_TERM_COLS}}" for monster_str in monster_strs]
     )
