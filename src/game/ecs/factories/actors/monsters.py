@@ -20,16 +20,3 @@ def create_dummy(manager: ECSManager) -> int:
         BlockComponent(),
         MonsterPendingMoveUpdateComponent(),
     )
-    # manager.create_entity(
-    #     MonsterMoveComponent(),
-    #     MonsterMoveDummyAttackComponent(),
-    #     MonsterMoveIntentComponent(damage=base_damage, times=1, block=False),
-    #     MonsterMoveParentComponent(dummy_entity_id),
-    # )
-    # manager.create_entity(
-    #     MonsterMoveComponent(),
-    #     MonsterMoveDummyDefendComponent(),
-    #     MonsterMoveIntentComponent(damage=0, times=0, block=True),
-    #     MonsterMoveParentComponent(dummy_entity_id),
-    # )
-    # return dummy_entity_id

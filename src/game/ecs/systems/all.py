@@ -1,6 +1,7 @@
 from src.game.ecs.systems.ai_dummy import AIDummySystem
 from src.game.ecs.systems.apply_modifier_delta import ApplyModifierDeltaSystem
 from src.game.ecs.systems.apply_weak import ApplyWeakSystem
+from src.game.ecs.systems.before_turn_end import BeforeTurnEndSystem
 from src.game.ecs.systems.create_modifier_weak import CreateModifierWeakSystem
 from src.game.ecs.systems.deal_damage import DealDamageSystem
 from src.game.ecs.systems.destroy_effect import DestroyEffectSystem
@@ -32,6 +33,7 @@ ALL_SYSTEMS = [
     TagCardTargetModifiersSystem(),
     TurnStartSystem(),
     ProcessMonsterTurnSystem(),
+    BeforeTurnEndSystem(),
     TurnEndSystem(),
     AIDummySystem(),
     PlayCardSystem(),

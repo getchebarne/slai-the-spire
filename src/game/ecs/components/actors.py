@@ -116,7 +116,7 @@ class ModifierWeakComponent(BaseComponent):
 
 
 @dataclass
-class IsEndingTurnComponent(BaseComponent):
+class BeforeTurnEndComponent(BaseComponent):
     pass
 
 
