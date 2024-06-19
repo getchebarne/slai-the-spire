@@ -7,6 +7,7 @@ from src.game.ecs.components.actors import HealthComponent
 from src.game.ecs.components.actors import ModifierParentComponent
 from src.game.ecs.components.actors import ModifierStacksComponent
 from src.game.ecs.components.actors import MonsterComponent
+
 # from src.game.ecs.components.actors import MonsterMoveIntentComponent
 # from src.game.ecs.components.actors import MonsterMoveIsCurrentComponent
 from src.game.ecs.components.cards import CardCostComponent
@@ -137,7 +138,6 @@ def character_view(manager: ECSManager) -> Character:
     )
 
 
-# TODO: list comprehension
 def monsters_view(manager: ECSManager) -> list[Monster]:
     monsters = []
     for entity_id, (

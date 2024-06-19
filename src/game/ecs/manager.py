@@ -51,13 +51,7 @@ class ECSManager:
     def get_component_for_entity(
         self, entity: int, component_type: type[BaseComponent]
     ) -> Optional[BaseComponent]:
-        # TODO: improve error messages
-        try:
-            components = self._entities[entity]
-        except KeyError as e:
-            raise KeyError(f"{e}: Entity {entity} does not exist.")
-
-        return components.get(component_type, None)
+        return self._entities[entity].get(component_type, None)
 
     def get_component(
         self, component_type: type[BaseComponent]
@@ -71,6 +65,7 @@ class ECSManager:
         try:
             for entity in set.intersection(*[self._components[ct] for ct in component_types]):
                 yield entity, [self._entities[entity][ct] for ct in component_types]
+
         except KeyError:
             pass
 
