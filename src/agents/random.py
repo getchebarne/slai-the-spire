@@ -33,7 +33,7 @@ class RandomAgent(BaseAgent):
         # If there's an effect pending input targets, select its targets randomly
         # TODO: improve this
         if combat_view.effect is not None:
-            if combat_view.effect.name == "Discard":
+            if combat_view.effect.type == "Discard":
                 return Action(
                     ActionType.SELECT_ENTITY,
                     random.choice(
@@ -41,7 +41,7 @@ class RandomAgent(BaseAgent):
                     ).entity_id,
                 )
 
-            raise ValueError(f"Unsupported effect {combat_view.effect.name}")
+            raise ValueError(f"Unsupported effect {combat_view.effect.type}")
 
         # At this point, there's no currently selected cards, no cards can be selected, and
         # there's no effects pending input targets. The agent can only end the turn

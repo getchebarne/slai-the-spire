@@ -2,7 +2,6 @@ from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
 from src.game.ecs.components.cards import CardSurvivorComponent
-from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectNumberOfTargetsComponent
@@ -32,7 +31,6 @@ class CardSurvivorSystem(BaseSystem):
             add_effect_to_bot(
                 manager,
                 manager.create_entity(
-                    NameComponent("Discard"),
                     EffectDiscardCardComponent(),
                     EffectQueryComponentsComponent([CardInHandComponent]),
                     EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
