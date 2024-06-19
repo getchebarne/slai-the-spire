@@ -20,9 +20,4 @@ class DispatchEffectSystem(BaseSystem):
 
         if dispatch_effect_entity_id is not None:
             manager.remove_component(dispatch_effect_entity_id, EffectIsQueuedComponent)
-
-            # Duplicate dispatched effect so that it can be modified by the downstream systems and
-            # tag it
-            manager.add_component(
-                manager.duplicate_entity(dispatch_effect_entity_id), EffectIsDispatchedComponent()
-            )
+            manager.add_component(dispatch_effect_entity_id, EffectIsDispatchedComponent())

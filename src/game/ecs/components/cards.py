@@ -1,12 +1,16 @@
 from dataclasses import dataclass
 
 from src.game.ecs.components.base import BaseComponent
-from src.game.ecs.components.base import BaseRelationshipComponent
 
 
 @dataclass
 class CardCostComponent(BaseComponent):
     value: int
+
+
+@dataclass
+class CardRequiresTargetComponent(BaseComponent):
+    pass
 
 
 @dataclass
@@ -40,10 +44,25 @@ class CardInDiscardPileComponent(BaseComponent):
 
 
 @dataclass
-class CardHasEffectsComponent(BaseRelationshipComponent):
-    effect_entity_ids: list[int]
+class CardIsActiveComponent(BaseComponent):
+    pass
 
 
 @dataclass
-class CardIsActiveComponent(BaseComponent):
+class CardStrikeComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CardDefendComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CardNeutralizeComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class CardSurvivorComponent(BaseComponent):
     pass

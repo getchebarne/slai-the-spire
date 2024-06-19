@@ -2,6 +2,10 @@ from src.game.ecs.systems.ai_dummy import AIDummySystem
 from src.game.ecs.systems.apply_modifier_delta import ApplyModifierDeltaSystem
 from src.game.ecs.systems.apply_weak import ApplyWeakSystem
 from src.game.ecs.systems.before_turn_end import BeforeTurnEndSystem
+from src.game.ecs.systems.card_defend import CardDefendSystem
+from src.game.ecs.systems.card_neutralize import CardNeutralizeSystem
+from src.game.ecs.systems.card_strike import CardStrikeSystem
+from src.game.ecs.systems.card_survivor import CardSurvivorSystem
 from src.game.ecs.systems.create_modifier_weak import CreateModifierWeakSystem
 from src.game.ecs.systems.deal_damage import DealDamageSystem
 from src.game.ecs.systems.destroy_effect import DestroyEffectSystem
@@ -36,6 +40,10 @@ ALL_SYSTEMS = [
     BeforeTurnEndSystem(),
     TurnEndSystem(),
     AIDummySystem(),
+    CardStrikeSystem(),
+    CardDefendSystem(),
+    CardNeutralizeSystem(),
+    CardSurvivorSystem(),
     PlayCardSystem(),
     MoveDummyAttackSystem(),
     MoveDummyDefendSystem(),
