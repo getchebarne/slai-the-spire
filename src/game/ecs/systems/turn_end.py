@@ -4,14 +4,8 @@ from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.actors import MonsterPendingMoveUpdateComponent
 from src.game.ecs.components.actors import TurnEndComponent
 from src.game.ecs.components.actors import TurnStartComponent
-from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.effects import EffectDiscardCardComponent
-from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectSelectionType
-from src.game.ecs.components.effects import EffectSelectionTypeComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.utils import add_effect_to_bot
 from src.game.ecs.utils import effect_queue_is_empty
 
 
@@ -30,24 +24,14 @@ class TurnEndSystem(BaseSystem):
         # TODO: reorder
         manager.destroy_component(TurnEndComponent)
 
-        # Character-only effects
+        # If the actor is the character, start the monsters' turn
         if manager.get_component_for_entity(actor_entity_id, CharacterComponent) is not None:
-            # TODO: move
-            add_effect_to_bot(
-                manager,
-                manager.create_entity(
-                    EffectDiscardCardComponent(),
-                    EffectQueryComponentsComponent([CardInHandComponent]),
-                    EffectSelectionTypeComponent(EffectSelectionType.ALL),
-                ),
-            )
-            # Start monsters' turn
             for monster_entity_id, monster_component in manager.get_component(MonsterComponent):
                 if monster_component.position == 0:
                     manager.add_component(monster_entity_id, TurnStartComponent())
                     break
 
-        # Monster-only effects
+        # Monster logic
         monster_component = manager.get_component_for_entity(actor_entity_id, MonsterComponent)
         if monster_component is not None:
             # Tag monster as pending move update
