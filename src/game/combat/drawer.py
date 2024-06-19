@@ -1,28 +1,27 @@
 import os
 from typing import Optional
 
-from src.game.combat.view import Actor
-from src.game.combat.view import Block
-from src.game.combat.view import Card
 from src.game.combat.view import CombatView
-from src.game.combat.view import EffectIsPendingInputTargets
-from src.game.combat.view import Energy
-from src.game.combat.view import Health
-from src.game.combat.view import Intent
+from src.game.combat.view.actor import ActorView
+from src.game.combat.view.actor import BlockView
+from src.game.combat.view.actor import HealthView
+from src.game.combat.view.card import CardView
+from src.game.combat.view.effect import EffectView
+from src.game.combat.view.energy import EnergyView
 
 
 N_TERM_COLS, _ = os.get_terminal_size()
 
 
-def _energy_str(energy: Energy) -> str:
+def _energy_str(energy: EnergyView) -> str:
     return f"\U0001F50B {energy.current}/{energy.max}"
 
 
-def _card_str(card: Card) -> str:
+def _card_str(card: CardView) -> str:
     return f"({card.cost}) {card.name}"
 
 
-def _hand_str(hand: list[Card]) -> str:
+def _hand_str(hand: list[CardView]) -> str:
     return " / ".join(
         [
             (f"\033[92m{_card_str(card)}\033[0m" if card.is_selected else _card_str(card))
@@ -31,55 +30,49 @@ def _hand_str(hand: list[Card]) -> str:
     )
 
 
-def _health_str(health: Health) -> str:
+def _health_str(health: HealthView) -> str:
     return f"\U0001FAC0 {health.current} / {health.max}"
 
 
-def _block_str(block: Block) -> str:
+def _block_str(block: BlockView) -> str:
     return f"\U0001F6E1 {block.current}"
 
 
-def _actor_str(actor: Actor) -> str:
+def _actor_str(actor: ActorView) -> str:
     return (
         f"{actor.name} {_health_str(actor.health)} {_block_str(actor.block)}" f"{actor.modifiers}"
     )
 
 
-def _effect_is_pending_input_targets_str(
-    effect_is_pending_input_targets: EffectIsPendingInputTargets,
-) -> str:
-    return (
-        f"{effect_is_pending_input_targets.name} | "
-        f"{effect_is_pending_input_targets.number_of_targets}"
-    )
+def _effect_str(effect_view: Optional[EffectView]) -> str:
+    if effect_view is None:
+        return "None"
+
+    return f"{effect_view.type} | {effect_view.number_of_targets}"
 
 
-def _intent_str(intent: Optional[Intent]) -> str:
-    str_ = ""
-    if intent is None:
-        return str_
+# def _intent_str(intent: Optional[Intent]) -> str:
+#     str_ = ""
+#     if intent is None:
+#         return str_
 
-    if intent.damage:
-        str_ = f"{str_} \U0001F5E1 {intent.damage}"
-        if intent.times > 1:
-            str_ = f"{str_} x {intent.times}"
+#     if intent.damage:
+#         str_ = f"{str_} \U0001F5E1 {intent.damage}"
+#         if intent.times > 1:
+#             str_ = f"{str_} x {intent.times}"
 
-    if intent.block:
-        str_ = f"{str_} \U0001F6E1"
+#     if intent.block:
+#         str_ = f"{str_} \U0001F6E1"
 
-    return str_
+#     return str_
 
 
 def _view_str(view: CombatView) -> str:
     # Effect
-    effect_str = "None"
-    if view.effect is not None:
-        effect_str = _effect_is_pending_input_targets_str(view.effect)
+    effect_str = _effect_str(view.effect)
 
     # Monsters
-    monster_strs = [
-        f"{_intent_str(monster.intent)} {_actor_str(monster)}" for monster in view.monsters
-    ]
+    monster_strs = [f"{_actor_str(monster)}" for monster in view.monsters]
     right_justified_monsters = "\n".join(
         [f"{monster_str:>{N_TERM_COLS}}" for monster_str in monster_strs]
     )

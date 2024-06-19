@@ -2,7 +2,6 @@ from src.game.ecs.components.actors import ModifierMinimumStacksComponent
 from src.game.ecs.components.actors import ModifierParentComponent
 from src.game.ecs.components.actors import ModifierStacksDurationComponent
 from src.game.ecs.components.actors import ModifierWeakComponent
-from src.game.ecs.components.common import NameComponent
 from src.game.ecs.components.effects import EffectCreateWeakComponent
 from src.game.ecs.components.effects import EffectIsTargetedComponent
 from src.game.ecs.components.effects import EffectTargetComponent
@@ -33,7 +32,6 @@ class CreateModifierWeakSystem(BaseSystem):
 
                 # Create modifier instance
                 manager.create_entity(
-                    NameComponent("Weak"),
                     ModifierParentComponent(target_entity_id),
                     ModifierWeakComponent(),
                     ModifierMinimumStacksComponent(1),
