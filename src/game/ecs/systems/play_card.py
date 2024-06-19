@@ -1,5 +1,4 @@
 from src.game.ecs.components.cards import CardCostComponent
-from src.game.ecs.components.cards import CardHasEffectsComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
@@ -8,7 +7,7 @@ from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
-from src.game.ecs.utils import add_effect_to_bot
+from src.game.ecs.utils import add_effect_to_top
 
 
 class PlayCardSystem(BaseSystem):
@@ -26,19 +25,13 @@ class PlayCardSystem(BaseSystem):
         energy_component.current -= card_cost
 
         # Create effect to discard the played card
-        add_effect_to_bot(
+        add_effect_to_top(
             manager,
             manager.create_entity(
                 EffectDiscardCardComponent(),
                 EffectQueryComponentsComponent([CardInHandComponent, CardIsActiveComponent]),
             ),
         )
-
-        # Tag the card's effects to be dispatched
-        for effect_entity_id in manager.get_component_for_entity(
-            card_entity_id, CardHasEffectsComponent
-        ).effect_entity_ids:
-            add_effect_to_bot(manager, effect_entity_id)
 
         # Untag the card
         # TODO: improve

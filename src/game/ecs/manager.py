@@ -45,25 +45,6 @@ class ECSManager:
         for component_type in self._components:
             self._components[component_type].discard(entity)
 
-    def duplicate_entity(self, entity: int) -> int:
-        # Get the next entity identifier
-        new_entity = next(self._entity_count)
-
-        # Create a new entry in the entities dictionary
-        if new_entity not in self._entities:
-            self._entities[new_entity] = {}
-        else:
-            raise ValueError(f"Entity {new_entity} already exists")
-
-        for component_type, component_instance in self._entities[entity].items():
-            # Add the entity to the component's set
-            self._components[component_type].add(new_entity)
-
-            # Add the component to the entity's dictionary
-            self._entities[new_entity][component_type] = component_instance
-
-        return new_entity
-
     def get_entity(self, entity: int) -> dict[type[BaseComponent], BaseComponent]:
         return self._entities[entity]
 
