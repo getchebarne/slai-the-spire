@@ -23,7 +23,6 @@ def _card_str(card: Card) -> str:
 
 
 def _hand_str(hand: list[Card]) -> str:
-    # TODO: If there's an active card, return its name in green
     return " / ".join(
         [
             (f"\033[92m{_card_str(card)}\033[0m" if card.is_selected else _card_str(card))
