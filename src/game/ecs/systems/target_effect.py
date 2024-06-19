@@ -61,7 +61,7 @@ def _handle_effect_selection_type_specific(
         ):
             manager.add_component(
                 is_halted_effect_entity_id,
-                EffectIsQueuedComponent(effect_is_halted_component.priority),
+                EffectIsQueuedComponent(effect_is_halted_component.position),
             )
 
         manager.destroy_component(EffectIsHaltedComponent)
@@ -78,7 +78,7 @@ def _handle_effect_selection_type_specific(
     ):
         manager.add_component(
             is_queued_effect_entity_id,
-            EffectIsHaltedComponent(effect_is_queued_component.priority),
+            EffectIsHaltedComponent(effect_is_queued_component.position),
         )
 
     manager.destroy_component(EffectIsQueuedComponent)

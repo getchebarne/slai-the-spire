@@ -10,13 +10,13 @@ class DispatchEffectSystem(BaseSystem):
         for effect_entity_id, effect_to_be_dispatched_component in manager.get_component(
             EffectIsQueuedComponent
         ):
-            # Dispatch highest priority effect
-            if effect_to_be_dispatched_component.priority == 0:
+            # Dispatch highest position effect
+            if effect_to_be_dispatched_component.position == 0:
                 dispatch_effect_entity_id = effect_entity_id
 
             else:
-                # Decrease priority. TODO: rename "priority" to something else
-                effect_to_be_dispatched_component.priority -= 1
+                # Decrease position. TODO: rename "position" to something else
+                effect_to_be_dispatched_component.position -= 1
 
         if dispatch_effect_entity_id is not None:
             manager.remove_component(dispatch_effect_entity_id, EffectIsQueuedComponent)

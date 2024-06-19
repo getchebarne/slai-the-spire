@@ -41,10 +41,10 @@ def test_base() -> None:
     PlayCardSystem().process(manager)
 
     # Verify there effects where tagged to be dispatched in the correct order
-    for priority, effect_entity_id in enumerate(effect_entity_ids):
+    for position, effect_entity_id in enumerate(effect_entity_ids):
         assert (
-            priority
-            == manager.get_component_for_entity(effect_entity_id, EffectIsQueuedComponent).priority
+            position
+            == manager.get_component_for_entity(effect_entity_id, EffectIsQueuedComponent).position
         )
 
     # Verify the current energy has been decreased by `card_cost`

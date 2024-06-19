@@ -99,7 +99,7 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     assert len(list(manager.get_component(CardInDrawPileComponent))) == 0
 
     # Assert one and only one effect to shuffle the discard pile into the draw pile has been
-    # created w/ priority 0
+    # created w/ position 0
     query_result = list(
         manager.get_components(
             EffectShuffleDiscardPileIntoDrawPileComponent, EffectIsQueuedComponent
@@ -108,12 +108,12 @@ def test_unsufficient_cards_in_draw_pile() -> None:
     assert len(query_result) == 1
 
     _, (_, effect_to_be_targeted_component) = query_result[0]
-    assert effect_to_be_targeted_component.priority == 0
+    assert effect_to_be_targeted_component.position == 0
 
-    # Assert one and only one effect to draw the remaining cards has been created w/ priority 1
+    # Assert one and only one effect to draw the remaining cards has been created w/ position 1
     query_result = list(manager.get_components(EffectDrawCardComponent, EffectIsQueuedComponent))
     assert len(query_result) == 1
 
     _, (draw_card_effect_component, effect_to_be_targeted_component) = query_result[0]
-    assert effect_to_be_targeted_component.priority == 1
+    assert effect_to_be_targeted_component.position == 1
     assert draw_card_effect_component.value == num_draw - num_cards

@@ -22,7 +22,7 @@ def test_base() -> None:
 
     # Assert the priorities of the effects range from 0 to `num_effects` - 2. TODO: improve
     for _, effect_to_be_dispatched_component in query_result:
-        assert effect_to_be_dispatched_component.priority in range(0, num_effects - 1)
+        assert effect_to_be_dispatched_component.position in range(0, num_effects - 1)
 
     # Assert there's one effect that has been dispatched
     assert len(list(manager.get_component(EffectIsDispatchedComponent))) == 1

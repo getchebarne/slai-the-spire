@@ -66,11 +66,9 @@ class EffectShuffleDeckIntoDrawPileComponent(BaseComponent):
     pass
 
 
-# TODO: improve effect lifecycle nomenclature
-# TODO: remame priority to position
 @dataclass
 class EffectIsQueuedComponent(BaseComponent):
-    priority: int
+    position: int
 
 
 @dataclass
@@ -95,7 +93,7 @@ class EffectNumberOfTargetsComponent(BaseComponent):
 
 @dataclass
 class EffectIsHaltedComponent(BaseComponent):
-    priority: int
+    position: int
 
 
 @dataclass
