@@ -14,6 +14,7 @@ from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
 from src.game.ecs.manager import ECSManager
 
 
+# TODO: maybe move this elsewhere
 @dataclass
 class CombatView:
     character: CharacterView
