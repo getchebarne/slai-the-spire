@@ -13,7 +13,14 @@ from src.game.combat.view.monster import IntentView
 from src.game.combat.view.monster import MonsterView
 
 
-N_TERM_COLS, _ = os.get_terminal_size()
+N_COL, _ = os.get_terminal_size()
+WHITE = "\033[37;1m"
+RED = "\033[31;1m"
+CYAN = "\033[36;1m"
+SELECTED = "\033[32;1m"
+SELECTABLE = "\033[38;5;65m"
+RESET = "\033[0m"
+S = "\U000002E2"
 
 
 def _energy_str(energy: EnergyView) -> str:
@@ -25,12 +32,21 @@ def _card_str(card: CardView) -> str:
 
 
 def _hand_str(hand: list[CardView]) -> str:
-    return "HAND: " + " / ".join(
-        [
-            (f"\033[92m{_card_str(card)}\033[0m" if card.is_selected else _card_str(card))
-            for card in hand
-        ]
-    )
+    card_strings = []
+    for card in hand:
+        if card.is_selected:
+            card_strings.append(f"{SELECTED}{_card_str(card)}{RESET}")
+
+            continue
+
+        if card.can_be_selected:
+            card_strings.append(f"{_card_str(card)}{S}")
+
+            continue
+
+        card_strings.append(f"{_card_str(card)}")
+
+    return "HAND: " + " / ".join(card_strings)
 
 
 def _health_str(health: HealthView) -> str:
@@ -41,14 +57,15 @@ def _block_str(block: BlockView) -> str:
     return f"BLK: {block.current}"
 
 
-def _actor_str(actor: ActorView) -> str:
+def _actor_str(actor: ActorView, n_col: int = 0) -> str:
     modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
+    actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
     return (
-        f"{actor.name}\n"
-        f"{'-' * len(actor.name)}\n"
-        f"{_health_str(actor.health)}\n"
-        f"{_block_str(actor.block)}\n"
-        f"{modifier_strs}"
+        f"{WHITE}{actor_name:>{n_col}}{RESET}\n"
+        f"{WHITE}{'-' * len(actor_name):>{n_col}}{RESET}\n"
+        f"{RED}{_health_str(actor.health):>{n_col}}{RESET}\n"
+        f"{CYAN}{_block_str(actor.block):>{n_col}}{RESET}\n"
+        f"{modifier_strs:>{n_col}}"
     )
 
 
@@ -87,30 +104,33 @@ def _intent_str(intent_view: Optional[IntentView]) -> str:
 
 def _monster_str(monster_view: MonsterView) -> str:
     # Get base actor string
-    str_ = _actor_str(monster_view)
+    str_ = _actor_str(monster_view, N_COL)
 
     # Split into lines
     lines = str_.split("\n")
+
+    if monster_view.can_be_selected:
+        # Patch
+        monster_name = f"{monster_view.name}{S}"
+        lines[0] = f"{WHITE}{monster_name:>{N_COL}}{RESET}"
+        lines[1] = f"{WHITE}{'-' * len(monster_name):>{N_COL}}{RESET}"
 
     # Insert monster's intent at first position
     lines.insert(0, _intent_str(monster_view.intent))
 
     # Align lines to the right of the terminal
-    right_aligned_lines = [f"{line:>{N_TERM_COLS}}" for line in lines]
+    right_aligned_lines = [f"{line:>{N_COL}}" for line in lines]
 
     # Stitch together and return
     return "\n".join(right_aligned_lines)
 
 
-def _view_str(view: CombatView) -> str:  #
+def _view_str(view: CombatView) -> str:
     # Effect
     effect_str = _effect_str(view.effect)
 
     # Monsters
     monster_strs = "\n".join([f"{_monster_str(monster)}" for monster in view.monsters])
-    # right_justified_monsters = "\n".join(
-    #     [f"{monster_str:>{N_TERM_COLS}}" for monster_str in monster_strs]
-    # )
 
     # Character
     character_str = _actor_str(view.character)
@@ -122,7 +142,7 @@ def _view_str(view: CombatView) -> str:  #
     hand_str = _hand_str(view.hand)
 
     # Separator
-    separator = "-" * N_TERM_COLS
+    separator = "-" * N_COL
 
     return (
         effect_str

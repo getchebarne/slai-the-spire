@@ -21,4 +21,5 @@ def get_character_view(manager: ECSManager) -> CharacterView:
         actor_view.health,
         actor_view.block,
         actor_view.modifiers,
+        actor_view.is_turn,
     )

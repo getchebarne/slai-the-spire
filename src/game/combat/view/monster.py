@@ -37,6 +37,7 @@ def get_monster_view(entity_id: int, manager: ECSManager) -> MonsterView:
         actor_view.health,
         actor_view.block,
         actor_view.modifiers,
+        actor_view.is_turn,
         intent_view,
         False if can_be_selected_component is None else True,
     )

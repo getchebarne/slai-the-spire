@@ -43,6 +43,7 @@ class EnableInputSystem(BaseSystem):
                 manager.add_component(card_in_hand_entity_id, CanBeSelectedComponent())
 
         # If there's a card selected in hand that requires a target, monsters can be selected
+        # TODO: fix, cardisactive shouldn't remain after the card is played
         query_result = list(manager.get_component(CardIsActiveComponent))
         if query_result:
             card_is_selected_entity_id, _ = query_result[0]
