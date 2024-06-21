@@ -1,14 +1,20 @@
 from src.agents.base import BaseAgent
-from src.game.combat import input as input_
 from src.game.combat.action import Action
+from src.game.combat.action import ActionType
 from src.game.combat.drawer import drawer
 from src.game.combat.view import CombatView
 from src.game.combat.view import get_combat_view
+from src.game.ecs.components.action import ActionComponent
+from src.game.ecs.components.action import ActionConfirmComponent
+from src.game.ecs.components.action import ActionEndTurnComponent
+from src.game.ecs.components.action import ActionSelectComponent
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.actors import HealthComponent
 from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.actors import TurnStartComponent
+from src.game.ecs.components.common import CanBeSelectedComponent
+from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
@@ -50,12 +56,69 @@ class CombatEngine:
 
     # TODO: this will have to be a system to activate on combat start effects, e.g., relics
     def _combat_start(self, manager: ECSManager) -> None:
+        # Create action holder entity
+        manager.create_entity(ActionComponent())
+
         # Queue an effect to shuffle the deck into the draw pile
         manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsQueuedComponent(0))
 
         # Start the character's turn
         character_entity_id, _ = list(manager.get_component(CharacterComponent))[0]
         manager.add_component(character_entity_id, TurnStartComponent())
+
+    def _handle_agent_action(
+        self, manager: ECSManager, action: Action, action_entity_id: int
+    ) -> None:
+        # Unpack
+        action_type = action.type
+        action_target_entity_id = action.target_entity_id
+
+        # Check the selected entity is valid
+        can_be_selected_entity_ids = [
+            can_be_selected_entity_id
+            for can_be_selected_entity_id, _ in manager.get_component(CanBeSelectedComponent)
+        ]
+        if (
+            action_target_entity_id is not None
+            and action_target_entity_id not in can_be_selected_entity_ids
+        ):
+            raise ValueError(f"Entity {action_target_entity_id} cannot be selected")
+
+        # Select
+        if action_type == ActionType.SELECT:
+            manager.add_component(action_entity_id, ActionSelectComponent())
+            manager.add_component(action_target_entity_id, IsSelectedComponent())
+
+            return
+
+        # Confirm
+        if action_type == ActionType.CONFIRM:
+            manager.add_component(action_entity_id, ActionConfirmComponent())
+
+            return
+
+        # End turn
+        if action_type == ActionType.END_TURN:
+            manager.add_component(action_entity_id, ActionEndTurnComponent())
+
+    def _clear_action_holder(self, manager: ECSManager) -> int:
+        action_entity_id, _ = list(manager.get_component(ActionComponent))[0]
+
+        if manager.get_component_for_entity(action_entity_id, ActionSelectComponent) is not None:
+            manager.remove_component(action_entity_id, ActionSelectComponent)
+            manager.destroy_component(IsSelectedComponent)
+
+            return action_entity_id
+
+        if manager.get_component_for_entity(action_entity_id, ActionConfirmComponent) is not None:
+            manager.remove_component(action_entity_id, ActionConfirmComponent)
+
+            return action_entity_id
+
+        if manager.get_component_for_entity(action_entity_id, ActionEndTurnComponent) is not None:
+            manager.remove_component(action_entity_id, ActionEndTurnComponent)
+
+        return action_entity_id
 
     def run(self, manager: ECSManager, agent: BaseAgent) -> None:
         # Start combat
@@ -66,9 +129,11 @@ class CombatEngine:
             drawer(view)
 
             # Get action from agent
-            input_.action = None
+            action_entity_id = self._clear_action_holder(manager)
+
             if self._agent_should_make_action(manager):
-                input_.action = self._get_action(agent, view)
+                action = self._get_action(agent, view)
+                self._handle_agent_action(manager, action, action_entity_id)
 
             # Run systems
             for system in ALL_SYSTEMS:

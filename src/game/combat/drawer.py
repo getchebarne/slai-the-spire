@@ -3,9 +3,9 @@ from typing import Optional
 
 from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
-from src.game.combat.view.actor import ModifierView
 from src.game.combat.view.actor import BlockView
 from src.game.combat.view.actor import HealthView
+from src.game.combat.view.actor import ModifierView
 from src.game.combat.view.card import CardView
 from src.game.combat.view.effect import EffectView
 from src.game.combat.view.energy import EnergyView

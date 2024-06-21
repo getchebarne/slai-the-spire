@@ -66,3 +66,8 @@ class CardNeutralizeComponent(BaseComponent):
 @dataclass
 class CardSurvivorComponent(BaseComponent):
     pass
+
+
+@dataclass
+class CardLastPlayedComponent(BaseComponent):
+    pass

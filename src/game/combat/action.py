@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class ActionType(Enum):
-    SELECT_ENTITY = "SELECT_ENTITY"
+    SELECT = "SELECT"
     CONFIRM = "CONFIRM"
     END_TURN = "END_TURN"
 
