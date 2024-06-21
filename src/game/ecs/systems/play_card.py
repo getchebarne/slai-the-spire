@@ -1,7 +1,7 @@
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.cards import CardIsPlayedComponent
+from src.game.ecs.components.cards import CardLastPlayedComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.energy import EnergyComponent
@@ -29,10 +29,10 @@ class PlayCardSystem(BaseSystem):
             manager,
             manager.create_entity(
                 EffectDiscardCardComponent(),
-                EffectQueryComponentsComponent([CardInHandComponent, CardIsActiveComponent]),
+                EffectQueryComponentsComponent([CardInHandComponent, CardLastPlayedComponent]),
             ),
         )
 
         # Untag the card
-        # TODO: improve
-        manager.destroy_component(CardIsPlayedComponent)
+        manager.destroy_component(CardLastPlayedComponent)
+        manager.add_component(card_entity_id, CardLastPlayedComponent())

@@ -14,13 +14,12 @@ from src.game.ecs.systems.dispatch_effect import DispatchEffectSystem
 from src.game.ecs.systems.draw_card import DrawCardSystem
 from src.game.ecs.systems.enable_input import EnableInputSystem
 from src.game.ecs.systems.gain_block import GainBlockSystem
-from src.game.ecs.systems.handle_input import HandleInputSystem
 from src.game.ecs.systems.intent_dummy import IntentDummySystem
 from src.game.ecs.systems.move_defend_dummy import MoveDummyDefendSystem
 from src.game.ecs.systems.move_dummy_attack import MoveDummyAttackSystem
 from src.game.ecs.systems.play_card import PlayCardSystem
+from src.game.ecs.systems.process_action import ProcessActionSystem
 from src.game.ecs.systems.process_monster_turn import ProcessMonsterTurnSystem
-from src.game.ecs.systems.process_selection import ProcessSelectionSystem
 from src.game.ecs.systems.refill_energy import RefillEnergySystem
 from src.game.ecs.systems.set_block_to_zero import SetBlockToZeroSystem
 from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDrawPileSystem
@@ -33,8 +32,7 @@ from src.game.ecs.systems.turn_start import TurnStartSystem
 
 
 ALL_SYSTEMS = [
-    HandleInputSystem(),
-    ProcessSelectionSystem(),
+    ProcessActionSystem(),
     TagCardTargetModifiersSystem(),
     TurnStartSystem(),
     ProcessMonsterTurnSystem(),

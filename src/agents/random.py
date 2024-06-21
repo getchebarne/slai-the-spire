@@ -18,9 +18,7 @@ class RandomAgent(BaseAgent):
             ]
             if len(monsters_can_be_selected) > 0:
                 # If so, select one randomly
-                return Action(
-                    ActionType.SELECT_ENTITY, random.choice(monsters_can_be_selected).entity_id
-                )
+                return Action(ActionType.SELECT, random.choice(monsters_can_be_selected).entity_id)
 
             # Else, confirm the selected card
             return Action(ActionType.CONFIRM)
@@ -28,14 +26,14 @@ class RandomAgent(BaseAgent):
         # Otherwise, if a card can be selected, select one randomly
         cards_can_be_selected = [card for card in combat_view.hand if card.can_be_selected]
         if len(cards_can_be_selected) > 0:
-            return Action(ActionType.SELECT_ENTITY, random.choice(cards_can_be_selected).entity_id)
+            return Action(ActionType.SELECT, random.choice(cards_can_be_selected).entity_id)
 
         # If there's an effect pending input targets, select its targets randomly
         # TODO: improve this
         if combat_view.effect is not None:
             if combat_view.effect.type == "Discard":
                 return Action(
-                    ActionType.SELECT_ENTITY,
+                    ActionType.SELECT,
                     random.choice(
                         [card for card in combat_view.hand if card.can_be_selected]
                     ).entity_id,
