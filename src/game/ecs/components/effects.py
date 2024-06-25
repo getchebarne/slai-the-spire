@@ -3,6 +3,7 @@ from enum import Enum
 
 from src.game.ecs.components.base import BaseComponent
 from src.game.ecs.components.base import BaseRelationshipComponent
+from src.game.ecs.components.base import BaseSingletonComponent
 
 
 class EffectSelectionType(Enum):
@@ -82,7 +83,7 @@ class EffectIsPendingInputTargetsComponent(BaseComponent):
 
 
 @dataclass
-class EffectIsTargetedComponent(BaseComponent):
+class EffectIsTargetedSingletonComponent(BaseSingletonComponent):
     pass
 
 

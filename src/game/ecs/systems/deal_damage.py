@@ -1,7 +1,7 @@
 from src.game.ecs.components.actors import BlockComponent
 from src.game.ecs.components.actors import HealthComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -11,7 +11,9 @@ class DealDamageSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (_, deal_damage_effect_component) = next(
-                manager.get_components(EffectIsTargetedComponent, EffectDealDamageComponent)
+                manager.get_components(
+                    EffectIsTargetedSingletonComponent, EffectDealDamageComponent
+                )
             )
 
         except StopIteration:

@@ -34,7 +34,7 @@ def _card_str(card: CardView) -> str:
 def _hand_str(hand: list[CardView]) -> str:
     card_strings = []
     for card in hand:
-        if card.is_selected:
+        if card.is_active:
             card_strings.append(f"{SELECTED}{_card_str(card)}{RESET}")
 
             continue

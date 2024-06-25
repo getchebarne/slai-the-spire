@@ -3,7 +3,7 @@ from src.game.ecs.components.actors import ModifierParentComponent
 from src.game.ecs.components.actors import ModifierStacksDurationComponent
 from src.game.ecs.components.actors import ModifierWeakComponent
 from src.game.ecs.components.effects import EffectCreateWeakComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -13,7 +13,7 @@ from src.game.ecs.systems.base import BaseSystem
 class CreateModifierWeakSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         query_result = list(
-            manager.get_components(EffectIsTargetedComponent, EffectCreateWeakComponent)
+            manager.get_components(EffectIsTargetedSingletonComponent, EffectCreateWeakComponent)
         )
 
         if query_result:

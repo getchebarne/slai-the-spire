@@ -2,7 +2,7 @@ import random
 
 from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectShuffleDiscardPileIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -13,7 +13,8 @@ class ShuffleDiscardPileIntoDrawPileSystem(BaseSystem):
         try:
             effect_entity_id, (shuffle_discard_pile_into_draw_pile_effect_component, _) = next(
                 manager.get_components(
-                    EffectShuffleDiscardPileIntoDrawPileComponent, EffectIsTargetedComponent
+                    EffectShuffleDiscardPileIntoDrawPileComponent,
+                    EffectIsTargetedSingletonComponent,
                 )
             )
 

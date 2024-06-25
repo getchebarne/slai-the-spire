@@ -6,7 +6,7 @@ from src.game.ecs.components.effects import EffectIsDispatchedComponent
 from src.game.ecs.components.effects import EffectIsHaltedComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectNumberOfTargetsComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectSelectionType
@@ -87,6 +87,9 @@ def _handle_effect_selection_type_specific(
 # TODO: check targeted entities are alive
 class TargetEffectSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
+        # Destroy previous targeted effect event
+        manager.destroy_component(EffectIsTargetedSingletonComponent)
+
         try:
             effect_entity_id, _ = next(manager.get_component(EffectIsDispatchedComponent))
 
@@ -139,4 +142,4 @@ class TargetEffectSystem(BaseSystem):
 
         # Promote effect to targeted status
         manager.remove_component(effect_entity_id, EffectIsDispatchedComponent)
-        manager.add_component(effect_entity_id, EffectIsTargetedComponent())
+        manager.add_component(effect_entity_id, EffectIsTargetedSingletonComponent())

@@ -10,3 +10,8 @@ class BaseComponent(ABC):
 @dataclass
 class BaseRelationshipComponent(BaseComponent):
     pass
+
+
+@dataclass
+class BaseSingletonComponent(BaseComponent):
+    pass

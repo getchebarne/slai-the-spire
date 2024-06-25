@@ -1,6 +1,6 @@
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardIsPlayedComponent
+from src.game.ecs.components.cards import CardIsPlayedSingletonComponent
 from src.game.ecs.components.cards import CardSurvivorComponent
 from src.game.ecs.components.effects import EffectDiscardCardComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
@@ -19,7 +19,9 @@ DISCARD = 1
 
 class CardSurvivorSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
-        query_result = list(manager.get_components(CardSurvivorComponent, CardIsPlayedComponent))
+        query_result = list(
+            manager.get_components(CardSurvivorComponent, CardIsPlayedSingletonComponent)
+        )
         if query_result:
             add_effect_to_bot(
                 manager,
