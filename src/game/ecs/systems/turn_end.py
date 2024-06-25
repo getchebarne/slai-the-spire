@@ -9,7 +9,6 @@ from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.utils import effect_queue_is_empty
 
 
-# TODO: split into two systems, one for character and one for monster
 class TurnEndSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:

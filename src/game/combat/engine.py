@@ -56,9 +56,6 @@ class CombatEngine:
 
     # TODO: this will have to be a system to activate on combat start effects, e.g., relics
     def _combat_start(self, manager: ECSManager) -> None:
-        # Create action holder entity
-        manager.create_entity(ActionComponent())
-
         # Queue an effect to shuffle the deck into the draw pile
         manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsQueuedComponent(0))
 
@@ -66,9 +63,7 @@ class CombatEngine:
         character_entity_id, _ = list(manager.get_component(CharacterComponent))[0]
         manager.add_component(character_entity_id, TurnStartComponent())
 
-    def _handle_agent_action(
-        self, manager: ECSManager, action: Action, action_entity_id: int
-    ) -> None:
+    def _handle_agent_action(self, manager: ECSManager, action: Action) -> None:
         # Unpack
         action_type = action.type
         action_target_entity_id = action.target_entity_id
@@ -83,6 +78,9 @@ class CombatEngine:
             and action_target_entity_id not in can_be_selected_entity_ids
         ):
             raise ValueError(f"Entity {action_target_entity_id} cannot be selected")
+
+        # Create action entitiy
+        action_entity_id = manager.create_entity(ActionComponent())
 
         # Select
         if action_type == ActionType.SELECT:
@@ -101,24 +99,11 @@ class CombatEngine:
         if action_type == ActionType.END_TURN:
             manager.add_component(action_entity_id, ActionEndTurnComponent())
 
-    def _clear_action_holder(self, manager: ECSManager) -> int:
-        action_entity_id, _ = list(manager.get_component(ActionComponent))[0]
-
-        if manager.get_component_for_entity(action_entity_id, ActionSelectComponent) is not None:
-            manager.remove_component(action_entity_id, ActionSelectComponent)
+    def _clear_action(self, manager: ECSManager) -> None:
+        if query_result := list(manager.get_component(ActionComponent)):
+            action_entity_id, _ = query_result[0]
+            manager.destroy_entity(action_entity_id)
             manager.destroy_component(IsSelectedComponent)
-
-            return action_entity_id
-
-        if manager.get_component_for_entity(action_entity_id, ActionConfirmComponent) is not None:
-            manager.remove_component(action_entity_id, ActionConfirmComponent)
-
-            return action_entity_id
-
-        if manager.get_component_for_entity(action_entity_id, ActionEndTurnComponent) is not None:
-            manager.remove_component(action_entity_id, ActionEndTurnComponent)
-
-        return action_entity_id
 
     def run(self, manager: ECSManager, agent: BaseAgent) -> None:
         # Start combat
@@ -129,11 +114,10 @@ class CombatEngine:
             drawer(view)
 
             # Get action from agent
-            action_entity_id = self._clear_action_holder(manager)
-
+            self._clear_action(manager)
             if self._agent_should_make_action(manager):
                 action = self._get_action(agent, view)
-                self._handle_agent_action(manager, action, action_entity_id)
+                self._handle_agent_action(manager, action)
 
             # Run systems
             for system in ALL_SYSTEMS:

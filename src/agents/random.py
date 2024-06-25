@@ -10,7 +10,7 @@ from src.game.combat.view import CombatView
 class RandomAgent(BaseAgent):
     def select_action(self, combat_view: CombatView) -> Optional[Action]:
         # If there's a card selected
-        if any([card.is_selected for card in combat_view.hand]):
+        if any([card.is_active for card in combat_view.hand]):
 
             # Check if monsters can be selected
             monsters_can_be_selected = [
@@ -30,6 +30,7 @@ class RandomAgent(BaseAgent):
 
         # If there's an effect pending input targets, select its targets randomly
         # TODO: improve this
+        # TODO: move up
         if combat_view.effect is not None:
             if combat_view.effect.type == "Discard":
                 return Action(

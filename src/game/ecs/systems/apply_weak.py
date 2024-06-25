@@ -1,7 +1,7 @@
 from src.game.ecs.components.actors import ModifierParentComponent
 from src.game.ecs.components.actors import ModifierWeakComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectParentComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -10,7 +10,7 @@ from src.game.ecs.systems.base import BaseSystem
 class ApplyWeakSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         query_result = list(
-            manager.get_components(EffectDealDamageComponent, EffectIsTargetedComponent)
+            manager.get_components(EffectDealDamageComponent, EffectIsTargetedSingletonComponent)
         )
         if query_result:
 

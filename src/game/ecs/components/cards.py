@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from src.game.ecs.components.base import BaseComponent
+from src.game.ecs.components.base import BaseSingletonComponent
 
 
 @dataclass
@@ -14,7 +15,7 @@ class CardRequiresTargetComponent(BaseComponent):
 
 
 @dataclass
-class CardIsPlayedComponent(BaseComponent):
+class CardIsPlayedSingletonComponent(BaseSingletonComponent):
     pass
 
 

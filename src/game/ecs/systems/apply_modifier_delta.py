@@ -1,6 +1,6 @@
 from src.game.ecs.components.actors import ModifierMinimumStacksComponent
 from src.game.ecs.components.actors import ModifierStacksComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectModifierDeltaComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
@@ -10,7 +10,9 @@ from src.game.ecs.systems.base import BaseSystem
 class ApplyModifierDeltaSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         query_result = list(
-            manager.get_components(EffectIsTargetedComponent, EffectModifierDeltaComponent)
+            manager.get_components(
+                EffectIsTargetedSingletonComponent, EffectModifierDeltaComponent
+            )
         )
 
         if query_result:

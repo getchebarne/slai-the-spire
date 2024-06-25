@@ -1,5 +1,5 @@
 from src.game.ecs.components.actors import MonsterComponent
-from src.game.ecs.components.cards import CardIsPlayedComponent
+from src.game.ecs.components.cards import CardIsPlayedSingletonComponent
 from src.game.ecs.components.cards import CardStrikeComponent
 from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.effects import EffectDealDamageComponent
@@ -14,7 +14,9 @@ DAMAGE = 6
 
 class CardStrikeSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
-        query_result = list(manager.get_components(CardStrikeComponent, CardIsPlayedComponent))
+        query_result = list(
+            manager.get_components(CardStrikeComponent, CardIsPlayedSingletonComponent)
+        )
         if query_result:
             add_effect_to_bot(
                 manager,

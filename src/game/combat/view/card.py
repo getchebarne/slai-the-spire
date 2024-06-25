@@ -2,8 +2,8 @@ from dataclasses import dataclass
 
 from src.game.ecs.components.cards import CardCostComponent
 from src.game.ecs.components.cards import CardInHandComponent
+from src.game.ecs.components.cards import CardIsActiveComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
-from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.manager import ECSManager
 
@@ -14,21 +14,21 @@ class CardView:
     name: str
     cost: int
     can_be_selected: bool
-    is_selected: bool
+    is_active: bool
 
 
 def get_card_view(entity_id: int, manager: ECSManager) -> CardView:
     name_component = manager.get_component_for_entity(entity_id, NameComponent)
     card_cost_component = manager.get_component_for_entity(entity_id, CardCostComponent)
     can_be_selected_component = manager.get_component_for_entity(entity_id, CanBeSelectedComponent)
-    is_selected_component = manager.get_component_for_entity(entity_id, IsSelectedComponent)
+    card_is_active_component = manager.get_component_for_entity(entity_id, CardIsActiveComponent)
 
     return CardView(
         entity_id,
         name_component.value,
         card_cost_component.value,
         False if can_be_selected_component is None else True,
-        False if is_selected_component is None else True,
+        False if card_is_active_component is None else True,
     )
 
 

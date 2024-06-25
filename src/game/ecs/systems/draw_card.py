@@ -2,7 +2,7 @@ from src.game.ecs.components.cards import CardInDiscardPileComponent
 from src.game.ecs.components.cards import CardInDrawPileComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectShuffleDiscardPileIntoDrawPileComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -16,7 +16,7 @@ class DrawCardSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (draw_card_effect_component, _) = next(
-                manager.get_components(EffectDrawCardComponent, EffectIsTargetedComponent)
+                manager.get_components(EffectDrawCardComponent, EffectIsTargetedSingletonComponent)
             )
 
         except StopIteration:

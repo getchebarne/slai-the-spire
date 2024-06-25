@@ -46,10 +46,10 @@ class EnableInputSystem(BaseSystem):
         # TODO: fix, cardisactive shouldn't remain after the card is played
         query_result = list(manager.get_component(CardIsActiveComponent))
         if query_result:
-            card_is_selected_entity_id, _ = query_result[0]
+            card_is_active_component, _ = query_result[0]
 
             if manager.get_component_for_entity(
-                card_is_selected_entity_id, CardRequiresTargetComponent
+                card_is_active_component, CardRequiresTargetComponent
             ):
                 for monster_entity_id, _ in manager.get_component(MonsterComponent):
                     manager.add_component(monster_entity_id, CanBeSelectedComponent())

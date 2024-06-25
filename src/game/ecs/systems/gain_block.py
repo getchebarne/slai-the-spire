@@ -1,6 +1,6 @@
 from src.game.ecs.components.actors import BlockComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
-from src.game.ecs.components.effects import EffectIsTargetedComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectTargetComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
@@ -10,7 +10,9 @@ class GainBlockSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
         try:
             effect_entity_id, (_, gain_block_effect_component) = next(
-                manager.get_components(EffectIsTargetedComponent, EffectGainBlockComponent)
+                manager.get_components(
+                    EffectIsTargetedSingletonComponent, EffectGainBlockComponent
+                )
             )
 
         except StopIteration:
