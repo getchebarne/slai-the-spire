@@ -40,7 +40,12 @@ class MonsterComponent(BaseComponent):
 
 
 @dataclass
-class IsTurnComponent(BaseComponent):
+class TurnComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class NextTurnComponent(BaseComponent):
     pass
 
 
@@ -111,11 +116,6 @@ class ModifierStacksDurationComponent(BaseComponent):
 
 @dataclass
 class ModifierWeakComponent(BaseComponent):
-    pass
-
-
-@dataclass
-class BeforeTurnEndComponent(BaseComponent):
     pass
 
 

@@ -4,8 +4,8 @@ from src.game.combat.view.modifier import ModifierView
 from src.game.combat.view.modifier import get_modifier_view
 from src.game.ecs.components.actors import BlockComponent
 from src.game.ecs.components.actors import HealthComponent
-from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import ModifierParentComponent
+from src.game.ecs.components.actors import TurnComponent
 from src.game.ecs.components.common import NameComponent
 from src.game.ecs.manager import ECSManager
 
@@ -35,7 +35,7 @@ def get_actor_view(entity_id: int, manager: ECSManager) -> ActorView:
     name_component = manager.get_component_for_entity(entity_id, NameComponent)
     health_component = manager.get_component_for_entity(entity_id, HealthComponent)
     block_component = manager.get_component_for_entity(entity_id, BlockComponent)
-    is_turn_component = manager.get_component_for_entity(entity_id, IsTurnComponent)
+    is_turn_component = manager.get_component_for_entity(entity_id, TurnComponent)
 
     modifier_views = _get_modifier_views_for_actor(entity_id, manager)
 

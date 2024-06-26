@@ -48,7 +48,7 @@ class EffectSetBlockToZero(BaseComponent):
 
 
 @dataclass
-class EffectRefillEnergy(BaseComponent):
+class EffectRefillEnergyComponent(BaseComponent):
     pass
 
 
@@ -74,6 +74,17 @@ class EffectIsQueuedComponent(BaseComponent):
 
 @dataclass
 class EffectIsDispatchedComponent(BaseComponent):
+    pass
+
+
+# TODO: rename
+@dataclass
+class EffectTurnEndComponent(BaseComponent):
+    pass
+
+
+@dataclass
+class EffectTurnStartComponent(BaseComponent):
     pass
 
 

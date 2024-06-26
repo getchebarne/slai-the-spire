@@ -2,9 +2,6 @@ from src.game.ecs.components.action import ActionComponent
 from src.game.ecs.components.action import ActionConfirmComponent
 from src.game.ecs.components.action import ActionEndTurnComponent
 from src.game.ecs.components.action import ActionSelectComponent
-from src.game.ecs.components.actors import BeforeTurnEndComponent
-from src.game.ecs.components.actors import CharacterComponent
-from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.cards import CardInHandComponent
 from src.game.ecs.components.cards import CardIsActiveComponent
@@ -13,8 +10,10 @@ from src.game.ecs.components.cards import CardTargetComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.effects import EffectInputTargetComponent
 from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
+from src.game.ecs.components.effects import EffectTurnEndComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
+from src.game.ecs.utils import add_effect_to_bot
 
 
 class ProcessActionSystem(BaseSystem):
@@ -29,12 +28,7 @@ class ProcessActionSystem(BaseSystem):
             return
 
         if manager.get_component_for_entity(action_entity_id, ActionEndTurnComponent) is not None:
-            # Get character
-            character_entity_id, _ = next(manager.get_component(CharacterComponent))
-
-            # Finish its turn and trigger its turn end. TODO: improve comment
-            manager.remove_component(character_entity_id, IsTurnComponent)
-            manager.add_component(character_entity_id, BeforeTurnEndComponent())
+            add_effect_to_bot(manager, manager.create_entity(EffectTurnEndComponent()))
             manager.destroy_component(CardIsActiveComponent)
 
             return

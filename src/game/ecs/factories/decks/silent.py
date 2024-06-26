@@ -17,6 +17,6 @@ def create_starter_deck(manager: ECSManager) -> list[int]:
         create_defend(manager),
         create_defend(manager),
         create_defend(manager),
-        create_survivor(manager),
-        create_neutralize(manager),
+        # create_survivor(manager),
+        # create_neutralize(manager),
     ]

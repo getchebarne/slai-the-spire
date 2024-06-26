@@ -1,5 +1,5 @@
 from src.game.ecs.components.effects import EffectIsDispatchedComponent
-from src.game.ecs.components.effects import EffectRefillEnergy
+from src.game.ecs.components.effects import EffectRefillEnergyComponent
 from src.game.ecs.components.energy import EnergyComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.refill_energy import RefillEnergySystem
@@ -17,7 +17,7 @@ def test_base() -> None:
     )
 
     # Create effect to refill the energy
-    manager.create_entity(EffectRefillEnergy(), EffectIsDispatchedComponent())
+    manager.create_entity(EffectRefillEnergyComponent(), EffectIsDispatchedComponent())
 
     # Run the system
     RefillEnergySystem().process(manager)
@@ -42,7 +42,7 @@ def test_current_equal_to_max() -> None:
     )
 
     # Create effect to refill the energy
-    manager.create_entity(EffectRefillEnergy(), EffectIsDispatchedComponent())
+    manager.create_entity(EffectRefillEnergyComponent(), EffectIsDispatchedComponent())
 
     # Run the system
     RefillEnergySystem().process(manager)
@@ -67,7 +67,7 @@ def test_current_higher_than_max() -> None:
     )
 
     # Create effect to refill the energy
-    manager.create_entity(EffectRefillEnergy(), EffectIsDispatchedComponent())
+    manager.create_entity(EffectRefillEnergyComponent(), EffectIsDispatchedComponent())
 
     # Run the system
     RefillEnergySystem().process(manager)
