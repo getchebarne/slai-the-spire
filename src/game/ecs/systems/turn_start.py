@@ -1,48 +1,44 @@
 from src.game.ecs.components.actors import CharacterComponent
-from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.actors import MonsterMoveIsQueuedComponent
-from src.game.ecs.components.actors import TurnStartComponent
+from src.game.ecs.components.actors import TurnComponent
 from src.game.ecs.components.effects import EffectDrawCardComponent
+from src.game.ecs.components.effects import EffectIsTargetedSingletonComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
-from src.game.ecs.components.effects import EffectRefillEnergy
+from src.game.ecs.components.effects import EffectRefillEnergyComponent
 from src.game.ecs.components.effects import EffectSetBlockToZero
+from src.game.ecs.components.effects import EffectTargetComponent
+from src.game.ecs.components.effects import EffectTurnStartComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.base import BaseSystem
 from src.game.ecs.utils import add_effect_to_bot
 
 
-# TODO: split into two systems, one for character and one for monster
-# TODO: think about where to destroy IsTurnComponent
 class TurnStartSystem(BaseSystem):
     def process(self, manager: ECSManager) -> None:
-        try:
-            actor_entity_id, _ = next(manager.get_component(TurnStartComponent))
-
-        except StopIteration:
+        if not list(
+            manager.get_components(EffectTurnStartComponent, EffectIsTargetedSingletonComponent)
+        ):
             return
+
+        # Get current turn actor
+        actor_entity_id, _ = list(manager.get_component(EffectTargetComponent))[0]
+        manager.add_component(actor_entity_id, TurnComponent())
+
+        # Find the id of the next actor
+        if manager.get_component_for_entity(actor_entity_id, CharacterComponent) is not None:
+            # Character-only effects
+            add_effect_to_bot(manager, manager.create_entity(EffectRefillEnergyComponent()))
+            add_effect_to_bot(manager, manager.create_entity(EffectDrawCardComponent(5)))
+
+        elif manager.get_component_for_entity(actor_entity_id, MonsterComponent) is not None:
+            # Queue monster's move
+            manager.add_component(actor_entity_id, MonsterMoveIsQueuedComponent())
 
         # Common effects
         add_effect_to_bot(
             manager,
             manager.create_entity(
-                EffectSetBlockToZero(),
-                EffectQueryComponentsComponent(
-                    [IsTurnComponent],
-                ),
+                EffectSetBlockToZero(), EffectQueryComponentsComponent([TurnComponent])
             ),
         )
-
-        # Character-only effects
-        if manager.get_component_for_entity(actor_entity_id, CharacterComponent) is not None:
-            add_effect_to_bot(manager, manager.create_entity(EffectRefillEnergy()))
-            add_effect_to_bot(manager, manager.create_entity(EffectDrawCardComponent(5)))
-
-        # Monster-only effects
-        elif manager.get_component_for_entity(actor_entity_id, MonsterComponent) is not None:
-            # Queue the monster's move
-            manager.add_component(actor_entity_id, MonsterMoveIsQueuedComponent())
-
-        # Untag actor & tag it w/ IsTurnComponent
-        manager.remove_component(actor_entity_id, TurnStartComponent)
-        manager.add_component(actor_entity_id, IsTurnComponent())

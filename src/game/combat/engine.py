@@ -10,21 +10,23 @@ from src.game.ecs.components.action import ActionEndTurnComponent
 from src.game.ecs.components.action import ActionSelectComponent
 from src.game.ecs.components.actors import CharacterComponent
 from src.game.ecs.components.actors import HealthComponent
-from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
-from src.game.ecs.components.actors import TurnStartComponent
+from src.game.ecs.components.actors import TurnComponent
 from src.game.ecs.components.common import CanBeSelectedComponent
 from src.game.ecs.components.common import IsSelectedComponent
 from src.game.ecs.components.effects import EffectIsQueuedComponent
+from src.game.ecs.components.effects import EffectQueryComponentsComponent
 from src.game.ecs.components.effects import EffectShuffleDeckIntoDrawPileComponent
+from src.game.ecs.components.effects import EffectTurnStartComponent
 from src.game.ecs.manager import ECSManager
 from src.game.ecs.systems.all import ALL_SYSTEMS
+from src.game.ecs.utils import add_effect_to_bot
 
 
 class CombatEngine:
     def _agent_should_make_action(self, manager: ECSManager) -> bool:
         # If it's not the character's turn, return False
-        if len(list(manager.get_components(CharacterComponent, IsTurnComponent))) == 0:
+        if len(list(manager.get_components(CharacterComponent, TurnComponent))) == 0:
             return False
 
         # If there's queued effects, return False
@@ -57,11 +59,15 @@ class CombatEngine:
     # TODO: this will have to be a system to activate on combat start effects, e.g., relics
     def _combat_start(self, manager: ECSManager) -> None:
         # Queue an effect to shuffle the deck into the draw pile
-        manager.create_entity(EffectShuffleDeckIntoDrawPileComponent(), EffectIsQueuedComponent(0))
+        add_effect_to_bot(manager, manager.create_entity(EffectShuffleDeckIntoDrawPileComponent()))
 
         # Start the character's turn
-        character_entity_id, _ = list(manager.get_component(CharacterComponent))[0]
-        manager.add_component(character_entity_id, TurnStartComponent())
+        add_effect_to_bot(
+            manager,
+            manager.create_entity(
+                EffectTurnStartComponent(), EffectQueryComponentsComponent([CharacterComponent])
+            ),
+        )
 
     def _handle_agent_action(self, manager: ECSManager, action: Action) -> None:
         # Unpack
@@ -117,6 +123,7 @@ class CombatEngine:
             self._clear_action(manager)
             if self._agent_should_make_action(manager):
                 action = self._get_action(agent, view)
+                print(action)
                 self._handle_agent_action(manager, action)
 
             # Run systems

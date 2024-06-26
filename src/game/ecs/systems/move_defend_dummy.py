@@ -1,7 +1,7 @@
-from src.game.ecs.components.actors import IsTurnComponent
 from src.game.ecs.components.actors import MonsterComponent
 from src.game.ecs.components.actors import MonsterMoveDummyDefendComponent
 from src.game.ecs.components.actors import MonsterMoveIsQueuedComponent
+from src.game.ecs.components.actors import TurnComponent
 from src.game.ecs.components.effects import EffectGainBlockComponent
 from src.game.ecs.components.effects import EffectParentComponent
 from src.game.ecs.components.effects import EffectQueryComponentsComponent
@@ -25,7 +25,7 @@ class MoveDummyDefendSystem(BaseSystem):
                 manager,
                 manager.create_entity(
                     EffectGainBlockComponent(BLOCK),
-                    EffectQueryComponentsComponent([MonsterComponent, IsTurnComponent]),
+                    EffectQueryComponentsComponent([MonsterComponent, TurnComponent]),
                     EffectParentComponent(monster_entity_id),
                 ),
             )

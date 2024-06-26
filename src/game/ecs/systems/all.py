@@ -1,7 +1,6 @@
 from src.game.ecs.systems.ai_dummy import AIDummySystem
 from src.game.ecs.systems.apply_modifier_delta import ApplyModifierDeltaSystem
 from src.game.ecs.systems.apply_weak import ApplyWeakSystem
-from src.game.ecs.systems.before_turn_end import BeforeTurnEndSystem
 from src.game.ecs.systems.card_defend import CardDefendSystem
 from src.game.ecs.systems.card_neutralize import CardNeutralizeSystem
 from src.game.ecs.systems.card_strike import CardStrikeSystem
@@ -22,9 +21,8 @@ from src.game.ecs.systems.process_monster_turn import ProcessMonsterTurnSystem
 from src.game.ecs.systems.refill_energy import RefillEnergySystem
 from src.game.ecs.systems.set_block_to_zero import SetBlockToZeroSystem
 from src.game.ecs.systems.shuffle_deck_into_draw_pile import ShuffleDeckIntoDrawPileSystem
-from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import (
-    ShuffleDiscardPileIntoDrawPileSystem,
-)
+from src.game.ecs.systems.shuffle_discard_pile_into_draw_pile import \
+    ShuffleDiscardPileIntoDrawPileSystem
 from src.game.ecs.systems.tag_card_target_modifiers import TagCardTargetModifiersSystem
 from src.game.ecs.systems.target_effect import TargetEffectSystem
 from src.game.ecs.systems.turn_end import TurnEndSystem
@@ -33,11 +31,8 @@ from src.game.ecs.systems.turn_start import TurnStartSystem
 
 ALL_SYSTEMS = [
     ProcessActionSystem(),
-    TagCardTargetModifiersSystem(),
-    TurnStartSystem(),
     ProcessMonsterTurnSystem(),
-    BeforeTurnEndSystem(),
-    TurnEndSystem(),
+    TagCardTargetModifiersSystem(),
     AIDummySystem(),
     IntentDummySystem(),
     PlayCardSystem(),
@@ -49,6 +44,8 @@ ALL_SYSTEMS = [
     MoveDummyDefendSystem(),
     DispatchEffectSystem(),
     TargetEffectSystem(),
+    TurnStartSystem(),
+    TurnEndSystem(),
     CreateModifierWeakSystem(),
     ApplyModifierDeltaSystem(),
     ShuffleDeckIntoDrawPileSystem(),
