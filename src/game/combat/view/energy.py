@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from src.game.ecs.components.energy import EnergyComponent
-from src.game.ecs.manager import ECSManager
+from src.game.combat.context import Energy
+from src.game.combat.context import GameContext
 
 
 @dataclass
@@ -10,7 +10,9 @@ class EnergyView:
     max: int
 
 
-def get_energy_view(manager: ECSManager) -> EnergyView:
-    _, energy_component = list(manager.get_component(EnergyComponent))[0]
+def _energy_to_view(energy: Energy) -> EnergyView:
+    return EnergyView(energy.current, energy.max)
 
-    return EnergyView(energy_component.current, energy_component.max)
+
+def view_energy(context: GameContext) -> EnergyView:
+    return _energy_to_view(context.energy)

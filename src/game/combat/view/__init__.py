@@ -1,17 +1,14 @@
 from dataclasses import dataclass
 
+from src.game.combat.context import GameContext
 from src.game.combat.view.card import CardView
-from src.game.combat.view.card import get_hand_view
+from src.game.combat.view.card import view_hand
 from src.game.combat.view.character import CharacterView
-from src.game.combat.view.character import get_character_view
-from src.game.combat.view.effect import EffectView
-from src.game.combat.view.effect import get_effect_view
+from src.game.combat.view.character import view_character
 from src.game.combat.view.energy import EnergyView
-from src.game.combat.view.energy import get_energy_view
+from src.game.combat.view.energy import view_energy
 from src.game.combat.view.monster import MonsterView
-from src.game.combat.view.monster import get_monsters_view
-from src.game.ecs.components.effects import EffectIsPendingInputTargetsComponent
-from src.game.ecs.manager import ECSManager
+from src.game.combat.view.monster import view_monsters
 
 
 # TODO: maybe move this elsewhere
@@ -21,19 +18,12 @@ class CombatView:
     monsters: list[MonsterView]
     hand: list[CardView]
     energy: EnergyView
-    effect: EffectView
+    # effect: EffectView
+    # draw pile
+    # discard pile
 
 
-def get_combat_view(manager: ECSManager) -> CombatView:
-    effect_entity_id = None
-    query_result = list(manager.get_component(EffectIsPendingInputTargetsComponent))
-    if query_result:
-        effect_entity_id, _ = query_result[0]
-
+def view_combat(context: GameContext) -> CombatView:
     return CombatView(
-        get_character_view(manager),
-        get_monsters_view(manager),
-        get_hand_view(manager),
-        get_energy_view(manager),
-        None if effect_entity_id is None else get_effect_view(effect_entity_id, manager),
+        view_character(context), view_monsters(context), view_hand(context), view_energy(context)
     )
