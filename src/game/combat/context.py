@@ -49,6 +49,7 @@ class EffectType(Enum):
     DRAW_CARD = "DRAW_CARD"
     REFILL_ENERGY = "REFILL_ENERGY"
     DISCARD = "DISCARD"
+    ZERO_BLOCK = "ZERO_BLOCK"
 
 
 class EffectTargetType(Enum):
@@ -56,6 +57,7 @@ class EffectTargetType(Enum):
     MONSTER = "MONSTER"
     CARD_TARGET = "CARD_TARGET"
     CARD_IN_HAND = "CARD_IN_HAND"
+    TURN = "TURN"
 
 
 class EffectSelectionType(Enum):
@@ -104,13 +106,12 @@ class GameContext:
     draw_pile: list[Card] = field(default_factory=list)
     discard_pile: set[Card] = field(default_factory=set)
 
+    # Actor turn
+    turn: Optional[Actor] = None
+
     # Effect queue
-    queue: deque[Effect] = field(default_factory=deque)
+    effect_queue: deque[Effect] = field(default_factory=deque)
 
     # Effect processing
     effect_target: Optional[Entity] = None  # TODO: shrink type annotation?
     effect_value: Optional[int] = None
-
-
-if __name__ == "__main__":
-    Entity()

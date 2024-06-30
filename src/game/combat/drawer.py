@@ -50,7 +50,7 @@ def _block_str(block: BlockView) -> str:
 
 
 def _actor_str(actor: ActorView, n_col: int = 0) -> str:
-    # modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
+    # modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor
     # actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
     return (
         f"{WHITE}{actor.name:>{n_col}}{RESET}\n"
