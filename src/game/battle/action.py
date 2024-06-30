@@ -4,12 +4,12 @@ from typing import Optional
 
 
 class ActionType(Enum):
-    SELECT_CARD = "SELECT_CARD"
-    SELECT_MONSTER = "SELECT_MONSTER"
+    SELECT = "SELECT"
+    CONFIRM = "CONFIRM"
     END_TURN = "END_TURN"
 
 
 @dataclass
 class Action:
     type: ActionType
-    index: Optional[int] = None
+    target_entity_id: Optional[int] = None

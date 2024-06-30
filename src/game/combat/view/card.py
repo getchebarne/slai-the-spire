@@ -1,48 +1,30 @@
 from dataclasses import dataclass
 
-from src.game.ecs.components.cards import CardCostComponent
-from src.game.ecs.components.cards import CardInHandComponent
-from src.game.ecs.components.cards import CardIsActiveComponent
-from src.game.ecs.components.common import CanBeSelectedComponent
-from src.game.ecs.components.common import NameComponent
-from src.game.ecs.manager import ECSManager
+from src.game.combat.context import Card
+from src.game.combat.context import GameContext
 
 
 @dataclass
 class CardView:
-    entity_id: int
     name: str
     cost: int
-    can_be_selected: bool
-    is_active: bool
+    is_active: bool  # TODO: make int
+
+    def __hash__(self) -> int:
+        return hash(id(self))
 
 
-def get_card_view(entity_id: int, manager: ECSManager) -> CardView:
-    name_component = manager.get_component_for_entity(entity_id, NameComponent)
-    card_cost_component = manager.get_component_for_entity(entity_id, CardCostComponent)
-    can_be_selected_component = manager.get_component_for_entity(entity_id, CanBeSelectedComponent)
-    card_is_active_component = manager.get_component_for_entity(entity_id, CardIsActiveComponent)
-
-    return CardView(
-        entity_id,
-        name_component.value,
-        card_cost_component.value,
-        False if can_be_selected_component is None else True,
-        False if card_is_active_component is None else True,
-    )
+def _card_to_view(card: Card) -> CardView:
+    return CardView(card.name, card.cost, card.is_active)
 
 
-def get_hand_view(manager: ECSManager) -> list[CardView]:
-    # Create a list of tuples containing CardView objects and their positions
-    hand_view = [
-        (get_card_view(entity_id, manager), card_in_hand_component.position)
-        for entity_id, card_in_hand_component in manager.get_component(CardInHandComponent)
-    ]
+def view_hand(context: GameContext) -> list[CardView]:
+    return [_card_to_view(card) for card in context.hand]
 
-    # Sort the list of tuples by the position
-    hand_view.sort(key=lambda x: x[1])
 
-    # Extract the sorted hand list
-    hand_view = [card_view for card_view, _ in hand_view]
+def view_draw_pile(context: GameContext) -> set[CardView]:
+    return {_card_to_view(card) for card in context.draw_pile}
 
-    return hand_view
+
+def view_discard_pile(context: GameContext) -> set[CardView]:
+    return {_card_to_view(card) for card in context.discard_pile}

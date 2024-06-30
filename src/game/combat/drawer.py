@@ -5,11 +5,8 @@ from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import BlockView
 from src.game.combat.view.actor import HealthView
-from src.game.combat.view.actor import ModifierView
 from src.game.combat.view.card import CardView
-from src.game.combat.view.effect import EffectView
 from src.game.combat.view.energy import EnergyView
-from src.game.combat.view.monster import IntentView
 from src.game.combat.view.monster import MonsterView
 
 
@@ -33,18 +30,13 @@ def _card_str(card: CardView) -> str:
 
 def _hand_str(hand: list[CardView]) -> str:
     card_strings = []
-    for card in hand:
-        if card.is_active:
-            card_strings.append(f"{SELECTED}{_card_str(card)}{RESET}")
+    for card_view in hand:
+        if card_view.is_active:
+            card_strings.append(f"{SELECTED}{_card_str(card_view)}{RESET}")
 
             continue
 
-        if card.can_be_selected:
-            card_strings.append(f"{_card_str(card)}{S}")
-
-            continue
-
-        card_strings.append(f"{_card_str(card)}")
+        card_strings.append(f"{_card_str(card_view)}")
 
     return "HAND: " + " / ".join(card_strings)
 
@@ -58,48 +50,48 @@ def _block_str(block: BlockView) -> str:
 
 
 def _actor_str(actor: ActorView, n_col: int = 0) -> str:
-    modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
-    actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
+    # modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
+    # actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
     return (
-        f"{WHITE}{actor_name:>{n_col}}{RESET}\n"
-        f"{WHITE}{'-' * len(actor_name):>{n_col}}{RESET}\n"
+        f"{WHITE}{actor.name:>{n_col}}{RESET}\n"
+        f"{WHITE}{'-' * len(actor.name):>{n_col}}{RESET}\n"
         f"{RED}{_health_str(actor.health):>{n_col}}{RESET}\n"
         f"{CYAN}{_block_str(actor.block):>{n_col}}{RESET}\n"
-        f"{modifier_strs:>{n_col}}"
+        # f"{modifier_strs:>{n_col}}"
     )
 
 
-def _modifier_str(modifier_view: ModifierView) -> str:
-    # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
-    return f"{modifier_view.type.upper()}: {modifier_view.stacks}"
+# def _modifier_str(modifier_view: ModifierView) -> str:
+#     # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
+#     return f"{modifier_view.type.upper()}: {modifier_view.stacks}"
 
 
-def _effect_str(effect_view: Optional[EffectView]) -> str:
-    if effect_view is None:
-        return "None"
+# def _effect_str(effect_view: Optional[EffectView]) -> str:
+#     if effect_view is None:
+#         return "None"
 
-    return f"{effect_view.type}: {effect_view.number_of_targets}"
+#     return f"{effect_view.type}: {effect_view.number_of_targets}"
 
 
-def _intent_str(intent_view: Optional[IntentView]) -> str:
-    str_ = ""
-    if intent_view is None:
-        return str_
+# def _intent_str(intent_view: Optional[IntentView]) -> str:
+#     str_ = ""
+#     if intent_view is None:
+#         return str_
 
-    if intent_view.damage is not None:
-        str_ = f"{str_}{intent_view.damage}"
+#     if intent_view.damage is not None:
+#         str_ = f"{str_}{intent_view.damage}"
 
-    if intent_view.times is not None:
-        str_ = f"{str_} x {intent_view.times}"
+#     if intent_view.times is not None:
+#         str_ = f"{str_} x {intent_view.times}"
 
-    if intent_view.block:
-        if str_ != "":
-            str_ = f"{str_} & Blocking"
+#     if intent_view.block:
+#         if str_ != "":
+#             str_ = f"{str_} & Blocking"
 
-        else:
-            str_ = "Blocking"
+#         else:
+#             str_ = "Blocking"
 
-    return str_
+#     return str_
 
 
 def _monster_str(monster_view: MonsterView) -> str:
@@ -109,14 +101,8 @@ def _monster_str(monster_view: MonsterView) -> str:
     # Split into lines
     lines = str_.split("\n")
 
-    if monster_view.can_be_selected:
-        # Patch
-        monster_name = f"{monster_view.name}{S}"
-        lines[0] = f"{WHITE}{monster_name:>{N_COL}}{RESET}"
-        lines[1] = f"{WHITE}{'-' * len(monster_name):>{N_COL}}{RESET}"
-
     # Insert monster's intent at first position
-    lines.insert(0, _intent_str(monster_view.intent))
+    # lines.insert(0, _intent_str(monster_view.intent))
 
     # Align lines to the right of the terminal
     right_aligned_lines = [f"{line:>{N_COL}}" for line in lines]
@@ -127,7 +113,7 @@ def _monster_str(monster_view: MonsterView) -> str:
 
 def _view_str(view: CombatView) -> str:
     # Effect
-    effect_str = _effect_str(view.effect)
+    # effect_str = _effect_str(view.effect)
 
     # Monsters
     monster_strs = "\n".join([f"{_monster_str(monster)}" for monster in view.monsters])
@@ -145,9 +131,7 @@ def _view_str(view: CombatView) -> str:
     separator = "-" * N_COL
 
     return (
-        effect_str
-        + "\n"
-        + monster_strs
+        monster_strs
         + "\n"
         + character_str
         + "\n"
