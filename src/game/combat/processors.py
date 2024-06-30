@@ -50,8 +50,15 @@ def _processor_refill_energy(context: GameContext) -> None:
 
 def _processor_discard(context: GameContext) -> None:
     target = context.effect_target
+
     context.hand.remove(target)
     context.discard_pile.add(target)
+
+
+def _processor_zero_block(context: GameContext) -> None:
+    target = context.effect_target
+
+    target.block.current = 0
 
 
 def get_effect_processors(effect_type: EffectType) -> list[Callable]:  # TODO: add argument type
@@ -65,4 +72,5 @@ processors = {
     EffectType.DRAW_CARD: [_processor_draw_card],
     EffectType.REFILL_ENERGY: [_processor_refill_energy],
     EffectType.DISCARD: [_processor_discard],
+    EffectType.ZERO_BLOCK: [_processor_zero_block],
 }
