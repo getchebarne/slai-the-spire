@@ -1,4 +1,5 @@
 import random
+from typing import Optional
 
 from src.game.combat.context import EffectSelectionType
 from src.game.combat.context import EffectTargetType
@@ -14,13 +15,13 @@ def _resolve_effect_target_type(
         return [context.character]
 
     if effect_target_type == EffectTargetType.MONSTER:
-        return context.monsters
+        return context.monsters.copy()  # TODO: revisit copy call
 
     if effect_target_type == EffectTargetType.CARD_TARGET:
         return [context.card_target]
 
     if effect_target_type == EffectTargetType.CARD_IN_HAND:
-        return context.hand
+        return context.hand.copy()  # TODO: revisit copy call
 
     if effect_target_type == EffectTargetType.TURN:
         return [context.turn]
@@ -48,9 +49,9 @@ def get_effect_targets(
     effect_target_type: EffectTargetType,
     effect_selection_type: EffectSelectionType,
     context: GameContext,
-) -> list[Entity]:
+) -> Optional[list[Entity]]:
     if effect_target_type is None:
-        return []
+        return None
 
     query_entity_ids = _resolve_effect_target_type(effect_target_type, context)
 
@@ -69,10 +70,10 @@ def _process_next_effect(context: GameContext) -> None:
     processors = get_effect_processors(effect.type)
 
     # Execute
-    if not targets:
-        targets = [1]  # TODO: fix
+    if targets is None:
+        targets = [None]
 
-    for target in targets.copy():  # TODO: revisit copy call
+    for target in targets:
         # Set target and value
         context.effect_target = target
         context.effect_value = effect.value

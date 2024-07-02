@@ -1,5 +1,3 @@
-from typing import Optional
-
 from src.game.combat.context import Card
 from src.game.combat.context import Effect
 from src.game.combat.context import EffectTargetType
@@ -20,9 +18,3 @@ def card_requires_target(card: Card) -> bool:
             return True
 
     return False
-
-
-def get_active_card(context: GameContext) -> Optional[Card]:
-    for card in context.hand:
-        if card.is_active:
-            return card

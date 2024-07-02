@@ -150,9 +150,9 @@ class CombatDrawer:
     def __call__(self, combat_view: CombatView) -> None:
         view_str = _view_str(combat_view)
 
-        if view_str != self.prev_view_str:
-            print(view_str)
-            self.prev_view_str = view_str
+        # if view_str != self.prev_view_str: TODO: reactivate?
+        print(view_str)
+        self.prev_view_str = view_str
 
 
 drawer = CombatDrawer()
