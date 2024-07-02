@@ -36,6 +36,7 @@ def _processor_draw_card(context: GameContext) -> None:
         if len(context.draw_pile) == 0:
             # Shuffle discard pile into draw pile
             # TODO: make effect
+
             context.draw_pile = list(context.discard_pile)
             random.shuffle(context.draw_pile)
 
