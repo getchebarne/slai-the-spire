@@ -10,39 +10,6 @@ class Entity(ABC):
     pass
 
 
-@dataclass
-class Health:
-    max: int
-    current: Optional[int] = None
-
-    def __post_init__(self):
-        if self.current is None:
-            self.current = self.max
-
-
-@dataclass
-class Block:
-    max: int = 999
-    current: int = 0
-
-
-@dataclass
-class Actor(Entity):
-    name: str
-    health: Health
-    block: Block = field(default_factory=Block)
-
-
-@dataclass
-class Character(Actor):
-    pass
-
-
-@dataclass
-class Monster(Actor):
-    pass
-
-
 class EffectType(Enum):
     DEAL_DAMAGE = "DEAL_DAMAGE"
     GAIN_BLOCK = "GAIN_BLOCK"
@@ -75,6 +42,45 @@ class Effect:
 
 
 @dataclass
+class Health:
+    max: int
+    current: Optional[int] = None
+
+    def __post_init__(self):
+        if self.current is None:
+            self.current = self.max
+
+
+@dataclass
+class Block:
+    max: int = 999
+    current: int = 0
+
+
+@dataclass
+class Actor(Entity):
+    name: str
+    health: Health
+    block: Block = field(default_factory=Block)
+
+
+@dataclass
+class Character(Actor):
+    pass
+
+
+@dataclass
+class MonsterMove:
+    name: str
+    effects: list[Effect]
+
+
+@dataclass
+class Monster(Actor):
+    move: Optional[MonsterMove] = None
+
+
+@dataclass
 class Card(Entity):
     name: str
     cost: int
@@ -82,6 +88,12 @@ class Card(Entity):
 
     def __hash__(self) -> int:
         return hash(id(self))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Entity):
+            return False
+
+        return id(self) == id(other)
 
 
 @dataclass

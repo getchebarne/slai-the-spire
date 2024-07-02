@@ -17,7 +17,7 @@ def silent() -> Character:
 def dummy() -> Monster:
     max_health = 30
 
-    return Character("Dummy", Health(max_health))
+    return Monster("Dummy", Health(max_health))
 
 
 def strike() -> Card:

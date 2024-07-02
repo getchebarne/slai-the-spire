@@ -2,8 +2,10 @@ import random
 
 from src.game.combat.context import Actor
 from src.game.combat.context import Effect
+from src.game.combat.context import Monster
 from src.game.combat.context import EffectSelectionType
 from src.game.combat.context import EffectTargetType
+from src.game.combat.ai import ais
 from src.game.combat.context import EffectType
 from src.game.combat.context import GameContext
 from src.game.combat.effect_queue import process_queue
@@ -14,6 +16,10 @@ def combat_start(context: GameContext) -> None:
     # Shuffle deck into draw pile
     context.draw_pile = list(context.deck)
     random.shuffle(context.draw_pile)
+
+    # Get first move from monsters
+    for monster in context.monsters:
+        ais[monster.name](monster)
 
     # TODO: relic start of combat effects
 
@@ -33,6 +39,25 @@ def turn_start_character(context: GameContext) -> None:
 
     # Run effects
     process_queue(context)
+
+
+def turn_start_monster(context: GameContext, monster: Monster) -> None:
+    _turn_start_actor(context, monster)
+
+    # Run effects
+    process_queue(context)
+
+
+def turn_monster(context: GameContext, monster: Monster) -> None:
+    add_effects_to_bot(context, *monster.move.effects)
+
+    # Run effects
+    process_queue(context)
+
+
+def turn_end_monster(context: GameContext, monster: Monster) -> None:
+    # Update monster's move
+    ais[monster.name](monster)
 
 
 def turn_end_character(context: GameContext) -> None:
