@@ -36,19 +36,23 @@ agent = RandomAgent()
 
 
 def main():
+    # Start combat
     combat_start(context)
 
+    # Game loop
     while not is_game_over(context):
+        # Character turn start
         turn_start_character(context)
-        action = agent.select_action(context)
 
-        while action.type != ActionType.END_TURN:
-            print(action)
+        # Character turn
+        action = None
+        while action is None or action.type != ActionType.END_TURN:
             combat_view = view_combat(context)
             drawer(combat_view)
+            action = agent.select_action(combat_view)
             character_turn(context, action)
-            action = agent.select_action(context)
 
+        # Character turn end
         turn_end_character(context)
 
         # Monster turn

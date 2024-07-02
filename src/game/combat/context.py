@@ -79,7 +79,6 @@ class Card(Entity):
     name: str
     cost: int
     effects: list[Effect]
-    is_active: bool = False
 
     def __hash__(self) -> int:
         return hash(id(self))
@@ -105,6 +104,9 @@ class GameContext:
     hand: list[Card] = field(default_factory=list)
     draw_pile: list[Card] = field(default_factory=list)
     discard_pile: set[Card] = field(default_factory=set)
+
+    # Active card
+    active_card: Optional[Card] = None
 
     # Actor turn
     turn: Optional[Actor] = None
