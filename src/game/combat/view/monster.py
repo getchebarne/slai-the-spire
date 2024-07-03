@@ -3,7 +3,6 @@ from typing import Optional
 
 from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
-from src.game.combat.state import Monster
 from src.game.combat.state import MonsterMove
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
@@ -17,6 +16,7 @@ class IntentView:
 
 @dataclass
 class MonsterView(ActorView):
+    entity_id: int
     intent: IntentView
 
 
@@ -45,12 +45,15 @@ def _move_to_intent(move: MonsterMove) -> IntentView:
     return intent
 
 
-def _monster_to_view(monster: Monster) -> MonsterView:
+def _monster_to_view(state: GameState, monster_entity_id: int) -> MonsterView:
+    monster = state.get_entity(monster_entity_id)
     actor_view = _actor_to_view(monster)
     intent_view = _move_to_intent(monster.move)
 
-    return MonsterView(actor_view.name, actor_view.health, actor_view.block, intent_view)
+    return MonsterView(
+        actor_view.name, actor_view.health, actor_view.block, monster_entity_id, intent_view
+    )
 
 
 def view_monsters(state: GameState) -> list[MonsterView]:
-    return [_monster_to_view(monster) for monster in state.get_monsters()]
+    return [_monster_to_view(state, monster_entity_id) for monster_entity_id in state.monster_ids]

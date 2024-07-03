@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 
-from src.game.combat.state import Card
 from src.game.combat.state import GameState
 
 
 @dataclass
 class CardView:
+    entity_id: int
     name: str
     cost: int
     is_active: bool  # TODO: make int
@@ -14,21 +14,26 @@ class CardView:
         return hash(id(self))
 
 
-def _card_to_view(state: GameState, card: Card) -> CardView:
+def _card_to_view(state: GameState, card_entity_id: int) -> CardView:
+    card = state.get_entity(card_entity_id)
+
     return CardView(
+        card_entity_id,
         card.name,
         card.cost,
-        True if card is state.get_active_card() else False,  # TODO: revisit
+        True if card_entity_id == state.card_active_id else False,
     )
 
 
-def view_hand(state: GameState) -> list[CardView]:
-    return [_card_to_view(state, card) for card in state.get_hand()]
-
-
 def view_draw_pile(state: GameState) -> set[CardView]:
-    return {_card_to_view(state, card) for card in state.get_draw_pile()}
+    return {_card_to_view(state, card_entity_id) for card_entity_id in state.card_in_draw_pile_ids}
+
+
+def view_hand(state: GameState) -> list[CardView]:
+    return [_card_to_view(state, card_entity_id) for card_entity_id in state.card_in_hand_ids]
 
 
 def view_discard_pile(state: GameState) -> set[CardView]:
-    return {_card_to_view(state, card) for card in state.get_discard_pile()}
+    return {
+        _card_to_view(state, card_entity_id) for card_entity_id in state.card_in_discard_pile_ids
+    }
