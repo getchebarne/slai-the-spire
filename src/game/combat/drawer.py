@@ -7,6 +7,7 @@ from src.game.combat.view.actor import BlockView
 from src.game.combat.view.actor import HealthView
 from src.game.combat.view.card import CardView
 from src.game.combat.view.energy import EnergyView
+from src.game.combat.view.monster import IntentView
 from src.game.combat.view.monster import MonsterView
 
 
@@ -73,25 +74,22 @@ def _actor_str(actor: ActorView, n_col: int = 0) -> str:
 #     return f"{effect_view.type}: {effect_view.number_of_targets}"
 
 
-# def _intent_str(intent_view: Optional[IntentView]) -> str:
-#     str_ = ""
-#     if intent_view is None:
-#         return str_
+def _intent_str(intent_view: Optional[IntentView]) -> str:
+    str_ = ""
+    if intent_view is None:
+        return str_
 
-#     if intent_view.damage is not None:
-#         str_ = f"{str_}{intent_view.damage}"
+    if intent_view.damage is not None:
+        str_ = f"{str_}{intent_view.damage[0]} x {intent_view.damage[1]}"
 
-#     if intent_view.times is not None:
-#         str_ = f"{str_} x {intent_view.times}"
+    if intent_view.block:
+        if str_ != "":
+            str_ = f"{str_} & Blocking"
 
-#     if intent_view.block:
-#         if str_ != "":
-#             str_ = f"{str_} & Blocking"
+        else:
+            str_ = "Blocking"
 
-#         else:
-#             str_ = "Blocking"
-
-#     return str_
+    return str_
 
 
 def _monster_str(monster_view: MonsterView) -> str:
@@ -102,7 +100,7 @@ def _monster_str(monster_view: MonsterView) -> str:
     lines = str_.split("\n")
 
     # Insert monster's intent at first position
-    # lines.insert(0, _intent_str(monster_view.intent))
+    lines.insert(0, _intent_str(monster_view.intent))
 
     # Align lines to the right of the terminal
     right_aligned_lines = [f"{line:>{N_COL}}" for line in lines]

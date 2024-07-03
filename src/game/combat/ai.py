@@ -1,5 +1,5 @@
-from typing import Callable
 import random
+from typing import Callable
 
 from src.game.combat.context import Effect
 from src.game.combat.context import EffectTargetType
