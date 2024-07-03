@@ -11,10 +11,10 @@ from src.game.combat.logic import character_turn
 from src.game.combat.logic import is_game_over
 from src.game.combat.phase import combat_start
 from src.game.combat.phase import turn_end_character
+from src.game.combat.phase import turn_end_monster
+from src.game.combat.phase import turn_monster
 from src.game.combat.phase import turn_start_character
 from src.game.combat.phase import turn_start_monster
-from src.game.combat.phase import turn_monster
-from src.game.combat.phase import turn_end_monster
 from src.game.combat.view import view_combat
 
 

@@ -1,13 +1,13 @@
 import random
 
+from src.game.combat.ai import ais
 from src.game.combat.context import Actor
 from src.game.combat.context import Effect
-from src.game.combat.context import Monster
 from src.game.combat.context import EffectSelectionType
 from src.game.combat.context import EffectTargetType
-from src.game.combat.ai import ais
 from src.game.combat.context import EffectType
 from src.game.combat.context import GameContext
+from src.game.combat.context import Monster
 from src.game.combat.effect_queue import process_queue
 from src.game.combat.utils import add_effects_to_bot
 
@@ -17,7 +17,7 @@ def combat_start(context: GameContext) -> None:
     context.draw_pile = list(context.deck)
     random.shuffle(context.draw_pile)
 
-    # Get first move from monsters
+    # Get first move from monsters. TODO: revisit
     for monster in context.monsters:
         ais[monster.name](monster)
 
