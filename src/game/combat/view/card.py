@@ -14,21 +14,21 @@ class CardView:
         return hash(id(self))
 
 
-def _card_to_view(context: GameState, card: Card) -> CardView:
+def _card_to_view(state: GameState, card: Card) -> CardView:
     return CardView(
         card.name,
         card.cost,
-        True if card is context.active_card else False,
+        True if card is state.get_active_card() else False,  # TODO: revisit
     )
 
 
-def view_hand(context: GameState) -> list[CardView]:
-    return [_card_to_view(context, card) for card in context.hand]
+def view_hand(state: GameState) -> list[CardView]:
+    return [_card_to_view(state, card) for card in state.get_hand()]
 
 
-def view_draw_pile(context: GameState) -> set[CardView]:
-    return {_card_to_view(context, card) for card in context.draw_pile}
+def view_draw_pile(state: GameState) -> set[CardView]:
+    return {_card_to_view(state, card) for card in state.get_draw_pile()}
 
 
-def view_discard_pile(context: GameState) -> set[CardView]:
-    return {_card_to_view(context, card) for card in context.discard_pile}
+def view_discard_pile(state: GameState) -> set[CardView]:
+    return {_card_to_view(state, card) for card in state.get_discard_pile()}

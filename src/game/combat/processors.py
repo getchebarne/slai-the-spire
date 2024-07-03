@@ -5,9 +5,9 @@ from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
 
 
-def _processor_deal_damage(context: GameState) -> None:
-    target = context.effect_target
-    value = context.effect_value
+def _processor_deal_damage(state: GameState) -> None:
+    target = state.get_effect_target()
+    value = state.effect_value
 
     health = target.health
     block = target.block
@@ -20,44 +20,45 @@ def _processor_deal_damage(context: GameState) -> None:
     health.current = max(0, health.current - damage_over_block)
 
 
-def _processor_gain_block(context: GameState) -> None:
-    target = context.effect_target
-    value = context.effect_value
+def _processor_gain_block(state: GameState) -> None:
+    target = state.get_effect_target()
+    value = state.effect_value
 
     block = target.block
     block.current = min(block.current + value, block.max)
 
 
 # TODO: handle infinite loop
-def _processor_draw_card(context: GameState) -> None:
-    value = context.effect_value
+def _processor_draw_card(state: GameState) -> None:
+    value = state.effect_value
 
     for _ in range(value):
-        if len(context.draw_pile) == 0:
+        if len(state.card_in_draw_pile_ids) == 0:
             # Shuffle discard pile into draw pile
             # TODO: make effect
 
-            context.draw_pile = list(context.discard_pile)
-            random.shuffle(context.draw_pile)
+            state.card_in_draw_pile_ids = list(state.card_in_discard_pile_ids)
+            random.shuffle(state.card_in_draw_pile_ids)
 
-            context.discard_pile = set()
+            state.card_in_discard_pile_ids = set()
 
-        context.hand.append(context.draw_pile.pop(0))
-
-
-def _processor_refill_energy(context: GameState) -> None:
-    context.energy.current = context.energy.max
+        state.card_in_hand_ids.append(state.card_in_draw_pile_ids.pop(0))
 
 
-def _processor_discard(context: GameState) -> None:
-    target = context.effect_target
-
-    context.hand.remove(target)
-    context.discard_pile.add(target)
+def _processor_refill_energy(state: GameState) -> None:
+    energy = state.get_energy()
+    energy.current = energy.max
 
 
-def _processor_zero_block(context: GameState) -> None:
-    target = context.effect_target
+def _processor_discard(state: GameState) -> None:
+    target_id = state.effect_target_id
+
+    state.card_in_hand_ids.remove(target_id)
+    state.card_in_discard_pile_ids.add(target_id)
+
+
+def _processor_zero_block(state: GameState) -> None:
+    target = state.get_effect_target()
 
     target.block.current = 0
 

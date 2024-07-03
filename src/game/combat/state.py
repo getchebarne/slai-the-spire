@@ -108,24 +108,84 @@ class Energy:
 
 @dataclass
 class GameState:
+    # List mapping entity ids to entities
+    entities: list[Entity] = field(default_factory=list)
+
     # Specific entities
-    character: Character
-    monsters: list[Monster]
-    energy: Energy
-    deck: set[Card]
-    hand: list[Card] = field(default_factory=list)
-    draw_pile: list[Card] = field(default_factory=list)
-    discard_pile: set[Card] = field(default_factory=set)
+    character_id: Optional[int] = None
+    monster_ids: list[int] = field(default_factory=list)
+    energy_id: Optional[int] = None
+    card_in_deck_ids: set[int] = field(default_factory=set)
+    card_in_draw_pile_ids: list[int] = field(default_factory=list)
+    card_in_hand_ids: list[int] = field(default_factory=list)
+    card_in_discard_pile_ids: set[int] = field(default_factory=set)
+
+    # Card target
+    card_target_id: Optional[int] = None
 
     # Active card
-    active_card: Optional[Card] = None
+    card_active_id: Optional[int] = None
 
     # Actor turn
-    turn: Optional[Actor] = None
+    actor_turn_id: Optional[int] = None
+
+    # Effect processing
+    effect_target_id: Optional[int] = None
+    effect_value: Optional[int] = None
 
     # Effect queue
     effect_queue: deque[Effect] = field(default_factory=deque)
 
-    # Effect processing
-    effect_target: Optional[Entity] = None  # TODO: shrink type annotation?
-    effect_value: Optional[int] = None
+    def create_entity(self, entity: Entity) -> int:
+        entity_id = len(self.entities)
+        self.entities.append(entity)
+
+        return entity_id
+
+    def get_entity(self, entity_id: int) -> Entity:
+        return self.entities[entity_id]
+
+    def get_character(self) -> Character:
+        return self.entities[self.character_id]
+
+    def get_monsters(self) -> list[Monster]:
+        return [self.entities[monster_id] for monster_id in self.monster_ids]
+
+    def get_energy(self) -> Energy:
+        return self.entities[self.energy_id]
+
+    def get_deck(self) -> set[Card]:
+        return {self.entities[card_id] for card_id in self.card_in_deck_ids}
+
+    def get_draw_pile(self) -> list[Card]:
+        return [self.entities[card_id] for card_id in self.card_in_draw_pile_ids]
+
+    def get_hand(self) -> list[Card]:
+        return [self.entities[card_id] for card_id in self.card_in_hand_ids]
+
+    def get_discard_pile(self) -> set[Card]:
+        return {self.entities[card_id] for card_id in self.card_in_discard_pile_ids}
+
+    def get_card_target(self) -> Optional[Entity]:
+        if self.card_target_id is None:
+            return None
+
+        return self.entities[self.card_target_id]
+
+    def get_active_card(self) -> Optional[Card]:
+        if self.card_active_id is None:
+            return None
+
+        return self.entities[self.card_active_id]
+
+    def get_actor_turn(self) -> Optional[Actor]:
+        if self.actor_turn_id is None:
+            return None
+
+        return self.entities[self.actor_turn_id]
+
+    def get_effect_target(self) -> Optional[Entity]:
+        if self.effect_target_id is None:
+            return None
+
+        return self.entities[self.effect_target_id]

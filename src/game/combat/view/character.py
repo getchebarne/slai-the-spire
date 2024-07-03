@@ -10,7 +10,7 @@ class CharacterView(ActorView):
     pass
 
 
-def view_character(context: GameState) -> CharacterView:
-    actor_view = _actor_to_view(context.character)
+def view_character(state: GameState) -> CharacterView:
+    actor_view = _actor_to_view(state.get_character())
 
     return CharacterView(actor_view.name, actor_view.health, actor_view.block)
