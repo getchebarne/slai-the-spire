@@ -4,12 +4,12 @@ from src.game.combat.state import EffectTargetType
 from src.game.combat.state import GameState
 
 
-def add_effects_to_bot(context: GameState, *effects: Effect) -> None:
-    context.effect_queue.extend(effects)
+def add_effects_to_bot(state: GameState, *effects: Effect) -> None:
+    state.effect_queue.extend(effects)
 
 
-def add_effects_to_top(context: GameState, *effects: Effect) -> None:
-    context.effect_queue.extendleft(effects[::-1])
+def add_effects_to_top(state: GameState, *effects: Effect) -> None:
+    state.effect_queue.extendleft(effects[::-1])
 
 
 def card_requires_target(card: Card) -> bool:

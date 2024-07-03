@@ -23,7 +23,7 @@ class CombatView:
     # discard pile
 
 
-def view_combat(context: GameState) -> CombatView:
+def view_combat(state: GameState) -> CombatView:
     return CombatView(
-        view_character(context), view_monsters(context), view_hand(context), view_energy(context)
+        view_character(state), view_monsters(state), view_hand(state), view_energy(state)
     )

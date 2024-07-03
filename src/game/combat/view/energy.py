@@ -14,5 +14,5 @@ def _energy_to_view(energy: Energy) -> EnergyView:
     return EnergyView(energy.current, energy.max)
 
 
-def view_energy(context: GameState) -> EnergyView:
-    return _energy_to_view(context.energy)
+def view_energy(state: GameState) -> EnergyView:
+    return _energy_to_view(state.get_energy())

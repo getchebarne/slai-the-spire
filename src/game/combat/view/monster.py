@@ -52,5 +52,5 @@ def _monster_to_view(monster: Monster) -> MonsterView:
     return MonsterView(actor_view.name, actor_view.health, actor_view.block, intent_view)
 
 
-def view_monsters(context: GameState) -> list[MonsterView]:
-    return [_monster_to_view(monster) for monster in context.monsters]
+def view_monsters(state: GameState) -> list[MonsterView]:
+    return [_monster_to_view(monster) for monster in state.get_monsters()]
