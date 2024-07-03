@@ -9,7 +9,7 @@ from src.game.ecs.components.base import BaseSingletonComponent
 class EffectSelectionType(Enum):
     ALL = "ALL"
     RANDOM = "RANDOM"
-    SPECIFIC = "SPECIFIC"
+    INPUT = "INPUT"
 
 
 @dataclass

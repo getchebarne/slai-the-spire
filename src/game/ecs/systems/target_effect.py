@@ -128,7 +128,7 @@ class TargetEffectSystem(BaseSystem):
             elif effect_selection_type_component.value == EffectSelectionType.RANDOM:
                 target_entity_ids = _handle_effect_selection_type_random(query_target_entity_ids)
 
-            elif effect_selection_type_component.value == EffectSelectionType.SPECIFIC:
+            elif effect_selection_type_component.value == EffectSelectionType.INPUT:
                 target_entity_ids = _handle_effect_selection_type_specific(
                     query_target_entity_ids, effect_entity_id, manager
                 )

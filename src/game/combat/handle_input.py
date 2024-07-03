@@ -1,14 +1,14 @@
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.effect_queue import process_queue
-from src.game.combat.state import GameState
+from src.game.combat.phase import turn_switch
 from src.game.combat.state import Card
+from src.game.combat.state import GameState
 from src.game.combat.state import Monster
 from src.game.combat.utils import add_effects_to_bot
 from src.game.combat.utils import card_requires_target
 
 
-# TODO: should be EffectPlayCard
 def play_card(state: GameState) -> None:
     active_card = state.get_active_card()
     energy = state.get_energy()
@@ -23,15 +23,18 @@ def play_card(state: GameState) -> None:
     state.card_in_discard_pile_ids.add(state.card_active_id)
 
 
-def is_game_over(state: GameState) -> bool:
-    return state.get_character().health.current <= 0 or all(
-        [monster.health.current <= 0 for monster in state.get_monsters()]
-    )
+def handle_action(state: GameState, action: Action) -> None:
+    if action.type == ActionType.END_TURN:
+        turn_switch(state)
+        return
 
-
-def character_turn(state: GameState, action: Action) -> None:
     if action.type == ActionType.SELECT_ENTITY:
-        # Get target entity
+        if state.effect_type is not None:
+            state.selected_entity_ids = [action.target_id]
+            process_queue(state)
+            return
+
+        # Get target entity. TODO: change to `in` check
         target = state.get_entity(action.target_id)
 
         # If it's a card, set it as active
@@ -44,9 +47,6 @@ def character_turn(state: GameState, action: Action) -> None:
         # If it's a monster, set it as target
         if isinstance(target, Monster):
             state.card_target_id = action.target_id
-
-    if action.type == ActionType.END_TURN:
-        return
 
     # Play card. TODO: confirm?
     play_card(state)

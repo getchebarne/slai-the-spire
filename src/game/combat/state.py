@@ -28,7 +28,7 @@ class EffectTargetType(Enum):
 
 
 class EffectSelectionType(Enum):
-    SPECIFIC = "SPECIFIC"
+    INPUT = "INPUT"
     ALL = "ALL"
     RANDOM = "RANDOM"
 
@@ -131,7 +131,10 @@ class GameState:
 
     # Effect processing
     effect_target_id: Optional[int] = None
+    effect_type: Optional[EffectType] = None
     effect_value: Optional[int] = None
+    selected_entity_ids: Optional[list[int]] = None
+    selectable_entity_ids: Optional[list[int]] = None
 
     # Effect queue
     effect_queue: deque[Effect] = field(default_factory=deque)

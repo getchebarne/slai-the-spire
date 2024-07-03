@@ -1,6 +1,7 @@
 from src.game.combat.state import Card
 from src.game.combat.state import Character
 from src.game.combat.state import Effect
+from src.game.combat.state import EffectSelectionType
 from src.game.combat.state import EffectTargetType
 from src.game.combat.state import EffectType
 from src.game.combat.state import Energy
@@ -34,6 +35,26 @@ def defend() -> Card:
     block = 5
 
     return Card("Defend", cost, [Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER)])
+
+
+def survivor() -> Card:
+    cost = 1
+    block = 8
+    discard = 1
+
+    return Card(
+        "Survivor",
+        cost,
+        [
+            Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER),
+            Effect(
+                EffectType.DISCARD,
+                discard,
+                EffectTargetType.CARD_IN_HAND,
+                EffectSelectionType.INPUT,
+            ),
+        ],
+    )
 
 
 def energy() -> Energy:
