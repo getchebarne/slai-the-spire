@@ -11,17 +11,16 @@ class RandomAgent(BaseAgent):
         # Check if there's an active card
         if any([card.is_active for card in combat_view.hand]):
             return Action(
-                ActionType.SELECT_MONSTER, random.choice(range(len(combat_view.monsters)))
+                ActionType.SELECT_ENTITY,
+                random.choice([monster.entity_id for monster in combat_view.monsters]),
             )
 
         # Else, select a card
-        selectable_card_idxs = [
-            idx
-            for idx, card in enumerate(combat_view.hand)
-            if card.cost <= combat_view.energy.current
+        card_is_selectable_ids = [
+            card.entity_id for card in combat_view.hand if card.cost <= combat_view.energy.current
         ]
-        if selectable_card_idxs:
-            return Action(ActionType.SELECT_CARD, random.choice(range(len(selectable_card_idxs))))
+        if card_is_selectable_ids:
+            return Action(ActionType.SELECT_ENTITY, random.choice(card_is_selectable_ids))
 
         # Else, end turn
         return Action(ActionType.END_TURN)
