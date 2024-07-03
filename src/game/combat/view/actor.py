@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from src.game.combat.context import Actor
+from src.game.combat.state import Actor
 
 
 @dataclass

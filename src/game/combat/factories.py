@@ -1,11 +1,11 @@
-from src.game.combat.context import Card
-from src.game.combat.context import Character
-from src.game.combat.context import Effect
-from src.game.combat.context import EffectTargetType
-from src.game.combat.context import EffectType
-from src.game.combat.context import Energy
-from src.game.combat.context import Health
-from src.game.combat.context import Monster
+from src.game.combat.state import Card
+from src.game.combat.state import Character
+from src.game.combat.state import Effect
+from src.game.combat.state import EffectTargetType
+from src.game.combat.state import EffectType
+from src.game.combat.state import Energy
+from src.game.combat.state import Health
+from src.game.combat.state import Monster
 
 
 def silent() -> Character:

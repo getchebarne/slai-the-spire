@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from src.game.combat.context import Energy
-from src.game.combat.context import GameContext
+from src.game.combat.state import Energy
+from src.game.combat.state import GameState
 
 
 @dataclass
@@ -14,5 +14,5 @@ def _energy_to_view(energy: Energy) -> EnergyView:
     return EnergyView(energy.current, energy.max)
 
 
-def view_energy(context: GameContext) -> EnergyView:
+def view_energy(context: GameState) -> EnergyView:
     return _energy_to_view(context.energy)

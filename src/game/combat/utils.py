@@ -1,14 +1,14 @@
-from src.game.combat.context import Card
-from src.game.combat.context import Effect
-from src.game.combat.context import EffectTargetType
-from src.game.combat.context import GameContext
+from src.game.combat.state import Card
+from src.game.combat.state import Effect
+from src.game.combat.state import EffectTargetType
+from src.game.combat.state import GameState
 
 
-def add_effects_to_bot(context: GameContext, *effects: Effect) -> None:
+def add_effects_to_bot(context: GameState, *effects: Effect) -> None:
     context.effect_queue.extend(effects)
 
 
-def add_effects_to_top(context: GameContext, *effects: Effect) -> None:
+def add_effects_to_top(context: GameState, *effects: Effect) -> None:
     context.effect_queue.extendleft(effects[::-1])
 
 

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from src.game.combat.context import GameContext
+from src.game.combat.state import GameState
 from src.game.combat.view.card import CardView
 from src.game.combat.view.card import view_hand
 from src.game.combat.view.character import CharacterView
@@ -23,7 +23,7 @@ class CombatView:
     # discard pile
 
 
-def view_combat(context: GameContext) -> CombatView:
+def view_combat(context: GameState) -> CombatView:
     return CombatView(
         view_character(context), view_monsters(context), view_hand(context), view_energy(context)
     )

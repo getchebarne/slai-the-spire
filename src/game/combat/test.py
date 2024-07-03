@@ -1,6 +1,6 @@
 from src.agents.random import RandomAgent
 from src.game.combat.action import ActionType
-from src.game.combat.context import GameContext
+from src.game.combat.state import GameState
 from src.game.combat.drawer import drawer
 from src.game.combat.factories import defend
 from src.game.combat.factories import dummy
@@ -18,7 +18,7 @@ from src.game.combat.phase import turn_start_monster
 from src.game.combat.view import view_combat
 
 
-context = GameContext(
+context = GameState(
     character=silent(),
     monsters=[dummy()],
     energy=energy(),

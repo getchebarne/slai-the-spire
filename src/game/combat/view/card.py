@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from src.game.combat.context import Card
-from src.game.combat.context import GameContext
+from src.game.combat.state import Card
+from src.game.combat.state import GameState
 
 
 @dataclass
@@ -14,7 +14,7 @@ class CardView:
         return hash(id(self))
 
 
-def _card_to_view(context: GameContext, card: Card) -> CardView:
+def _card_to_view(context: GameState, card: Card) -> CardView:
     return CardView(
         card.name,
         card.cost,
@@ -22,13 +22,13 @@ def _card_to_view(context: GameContext, card: Card) -> CardView:
     )
 
 
-def view_hand(context: GameContext) -> list[CardView]:
+def view_hand(context: GameState) -> list[CardView]:
     return [_card_to_view(context, card) for card in context.hand]
 
 
-def view_draw_pile(context: GameContext) -> set[CardView]:
+def view_draw_pile(context: GameState) -> set[CardView]:
     return {_card_to_view(context, card) for card in context.draw_pile}
 
 
-def view_discard_pile(context: GameContext) -> set[CardView]:
+def view_discard_pile(context: GameState) -> set[CardView]:
     return {_card_to_view(context, card) for card in context.discard_pile}

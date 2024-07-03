@@ -1,11 +1,11 @@
 import random
 from typing import Callable
 
-from src.game.combat.context import Effect
-from src.game.combat.context import EffectTargetType
-from src.game.combat.context import EffectType
-from src.game.combat.context import Monster
-from src.game.combat.context import MonsterMove
+from src.game.combat.state import Effect
+from src.game.combat.state import EffectTargetType
+from src.game.combat.state import EffectType
+from src.game.combat.state import Monster
+from src.game.combat.state import MonsterMove
 
 
 ais: dict[str, Callable] = {}

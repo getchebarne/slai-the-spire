@@ -107,7 +107,7 @@ class Energy:
 
 
 @dataclass
-class GameContext:
+class GameState:
     # Specific entities
     character: Character
     monsters: list[Monster]
