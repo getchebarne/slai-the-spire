@@ -13,6 +13,7 @@ class Entity(ABC):
 class EffectType(Enum):
     DEAL_DAMAGE = "DEAL_DAMAGE"
     GAIN_BLOCK = "GAIN_BLOCK"
+    GAIN_WEAK = "GAIN_WEAK"
     DRAW_CARD = "DRAW_CARD"
     REFILL_ENERGY = "REFILL_ENERGY"
     DISCARD = "DISCARD"
@@ -58,10 +59,26 @@ class Block:
 
 
 @dataclass
+class ModifierType:
+    WEAK = "WEAK"
+
+
+@dataclass
+class Modifier:
+    stacks: Optional[int] = None
+    stacks_min: Optional[int] = None
+    stacks_max: Optional[int] = None
+    stacks_duration: bool = False
+    turn_start_effects: list[Effect] = field(default_factory=list)
+    turn_end_effects: list[Effect] = field(default_factory=list)
+
+
+@dataclass
 class Actor(Entity):
     name: str
     health: Health
     block: Block = field(default_factory=Block)
+    modifiers: dict[ModifierType, Modifier] = field(default_factory=dict)
 
 
 @dataclass
@@ -130,6 +147,7 @@ class GameState:
     actor_turn_id: Optional[int] = None
 
     # Effect processing
+    effect_source_id: Optional[int] = None
     effect_target_id: Optional[int] = None
     effect_type: Optional[EffectType] = None
     effect_value: Optional[int] = None

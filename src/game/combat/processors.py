@@ -1,13 +1,16 @@
 import random
 from typing import Callable
 
+from src.game.combat.factories import weak
+from src.game.combat.state import Card
 from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
+from src.game.combat.state import ModifierType
 
 
 def _processor_deal_damage(state: GameState) -> None:
     target = state.get_effect_target()
-    value = state.effect_value
+    value = int(state.effect_value)
 
     health = target.health
     block = target.block
@@ -26,6 +29,33 @@ def _processor_gain_block(state: GameState) -> None:
 
     block = target.block
     block.current = min(block.current + value, block.max)
+
+
+def _processor_gain_weak(state: GameState) -> None:
+    target = state.get_effect_target()
+    value = state.effect_value
+
+    try:
+        modifier_weak = target.modifiers[ModifierType.WEAK]
+        modifier_weak.stacks = min(modifier_weak.stacks + value, modifier_weak.stacks_max)
+
+    except KeyError:
+        modifier_weak = weak()
+        modifier_weak.stacks = value
+        target.modifiers[ModifierType.WEAK] = modifier_weak
+
+
+def _processor_apply_weak(state: GameState) -> None:
+    source = state.get_entity(state.effect_source_id)
+
+    # TODO: improve
+    if isinstance(source, Card):
+        source = state.get_character()
+
+    value = state.effect_value
+
+    if ModifierType.WEAK in source.modifiers:
+        value *= 0.75
 
 
 # TODO: handle infinite loop
@@ -69,8 +99,9 @@ def get_effect_processors(effect_type: EffectType) -> list[Callable]:  # TODO: a
 
 # Dictionary to hold effect type to processing function mappings
 processors = {
-    EffectType.DEAL_DAMAGE: [_processor_deal_damage],
+    EffectType.DEAL_DAMAGE: [_processor_apply_weak, _processor_deal_damage],
     EffectType.GAIN_BLOCK: [_processor_gain_block],
+    EffectType.GAIN_WEAK: [_processor_gain_weak],
     EffectType.DRAW_CARD: [_processor_draw_card],
     EffectType.REFILL_ENERGY: [_processor_refill_energy],
     EffectType.DISCARD: [_processor_discard],

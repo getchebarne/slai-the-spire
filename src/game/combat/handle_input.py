@@ -50,7 +50,9 @@ def handle_action(state: GameState, action: Action) -> None:
 
     # Play card. TODO: confirm?
     play_card(state)
-    add_effects_to_bot(state, *state.get_active_card().effects)
+    add_effects_to_bot(
+        state, *[(effect, state.card_active_id) for effect in state.get_active_card().effects]
+    )
     process_queue(state)
 
     # Untag card

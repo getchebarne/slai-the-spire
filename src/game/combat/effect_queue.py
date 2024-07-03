@@ -72,7 +72,7 @@ def get_effect_targets(
 
 def _process_next_effect(state: GameState) -> Optional[EffectSelectionStatus]:
     # Get effect from queue
-    effect = state.effect_queue.popleft()
+    effect, source_id = state.effect_queue.popleft()
 
     # Get effect's targets and processors
     effect_selection_status, target_ids = get_effect_targets(
@@ -83,7 +83,7 @@ def _process_next_effect(state: GameState) -> Optional[EffectSelectionStatus]:
         state.effect_type = effect.type
 
         # Reque effect
-        add_effects_to_top(state, effect)
+        add_effects_to_top(state, (effect, source_id))
 
         return effect_selection_status
 
@@ -95,6 +95,7 @@ def _process_next_effect(state: GameState) -> Optional[EffectSelectionStatus]:
     if target_ids is None:
         target_ids = [None]
 
+    state.effect_source_id = source_id
     for target_id in target_ids:
         # Set target and value
         state.effect_target_id = target_id

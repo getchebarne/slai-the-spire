@@ -60,13 +60,16 @@ def turn_switch(state: GameState) -> None:
 
 def _turn_start_effects(state: GameState, actor_id: int) -> None:
     # Common effects
-    effects = [Effect(EffectType.ZERO_BLOCK, target_type=EffectTargetType.TURN)]
+    effects = [(Effect(EffectType.ZERO_BLOCK, target_type=EffectTargetType.TURN), None)]
 
     # Character and monster-specific effects
     actor = state.get_entity(actor_id)
     if isinstance(actor, Character):
         # Draw 5 cards and refill energy
-        effects += [Effect(EffectType.DRAW_CARD, 5), Effect(EffectType.REFILL_ENERGY)]
+        effects += [
+            (Effect(EffectType.DRAW_CARD, 5), None),
+            (Effect(EffectType.REFILL_ENERGY), None),
+        ]
 
     elif isinstance(actor, Monster):
         # TODO: empty for now
@@ -80,13 +83,27 @@ def _turn_start_effects(state: GameState, actor_id: int) -> None:
 def _turn_end_effects(state: GameState, actor_id: int) -> None:
     actor = state.get_entity(actor_id)
 
+    # Common
+    for modifier_type, modifier in actor.modifiers.items():
+        if modifier.stacks_duration:
+            modifier.stacks -= 1
+
+    actor.modifiers = {
+        modifier_type: modifier
+        for modifier_type, modifier in actor.modifiers.items()
+        if modifier.stacks > modifier.stacks_min
+    }
+
     if isinstance(actor, Character):
         # Character-specific effects
         effects = [
-            Effect(
-                EffectType.DISCARD,
-                target_type=EffectTargetType.CARD_IN_HAND,
-                selection_type=EffectSelectionType.ALL,
+            (
+                Effect(
+                    EffectType.DISCARD,
+                    target_type=EffectTargetType.CARD_IN_HAND,
+                    selection_type=EffectSelectionType.ALL,
+                ),
+                None,
             )
         ]
 
@@ -107,7 +124,7 @@ def turn_monster(state: GameState) -> None:
         return
 
     # Queue monster's move's effects
-    add_effects_to_bot(state, *actor.move.effects)
+    add_effects_to_bot(state, *[(effect, actor_id) for effect in actor.move.effects])
 
     # Update monster's move
     ais[actor.name](actor)
