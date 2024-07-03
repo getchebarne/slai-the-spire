@@ -18,3 +18,9 @@ def card_requires_target(card: Card) -> bool:
             return True
 
     return False
+
+
+def is_game_over(state: GameState) -> bool:
+    return state.get_character().health.current <= 0 or all(
+        [monster.health.current <= 0 for monster in state.get_monsters()]
+    )

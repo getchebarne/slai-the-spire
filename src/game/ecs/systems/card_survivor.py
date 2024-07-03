@@ -35,7 +35,7 @@ class CardSurvivorSystem(BaseSystem):
                 manager.create_entity(
                     EffectDiscardCardComponent(),
                     EffectQueryComponentsComponent([CardInHandComponent]),
-                    EffectSelectionTypeComponent(EffectSelectionType.SPECIFIC),
+                    EffectSelectionTypeComponent(EffectSelectionType.INPUT),
                     EffectNumberOfTargetsComponent(DISCARD),
                 ),
             )

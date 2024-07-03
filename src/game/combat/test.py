@@ -1,20 +1,16 @@
 from src.agents.random import RandomAgent
-from src.game.combat.action import ActionType
 from src.game.combat.drawer import drawer
 from src.game.combat.factories import defend
 from src.game.combat.factories import dummy
 from src.game.combat.factories import energy
 from src.game.combat.factories import silent
 from src.game.combat.factories import strike
-from src.game.combat.logic import character_turn
-from src.game.combat.logic import is_game_over
+from src.game.combat.factories import survivor
+from src.game.combat.handle_input import handle_action
 from src.game.combat.phase import combat_start
-from src.game.combat.phase import turn_end_character
-from src.game.combat.phase import turn_end_monster
 from src.game.combat.phase import turn_monster
-from src.game.combat.phase import turn_start_character
-from src.game.combat.phase import turn_start_monster
 from src.game.combat.state import GameState
+from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
 
@@ -37,6 +33,7 @@ state.card_in_deck_ids = {
     state.create_entity(defend()),
     state.create_entity(defend()),
     state.create_entity(defend()),
+    state.create_entity(survivor()),
 }
 
 # Instance agent
@@ -49,30 +46,19 @@ def main():
 
     # Game loop
     while not is_game_over(state):
-        # Character turn start
-        turn_start_character(state)
+        #
+        combat_view = view_combat(state)
+        drawer(combat_view)
 
-        # Character turn. TODO: fix gamer over
-        action = None
-        while action is None or action.type != ActionType.END_TURN:
-            combat_view = view_combat(state)
-            drawer(combat_view)
+        # Get action form agent
+        if state.actor_turn_id == state.character_id:
             action = agent.select_action(combat_view)
-            character_turn(state, action)
 
-        # Character turn end
-        turn_end_character(state)
+            # Handle action
+            handle_action(state, action)
 
         # Monsters turn
-        for monster_id in state.monster_ids:
-            # Monster turn start
-            turn_start_monster(state, monster_id)
-
-            # Monster turn
-            turn_monster(state, monster_id)
-
-            # Monster turn end
-            turn_end_monster(state, monster_id)
+        turn_monster(state)
 
 
 if __name__ == "__main__":
