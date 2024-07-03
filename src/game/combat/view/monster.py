@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from src.game.combat.context import EffectType
-from src.game.combat.context import GameContext
-from src.game.combat.context import Monster
-from src.game.combat.context import MonsterMove
+from src.game.combat.state import EffectType
+from src.game.combat.state import GameState
+from src.game.combat.state import Monster
+from src.game.combat.state import MonsterMove
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
 
@@ -52,5 +52,5 @@ def _monster_to_view(monster: Monster) -> MonsterView:
     return MonsterView(actor_view.name, actor_view.health, actor_view.block, intent_view)
 
 
-def view_monsters(context: GameContext) -> list[MonsterView]:
+def view_monsters(context: GameState) -> list[MonsterView]:
     return [_monster_to_view(monster) for monster in context.monsters]

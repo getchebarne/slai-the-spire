@@ -1,11 +1,11 @@
 import random
 from typing import Callable
 
-from src.game.combat.context import EffectType
-from src.game.combat.context import GameContext
+from src.game.combat.state import EffectType
+from src.game.combat.state import GameState
 
 
-def _processor_deal_damage(context: GameContext) -> None:
+def _processor_deal_damage(context: GameState) -> None:
     target = context.effect_target
     value = context.effect_value
 
@@ -20,7 +20,7 @@ def _processor_deal_damage(context: GameContext) -> None:
     health.current = max(0, health.current - damage_over_block)
 
 
-def _processor_gain_block(context: GameContext) -> None:
+def _processor_gain_block(context: GameState) -> None:
     target = context.effect_target
     value = context.effect_value
 
@@ -29,7 +29,7 @@ def _processor_gain_block(context: GameContext) -> None:
 
 
 # TODO: handle infinite loop
-def _processor_draw_card(context: GameContext) -> None:
+def _processor_draw_card(context: GameState) -> None:
     value = context.effect_value
 
     for _ in range(value):
@@ -45,18 +45,18 @@ def _processor_draw_card(context: GameContext) -> None:
         context.hand.append(context.draw_pile.pop(0))
 
 
-def _processor_refill_energy(context: GameContext) -> None:
+def _processor_refill_energy(context: GameState) -> None:
     context.energy.current = context.energy.max
 
 
-def _processor_discard(context: GameContext) -> None:
+def _processor_discard(context: GameState) -> None:
     target = context.effect_target
 
     context.hand.remove(target)
     context.discard_pile.add(target)
 
 
-def _processor_zero_block(context: GameContext) -> None:
+def _processor_zero_block(context: GameState) -> None:
     target = context.effect_target
 
     target.block.current = 0

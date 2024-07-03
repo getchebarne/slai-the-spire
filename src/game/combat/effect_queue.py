@@ -1,15 +1,15 @@
 import random
 from typing import Optional
 
-from src.game.combat.context import EffectSelectionType
-from src.game.combat.context import EffectTargetType
-from src.game.combat.context import Entity
-from src.game.combat.context import GameContext
+from src.game.combat.state import EffectSelectionType
+from src.game.combat.state import EffectTargetType
+from src.game.combat.state import Entity
+from src.game.combat.state import GameState
 from src.game.combat.processors import get_effect_processors
 
 
 def _resolve_effect_target_type(
-    effect_target_type: EffectTargetType, context: GameContext
+    effect_target_type: EffectTargetType, context: GameState
 ) -> list[Entity]:
     if effect_target_type == EffectTargetType.CHARACTER:
         return [context.character]
@@ -48,7 +48,7 @@ def _resolve_effect_selection_type(
 def get_effect_targets(
     effect_target_type: EffectTargetType,
     effect_selection_type: EffectSelectionType,
-    context: GameContext,
+    context: GameState,
 ) -> Optional[list[Entity]]:
     if effect_target_type is None:
         return None
@@ -61,7 +61,7 @@ def get_effect_targets(
     return _resolve_effect_selection_type(effect_selection_type, query_entity_ids)
 
 
-def _process_next_effect(context: GameContext) -> None:
+def _process_next_effect(context: GameState) -> None:
     # Get effect from queue
     effect = context.effect_queue.popleft()
 
@@ -83,6 +83,6 @@ def _process_next_effect(context: GameContext) -> None:
             processor(context)
 
 
-def process_queue(context: GameContext) -> None:
+def process_queue(context: GameState) -> None:
     while context.effect_queue:
         _process_next_effect(context)
