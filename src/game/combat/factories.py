@@ -6,6 +6,7 @@ from src.game.combat.state import EffectTargetType
 from src.game.combat.state import EffectType
 from src.game.combat.state import Energy
 from src.game.combat.state import Health
+from src.game.combat.state import Modifier
 from src.game.combat.state import Monster
 
 
@@ -57,7 +58,26 @@ def survivor() -> Card:
     )
 
 
+def neutralize() -> Card:
+    cost = 0
+    damage = 3
+    weak = 1
+
+    return Card(
+        "Neutralize",
+        cost,
+        [
+            Effect(EffectType.DEAL_DAMAGE, damage, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.GAIN_WEAK, weak, EffectTargetType.CARD_TARGET),
+        ],
+    )
+
+
 def energy() -> Energy:
     energy = 3
 
     return Energy(energy)
+
+
+def weak() -> Modifier:
+    return Modifier(stacks_min=0, stacks_max=999, stacks_duration=True)

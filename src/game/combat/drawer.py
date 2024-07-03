@@ -5,6 +5,7 @@ from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import BlockView
 from src.game.combat.view.actor import HealthView
+from src.game.combat.view.actor import ModifierView
 from src.game.combat.view.card import CardView
 from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import IntentView
@@ -51,20 +52,20 @@ def _block_str(block: BlockView) -> str:
 
 
 def _actor_str(actor: ActorView, n_col: int = 0) -> str:
-    # modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor
+    modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
     # actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
     return (
         f"{WHITE}{actor.name:>{n_col}}{RESET}\n"
         f"{WHITE}{'-' * len(actor.name):>{n_col}}{RESET}\n"
         f"{RED}{_health_str(actor.health):>{n_col}}{RESET}\n"
         f"{CYAN}{_block_str(actor.block):>{n_col}}{RESET}\n"
-        # f"{modifier_strs:>{n_col}}"
+        f"{modifier_strs:>{n_col}}"
     )
 
 
-# def _modifier_str(modifier_view: ModifierView) -> str:
-#     # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
-#     return f"{modifier_view.type.upper()}: {modifier_view.stacks}"
+def _modifier_str(modifier_view: ModifierView) -> str:
+    # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
+    return f"{modifier_view.type}: {modifier_view.stacks}"
 
 
 # def _effect_str(effect_view: Optional[EffectView]) -> str:

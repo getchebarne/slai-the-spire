@@ -3,6 +3,7 @@ from src.game.combat.drawer import drawer
 from src.game.combat.factories import defend
 from src.game.combat.factories import dummy
 from src.game.combat.factories import energy
+from src.game.combat.factories import neutralize
 from src.game.combat.factories import silent
 from src.game.combat.factories import strike
 from src.game.combat.factories import survivor
@@ -34,6 +35,7 @@ state.card_in_deck_ids = {
     state.create_entity(defend()),
     state.create_entity(defend()),
     state.create_entity(survivor()),
+    state.create_entity(neutralize()),
 }
 
 # Instance agent

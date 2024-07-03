@@ -51,7 +51,12 @@ def _monster_to_view(state: GameState, monster_entity_id: int) -> MonsterView:
     intent_view = _move_to_intent(monster.move)
 
     return MonsterView(
-        actor_view.name, actor_view.health, actor_view.block, monster_entity_id, intent_view
+        actor_view.name,
+        actor_view.health,
+        actor_view.block,
+        actor_view.modifiers,
+        monster_entity_id,
+        intent_view,
     )
 
 
