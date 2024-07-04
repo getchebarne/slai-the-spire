@@ -20,11 +20,11 @@ def register_ai(monster_name: str) -> Callable:
 
 
 def move_attack() -> MonsterMove:
-    return MonsterMove("Attack", [Effect(EffectType.DEAL_DAMAGE, 5, EffectTargetType.CHARACTER)])
+    return MonsterMove("Attack", [Effect(EffectType.DEAL_DAMAGE, 10, EffectTargetType.CHARACTER)])
 
 
 def move_defend() -> MonsterMove:
-    return MonsterMove("Defend", [Effect(EffectType.GAIN_BLOCK, 5, EffectTargetType.TURN)])
+    return MonsterMove("Defend", [Effect(EffectType.GAIN_BLOCK, 10, EffectTargetType.TURN)])
 
 
 @register_ai("Dummy")

@@ -97,6 +97,11 @@ class Monster(Actor):
     move: Optional[MonsterMove] = None
 
 
+class CardName(Enum):
+    STRIKE = "STRIKE"
+    DEFEND = "DEFEND"
+
+
 @dataclass
 class Card(Entity):
     name: str

@@ -29,3 +29,6 @@ venv/
 
 # .DS_Store
 .DS_Store
+
+# Experiments directory
+experiments
