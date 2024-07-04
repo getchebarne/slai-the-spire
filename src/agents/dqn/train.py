@@ -9,8 +9,6 @@ from src.agents.dqn.explorer import linear_decay
 from src.agents.dqn.memory import Batch
 from src.agents.dqn.memory import ReplayBuffer
 from src.agents.dqn.memory import Sample
-from src.agents.dqn.memory import sample
-from src.agents.dqn.memory import store
 from src.agents.dqn.model import DQNAgent
 from src.agents.dqn.utils import get_valid_action_mask
 from src.game.combat.action import Action
@@ -82,8 +80,6 @@ def _play_episode(
     replay_buffer: ReplayBuffer,
     epsilon: float,
     batch_size: int,
-    ptr: int,
-    full: bool,
 ) -> tuple[GameState, float]:
     # Get new game
     state = new_game()
@@ -145,8 +141,7 @@ def _play_episode(
             reward = 0
 
         # Store transition in memory
-        ptr = store(
-            replay_buffer,
+        replay_buffer.store(
             Sample(
                 combat_view_t,
                 combat_view_tp1,
@@ -154,30 +149,26 @@ def _play_episode(
                 reward,
                 valid_action_mask_tp1,
                 game_over_flag,
-            ),
-            ptr,
+            )
         )
-        full = full or ptr == 0
 
-        # Training step
-        if not full and ptr < batch_size:
+        # Train
+        batch = replay_buffer.sample(batch_size)
+        if batch is None:
             continue
 
-        batch = sample(replay_buffer, batch_size, len(replay_buffer) if full else ptr)
         loss_batch = _train_on_batch(batch, model, optimizer)
         loss_episode += loss_batch
 
-    return state, loss_episode / num_moves, ptr, full
+    return state, loss_episode / num_moves
 
 
 def train() -> None:
     # Config
-    ptr = 0
-    full = False
     buffer_size = int(5e3)
     num_epochs = int(1e3)
     batch_size = 48
-    writer = SummaryWriter("experiments/test-7")
+    writer = SummaryWriter("experiments/test-del")
 
     # Replay buffer
     replay_buffer = ReplayBuffer(buffer_size)
@@ -193,8 +184,8 @@ def train() -> None:
 
     # Train
     for epoch in range(num_epochs):
-        state, epoch_loss, ptr, full = _play_episode(
-            model, optimizer, replay_buffer, epsilons[epoch], batch_size, ptr, full
+        state, epoch_loss = _play_episode(
+            model, optimizer, replay_buffer, epsilons[epoch], batch_size
         )
         # View end state
         combat_view_end = view_combat(state)
