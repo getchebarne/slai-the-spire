@@ -25,6 +25,7 @@ def play_card(state: GameState) -> None:
 
 def handle_action(state: GameState, action: Action) -> None:
     if action.type == ActionType.END_TURN:
+        state.card_active_id = None
         turn_switch(state)
         return
 

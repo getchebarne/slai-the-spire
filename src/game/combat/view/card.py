@@ -8,7 +8,8 @@ class CardView:
     entity_id: int
     name: str
     cost: int
-    is_active: bool  # TODO: make int
+    is_selectable: bool
+    is_active: bool
 
     def __hash__(self) -> int:
         return hash(id(self))
@@ -16,11 +17,13 @@ class CardView:
 
 def _card_to_view(state: GameState, card_entity_id: int) -> CardView:
     card = state.get_entity(card_entity_id)
+    energy = state.get_entity(state.energy_id)
 
     return CardView(
         card_entity_id,
         card.name,
         card.cost,
+        True if card.cost <= energy.current and state.card_active_id is None else False,
         True if card_entity_id == state.card_active_id else False,
     )
 

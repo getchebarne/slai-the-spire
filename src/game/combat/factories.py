@@ -1,4 +1,5 @@
 from src.game.combat.state import Card
+from src.game.combat.state import CardName
 from src.game.combat.state import Character
 from src.game.combat.state import Effect
 from src.game.combat.state import EffectSelectionType
@@ -27,7 +28,9 @@ def strike() -> Card:
     damage = 6
 
     return Card(
-        "Strike", cost, [Effect(EffectType.DEAL_DAMAGE, damage, EffectTargetType.CARD_TARGET)]
+        CardName.STRIKE,
+        cost,
+        [Effect(EffectType.DEAL_DAMAGE, damage, EffectTargetType.CARD_TARGET)],
     )
 
 
@@ -35,7 +38,9 @@ def defend() -> Card:
     cost = 1
     block = 5
 
-    return Card("Defend", cost, [Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER)])
+    return Card(
+        CardName.DEFEND, cost, [Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER)]
+    )
 
 
 def survivor() -> Card:
