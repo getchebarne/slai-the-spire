@@ -116,6 +116,7 @@ def _turn_end_effects(state: GameState, actor_id: int) -> None:
     process_queue(state)
 
 
+# TODO: support multiple monsters
 def turn_monster(state: GameState) -> None:
     actor_id = state.actor_turn_id
     actor = state.get_entity(actor_id)

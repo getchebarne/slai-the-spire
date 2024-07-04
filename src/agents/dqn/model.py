@@ -94,7 +94,7 @@ def _encode_combat(
     )
 
 
-class DQNAgent(nn.Module):
+class EmbeddingMLP(nn.Module):
     def __init__(self, card_name_embedding_size: int):
         super().__init__()
         self.card_name_embedding_size = card_name_embedding_size
