@@ -29,6 +29,9 @@ def _resolve_effect_target_type(
     if effect_target_type == EffectTargetType.CARD_IN_HAND:
         return state.card_in_hand_ids.copy()  # TODO: revisit copy call
 
+    if effect_target_type == EffectTargetType.CARD_ACTIVE:
+        return [state.card_active_id]
+
     if effect_target_type == EffectTargetType.TURN:
         return [state.actor_turn_id]
 
