@@ -100,6 +100,8 @@ class Monster(Actor):
 class CardName(Enum):
     STRIKE = "STRIKE"
     DEFEND = "DEFEND"
+    NEUTRALIZE = "NEUTRALIZE"
+    # SURVIVOR = "SURVIVOR"
 
 
 @dataclass

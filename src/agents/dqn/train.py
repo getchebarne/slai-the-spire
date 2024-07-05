@@ -14,12 +14,12 @@ from src.agents.dqn.reward import compute_reward
 from src.agents.dqn.utils import action_idx_to_action
 from src.agents.dqn.utils import get_valid_action_mask
 from src.agents.dqn_a import DQNAgent
-from src.game.combat.view import CombatView
 from src.game.combat.create import create_combat
 from src.game.combat.handle_input import handle_action
 from src.game.combat.phase import turn_monster
 from src.game.combat.state import GameState
 from src.game.combat.utils import is_game_over
+from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
 
 
@@ -84,6 +84,19 @@ def _game_step(state: GameState, agent: DQNAgent, epsilon: float) -> tuple[Comba
     return combat_view, action_idx
 
 
+def _evaluate_agent(agent: DQNAgent) -> int:
+    # Get new game
+    state = create_combat()
+
+    while not is_game_over(state):
+        _game_step(state, agent, epsilon=-1)
+
+    # View end state
+    combat_view_end = view_combat(state)
+
+    return combat_view_end.character.health.current
+
+
 def _play_episode(
     agent: DQNAgent,
     optimizer: torch.optim.Optimizer,
@@ -134,9 +147,10 @@ def _play_episode(
 def train() -> None:
     # Config
     buffer_size = int(1e3)
-    num_epochs = int(5e2)
+    num_epochs = int(5e1)
     batch_size = 48
-    writer = SummaryWriter("experiments/test-del-9")
+    eval_every = 5
+    writer = SummaryWriter("experiments/test-del-wk-2")
 
     # Replay buffer
     replay_buffer = ReplayBuffer(buffer_size)
@@ -146,7 +160,7 @@ def train() -> None:
     agent = DQNAgent(model)
 
     # Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
     # Explorer
     epsilons = linear_decay(num_epochs, num_epochs // 2, 1, 0.001)
@@ -162,7 +176,10 @@ def train() -> None:
         writer.add_scalar("Epoch loss", epoch_loss, epoch)
         writer.add_scalar("Epsilon", epsilons[epoch], epoch)
         writer.add_scalar("Final HP", combat_view_end.character.health.current, epoch)
-        # writer.add_scalar("Blunders", blunders, epoch)
+
+        if (epoch % eval_every) == 0:
+            final_hp = _evaluate_agent(agent)
+            writer.add_scalar("Eval/Final HP", final_hp, epoch)
 
 
 if __name__ == "__main__":
