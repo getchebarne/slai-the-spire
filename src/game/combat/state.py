@@ -18,6 +18,7 @@ class EffectType(Enum):
     REFILL_ENERGY = "REFILL_ENERGY"
     DISCARD = "DISCARD"
     ZERO_BLOCK = "ZERO_BLOCK"
+    PLAY_CARD = "PLAY_CARD"
 
 
 class EffectTargetType(Enum):
@@ -25,6 +26,7 @@ class EffectTargetType(Enum):
     MONSTER = "MONSTER"
     CARD_TARGET = "CARD_TARGET"
     CARD_IN_HAND = "CARD_IN_HAND"
+    CARD_ACTIVE = "CARD_ACTIVE"
     TURN = "TURN"
 
 

@@ -4,8 +4,11 @@ from typing import Callable
 from src.game.combat.factories import weak
 from src.game.combat.state import Card
 from src.game.combat.state import EffectType
+from src.game.combat.state import Effect
+from src.game.combat.state import EffectTargetType
 from src.game.combat.state import GameState
 from src.game.combat.state import ModifierType
+from src.game.combat.utils import add_effects_to_bot
 
 
 def _processor_deal_damage(state: GameState) -> None:
@@ -29,6 +32,25 @@ def _processor_gain_block(state: GameState) -> None:
 
     block = target.block
     block.current = min(block.current + value, block.max)
+
+
+def _processor_play_card(state: GameState) -> None:
+    target = state.get_effect_target()
+    energy = state.get_energy()
+
+    if target.cost > energy.current:
+        raise ValueError(f"Can't play card {target} with {energy.current} energy")
+
+    # Subtract energy
+    energy.current -= target.cost
+
+    # Add cards effects to pipeline
+    # TODO: think about creating effects w/ target already
+    add_effects_to_bot(
+        state,
+        (Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_ACTIVE), None),
+        *[(effect, state.effect_target_id) for effect in target.effects],
+    )
 
 
 def _processor_gain_weak(state: GameState) -> None:
@@ -106,4 +128,5 @@ processors = {
     EffectType.REFILL_ENERGY: [_processor_refill_energy],
     EffectType.DISCARD: [_processor_discard],
     EffectType.ZERO_BLOCK: [_processor_zero_block],
+    EffectType.PLAY_CARD: [_processor_play_card],
 }

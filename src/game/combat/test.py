@@ -1,11 +1,10 @@
 from src.agents.random import RandomAgent
 from src.game.combat.drawer import drawer
 from src.game.combat.handle_input import handle_action
-from src.game.combat.phase import combat_start
 from src.game.combat.phase import turn_monster
 from src.game.combat.state import GameState
 from src.game.combat.utils import is_game_over
-from src.game.combat.utils import new_game
+from src.game.combat.create import create_combat
 from src.game.combat.view import view_combat
 
 
@@ -13,16 +12,13 @@ from src.game.combat.view import view_combat
 state = GameState()
 
 # Instance state
-state = new_game()
+state = create_combat()
 
 # Instance agent
 agent = RandomAgent()
 
 
 def main():
-    # Start combat
-    combat_start(state)
-
     # Game loop
     while not is_game_over(state):
         #
