@@ -62,6 +62,9 @@ def _encode_card(
     elif card_view.name == CardName.DEFEND:
         card_name_idx = 2
 
+    elif card_view.name == CardName.NEUTRALIZE:
+        card_name_idx = 3
+
     return torch.concat(
         [
             torch.tensor((card_view.cost, card_view.is_selectable, card_view.is_active)),

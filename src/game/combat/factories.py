@@ -69,7 +69,7 @@ def neutralize() -> Card:
     weak = 1
 
     return Card(
-        "Neutralize",
+        CardName.NEUTRALIZE,
         cost,
         [
             Effect(EffectType.DEAL_DAMAGE, damage, EffectTargetType.CARD_TARGET),
