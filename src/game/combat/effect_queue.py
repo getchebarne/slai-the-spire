@@ -6,7 +6,6 @@ from src.game.combat.processors import get_effect_processors
 from src.game.combat.state import Effect
 from src.game.combat.state import EffectSelectionType
 from src.game.combat.state import EffectTargetType
-from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
 
 
@@ -19,7 +18,13 @@ class EffectQueue:
     def __init__(self):
         self._source_ids: list[int] = []
         self._effects: list[Effect] = []
-        self._effect_type_pending: Optional[EffectType] = None
+
+        self._source_id_pending: Optional[int] = None
+        self._effect_pending: Optional[Effect] = None
+
+    @property
+    def effect_pending(self) -> Effect:
+        return self._effect_pending
 
     def add_to_bot(self, source_id: int, *effects: Effect) -> None:
         self._source_ids += [source_id] * len(effects)
@@ -30,7 +35,20 @@ class EffectQueue:
         self._effects = list(effects) + self._effects
 
     def get_next_effect(self) -> tuple[int, Effect]:
-        return self._source_ids.pop(0), self._effects.pop(0)
+        if self._source_id_pending is not None and self._effect_pending is not None:
+            return self._source_id_pending, self._effect_pending
+
+        source_id = self._source_ids.pop(0)
+        effect = self._effects.pop(0)
+
+        self._source_id_pending = source_id
+        self._effect_pending = effect
+
+        return source_id, effect
+
+    def clear_pending(self) -> None:
+        self._source_id_pending = None
+        self._effect_pending = None
 
 
 def _resolve_effect_target_type(
@@ -103,16 +121,9 @@ def _process_next_effect(
         state, effect.target_type, effect.selection_type
     )
     if effect_selection_status == EffectSelectionStatus.PENDING_INPUT:
-        # Tags
-        effect_queue._effect_type_pending = effect.type
-
-        # Reque effect
-        effect_queue.add_to_top(source_id, effect)
-
         return effect_selection_status
 
     processors = get_effect_processors(effect.type)
-    state.effect_type = None
     state.selected_entity_ids = None
 
     # Execute
@@ -134,3 +145,6 @@ def process_queue(state: GameState, effect_queue: EffectQueue) -> None:
     ret = None
     while effect_queue._effects and ret is None:
         ret = _process_next_effect(state, effect_queue)
+
+        if ret is None:
+            effect_queue.clear_pending()
