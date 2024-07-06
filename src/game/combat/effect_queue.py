@@ -1,4 +1,5 @@
 import random
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -16,6 +17,7 @@ class EffectSelectionStatus(Enum):
 
 class EffectQueue:
     def __init__(self):
+        # TODO: change to `source_id_effects`?
         self._source_ids: list[int] = []
         self._effects: list[Effect] = []
 
@@ -49,6 +51,13 @@ class EffectQueue:
     def clear_pending(self) -> None:
         self._source_id_pending = None
         self._effect_pending = None
+
+
+@dataclass
+class EffectDispatch:
+    source_id: int
+    target_id: int
+    value: float
 
 
 def _resolve_effect_target_type(
@@ -124,23 +133,19 @@ def _process_next_effect(
         return effect_selection_status
 
     processors = get_effect_processors(effect.type)
-    state.selected_entity_ids = None
+    state.selected_entity_ids = None  # TODO: move
 
     # Execute
     if target_ids is None:
         target_ids = [None]
 
-    state.effect_source_id = source_id
     for target_id in target_ids:
-        # Set target and value
-        state.effect_target_id = target_id
-        state.effect_value = effect.value
-
         # Run effect's processors
         for processor in processors:
-            processor(state, effect_queue)
+            processor(state, effect_queue, EffectDispatch(source_id, target_id, effect.value))
 
 
+# TODO: imprve
 def process_queue(state: GameState, effect_queue: EffectQueue) -> None:
     ret = None
     while effect_queue._effects and ret is None:
