@@ -15,7 +15,8 @@ class EffectView:
 
 
 def view_effect(state: GameState) -> Optional[EffectView]:
-    if state.effect_type is None:
-        return None
+    return None
+    # if state.effect_type is None:  # TODO: fix
+    #     return None
 
-    return EffectView(state.effect_type)
+    # return EffectView(state.effect_type)

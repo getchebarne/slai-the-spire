@@ -20,7 +20,7 @@ def handle_action(state: GameState, effect_queue: EffectQueue, action: Action) -
         return
 
     if action.type == ActionType.SELECT_ENTITY:
-        if effect_queue._effect_type_pending is not None:
+        if effect_queue.effect_pending is not None:
             state.selected_entity_ids = [action.target_id]
             process_queue(state, effect_queue)
             return
