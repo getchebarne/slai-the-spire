@@ -1,18 +1,23 @@
 from src.agents.random import RandomAgent
+from src.game.combat.create import create_combat
+from src.game.combat.phase import combat_start
 from src.game.combat.drawer import drawer
+from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.handle_input import handle_action
 from src.game.combat.phase import turn_monster
 from src.game.combat.state import GameState
 from src.game.combat.utils import is_game_over
-from src.game.combat.create import create_combat
 from src.game.combat.view import view_combat
 
 
 # Create state
 state = GameState()
 
-# Instance state
+# Instance state & effect queue
 state = create_combat()
+effect_queue = EffectQueue()
+
+combat_start(state, effect_queue)
 
 # Instance agent
 agent = RandomAgent()
@@ -30,10 +35,10 @@ def main():
             action = agent.select_action(combat_view)
 
             # Handle action
-            handle_action(state, action)
+            handle_action(state, effect_queue, action)
 
         # Monsters turn
-        turn_monster(state)
+        turn_monster(state, effect_queue)
 
 
 if __name__ == "__main__":

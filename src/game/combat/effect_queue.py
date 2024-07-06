@@ -3,15 +3,34 @@ from enum import Enum
 from typing import Optional
 
 from src.game.combat.processors import get_effect_processors
+from src.game.combat.state import Effect
 from src.game.combat.state import EffectSelectionType
 from src.game.combat.state import EffectTargetType
+from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
-from src.game.combat.utils import add_effects_to_top
 
 
 class EffectSelectionStatus(Enum):
     COMPLETE = "COMPLETE"
     PENDING_INPUT = "PENDING_INPUT"
+
+
+class EffectQueue:
+    def __init__(self):
+        self._source_ids: list[int] = []
+        self._effects: list[Effect] = []
+        self._effect_type_pending: Optional[EffectType] = None
+
+    def add_to_bot(self, source_id: int, *effects: Effect) -> None:
+        self._source_ids += [source_id] * len(effects)
+        self._effects += list(effects)
+
+    def add_to_top(self, source_id: int, *effects: Effect) -> None:
+        self._source_ids = [source_id] * len(effects) + self._source_ids
+        self._effects = list(effects) + self._effects
+
+    def get_next_effect(self) -> tuple[int, Effect]:
+        return self._source_ids.pop(0), self._effects.pop(0)
 
 
 def _resolve_effect_target_type(
@@ -73,9 +92,11 @@ def get_effect_targets(
     return _resolve_effect_selection_type(state, effect_selection_type, query_entity_ids)
 
 
-def _process_next_effect(state: GameState) -> Optional[EffectSelectionStatus]:
+def _process_next_effect(
+    state: GameState, effect_queue: EffectQueue
+) -> Optional[EffectSelectionStatus]:
     # Get effect from queue
-    effect, source_id = state.effect_queue.popleft()
+    source_id, effect = effect_queue.get_next_effect()
 
     # Get effect's targets and processors
     effect_selection_status, target_ids = get_effect_targets(
@@ -83,10 +104,10 @@ def _process_next_effect(state: GameState) -> Optional[EffectSelectionStatus]:
     )
     if effect_selection_status == EffectSelectionStatus.PENDING_INPUT:
         # Tags
-        state.effect_type = effect.type
+        effect_queue._effect_type_pending = effect.type
 
         # Reque effect
-        add_effects_to_top(state, (effect, source_id))
+        effect_queue.add_to_top(source_id, effect)
 
         return effect_selection_status
 
@@ -106,10 +127,10 @@ def _process_next_effect(state: GameState) -> Optional[EffectSelectionStatus]:
 
         # Run effect's processors
         for processor in processors:
-            processor(state)
+            processor(state, effect_queue)
 
 
-def process_queue(state: GameState) -> None:
+def process_queue(state: GameState, effect_queue: EffectQueue) -> None:
     ret = None
-    while state.effect_queue and ret is None:
-        ret = _process_next_effect(state)
+    while effect_queue._effects and ret is None:
+        ret = _process_next_effect(state, effect_queue)
