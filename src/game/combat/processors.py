@@ -13,15 +13,12 @@ from src.game.combat.state import ModifierType
 
 
 if TYPE_CHECKING:
-    from src.game.combat.effect_queue import EffectDispatch
     from src.game.combat.effect_queue import EffectQueue
 
 
-def _processor_deal_damage(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    target = state.get_entity(effect_dispatch.target_id)
-    damage = int(effect_dispatch.value)
+def _processor_deal_damage(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    target = state.get_entity(kwargs["target_id"])
+    damage = int(kwargs["value"])
 
     health = target.health
     block = target.block
@@ -34,20 +31,16 @@ def _processor_deal_damage(
     health.current = max(0, health.current - damage_over_block)
 
 
-def _processor_gain_block(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    target = state.get_entity(effect_dispatch.target_id)
-    value = int(effect_dispatch.value)
+def _processor_gain_block(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    target = state.get_entity(kwargs["target_id"])
+    value = int(kwargs["value"])
 
     block = target.block
     block.current = min(block.current + value, block.max)
 
 
-def _processor_play_card(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    target = state.get_entity(effect_dispatch.target_id)
+def _processor_play_card(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    target = state.get_entity(kwargs["target_id"])
     energy = state.get_entity(state.energy_id)
 
     if target.cost > energy.current:
@@ -64,14 +57,12 @@ def _processor_play_card(
 
     # Add card's effects to pipeline
     # TODO: think about creating effects w/ target already
-    effect_queue.add_to_bot(effect_dispatch.target_id, *target.effects)
+    effect_queue.add_to_bot(kwargs["target_id"], *target.effects)
 
 
-def _processor_gain_weak(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    target = state.get_entity(effect_dispatch.target_id)
-    value = int(effect_dispatch.value)
+def _processor_gain_weak(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    target = state.get_entity(kwargs["target_id"])
+    value = int(kwargs["value"])
 
     # TODO: use defaultdict?
     try:
@@ -84,32 +75,27 @@ def _processor_gain_weak(
         target.modifiers[ModifierType.WEAK] = modifier_weak
 
 
-def _processor_apply_weak(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    source = state.get_entity(effect_dispatch.source_id)
+def _processor_apply_weak(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    source = state.get_entity(kwargs["source_id"])
 
     # TODO: improve
     if isinstance(source, Card):
         source = state.get_entity(state.character_id)
 
-    value = effect_dispatch.value
+    value = kwargs["value"]
 
     if ModifierType.WEAK in source.modifiers:
         value *= 0.75
 
 
 # TODO: handle infinite loop
-def _processor_draw_card(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    value = int(effect_dispatch.value)
+def _processor_draw_card(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    value = int(kwargs["value"])
 
     for _ in range(value):
         if len(state.card_in_draw_pile_ids) == 0:
             # Shuffle discard pile into draw pile
             # TODO: make effect
-
             state.card_in_draw_pile_ids = list(state.card_in_discard_pile_ids)
             random.shuffle(state.card_in_draw_pile_ids)
 
@@ -118,24 +104,18 @@ def _processor_draw_card(
         state.card_in_hand_ids.append(state.card_in_draw_pile_ids.pop(0))
 
 
-def _processor_refill_energy(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
+def _processor_refill_energy(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
     energy = state.get_entity(state.energy_id)
     energy.current = energy.max
 
 
-def _processor_discard(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    state.card_in_hand_ids.remove(effect_dispatch.target_id)
-    state.card_in_discard_pile_ids.add(effect_dispatch.target_id)
+def _processor_discard(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    state.card_in_hand_ids.remove(kwargs["target_id"])
+    state.card_in_discard_pile_ids.add(kwargs["target_id"])
 
 
-def _processor_zero_block(
-    state: GameState, effect_queue: EffectQueue, effect_dispatch: EffectDispatch
-) -> None:
-    target = state.get_entity(effect_dispatch.target_id)
+def _processor_zero_block(state: GameState, effect_queue: EffectQueue, **kwargs) -> None:
+    target = state.get_entity(kwargs["target_id"])
 
     target.block.current = 0
 
