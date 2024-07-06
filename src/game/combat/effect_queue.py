@@ -1,5 +1,4 @@
 import random
-from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -51,13 +50,6 @@ class EffectQueue:
     def clear_pending(self) -> None:
         self._source_id_pending = None
         self._effect_pending = None
-
-
-@dataclass
-class EffectDispatch:
-    source_id: int
-    target_id: int
-    value: float
 
 
 def _resolve_effect_target_type(
@@ -142,7 +134,9 @@ def _process_next_effect(
     for target_id in target_ids:
         # Run effect's processors
         for processor in processors:
-            processor(state, effect_queue, EffectDispatch(source_id, target_id, effect.value))
+            processor(
+                state, effect_queue, source_id=source_id, target_id=target_id, value=effect.value
+            )
 
 
 # TODO: imprve
