@@ -5,7 +5,6 @@ from src.game.combat.factories import neutralize
 from src.game.combat.factories import silent
 from src.game.combat.factories import strike
 from src.game.combat.factories import survivor
-from src.game.combat.phase import combat_start
 from src.game.combat.state import GameState
 
 
@@ -32,8 +31,5 @@ def create_combat() -> GameState:
         # state.create_entity(survivor()),
         state.create_entity(neutralize()),
     }
-
-    # Trigger combat start
-    combat_start(state)
 
     return state

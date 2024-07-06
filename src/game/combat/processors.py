@@ -1,17 +1,22 @@
+from __future__ import annotations
+
 import random
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from src.game.combat.factories import weak
 from src.game.combat.state import Card
-from src.game.combat.state import EffectType
 from src.game.combat.state import Effect
 from src.game.combat.state import EffectTargetType
+from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
 from src.game.combat.state import ModifierType
-from src.game.combat.utils import add_effects_to_bot
 
 
-def _processor_deal_damage(state: GameState) -> None:
+if TYPE_CHECKING:
+    from src.game.combat.effect_queue import EffectQueue
+
+
+def _processor_deal_damage(state: GameState, effect_queue: EffectQueue) -> None:
     target = state.get_effect_target()
     value = int(state.effect_value)
 
@@ -26,7 +31,7 @@ def _processor_deal_damage(state: GameState) -> None:
     health.current = max(0, health.current - damage_over_block)
 
 
-def _processor_gain_block(state: GameState) -> None:
+def _processor_gain_block(state: GameState, effect_queue: EffectQueue) -> None:
     target = state.get_effect_target()
     value = state.effect_value
 
@@ -34,7 +39,7 @@ def _processor_gain_block(state: GameState) -> None:
     block.current = min(block.current + value, block.max)
 
 
-def _processor_play_card(state: GameState) -> None:
+def _processor_play_card(state: GameState, effect_queue: EffectQueue) -> None:
     target = state.get_effect_target()
     energy = state.get_energy()
 
@@ -42,18 +47,20 @@ def _processor_play_card(state: GameState) -> None:
         raise ValueError(f"Can't play card {target} with {energy.current} energy")
 
     # Subtract energy
+    # TODO: should be effect
     energy.current -= target.cost
 
-    # Add cards effects to pipeline
-    # TODO: think about creating effects w/ target already
-    add_effects_to_bot(
-        state,
-        (Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_ACTIVE), None),
-        *[(effect, state.effect_target_id) for effect in target.effects],
+    # Add effect to discard the card
+    effect_queue.add_to_bot(
+        None, Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_ACTIVE)
     )
 
+    # Add card's effects to pipeline
+    # TODO: think about creating effects w/ target already
+    effect_queue.add_to_bot(state.effect_target_id, *target.effects)
 
-def _processor_gain_weak(state: GameState) -> None:
+
+def _processor_gain_weak(state: GameState, effect_queue: EffectQueue) -> None:
     target = state.get_effect_target()
     value = state.effect_value
 
@@ -67,7 +74,7 @@ def _processor_gain_weak(state: GameState) -> None:
         target.modifiers[ModifierType.WEAK] = modifier_weak
 
 
-def _processor_apply_weak(state: GameState) -> None:
+def _processor_apply_weak(state: GameState, effect_queue: EffectQueue) -> None:
     source = state.get_entity(state.effect_source_id)
 
     # TODO: improve
@@ -81,7 +88,7 @@ def _processor_apply_weak(state: GameState) -> None:
 
 
 # TODO: handle infinite loop
-def _processor_draw_card(state: GameState) -> None:
+def _processor_draw_card(state: GameState, effect_queue: EffectQueue) -> None:
     value = state.effect_value
 
     for _ in range(value):
@@ -97,19 +104,19 @@ def _processor_draw_card(state: GameState) -> None:
         state.card_in_hand_ids.append(state.card_in_draw_pile_ids.pop(0))
 
 
-def _processor_refill_energy(state: GameState) -> None:
+def _processor_refill_energy(state: GameState, effect_queue: EffectQueue) -> None:
     energy = state.get_energy()
     energy.current = energy.max
 
 
-def _processor_discard(state: GameState) -> None:
+def _processor_discard(state: GameState, effect_queue: EffectQueue) -> None:
     target_id = state.effect_target_id
 
     state.card_in_hand_ids.remove(target_id)
     state.card_in_discard_pile_ids.add(target_id)
 
 
-def _processor_zero_block(state: GameState) -> None:
+def _processor_zero_block(state: GameState, effect_queue: EffectQueue) -> None:
     target = state.get_effect_target()
 
     target.block.current = 0

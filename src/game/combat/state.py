@@ -1,5 +1,4 @@
 from abc import ABC
-from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -155,16 +154,9 @@ class GameState:
     # Actor turn
     actor_turn_id: Optional[int] = None
 
-    # Effect processing
-    effect_source_id: Optional[int] = None
-    effect_target_id: Optional[int] = None
-    effect_type: Optional[EffectType] = None
-    effect_value: Optional[int] = None
-    selected_entity_ids: Optional[list[int]] = None
-    selectable_entity_ids: Optional[list[int]] = None
-
-    # Effect queue
-    effect_queue: deque[Effect] = field(default_factory=deque)
+    # Selectable and selected entities
+    entity_selectable_ids: Optional[list[int]] = None
+    entity_selected_ids: Optional[list[int]] = None
 
     def create_entity(self, entity: Entity) -> int:
         entity_id = len(self.entities)
