@@ -5,7 +5,6 @@ from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.effect_queue import process_queue
 from src.game.combat.state import Character
 from src.game.combat.state import Effect
-from src.game.combat.state import EffectSelectionType
 from src.game.combat.state import EffectTargetType
 from src.game.combat.state import EffectType
 from src.game.combat.state import GameState
@@ -95,11 +94,7 @@ def _turn_end_effects(state: GameState, effect_queue: EffectQueue, actor_id: int
         # Character-specific effects
         effect_queue.add_to_bot(
             None,
-            Effect(
-                EffectType.DISCARD,
-                target_type=EffectTargetType.CARD_IN_HAND,
-                selection_type=EffectSelectionType.ALL,
-            ),
+            Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_IN_HAND),
         )
 
     elif isinstance(actor, Monster):

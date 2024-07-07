@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import random
-from enum import Enum
 from typing import Optional
 
 from src.game.combat.processors import get_effect_processors
@@ -9,9 +10,8 @@ from src.game.combat.state import EffectTargetType
 from src.game.combat.state import GameState
 
 
-class EffectSelectionStatus(Enum):
-    COMPLETE = "COMPLETE"
-    PENDING_INPUT = "PENDING_INPUT"
+class EffectNeedsInputTargetsException(Exception):
+    pass
 
 
 class EffectQueue:
@@ -19,9 +19,22 @@ class EffectQueue:
         self._source_id_effects: list[tuple[int, Effect]] = []
         self._source_id_effect_pending: Optional[tuple[int, Effect]] = None
 
-    # @property
-    # def effect_pending(self) -> Effect:
-    #     return self._effect_pending
+    def __iter__(self) -> EffectQueue:
+        # Return the iterator object (in this case, the instance itself)
+        return self
+
+    def __next__(self) -> tuple[int, Effect]:
+        if self.is_empty():
+            raise StopIteration  # No more effects to process
+
+        if self._source_id_effect_pending is not None:
+            return self._source_id_effect_pending
+
+        if self._source_id_effects:
+            self._source_id_effect_pending = self._source_id_effects.pop(0)
+            return self._source_id_effect_pending
+
+        raise StopIteration
 
     def add_to_bot(self, source_id: int, *effects: Effect) -> None:
         self._source_id_effects += [(source_id, effect) for effect in effects]
@@ -31,19 +44,22 @@ class EffectQueue:
             (source_id, effect) for effect in effects
         ] + self._source_id_effects
 
-    def get_next_effect(self) -> tuple[int, Effect]:
-        if self._source_id_effect_pending is not None:
-            return self._source_id_effect_pending
+    def is_empty(self) -> bool:
+        return self._source_id_effect_pending is None and not self._source_id_effects
 
-        return self._source_id_effects.pop(0)
+    def get_pending(self) -> Optional[tuple[int, Effect]]:
+        return self._source_id_effect_pending
 
     def clear_pending(self) -> None:
         self._source_id_effect_pending = None
 
 
 def _resolve_effect_target_type(
-    state: GameState, effect_target_type: EffectTargetType
-) -> list[int]:
+    state: GameState, effect_target_type: Optional[EffectTargetType]
+) -> Optional[list[int]]:
+    if effect_target_type is None:
+        return None
+
     if effect_target_type == EffectTargetType.CHARACTER:
         return [state.character_id]
 
@@ -66,79 +82,56 @@ def _resolve_effect_target_type(
 
 
 def _resolve_effect_selection_type(
-    state: GameState, effect_selection_type: EffectSelectionType, entity_ids: list[int]
-) -> tuple[EffectSelectionStatus, list[int]]:
-
-    if effect_selection_type == EffectSelectionType.ALL:
-        return EffectSelectionStatus.COMPLETE, entity_ids
+    state: GameState, entity_ids: Optional[list[int]], effect_selection_type: EffectSelectionType
+) -> list[int]:
+    if effect_selection_type is None:
+        return entity_ids
 
     if effect_selection_type == EffectSelectionType.RANDOM:
-        return EffectSelectionStatus.COMPLETE, [random.choice(entity_ids)]
+        return [random.choice(entity_ids)]
 
     if effect_selection_type == EffectSelectionType.INPUT:
-        if not state.selected_entity_ids:
-            return EffectSelectionStatus.PENDING_INPUT, entity_ids
+        if not state.entity_selected_ids:
+            raise EffectNeedsInputTargetsException
 
-        return EffectSelectionStatus.COMPLETE, state.selected_entity_ids
+        return state.entity_selected_ids
 
     raise ValueError(f"Unsupported effect selection type: {effect_selection_type}")
 
 
-def get_effect_targets(
-    state: GameState,
-    effect_target_type: EffectTargetType,
-    effect_selection_type: EffectSelectionType,
-) -> tuple[Optional[EffectSelectionStatus], Optional[list[int]]]:
-    if effect_target_type is None:
-        return None, None
-
-    query_entity_ids = _resolve_effect_target_type(state, effect_target_type)
-
-    if effect_selection_type is None:
-        return None, query_entity_ids
-
-    return _resolve_effect_selection_type(state, effect_selection_type, query_entity_ids)
-
-
-def _process_next_effect(
-    state: GameState, effect_queue: EffectQueue
-) -> Optional[EffectSelectionStatus]:
-    # Get effect from queue
-    source_id, effect = effect_queue.get_next_effect()
-
-    # Get effect's targets and processors
-    effect_selection_status, target_ids = get_effect_targets(
-        state, effect.target_type, effect.selection_type
-    )
-    if effect_selection_status == EffectSelectionStatus.PENDING_INPUT:
-        return effect_selection_status
-
-    processors = get_effect_processors(effect.type)
-    state.selected_entity_ids = None  # TODO: move
-
-    # Execute
-    # TODO: improve
-    if target_ids is None:
-        target_ids = [None]
-
-    for target_id in target_ids:
-        # Run effect's processors
-        for processor in processors:
-            processor(
-                state,
-                source_id=source_id,
-                target_id=target_id,
-                value=effect.value,
-                add_to_bot_callback=effect_queue.add_to_bot,
-                add_to_top_callback=effect_queue.add_to_top,
-            )
-
-
 # TODO: improve
 def process_queue(state: GameState, effect_queue: EffectQueue) -> None:
-    ret = None
-    while effect_queue._effects and ret is None:
-        ret = _process_next_effect(state, effect_queue)
+    for source_id, effect in effect_queue:
+        # Get effect's query entities
+        query_ids = _resolve_effect_target_type(state, effect.target_type)
 
-        if ret is None:
-            effect_queue.clear_pending()
+        # Select from those entities
+        try:
+            target_ids = _resolve_effect_selection_type(state, query_ids, effect.selection_type)
+
+        except EffectNeedsInputTargetsException:
+            # Set selectable entities & stop processing
+            state.entity_selectable_ids = query_ids
+
+            return
+
+        effect_queue.clear_pending()
+
+        # Clear selectable entities
+        state.entity_selectable_ids = None
+
+        # TODO: can this be a bit nicer?
+        if target_ids is None:
+            target_ids = [None]
+
+        for target_id in target_ids:
+            for processor in get_effect_processors(effect.type):
+                effects_bot, effects_top = processor(
+                    state, source_id=source_id, target_id=target_id, value=effect.value
+                )
+
+                for source_id, effect_bot in effects_bot:
+                    effect_queue.add_to_bot(source_id, effect_bot)
+
+                for source_id, effect_top in effects_top:
+                    effect_queue.add_to_top(source_id, effect_top)

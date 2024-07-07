@@ -28,8 +28,8 @@ def create_combat() -> GameState:
         state.create_entity(defend()),
         state.create_entity(defend()),
         state.create_entity(defend()),
-        # state.create_entity(survivor()),
         state.create_entity(neutralize()),
+        state.create_entity(survivor()),
     }
 
     return state
