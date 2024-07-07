@@ -16,40 +16,29 @@ class EffectSelectionStatus(Enum):
 
 class EffectQueue:
     def __init__(self):
-        # TODO: change to `source_id_effects`?
-        self._source_ids: list[int] = []
-        self._effects: list[Effect] = []
+        self._source_id_effects: list[tuple[int, Effect]] = []
+        self._source_id_effect_pending: Optional[tuple[int, Effect]] = None
 
-        self._source_id_pending: Optional[int] = None
-        self._effect_pending: Optional[Effect] = None
-
-    @property
-    def effect_pending(self) -> Effect:
-        return self._effect_pending
+    # @property
+    # def effect_pending(self) -> Effect:
+    #     return self._effect_pending
 
     def add_to_bot(self, source_id: int, *effects: Effect) -> None:
-        self._source_ids += [source_id] * len(effects)
-        self._effects += list(effects)
+        self._source_id_effects += [(source_id, effect) for effect in effects]
 
     def add_to_top(self, source_id: int, *effects: Effect) -> None:
-        self._source_ids = [source_id] * len(effects) + self._source_ids
-        self._effects = list(effects) + self._effects
+        self._source_id_effects = [
+            (source_id, effect) for effect in effects
+        ] + self._source_id_effects
 
     def get_next_effect(self) -> tuple[int, Effect]:
-        if self._source_id_pending is not None and self._effect_pending is not None:
-            return self._source_id_pending, self._effect_pending
+        if self._source_id_effect_pending is not None:
+            return self._source_id_effect_pending
 
-        source_id = self._source_ids.pop(0)
-        effect = self._effects.pop(0)
-
-        self._source_id_pending = source_id
-        self._effect_pending = effect
-
-        return source_id, effect
+        return self._source_id_effects.pop(0)
 
     def clear_pending(self) -> None:
-        self._source_id_pending = None
-        self._effect_pending = None
+        self._source_id_effect_pending = None
 
 
 def _resolve_effect_target_type(
@@ -128,6 +117,7 @@ def _process_next_effect(
     state.selected_entity_ids = None  # TODO: move
 
     # Execute
+    # TODO: improve
     if target_ids is None:
         target_ids = [None]
 
@@ -135,11 +125,16 @@ def _process_next_effect(
         # Run effect's processors
         for processor in processors:
             processor(
-                state, effect_queue, source_id=source_id, target_id=target_id, value=effect.value
+                state,
+                source_id=source_id,
+                target_id=target_id,
+                value=effect.value,
+                add_to_bot_callback=effect_queue.add_to_bot,
+                add_to_top_callback=effect_queue.add_to_top,
             )
 
 
-# TODO: imprve
+# TODO: improve
 def process_queue(state: GameState, effect_queue: EffectQueue) -> None:
     ret = None
     while effect_queue._effects and ret is None:
