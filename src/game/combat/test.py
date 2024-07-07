@@ -27,7 +27,7 @@ def main():
     # Game loop
     while not is_game_over(state):
         #
-        combat_view = view_combat(state)
+        combat_view = view_combat(state, effect_queue)
         drawer(combat_view)
 
         # Get action form agent

@@ -31,7 +31,6 @@ class EffectTargetType(Enum):
 
 class EffectSelectionType(Enum):
     INPUT = "INPUT"
-    ALL = "ALL"
     RANDOM = "RANDOM"
 
 

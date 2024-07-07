@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.state import EffectType
-from src.game.combat.state import GameState
 
 
 EffectViewType = EffectType
@@ -11,12 +11,13 @@ EffectViewType = EffectType
 @dataclass
 class EffectView:
     type: EffectViewType
-    number_of_targets: Optional[int] = None  # TODO: unused for now
+    # number_of_targets: Optional[int] = None  # TODO: unused for now
 
 
-def view_effect(state: GameState) -> Optional[EffectView]:
-    return None
-    # if state.effect_type is None:  # TODO: fix
-    #     return None
+def view_effect(effect_queue: EffectQueue) -> Optional[EffectView]:
+    if (source_id_effect_pending := effect_queue.get_pending()) is None:
+        return None
 
-    # return EffectView(state.effect_type)
+    source_id_pending, effect_pending = source_id_effect_pending
+
+    return EffectView(effect_pending.type)
