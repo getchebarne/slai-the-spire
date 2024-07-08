@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from src.game.combat.state import Actor
-from src.game.combat.state import ModifierType
+from src.game.combat.entities import Actor
+from src.game.combat.entities import ModifierType
 
 
 ModifierViewType = ModifierType

@@ -131,7 +131,7 @@ class Energy:
 
 
 @dataclass
-class GameState:
+class Entities:
     # List mapping entity ids to entities
     entities: list[Entity] = field(default_factory=list)
 

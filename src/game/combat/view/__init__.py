@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from src.game.combat.effect_queue import EffectQueue
-from src.game.combat.state import GameState
+from src.game.combat.entities import Entities
 from src.game.combat.view.card import CardView
 from src.game.combat.view.card import view_hand
 from src.game.combat.view.character import CharacterView
@@ -26,11 +26,11 @@ class CombatView:
     # discard pile
 
 
-def view_combat(state: GameState, effect_queue: EffectQueue) -> CombatView:
+def view_combat(entities: Entities, effect_queue: EffectQueue) -> CombatView:
     return CombatView(
-        view_character(state),
-        view_monsters(state),
-        view_hand(state),
-        view_energy(state),
+        view_character(entities),
+        view_monsters(entities),
+        view_hand(entities),
+        view_energy(entities),
         view_effect(effect_queue),
     )
