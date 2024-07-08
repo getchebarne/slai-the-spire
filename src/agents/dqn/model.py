@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.constant import MAX_MONSTERS
-from src.game.combat.state import CardName
+from src.game.combat.entities import CardName
 from src.game.combat.view import CombatView
 from src.game.combat.view.card import CardView
 from src.game.combat.view.character import CharacterView

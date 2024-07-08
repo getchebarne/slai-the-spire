@@ -1,19 +1,19 @@
 import random
 from typing import Callable
 
+from src.game.combat.entities import Card
+from src.game.combat.entities import Effect
+from src.game.combat.entities import EffectTargetType
+from src.game.combat.entities import EffectType
+from src.game.combat.entities import Entities
+from src.game.combat.entities import ModifierType
 from src.game.combat.factories import weak
-from src.game.combat.state import Card
-from src.game.combat.state import Effect
-from src.game.combat.state import EffectTargetType
-from src.game.combat.state import EffectType
-from src.game.combat.state import GameState
-from src.game.combat.state import ModifierType
 
 
 def _processor_deal_damage(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = state.get_entity(kwargs["target_id"])
+    target = entities.get_entity(kwargs["target_id"])
     damage = int(kwargs["value"])
 
     health = target.health
@@ -30,9 +30,9 @@ def _processor_deal_damage(
 
 
 def _processor_gain_block(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = state.get_entity(kwargs["target_id"])
+    target = entities.get_entity(kwargs["target_id"])
     value = int(kwargs["value"])
 
     block = target.block
@@ -42,11 +42,11 @@ def _processor_gain_block(
 
 
 def _processor_play_card(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
     target_id = kwargs["target_id"]
-    target = state.get_entity(target_id)
-    energy = state.get_entity(state.energy_id)
+    target = entities.get_entity(target_id)
+    energy = entities.get_entity(entities.energy_id)
 
     if target.cost > energy.current:
         raise ValueError(f"Can't play card {target} with {energy.current} energy")
@@ -64,9 +64,9 @@ def _processor_play_card(
 
 
 def _processor_gain_weak(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = state.get_entity(kwargs["target_id"])
+    target = entities.get_entity(kwargs["target_id"])
     value = int(kwargs["value"])
 
     # TODO: use defaultdict?
@@ -83,14 +83,14 @@ def _processor_gain_weak(
 
 
 def _processor_apply_weak(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    source = state.get_entity(kwargs["source_id"])
+    source = entities.get_entity(kwargs["source_id"])
     value = kwargs["value"]
 
     # TODO: improve
     if isinstance(source, Card):
-        source = state.get_entity(state.character_id)
+        source = entities.get_entity(entities.character_id)
 
     if ModifierType.WEAK in source.modifiers:
         value *= 0.75
@@ -100,46 +100,46 @@ def _processor_apply_weak(
 
 # TODO: handle infinite loop
 def _processor_draw_card(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
     value = int(kwargs["value"])
 
     for _ in range(value):
-        if len(state.card_in_draw_pile_ids) == 0:
+        if len(entities.card_in_draw_pile_ids) == 0:
             # Shuffle discard pile into draw pile
             # TODO: make effect
-            state.card_in_draw_pile_ids = list(state.card_in_discard_pile_ids)
-            random.shuffle(state.card_in_draw_pile_ids)
+            entities.card_in_draw_pile_ids = list(entities.card_in_discard_pile_ids)
+            random.shuffle(entities.card_in_draw_pile_ids)
 
-            state.card_in_discard_pile_ids = set()
+            entities.card_in_discard_pile_ids = set()
 
-        state.card_in_hand_ids.append(state.card_in_draw_pile_ids.pop(0))
+        entities.card_in_hand_ids.append(entities.card_in_draw_pile_ids.pop(0))
 
     return [], []
 
 
 def _processor_refill_energy(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    energy = state.get_entity(state.energy_id)
+    energy = entities.get_entity(entities.energy_id)
     energy.current = energy.max
 
     return [], []
 
 
 def _processor_discard(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    state.card_in_hand_ids.remove(kwargs["target_id"])
-    state.card_in_discard_pile_ids.add(kwargs["target_id"])
+    entities.card_in_hand_ids.remove(kwargs["target_id"])
+    entities.card_in_discard_pile_ids.add(kwargs["target_id"])
 
     return [], []
 
 
 def _processor_zero_block(
-    state: GameState, **kwargs
+    entities: Entities, **kwargs
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = state.get_entity(kwargs["target_id"])
+    target = entities.get_entity(kwargs["target_id"])
 
     target.block.current = 0
 

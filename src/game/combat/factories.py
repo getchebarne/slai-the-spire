@@ -1,14 +1,14 @@
-from src.game.combat.state import Card
-from src.game.combat.state import CardName
-from src.game.combat.state import Character
-from src.game.combat.state import Effect
-from src.game.combat.state import EffectSelectionType
-from src.game.combat.state import EffectTargetType
-from src.game.combat.state import EffectType
-from src.game.combat.state import Energy
-from src.game.combat.state import Health
-from src.game.combat.state import Modifier
-from src.game.combat.state import Monster
+from src.game.combat.entities import Card
+from src.game.combat.entities import CardName
+from src.game.combat.entities import Character
+from src.game.combat.entities import Effect
+from src.game.combat.entities import EffectSelectionType
+from src.game.combat.entities import EffectTargetType
+from src.game.combat.entities import EffectType
+from src.game.combat.entities import Energy
+from src.game.combat.entities import Health
+from src.game.combat.entities import Modifier
+from src.game.combat.entities import Monster
 
 
 def silent() -> Character:

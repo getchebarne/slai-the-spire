@@ -1,3 +1,4 @@
+from src.game.combat.entities import Entities
 from src.game.combat.factories import defend
 from src.game.combat.factories import dummy
 from src.game.combat.factories import energy
@@ -5,31 +6,30 @@ from src.game.combat.factories import neutralize
 from src.game.combat.factories import silent
 from src.game.combat.factories import strike
 from src.game.combat.factories import survivor
-from src.game.combat.state import GameState
 
 
-def create_combat() -> GameState:
-    # Create GameState instance
-    state = GameState()
+def create_combat() -> Entities:
+    # Create Entities instance
+    entities = Entities()
 
     # Fill
     # TODO: create functions for this
-    state.character_id = state.create_entity(silent())
-    state.monster_ids = [state.create_entity(dummy())]
-    state.energy_id = state.create_entity(energy())
-    state.card_in_deck_ids = {
-        state.create_entity(strike()),
-        state.create_entity(strike()),
-        state.create_entity(strike()),
-        state.create_entity(strike()),
-        state.create_entity(strike()),
-        state.create_entity(defend()),
-        state.create_entity(defend()),
-        state.create_entity(defend()),
-        state.create_entity(defend()),
-        state.create_entity(defend()),
-        state.create_entity(neutralize()),
-        state.create_entity(survivor()),
+    entities.character_id = entities.create_entity(silent())
+    entities.monster_ids = [entities.create_entity(dummy())]
+    entities.energy_id = entities.create_entity(energy())
+    entities.card_in_deck_ids = {
+        entities.create_entity(strike()),
+        entities.create_entity(strike()),
+        entities.create_entity(strike()),
+        entities.create_entity(strike()),
+        entities.create_entity(strike()),
+        entities.create_entity(defend()),
+        entities.create_entity(defend()),
+        entities.create_entity(defend()),
+        entities.create_entity(defend()),
+        entities.create_entity(defend()),
+        entities.create_entity(neutralize()),
+        entities.create_entity(survivor()),
     }
 
-    return state
+    return entities
