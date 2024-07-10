@@ -91,10 +91,10 @@ def _resolve_effect_selection_type(
         return [random.choice(entity_ids)]
 
     if effect_selection_type == EffectSelectionType.INPUT:
-        if not entities.entity_selected_ids:
+        if not entities.effect_target_id:
             raise EffectNeedsInputTargetsException
 
-        return entities.entity_selected_ids
+        return [entities.effect_target_id]
 
     raise ValueError(f"Unsupported effect selection type: {effect_selection_type}")
 
@@ -117,8 +117,9 @@ def process_queue(entities: Entities, effect_queue: EffectQueue) -> None:
 
         effect_queue.clear_pending()
 
-        # Clear selectable entities
+        # Clear selectable entities TODO: move
         entities.entity_selectable_ids = None
+        entities.effect_target_id = None  # TODO: revisit nullable
 
         # TODO: can this be a bit nicer?
         if target_ids is None:

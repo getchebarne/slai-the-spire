@@ -1,0 +1,7 @@
+from enum import Enum
+
+
+class State(Enum):
+    DEFAULT = "DEFAULT"
+    AWAIT_CARD_TARGET = "AWAIT_CARD_TARGET"
+    AWAIT_EFFECT_TARGET = "AWAIT_EFFECT_TARGET"
