@@ -150,12 +150,11 @@ class Entities:
     # Active card
     card_active_id: Optional[int] = None
 
-    # Actor turn
-    actor_turn_id: Optional[int] = None
+    # Effect target
+    effect_target_id: Optional[list[int]] = None
 
-    # Selectable and selected entities
-    entity_selectable_ids: Optional[list[int]] = None
-    entity_selected_ids: Optional[list[int]] = None
+    # TODO;
+    entitiy_selectable_ids: Optional[list[int]] = None
 
     def create_entity(self, entity: Entity) -> int:
         entity_id = len(self.entities)

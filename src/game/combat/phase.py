@@ -2,7 +2,6 @@ import random
 
 from src.game.combat.ai import ais
 from src.game.combat.effect_queue import EffectQueue
-from src.game.combat.effect_queue import process_queue
 from src.game.combat.entities import Character
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectTargetType
@@ -22,42 +21,14 @@ def combat_start(entities: Entities, effect_queue: EffectQueue) -> None:
 
     # Set start of turn to character & call it's turn start
     entities.actor_turn_id = entities.character_id
-    _turn_start_effects(entities, effect_queue, entities.character_id)
+    _queue_turn_start_effects(entities, effect_queue, entities.character_id)
 
     # TODO: relic start of combat effects
 
 
-def turn_switch(entities: Entities, effect_queue: EffectQueue) -> None:
-    actor_turn_id = entities.actor_turn_id
-    actor = entities.get_entity(actor_turn_id)
-
-    # Process turn end effects
-    _turn_end_effects(entities, effect_queue, actor_turn_id)
-
-    # Pass "turn" entities to next actor
-    if isinstance(actor, Character):
-        entities.actor_turn_id = entities.monster_ids[0]
-
-    elif isinstance(actor, Monster):
-        # Get monster's position
-        monster_pos = entities.monster_ids.index(actor_turn_id)
-
-        # If it's the last monster, give "turn_start" to the character
-        if monster_pos == len(entities.monster_ids) - 1:
-            entities.actor_turn_id = entities.character_id
-
-        # Else, give it to the next monster
-        else:
-            entities.actor_turn_id = entities.monster_ids[monster_pos + 1]
-
-    else:
-        raise ValueError(f"Unsupported actor instance: {actor.__class__.__name__}")
-
-    # Process turn start effects
-    _turn_start_effects(entities, effect_queue, entities.actor_turn_id)
-
-
-def _turn_start_effects(entities: Entities, effect_queue: EffectQueue, actor_id: int) -> None:
+def _queue_turn_start_effects(
+    entities: Entities, effect_queue: EffectQueue, actor_id: int
+) -> None:
     # Common effects
     effects = [Effect(EffectType.ZERO_BLOCK, target_type=EffectTargetType.TURN)]
 
@@ -73,13 +44,12 @@ def _turn_start_effects(entities: Entities, effect_queue: EffectQueue, actor_id:
 
     # Process effects
     effect_queue.add_to_bot(None, *effects)
-    process_queue(entities, effect_queue)
 
 
-def _turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor_id: int) -> None:
+def _queue_turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor_id: int) -> None:
     actor = entities.get_entity(actor_id)
 
-    # Common
+    # Common. TODO: function
     for modifier_type, modifier in actor.modifiers.items():
         if modifier.stacks_duration:
             modifier.stacks -= 1
@@ -103,25 +73,3 @@ def _turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor_id: i
 
     # Process effects
     effect_queue.add_to_bot(actor_id, *effects)
-    process_queue(entities, effect_queue)
-
-
-# TODO: support multiple monsters
-def turn_monster(entities: Entities, effect_queue: EffectQueue) -> None:
-    actor_id = entities.actor_turn_id
-    actor = entities.get_entity(actor_id)
-
-    if not isinstance(actor, Monster):
-        return
-
-    # Queue monster's move's effects
-    effect_queue.add_to_bot(actor_id, *actor.move.effects)
-
-    # Update monster's move
-    ais[actor.name](actor)
-
-    # Run effects
-    process_queue(entities, effect_queue)
-
-    # Switch turn
-    turn_switch(entities, effect_queue)
