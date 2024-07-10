@@ -133,7 +133,7 @@ class Energy:
 @dataclass
 class Entities:
     # List mapping entity ids to entities
-    entities: list[Entity] = field(default_factory=list)
+    _entities: list[Entity] = field(default_factory=list)
 
     # Specific entities
     character_id: Optional[int] = None
@@ -157,55 +157,55 @@ class Entities:
     entitiy_selectable_ids: Optional[list[int]] = None
 
     def create_entity(self, entity: Entity) -> int:
-        entity_id = len(self.entities)
-        self.entities.append(entity)
+        entity_id = len(self._entities)
+        self._entities.append(entity)
 
         return entity_id
 
     def get_entity(self, entity_id: int) -> Entity:
-        return self.entities[entity_id]
+        return self._entities[entity_id]
 
     def get_character(self) -> Character:
-        return self.entities[self.character_id]
+        return self._entities[self.character_id]
 
     def get_monsters(self) -> list[Monster]:
-        return [self.entities[monster_id] for monster_id in self.monster_ids]
+        return [self._entities[monster_id] for monster_id in self.monster_ids]
 
     def get_energy(self) -> Energy:
-        return self.entities[self.energy_id]
+        return self._entities[self.energy_id]
 
     def get_deck(self) -> set[Card]:
-        return {self.entities[card_id] for card_id in self.card_in_deck_ids}
+        return {self._entities[card_id] for card_id in self.card_in_deck_ids}
 
     def get_draw_pile(self) -> list[Card]:
-        return [self.entities[card_id] for card_id in self.card_in_draw_pile_ids]
+        return [self._entities[card_id] for card_id in self.card_in_draw_pile_ids]
 
     def get_hand(self) -> list[Card]:
-        return [self.entities[card_id] for card_id in self.card_in_hand_ids]
+        return [self._entities[card_id] for card_id in self.card_in_hand_ids]
 
     def get_discard_pile(self) -> set[Card]:
-        return {self.entities[card_id] for card_id in self.card_in_discard_pile_ids}
+        return {self._entities[card_id] for card_id in self.card_in_discard_pile_ids}
 
     def get_card_target(self) -> Optional[Entity]:
         if self.card_target_id is None:
             return None
 
-        return self.entities[self.card_target_id]
+        return self._entities[self.card_target_id]
 
     def get_active_card(self) -> Optional[Card]:
         if self.card_active_id is None:
             return None
 
-        return self.entities[self.card_active_id]
+        return self._entities[self.card_active_id]
 
     def get_actor_turn(self) -> Optional[Actor]:
         if self.actor_turn_id is None:
             return None
 
-        return self.entities[self.actor_turn_id]
+        return self._entities[self.actor_turn_id]
 
     def get_effect_target(self) -> Optional[Entity]:
         if self.effect_target_id is None:
             return None
 
-        return self.entities[self.effect_target_id]
+        return self._entities[self.effect_target_id]

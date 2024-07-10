@@ -19,6 +19,14 @@ class EffectQueue:
         self._source_id_effects: list[tuple[int, Effect]] = []
         self._source_id_effect_pending: Optional[tuple[int, Effect]] = None
 
+    def __len__(self) -> int:
+        _len = len(self._source_id_effects)
+
+        if self._source_id_effect_pending is None:
+            return _len
+
+        return _len + 1
+
     def __iter__(self) -> EffectQueue:
         # Return the iterator object (in this case, the instance itself)
         return self

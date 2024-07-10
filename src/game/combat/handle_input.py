@@ -1,7 +1,10 @@
+from typing import Optional
+
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.ai import ais
 from src.game.combat.effect_queue import EffectQueue
+from src.game.combat.effect_queue import process_queue
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
@@ -16,7 +19,7 @@ class InvalidActionError(Exception):
     pass
 
 
-def _handle_end_turn(entities: Entities, effect_queue: EffectQueue, state: State) -> State:
+def _handle_end_turn(entities: Entities, effect_queue: EffectQueue, state: State) -> None:
     if state == State.AWAIT_EFFECT_TARGET:
         raise InvalidActionError
 
@@ -41,41 +44,30 @@ def _handle_end_turn(entities: Entities, effect_queue: EffectQueue, state: State
     # Character's turn start
     _queue_turn_start_effects(entities, effect_queue, entities.character_id)
 
-    return State.DEFAULT
-
 
 def _handle_select_entity(
     entities: Entities, effect_queue: EffectQueue, state: State, target_id: int
-) -> State:
+) -> Optional[State]:
+    if state == State.AWAIT_EFFECT_TARGET:
+        # Set effect target in `entities`
+        entities.effect_target_id = target_id
+
+        return
+
     if state == State.DEFAULT:
         # Set active card in `entities`
         entities.card_active_id = target_id
         if card_requires_target(entities.get_entity(target_id)):
             return State.AWAIT_CARD_TARGET
 
-        # Play card TODO: confirm?
-        effect_queue.add_to_bot(
-            None, Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE)
-        )
-
-        return State.DEFAULT
-
-    if state == State.AWAIT_CARD_TARGET:
+    elif state == State.AWAIT_CARD_TARGET:
         # Set card target in `entities`
         entities.card_target_id = target_id
 
-        # Play card
-        effect_queue.add_to_bot(
-            None, Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE)
-        )
-
-        return State.DEFAULT
-
-    if state == State.AWAIT_EFFECT_TARGET:
-        # Set effect target in `entities`
-        entities.effect_target_id = target_id
-
-        return State.DEFAULT
+    # Play card
+    effect_queue.add_to_bot(
+        None, Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE)
+    )
 
 
 # TODO: improve this function
@@ -83,7 +75,18 @@ def handle_action(
     entities: Entities, effect_queue: EffectQueue, state: State, action: Action
 ) -> State:
     if action.type == ActionType.END_TURN:
-        return _handle_end_turn(entities, effect_queue, state)
+        new_state = _handle_end_turn(entities, effect_queue, state)
 
-    if action.type == ActionType.SELECT_ENTITY:
-        return _handle_select_entity(entities, effect_queue, state, action.target_id)
+    elif action.type == ActionType.SELECT_ENTITY:
+        new_state = _handle_select_entity(entities, effect_queue, state, action.target_id)
+
+    if new_state is not None:
+        return new_state
+
+    # Process queue
+    process_queue(entities, effect_queue)
+
+    if effect_queue.get_pending() is not None:
+        return State.AWAIT_EFFECT_TARGET
+
+    return State.DEFAULT
