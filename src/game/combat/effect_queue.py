@@ -108,7 +108,7 @@ def _resolve_effect_selection_type(
 
 
 # TODO: improve
-def process_queue(entities: Entities, effect_queue: EffectQueue) -> None:
+def process_queue(entities: Entities, effect_queue: EffectQueue) -> Optional[list[int]]:
     for source_id, effect in effect_queue:
         # Get effect's query entities
         query_ids = _resolve_effect_target_type(entities, effect.target_type)
@@ -118,15 +118,11 @@ def process_queue(entities: Entities, effect_queue: EffectQueue) -> None:
             target_ids = _resolve_effect_selection_type(entities, query_ids, effect.selection_type)
 
         except EffectNeedsInputTargetsException:
-            # Set selectable entities & stop processing
-            entities.entity_selectable_ids = query_ids
-
-            return
+            return query_ids
 
         effect_queue.clear_pending()
 
         # Clear selectable entities TODO: move
-        entities.entity_selectable_ids = None
         entities.effect_target_id = None  # TODO: revisit nullable
 
         # TODO: can this be a bit nicer?
