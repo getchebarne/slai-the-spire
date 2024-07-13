@@ -3,6 +3,7 @@ from src.game.combat.action import ActionType
 from src.game.combat.ai import ais
 from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.effect_queue import process_queue
+from src.game.combat.entities import Card
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
@@ -11,11 +12,18 @@ from src.game.combat.phase import _queue_turn_end_effects
 from src.game.combat.phase import _queue_turn_start_effects
 from src.game.combat.state import State
 from src.game.combat.state import on_enter
-from src.game.combat.utils import card_requires_target
 
 
 class InvalidActionError(Exception):
     pass
+
+
+def _card_requires_target(card: Card) -> bool:
+    for effect in card.effects:
+        if effect.target_type == EffectTargetType.CARD_TARGET:
+            return True
+
+    return False
 
 
 def _handle_end_turn(entities: Entities, effect_queue: EffectQueue, state: State) -> State:
@@ -46,7 +54,7 @@ def _handle_end_turn(entities: Entities, effect_queue: EffectQueue, state: State
     # Process queue
     query_ids = process_queue(entities, effect_queue)
     if query_ids is not None:
-        entities.entitiy_selectable_ids = query_ids
+        entities.entity_selectable_ids = query_ids
 
         return State.AWAIT_EFFECT_TARGET
 
@@ -60,7 +68,7 @@ def _handle_select_entity(
         # Set active card in `entities`
         entities.card_active_id = target_id
 
-        if card_requires_target(entities.get_entity(target_id)):
+        if _card_requires_target(entities.get_entity(target_id)):
             return State.AWAIT_CARD_TARGET
 
         # Play card
@@ -84,7 +92,7 @@ def _handle_select_entity(
     # Process queue
     query_ids = process_queue(entities, effect_queue)
     if query_ids is not None:
-        entities.entitiy_selectable_ids = query_ids
+        entities.entity_selectable_ids = query_ids
 
         return State.AWAIT_EFFECT_TARGET
 

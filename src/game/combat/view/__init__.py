@@ -26,6 +26,7 @@ class CombatView:
     hand: list[CardView]
     energy: EnergyView
     effect: EffectView
+    entity_selectable_ids: list[int]
     # draw pile
     # discard pile
 
@@ -38,4 +39,5 @@ def view_combat(entities: Entities, effect_queue: EffectQueue, state: State) -> 
         view_hand(entities),
         view_energy(entities),
         view_effect(effect_queue),
+        entities.entity_selectable_ids.copy(),
     )

@@ -4,7 +4,6 @@ from typing import Optional
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
 from src.game.combat.entities import MonsterMove
-from src.game.combat.utils import card_requires_target
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
 
@@ -19,7 +18,7 @@ class IntentView:
 class MonsterView(ActorView):
     entity_id: int
     intent: IntentView
-    is_selectable: bool
+    # is_selectable: bool
 
 
 def _move_to_intent(move: MonsterMove) -> IntentView:
@@ -52,12 +51,6 @@ def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
     actor_view = _actor_to_view(monster)
     intent_view = _move_to_intent(monster.move)
 
-    is_selectable = False
-    if entities.card_active_id is not None and card_requires_target(
-        entities.get_entity(entities.card_active_id)
-    ):
-        is_selectable = True
-
     return MonsterView(
         actor_view.name,
         actor_view.health,
@@ -65,7 +58,6 @@ def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
         actor_view.modifiers,
         monster_entity_id,  # TODO: revisit order
         intent_view,
-        is_selectable,
     )
 
 
