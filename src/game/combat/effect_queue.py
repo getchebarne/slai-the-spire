@@ -99,7 +99,7 @@ def _resolve_effect_selection_type(
         return [random.choice(entity_ids)]
 
     if effect_selection_type == EffectSelectionType.INPUT:
-        if not entities.effect_target_id:
+        if entities.effect_target_id is None:
             raise EffectNeedsInputTargetsException
 
         return [entities.effect_target_id]
@@ -123,7 +123,7 @@ def process_queue(entities: Entities, effect_queue: EffectQueue) -> Optional[lis
         effect_queue.clear_pending()
 
         # Clear selectable entities TODO: move
-        entities.effect_target_id = None  # TODO: revisit nullable
+        entities.effect_target_id = None
 
         # TODO: can this be a bit nicer?
         if target_ids is None:

@@ -151,10 +151,10 @@ class Entities:
     card_active_id: Optional[int] = None
 
     # Effect target
-    effect_target_id: Optional[list[int]] = None
+    effect_target_id: Optional[int] = None
 
     # TODO;
-    entitiy_selectable_ids: Optional[list[int]] = None
+    entity_selectable_ids: Optional[list[int]] = field(default_factory=list)
 
     def create_entity(self, entity: Entity) -> int:
         entity_id = len(self._entities)
