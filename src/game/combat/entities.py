@@ -26,7 +26,7 @@ class EffectTargetType(Enum):
     CARD_TARGET = "CARD_TARGET"
     CARD_IN_HAND = "CARD_IN_HAND"
     CARD_ACTIVE = "CARD_ACTIVE"
-    TURN = "TURN"
+    SOURCE = "SOURCE"
 
 
 class EffectSelectionType(Enum):

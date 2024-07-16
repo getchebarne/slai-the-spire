@@ -38,6 +38,6 @@ def view_combat(entities: Entities, effect_queue: EffectQueue, state: State) -> 
         view_monsters(entities),
         view_hand(entities),
         view_energy(entities),
-        view_effect(effect_queue),
-        entities.entity_selectable_ids.copy(),
+        view_effect(effect_queue, state),
+        entities.entity_selectable_ids.copy(),  # revisit
     )

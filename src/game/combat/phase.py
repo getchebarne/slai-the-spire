@@ -30,7 +30,7 @@ def _queue_turn_start_effects(
     entities: Entities, effect_queue: EffectQueue, actor_id: int
 ) -> None:
     # Common effects
-    effects = [Effect(EffectType.ZERO_BLOCK, target_type=EffectTargetType.TURN)]
+    effects = [Effect(EffectType.ZERO_BLOCK, target_type=EffectTargetType.SOURCE)]
 
     # Character and monster-specific effects
     actor = entities.get_entity(actor_id)
@@ -43,7 +43,7 @@ def _queue_turn_start_effects(
         pass
 
     # Process effects
-    effect_queue.add_to_bot(None, *effects)
+    effect_queue.add_to_bot(actor_id, *effects)
 
 
 def _queue_turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor_id: int) -> None:
@@ -63,7 +63,7 @@ def _queue_turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor
     if isinstance(actor, Character):
         # Character-specific effects
         effect_queue.add_to_bot(
-            None,
+            actor_id,
             Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_IN_HAND),
         )
 

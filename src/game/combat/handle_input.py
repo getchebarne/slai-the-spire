@@ -36,7 +36,7 @@ def _handle_end_turn(entities: Entities, effect_queue: EffectQueue, state: State
     for monster_id in entities.monster_ids:
         monster = entities.get_entity(monster_id)
 
-        # Mosnter's turn start
+        # Monster's turn start
         _queue_turn_start_effects(entities, effect_queue, monster_id)
 
         # Queue monster's move's effects
@@ -73,7 +73,8 @@ def _handle_select_entity(
 
         # Play card
         effect_queue.add_to_bot(
-            None, Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE)
+            entities.character_id,
+            Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE),
         )
 
     elif state == State.AWAIT_CARD_TARGET:
@@ -82,7 +83,8 @@ def _handle_select_entity(
 
         # Play card
         effect_queue.add_to_bot(
-            None, Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE)
+            entities.character_id,
+            Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE),
         )
 
     elif state == State.AWAIT_EFFECT_TARGET:

@@ -24,7 +24,7 @@ def move_attack() -> MonsterMove:
 
 
 def move_defend() -> MonsterMove:
-    return MonsterMove("Defend", [Effect(EffectType.GAIN_BLOCK, 10, EffectTargetType.TURN)])
+    return MonsterMove("Defend", [Effect(EffectType.GAIN_BLOCK, 10, EffectTargetType.SOURCE)])
 
 
 @register_ai("Dummy")
