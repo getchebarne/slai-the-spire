@@ -8,22 +8,40 @@ from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
 from src.game.combat.entities import Monster
+from src.game.combat.effect_queue import process_queue
+from src.game.combat.state import State
+from src.game.combat.state import on_enter
+from src.game.combat.manager import CombatManager
 
 
-def combat_start(entities: Entities, effect_queue: EffectQueue) -> None:
+def combat_start(combat_manager: CombatManager) -> None:
     # Shuffle deck into draw pile
-    entities.card_in_draw_pile_ids = list(entities.card_in_deck_ids)
-    random.shuffle(entities.card_in_draw_pile_ids)
+    combat_manager.entities.card_in_draw_pile_ids = list(combat_manager.entities.card_in_deck_ids)
+    random.shuffle(combat_manager.entities.card_in_draw_pile_ids)
 
     # Get first move from monsters. TODO: revisit
-    for monster in entities.get_monsters():
+    for monster in combat_manager.entities.get_monsters():
         ais[monster.name](monster)
 
     # Set start of turn to character & call it's turn start
-    entities.actor_turn_id = entities.character_id
-    _queue_turn_start_effects(entities, effect_queue, entities.character_id)
+    combat_manager.entities.actor_turn_id = combat_manager.entities.character_id
+    _queue_turn_start_effects(
+        combat_manager.entities, combat_manager.effect_queue, combat_manager.entities.character_id
+    )
 
     # TODO: relic start of combat effects
+
+    # Process queue
+    query_ids = process_queue(combat_manager.entities, combat_manager.effect_queue)
+    if query_ids is not None:
+        combat_manager.entities.entity_selectable_ids = query_ids
+        new_state = State.AWAIT_EFFECT_TARGET
+
+    else:
+        new_state = State.DEFAULT
+
+    combat_manager.state = new_state
+    on_enter(combat_manager.state, combat_manager.entities)
 
 
 def _queue_turn_start_effects(

@@ -11,9 +11,12 @@ class State(Enum):
 
 def on_enter(state: State, entities: Entities) -> None:
     if state == State.DEFAULT:
+        # Reset active card, card target, and effect target
         entities.card_active_id = None
         entities.card_target_id = None
         entities.effect_target_id = None
+
+        # Set selectable entities to cards w/ cost lower or equal to the current energy
         entities.entity_selectable_ids = [
             card_in_hand_id
             for card_in_hand_id in entities.card_in_hand_ids
