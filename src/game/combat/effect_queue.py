@@ -40,6 +40,7 @@ class EffectQueue:
             (source_id, effect) for effect in effects
         ] + self._source_id_effects
 
+    # TODO: revisit
     def next_effect_type(self) -> EffectType:
         return self._source_id_effects[0][1].type
 
