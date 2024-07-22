@@ -1,7 +1,7 @@
 from typing import Optional
 
-from src.agents.random import RandomAgent
 from src.agents.random import BaseAgent
+from src.agents.random import RandomAgent
 from src.game.combat.create import create_combat_manager
 from src.game.combat.drawer import drawer
 from src.game.combat.effect_queue import process_queue
