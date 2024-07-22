@@ -14,10 +14,10 @@ from src.agents.dqn.reward import compute_reward
 from src.agents.dqn.utils import action_idx_to_action
 from src.agents.dqn.utils import get_valid_action_mask
 from src.agents.dqn_a import DQNAgent
-from src.game.combat.create import create_combat
-from src.game.combat.entities import Entities
+from src.game.combat.create import create_combat_manager
 from src.game.combat.handle_input import handle_action
-from src.game.combat.phase import turn_monster
+from src.game.combat.main import _process_round
+from src.game.combat.manager import CombatManager
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
@@ -61,10 +61,15 @@ def _train_on_batch(
     return loss.item()
 
 
-def _game_step(entities: Entities, agent: DQNAgent, epsilon: float) -> tuple[CombatView, int]:
+def _game_step(
+    combat_manager: CombatManager, agent: DQNAgent, epsilon: float
+) -> tuple[CombatView, int]:
+    # Process round
+    _process_round(combat_manager)
+
     # Get combat view
-    combat_view = view_combat(entities)
-    valid_action_mask = get_valid_action_mask(combat_view)
+    combat_view = view_combat(combat_manager)
+    valid_action_mask = get_valid_action_mask(combat_view)  # TODO: FIX
 
     if random.uniform(0, 1) < epsilon:
         # Explore
@@ -76,23 +81,20 @@ def _game_step(entities: Entities, agent: DQNAgent, epsilon: float) -> tuple[Com
 
     # Handle action
     action = action_idx_to_action(action_idx, combat_view)
-    handle_action(entities, action)
-
-    # Monsters' turn
-    turn_monster(entities)
+    handle_action(combat_manager, action)
 
     return combat_view, action_idx
 
 
 def _evaluate_agent(agent: DQNAgent) -> int:
     # Get new game
-    entities = create_combat()
+    combat_manager = create_combat_manager()
 
-    while not is_game_over(entities):
-        _game_step(entities, agent, epsilon=-1)
+    while not is_game_over(combat_manager):
+        _game_step(combat_manager, agent, epsilon=-1)
 
     # View end entities
-    combat_view_end = view_combat(entities)
+    combat_view_end = view_combat(combat_manager)
 
     return combat_view_end.character.health.current
 
@@ -103,22 +105,22 @@ def _play_episode(
     replay_buffer: ReplayBuffer,
     epsilon: float,
     batch_size: int,
-) -> tuple[Entities, float]:
+) -> tuple[CombatManager, float]:
     # Get new game
-    entities = create_combat()
+    combat_manager = create_combat_manager()
 
     # Start playing
     loss_episode = 0
     num_moves = 0
-    while not is_game_over(entities):
+    while not is_game_over(combat_manager):
         num_moves += 1
 
-        combat_view_t, action_idx = _game_step(entities, agent, epsilon)
+        combat_view_t, action_idx = _game_step(combat_manager, agent, epsilon)
 
         # Get new entities, new valid actions, game over flag and instant reward
-        combat_view_tp1 = view_combat(entities)
+        combat_view_tp1 = view_combat(combat_manager)
         valid_action_mask_tp1 = get_valid_action_mask(combat_view_tp1)
-        game_over_flag = is_game_over(entities)
+        game_over_flag = is_game_over(combat_manager)
         reward = compute_reward(combat_view_tp1, game_over_flag)
 
         # Store transition in memory
