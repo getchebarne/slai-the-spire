@@ -8,7 +8,6 @@ from src.game.combat.factories import silent
 from src.game.combat.factories import strike
 from src.game.combat.factories import survivor
 from src.game.combat.manager import CombatManager
-from src.game.combat.phase import combat_start
 
 
 def create_combat_manager() -> CombatManager:
@@ -37,9 +36,5 @@ def create_combat_manager() -> CombatManager:
 
     # Create combat manager w/ entities and effect queue
     combat_manager = CombatManager(entities=entities, effect_queue=effect_queue)
-
-    # Queue combat start effects
-    # TODO: rename this function
-    combat_start(combat_manager)
 
     return combat_manager
