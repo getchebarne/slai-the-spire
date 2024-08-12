@@ -12,7 +12,7 @@ class InvalidActionError(Exception):
 
 
 def _handle_end_turn(combat_manager: CombatManager) -> None:
-    if combat_manager.state == State.AWAIT_EFFECT_TARGET:
+    if combat_manager.state != State.DEFAULT:
         raise InvalidActionError
 
     # Character's turn end

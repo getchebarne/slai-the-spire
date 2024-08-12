@@ -27,12 +27,7 @@ def _encode_monsters(monster_views: list[MonsterView]) -> torch.Tensor:
     return torch.concat(
         [
             torch.tensor(
-                (
-                    monster_view.is_selectable,
-                    monster_view.health.max,
-                    monster_view.health.current,
-                    monster_view.block.current,
-                )
+                (monster_view.health.max, monster_view.health.current, monster_view.block.current)
             )
             for monster_view in monster_views
         ]
@@ -45,12 +40,11 @@ def _encode_card(
     if card_view is None:
         # TODO: move this
         PAD_COST = -1
-        PAD_IS_SELECTABLE = False
         PAD_IS_ACTIVE = False
         PAD_INDEX = 0
         return torch.concat(
             [
-                torch.tensor((PAD_COST, PAD_IS_SELECTABLE, PAD_IS_ACTIVE)),
+                torch.tensor((PAD_COST, PAD_IS_ACTIVE)),
                 embbeding_table_card_name(torch.tensor(PAD_INDEX)),
             ]
         )
@@ -67,7 +61,7 @@ def _encode_card(
 
     return torch.concat(
         [
-            torch.tensor((card_view.cost, card_view.is_selectable, card_view.is_active)),
+            torch.tensor((card_view.cost, card_view.is_active)),
             embbeding_table_card_name(torch.tensor(card_name_idx)),
         ]
     )
@@ -106,7 +100,7 @@ class EmbeddingMLP(nn.Module):
             len(CardName) + 1, card_name_embedding_size, padding_idx=0
         )
         self.mlp = nn.Sequential(
-            nn.Linear(44, 128),
+            nn.Linear(38, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
