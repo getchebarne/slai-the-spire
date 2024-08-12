@@ -2,6 +2,7 @@ from typing import Optional
 
 from src.agents.random import BaseAgent
 from src.agents.random import RandomAgent
+from src.game.combat.action import Action
 from src.game.combat.create import create_combat_manager
 from src.game.combat.drawer import drawer
 from src.game.combat.effect_queue import process_queue
@@ -34,7 +35,8 @@ def _set_state(
     combat_manager.state = state
 
 
-def _process(combat_manager: CombatManager) -> None:
+# TODO: find more suitable name
+def process(combat_manager: CombatManager) -> None:
     # Check if there's an active card
     card_active_id = combat_manager.entities.card_active_id
     if card_active_id is not None and card_active_id in combat_manager.entities.card_in_hand_ids:
@@ -62,24 +64,29 @@ def _process(combat_manager: CombatManager) -> None:
     _set_state(State.AWAIT_EFFECT_TARGET, combat_manager, query_ids)
 
 
+def step(combat_manager: CombatManager, action: Action) -> None:
+    # Handle action
+    handle_action(combat_manager, action)
+
+    # Process round
+    process(combat_manager)
+
+
 def main(combat_manager: CombatManager, agent: BaseAgent) -> None:
     # Combat start TODO: change name
     combat_start(combat_manager)
-    _process(combat_manager)
+    process(combat_manager)
 
     while not is_game_over(combat_manager.entities):
         # Get combat view and draw it on the terminal
         combat_view = view_combat(combat_manager)
         drawer(combat_view)
 
-        # Get action form agent
+        # Get action from agent
         action = agent.select_action(combat_view)
 
-        # Handle action
-        handle_action(combat_manager, action)
-
-        # Process round
-        _process(combat_manager)
+        # Game step
+        step(combat_manager, action)
 
     # TODO: combat end
 

@@ -2,22 +2,26 @@ from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.constant import MAX_MONSTERS
+from src.game.combat.state import State
 from src.game.combat.view import CombatView
 
 
 def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
     # Cards in hand
-    valid_action_mask = [card.is_selectable for card in combat_view.hand] + [False] * (
-        MAX_HAND_SIZE - len(combat_view.hand)
-    )
+    valid_action_mask = [
+        card.entity_id in combat_view.entity_selectable_ids for card in combat_view.hand
+    ] + [False] * (MAX_HAND_SIZE - len(combat_view.hand))
 
     # Monsters
-    valid_action_mask += [monster.is_selectable for monster in combat_view.monsters] + [False] * (
-        MAX_MONSTERS - len(combat_view.monsters)
-    )
+    valid_action_mask += [
+        monster.entity_id in combat_view.entity_selectable_ids for monster in combat_view.monsters
+    ] + [False] * (MAX_MONSTERS - len(combat_view.monsters))
 
-    # End turn
-    valid_action_mask.append(True)
+    # End turn. TODO: improve
+    if combat_view.state == State.DEFAULT:
+        valid_action_mask.append(True)
+    else:
+        valid_action_mask.append(False)
 
     return valid_action_mask
 
