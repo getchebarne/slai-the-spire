@@ -3,13 +3,14 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from torch.utils.tensorboard import SummaryWriter
 
+from src.agents.dqn import models
 from src.agents.dqn.explorer import linear_decay
 from src.agents.dqn.memory import Batch
 from src.agents.dqn.memory import ReplayBuffer
 from src.agents.dqn.memory import Sample
-from src.agents.dqn.model import EmbeddingMLP
 from src.agents.dqn.reward import compute_reward
 from src.agents.dqn.utils import action_idx_to_action
 from src.agents.dqn.utils import get_valid_action_mask
@@ -153,30 +154,31 @@ def _play_episode(
     return combat_manager, loss_episode / num_moves
 
 
-def train() -> None:
-    # Config
-    buffer_size = int(1e3)
-    num_epochs = int(5e3)
-    batch_size = 48
-    eval_every = 5
-    writer = SummaryWriter("experiments/test-intent")
+def train(
+    exp_name: str,
+    num_episodes: int,
+    buffer_size: int,
+    batch_size: int,
+    eval_every: int,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    value_start: float,
+    value_end: float,
+    episode_elbow: int,
+) -> None:
+    writer = SummaryWriter(f"experiments/{exp_name}")
 
     # Replay buffer
     replay_buffer = ReplayBuffer(buffer_size)
 
-    # Get model
-    model = EmbeddingMLP(4)
+    # Instantiate agent
     agent = DQNAgent(model)
 
-    # Optimizer
-    lr = 1e-3
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.90, nesterov=True)
-
     # Explorer
-    epsilons = linear_decay(num_epochs, num_epochs // 2, 1, 0.001)
+    epsilons = linear_decay(num_episodes, episode_elbow, value_start, value_end)
 
     # Train
-    for epoch in range(num_epochs):
+    for epoch in range(num_episodes):
         combat_manager, epoch_loss = _play_episode(
             agent, optimizer, replay_buffer, epsilons[epoch], batch_size
         )
@@ -192,5 +194,37 @@ def train() -> None:
             writer.add_scalar("Eval/Final HP", final_hp, epoch)
 
 
+# TODO: fix path
+# TODO: parse values accordingly
+def _load_config(config_path: str = "src/agents/dqn/config.yml") -> dict:
+    with open(config_path, "r") as file:
+        return yaml.safe_load(file)
+
+
+def _init_model(config_model: dict) -> nn.Module:
+    return getattr(models, config_model["name"])(**config_model["kwargs"])
+
+
+def _init_optimizer(config_optimizer: dict, model: nn.Module) -> torch.optim.Optimizer:
+    return getattr(torch.optim, config_optimizer["name"])(
+        **config_optimizer["kwargs"], params=model.parameters()
+    )
+
+
 if __name__ == "__main__":
-    train()
+    config = _load_config()
+    model = _init_model(config["model"])
+    optimizer = _init_optimizer(config["optimizer"], model)
+
+    train(
+        config["exp_name"],
+        int(config["num_episodes"]),
+        int(config["buffer_size"]),
+        config["batch_size"],
+        config["eval_every"],
+        model,
+        optimizer,
+        config["value_start"],
+        config["value_end"],
+        config["episode_elbow"],
+    )

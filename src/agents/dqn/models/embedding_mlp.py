@@ -98,30 +98,56 @@ def _encode_combat(
     )
 
 
-class EmbeddingMLP(nn.Module):
-    def __init__(self, card_name_embedding_size: int):
+class MLP(nn.Module):
+    def __init__(self, layer_sizes: list[int], bias: bool = True, activation_name: str = "ReLU"):
         super().__init__()
-        self.card_name_embedding_size = card_name_embedding_size
 
-        self.embedding_table_card_name = nn.Embedding(
+        self._layer_sizes = layer_sizes
+        self._bias = bias
+        self._activation_name = activation_name
+
+        self._mlp = self._create_mlp()
+
+    def _create_mlp(self) -> nn.Module:
+        layers = []
+        for i in range(len(self._layer_sizes)):
+            if i == 0:
+                # First layer is lazy
+                layers.append(nn.LazyLinear(self._layer_sizes[i], self._bias))
+            else:
+                layers.append(
+                    nn.Linear(self._layer_sizes[i - 1], self._layer_sizes[i], self._bias)
+                )
+
+            layers.append(getattr(nn, self._activation_name)())
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._mlp(x)
+
+
+class EmbeddingMLP(nn.Module):
+    def __init__(self, card_name_embedding_size: int, linear_sizes: list[int]):
+        super().__init__()
+        self._card_name_embedding_size = card_name_embedding_size
+        self._linear_sizes = linear_sizes
+
+        self._embedding_table_card_name = nn.Embedding(
             len(CardName) + 1, card_name_embedding_size, padding_idx=0
         )
-        self.mlp = nn.Sequential(
-            nn.Linear(41, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, MAX_HAND_SIZE + MAX_MONSTERS + 1),
-        )
+        self._mlp = MLP(linear_sizes)
+        self._last = nn.Linear(linear_sizes[-1], MAX_HAND_SIZE + MAX_MONSTERS + 1, bias=True)
 
     def forward(self, combat_views: list[CombatView]) -> torch.Tensor:
         x = torch.stack(
             [
-                _encode_combat(combat_view, self.embedding_table_card_name)
+                _encode_combat(combat_view, self._embedding_table_card_name)
                 for combat_view in combat_views
             ]
         )
 
-        return self.mlp(x)
+        x = self._mlp(x)
+        x = self._last(x)
+
+        return x
