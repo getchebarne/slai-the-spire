@@ -6,6 +6,7 @@ from src.game.combat.state import State
 from src.game.combat.view import CombatView
 
 
+# TODO: this should be more "global", i.e., not specific to the DQN agent
 def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
     # Cards in hand
     valid_action_mask = [

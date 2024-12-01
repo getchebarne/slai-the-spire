@@ -13,6 +13,7 @@ class DQNAgent(BaseAgent):
     def model(self) -> nn.Module:
         return self._model
 
+    # TODO: revisit if `valid_action_mask` should be necessary here
     def select_action(self, combat_view: CombatView, valid_action_mask: list[bool]) -> int:
         with torch.no_grad():
             q_t = self.model([combat_view])

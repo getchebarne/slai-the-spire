@@ -1,0 +1,23 @@
+exp_name: test-config
+num_episodes: 5.0e+3
+buffer_size: 1.0e+3
+batch_size: 48
+eval_every: 5
+
+model: 
+  name: EmbeddingMLP
+  kwargs:
+    card_name_embedding_size: 4
+    linear_sizes: [128, 128, 128]
+
+optimizer:
+  name: SGD
+  kwargs:
+    lr: 1.0e-3
+    nesterov: True
+    momentum: 0.90
+
+# Explorer
+episode_elbow: 2.5e+3
+value_start: 1
+value_end: 1.0e-3
