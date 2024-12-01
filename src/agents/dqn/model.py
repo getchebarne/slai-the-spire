@@ -27,10 +27,17 @@ def _encode_monsters(monster_views: list[MonsterView]) -> torch.Tensor:
     return torch.concat(
         [
             torch.tensor(
-                (monster_view.health.max, monster_view.health.current, monster_view.block.current)
+                [
+                    monster_view.health.max,
+                    monster_view.health.current,
+                    monster_view.block.current,
+                    0 if monster_view.intent.damage is None else monster_view.intent.damage[0],
+                    0 if monster_view.intent.damage is None else monster_view.intent.damage[1],
+                    int(monster_view.intent.block),
+                ]
             )
             for monster_view in monster_views
-        ]
+        ],
     )
 
 
@@ -100,7 +107,7 @@ class EmbeddingMLP(nn.Module):
             len(CardName) + 1, card_name_embedding_size, padding_idx=0
         )
         self.mlp = nn.Sequential(
-            nn.Linear(38, 128),
+            nn.Linear(41, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),

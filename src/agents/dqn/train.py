@@ -27,7 +27,7 @@ from src.game.combat.view import view_combat
 def _train_on_batch(
     batch: Batch, model: nn.Module, optimizer: torch.optim.Optimizer, discount: float = 0.99
 ) -> float:
-    # Set model to train model
+    # Set model to train mode
     model.train()
 
     # Forward pass
@@ -159,7 +159,7 @@ def train() -> None:
     num_epochs = int(5e3)
     batch_size = 48
     eval_every = 5
-    writer = SummaryWriter("experiments/test")
+    writer = SummaryWriter("experiments/test-intent")
 
     # Replay buffer
     replay_buffer = ReplayBuffer(buffer_size)
@@ -169,7 +169,8 @@ def train() -> None:
     agent = DQNAgent(model)
 
     # Optimizer
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
+    lr = 1e-3
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.90, nesterov=True)
 
     # Explorer
     epsilons = linear_decay(num_epochs, num_epochs // 2, 1, 0.001)

@@ -4,6 +4,9 @@ from enum import Enum
 from typing import Optional
 
 
+# TODO: split this into multiple scripts
+
+
 @dataclass
 class Entity(ABC):
     pass
@@ -86,6 +89,7 @@ class Character(Actor):
     pass
 
 
+# TODO: maybe make flat
 @dataclass
 class MonsterMove:
     name: str
