@@ -55,7 +55,7 @@ def survivor() -> Card:
             Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER),
             Effect(
                 EffectType.DISCARD,
-                discard,
+                discard,  # TODO: this should be part of the selection type
                 EffectTargetType.CARD_IN_HAND,
                 EffectSelectionType.INPUT,
             ),

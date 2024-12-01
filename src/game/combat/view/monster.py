@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
@@ -10,7 +9,7 @@ from src.game.combat.view.actor import _actor_to_view
 
 @dataclass
 class IntentView:
-    damage: Optional[tuple[int, int]]
+    damage: tuple[int, int] | None  # TODO: maybe change to `damage` and `instances`
     block: bool
 
 
