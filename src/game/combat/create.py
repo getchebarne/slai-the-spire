@@ -29,7 +29,7 @@ def create_combat_manager() -> CombatManager:
         entities.create_entity(defend()),
         entities.create_entity(defend()),
         entities.create_entity(neutralize()),
-        # entities.create_entity(survivor()),
+        entities.create_entity(survivor()),
     }
     # Create effect queue
     effect_queue = EffectQueue()

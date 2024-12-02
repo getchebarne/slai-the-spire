@@ -65,9 +65,9 @@ def _train_on_batch(
     return loss.item()
 
 
-def _get_action(combat_view: CombatView, agent: DQNAgent, epsilon: float) -> int:
+def _get_action(combat_view: CombatView, agent: DQNAgent, epsilon: float) -> Action:
     if random.uniform(0, 1) < epsilon:
-        # Explore
+        # Explore TODO: fix, add end turn
         if combat_view.entity_selectable_ids:
             return Action(
                 ActionType.SELECT_ENTITY, random.choice(combat_view.entity_selectable_ids)

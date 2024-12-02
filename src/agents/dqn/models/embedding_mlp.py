@@ -11,6 +11,21 @@ from src.game.combat.view.card import CardView
 from src.game.combat.view.character import CharacterView
 from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import MonsterView
+from src.game.combat.view.state import StateView
+
+
+def _encode_state(state_view: StateView, embedding_table_state: nn.Embedding) -> torch.Tensor:
+    # TODO: move this
+    if state_view == StateView.DEFAULT:
+        state_idx = 0
+
+    elif state_view == StateView.AWAIT_CARD_TARGET:
+        state_idx = 1
+
+    elif state_view == StateView.AWAIT_EFFECT_TARGET:
+        state_idx = 2
+
+    return embedding_table_state(torch.tensor(state_idx))
 
 
 def _encode_character(character_view: CharacterView) -> torch.Tensor:
@@ -66,6 +81,9 @@ def _encode_card(
     elif card_view.name == CardName.NEUTRALIZE:
         card_name_idx = 3
 
+    elif card_view.name == CardName.SURVIVOR:
+        card_name_idx = 4
+
     return torch.concat(
         [
             torch.tensor((card_view.cost, card_view.is_active)),
@@ -84,11 +102,14 @@ def _encode_hand(hand: list[CardView], embbeding_table_card_name: nn.Embedding) 
 
 
 def _encode_combat(
-    combat_view: CombatView, embbeding_table_card_name: nn.Embedding
+    combat_view: CombatView,
+    embbeding_table_card_name: nn.Embedding,
+    embedding_table_state: nn.Embedding,
 ) -> torch.Tensor:
     return torch.flatten(
         torch.concat(
             [
+                _encode_state(combat_view.state, embedding_table_state),
                 _encode_character(combat_view.character),
                 _encode_monsters(combat_view.monsters),
                 _encode_hand(combat_view.hand, embbeding_table_card_name),
@@ -128,21 +149,27 @@ class MLP(nn.Module):
 
 
 class EmbeddingMLP(nn.Module):
-    def __init__(self, card_name_embedding_size: int, linear_sizes: list[int]):
+    def __init__(
+        self, card_name_embedding_size: int, state_embedding_size: int, linear_sizes: list[int]
+    ):
         super().__init__()
         self._card_name_embedding_size = card_name_embedding_size
+        self._state_embedding_size = state_embedding_size
         self._linear_sizes = linear_sizes
 
         self._embedding_table_card_name = nn.Embedding(
             len(CardName) + 1, card_name_embedding_size, padding_idx=0
         )
+        self._embedding_table_state = nn.Embedding(len(StateView), state_embedding_size)
         self._mlp = MLP(linear_sizes)
         self._last = nn.Linear(linear_sizes[-1], MAX_HAND_SIZE + MAX_MONSTERS + 1, bias=True)
 
     def forward(self, combat_views: list[CombatView]) -> torch.Tensor:
         x = torch.stack(
             [
-                _encode_combat(combat_view, self._embedding_table_card_name)
+                _encode_combat(
+                    combat_view, self._embedding_table_card_name, self._embedding_table_state
+                )
                 for combat_view in combat_views
             ]
         )

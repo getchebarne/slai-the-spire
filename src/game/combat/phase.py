@@ -50,17 +50,9 @@ def _queue_turn_start_effects(
 def _queue_turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor_id: int) -> None:
     actor = entities.get_entity(actor_id)
 
-    # Common. TODO: function
-    for modifier_type, modifier in actor.modifiers.items():
-        if modifier.stacks_duration:
-            modifier.stacks -= 1
+    # Common
+    effects = [Effect(EffectType.MOD_TICK, target_type=EffectTargetType.SOURCE)]
 
-    actor.modifiers = {
-        modifier_type: modifier
-        for modifier_type, modifier in actor.modifiers.items()
-        if modifier.stacks > modifier.stacks_min
-    }
-    effects = []
     if isinstance(actor, Character):
         # Character-specific effects
         effect_queue.add_to_bot(
@@ -72,5 +64,5 @@ def _queue_turn_end_effects(entities: Entities, effect_queue: EffectQueue, actor
         # TODO: no effects for now
         pass
 
-    # Process effects
+    # Queue effects
     effect_queue.add_to_bot(actor_id, *effects)

@@ -54,7 +54,7 @@ def process(combat_manager: CombatManager) -> None:
             Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE),
         )
 
-    # Process queue
+    # Process queue TODO: should be standalone
     query_ids = process_queue(combat_manager.entities, combat_manager.effect_queue)
     if query_ids is None:
         _set_state(State.DEFAULT, combat_manager)

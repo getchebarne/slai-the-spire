@@ -21,6 +21,7 @@ class EffectType(Enum):
     DISCARD = "DISCARD"
     ZERO_BLOCK = "ZERO_BLOCK"
     PLAY_CARD = "PLAY_CARD"
+    MOD_TICK = "MOD_TICK"
 
 
 class EffectTargetType(Enum):
@@ -105,7 +106,7 @@ class CardName(Enum):
     STRIKE = "STRIKE"
     DEFEND = "DEFEND"
     NEUTRALIZE = "NEUTRALIZE"
-    # SURVIVOR = "SURVIVOR"
+    SURVIVOR = "SURVIVOR"
 
 
 @dataclass
