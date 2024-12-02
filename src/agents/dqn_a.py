@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 
 from src.agents.base import BaseAgent
+from src.agents.dqn.utils import action_idx_to_action
+from src.agents.dqn.utils import get_valid_action_mask
+from src.game.combat.action import Action
 from src.game.combat.view import CombatView
 
 
@@ -13,14 +16,18 @@ class DQNAgent(BaseAgent):
     def model(self) -> nn.Module:
         return self._model
 
-    # TODO: revisit if `valid_action_mask` should be necessary here
-    def select_action(self, combat_view: CombatView, valid_action_mask: list[bool]) -> int:
+    def select_action(self, combat_view: CombatView) -> Action:
+        # Set model to evaluation mode
+        self._model.eval()
+
+        # Calculate q-values for every action
         with torch.no_grad():
             q_t = self.model([combat_view])
 
         # Calculate action w/ highest q-value (masking invalid actions)
+        valid_action_mask = get_valid_action_mask(combat_view)
         action_idx = (
             (q_t - (1 - torch.tensor(valid_action_mask, dtype=torch.int)) * 1e20).argmax().item()
         )
 
-        return action_idx
+        return action_idx_to_action(action_idx, combat_view)

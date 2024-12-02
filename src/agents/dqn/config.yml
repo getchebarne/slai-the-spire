@@ -1,4 +1,4 @@
-exp_name: test-config
+exp_name: test-inter
 num_episodes: 5.0e+3
 buffer_size: 1.0e+3
 batch_size: 48

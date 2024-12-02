@@ -12,9 +12,11 @@ from src.agents.dqn.memory import Batch
 from src.agents.dqn.memory import ReplayBuffer
 from src.agents.dqn.memory import Sample
 from src.agents.dqn.reward import compute_reward
-from src.agents.dqn.utils import action_idx_to_action
+from src.agents.dqn.utils import action_to_action_idx
 from src.agents.dqn.utils import get_valid_action_mask
 from src.agents.dqn_a import DQNAgent
+from src.game.combat.action import Action
+from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_manager
 from src.game.combat.main import process
 from src.game.combat.main import step
@@ -63,15 +65,18 @@ def _train_on_batch(
     return loss.item()
 
 
-def _get_action_idx(combat_view: CombatView, agent: DQNAgent, epsilon: float) -> int:
-    valid_action_mask = get_valid_action_mask(combat_view)  # TODO: FIX
-
+def _get_action(combat_view: CombatView, agent: DQNAgent, epsilon: float) -> int:
     if random.uniform(0, 1) < epsilon:
         # Explore
-        return random.choice([i for i, is_valid in enumerate(valid_action_mask) if is_valid])
+        if combat_view.entity_selectable_ids:
+            return Action(
+                ActionType.SELECT_ENTITY, random.choice(combat_view.entity_selectable_ids)
+            )
+
+        return Action(ActionType.END_TURN)
 
     # Exploit
-    return agent.select_action(combat_view, valid_action_mask)
+    return agent.select_action(combat_view)
 
 
 def _evaluate_agent(agent: DQNAgent) -> int:
@@ -85,16 +90,13 @@ def _evaluate_agent(agent: DQNAgent) -> int:
         combat_view_t = view_combat(combat_manager)
 
         # Get action from agent
-        action_idx = _get_action_idx(combat_view_t, agent, epsilon=-1)
-        action = action_idx_to_action(action_idx, combat_view_t)
+        action = agent.select_action(combat_view_t)
 
         # Game step
         step(combat_manager, action)
 
-    # View end entities
-    combat_view_end = view_combat(combat_manager)
-
-    return combat_view_end.character.health.current
+    # Return final health
+    return view_combat(combat_manager).character.health.current
 
 
 def _play_episode(
@@ -103,7 +105,7 @@ def _play_episode(
     replay_buffer: ReplayBuffer,
     epsilon: float,
     batch_size: int,
-) -> tuple[CombatManager, float]:
+) -> tuple[CombatManager, float, int]:
     # Get new game TODO: improve this
     combat_manager = create_combat_manager()
     combat_start(combat_manager)
@@ -119,8 +121,7 @@ def _play_episode(
         combat_view_t = view_combat(combat_manager)
 
         # Get action from agent
-        action_idx = _get_action_idx(combat_view_t, agent, epsilon)
-        action = action_idx_to_action(action_idx, combat_view_t)
+        action = _get_action(combat_view_t, agent, epsilon)
 
         # Game step
         step(combat_manager, action)
@@ -132,6 +133,7 @@ def _play_episode(
         reward = compute_reward(combat_view_tp1, game_over_flag)
 
         # Store transition in memory
+        action_idx = action_to_action_idx(action, combat_view_t)
         replay_buffer.store(
             Sample(
                 combat_view_t,
@@ -151,7 +153,7 @@ def _play_episode(
         loss_batch = _train_on_batch(batch, agent.model, optimizer)
         loss_episode += loss_batch
 
-    return combat_manager, loss_episode / num_moves
+    return combat_manager, loss_episode / num_moves, num_moves
 
 
 def train(
@@ -179,13 +181,14 @@ def train(
 
     # Train
     for epoch in range(num_episodes):
-        combat_manager, epoch_loss = _play_episode(
+        combat_manager, epoch_loss, num_moves = _play_episode(
             agent, optimizer, replay_buffer, epsilons[epoch], batch_size
         )
         # View end state
         combat_view_end = view_combat(combat_manager)
 
         writer.add_scalar("Epoch loss", epoch_loss, epoch)
+        writer.add_scalar("Number of moves", num_moves, epoch)
         writer.add_scalar("Epsilon", epsilons[epoch], epoch)
         writer.add_scalar("Final HP", combat_view_end.character.health.current, epoch)
 
