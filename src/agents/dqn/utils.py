@@ -6,7 +6,7 @@ from src.game.combat.state import State
 from src.game.combat.view import CombatView
 
 
-# TODO: this should be more "global", i.e., not specific to the DQN agent
+# TODO: these should be more "global", i.e., not specific to the DQN agent
 def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
     # Cards in hand
     valid_action_mask = [
@@ -38,3 +38,16 @@ def action_idx_to_action(action_idx: int, combat_view: CombatView) -> Action:
         return Action(ActionType.END_TURN)
 
     raise ValueError(f"Unsupported action index: {action_idx}")
+
+
+def action_to_action_idx(action: Action, combat_view: CombatView) -> int:
+    if action.type == ActionType.END_TURN:
+        return 6
+
+    for idx, card in enumerate(combat_view.hand):
+        if card.entity_id == action.target_id:
+            return idx
+
+    for idx, monster in enumerate(combat_view.monsters):
+        if monster.entity_id == action.target_id:
+            return idx + 5
