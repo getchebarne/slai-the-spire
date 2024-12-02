@@ -1,5 +1,5 @@
-exp_name: test-inter
-num_episodes: 5.0e+3
+exp_name: test-surv-neut
+num_episodes: 1.0e+4
 buffer_size: 1.0e+3
 batch_size: 48
 eval_every: 5
@@ -7,7 +7,8 @@ eval_every: 5
 model: 
   name: EmbeddingMLP
   kwargs:
-    card_name_embedding_size: 4
+    card_name_embedding_size: 5
+    state_embedding_size: 3
     linear_sizes: [128, 128, 128]
 
 optimizer:
@@ -18,6 +19,6 @@ optimizer:
     momentum: 0.90
 
 # Explorer
-episode_elbow: 2.5e+3
+episode_elbow: 5.0e+3
 value_start: 1
 value_end: 1.0e-3

@@ -49,7 +49,7 @@ def survivor() -> Card:
     discard = 1
 
     return Card(
-        "Survivor",
+        CardName.SURVIVOR,
         cost,
         [
             Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER),

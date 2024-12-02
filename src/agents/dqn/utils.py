@@ -19,10 +19,7 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
     ] + [False] * (MAX_MONSTERS - len(combat_view.monsters))
 
     # End turn. TODO: improve
-    if combat_view.state == State.DEFAULT:
-        valid_action_mask.append(True)
-    else:
-        valid_action_mask.append(False)
+    valid_action_mask.append(combat_view.state == State.DEFAULT)
 
     return valid_action_mask
 
@@ -51,3 +48,5 @@ def action_to_action_idx(action: Action, combat_view: CombatView) -> int:
     for idx, monster in enumerate(combat_view.monsters):
         if monster.entity_id == action.target_id:
             return idx + 5
+
+    raise ValueError(f"Unable to convert action: {action}")

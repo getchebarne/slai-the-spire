@@ -7,6 +7,7 @@ from src.game.combat.entities import EffectSelectionType
 from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
+from src.game.combat.processors import EffectPayload
 from src.game.combat.processors import get_effect_processors
 
 
@@ -42,6 +43,14 @@ class EffectQueue:
     # TODO: revisit
     def next_effect_type(self) -> EffectType:
         return self._source_id_effects[0][1].type
+
+    def __str__(self) -> str:
+        if not self._source_id_effects:
+            return "EffectQueue is empty."
+
+        return "EffectQueue:\n" + "\n".join(
+            f"  Source ID {source_id}: {effect}" for source_id, effect in self._source_id_effects
+        )
 
 
 def _resolve_effect_target_type(
@@ -94,7 +103,7 @@ def _resolve_effect_selection_type(
             if len(entity_ids) > num_target:
                 raise EffectNeedsInputTargets
 
-            return []
+            return entity_ids
 
         return [entities.effect_target_id]  # TODO: clear id?
 
@@ -122,10 +131,10 @@ def process_queue(entities: Entities, effect_queue: EffectQueue) -> list[int] | 
         entities.effect_target_id = None
 
         for target_id in target_ids:
+            # TODO: improve payload handling and definiton
+            payload = EffectPayload(source_id, target_id, effect.value)
             for processor in get_effect_processors(effect.type):
-                effects_bot, effects_top = processor(
-                    entities, source_id=source_id, target_id=target_id, value=effect.value
-                )
+                effects_bot, effects_top = processor(entities, payload)
 
                 for source_id, effect_bot in effects_bot:
                     effect_queue.add_to_bot(source_id, effect_bot)

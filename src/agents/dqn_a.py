@@ -17,12 +17,12 @@ class DQNAgent(BaseAgent):
         return self._model
 
     def select_action(self, combat_view: CombatView) -> Action:
-        # Set model to evaluation mode
+        # Set model to evaluation mode TODO: maybe shouldn't be here
         self._model.eval()
 
         # Calculate q-values for every action
         with torch.no_grad():
-            q_t = self.model([combat_view])
+            q_t = self.model([combat_view])  # TODO: fix, can sometimes be NaN and cause issues
 
         # Calculate action w/ highest q-value (masking invalid actions)
         valid_action_mask = get_valid_action_mask(combat_view)
