@@ -1,18 +1,24 @@
 from dataclasses import dataclass
 
+from src.game.combat.entities import CardName
 from src.game.combat.entities import Entities
 
 
 @dataclass
 class CardView:
     entity_id: int
-    name: str
+    name: CardName
     cost: int
-    # is_selectable: bool
     is_active: bool
 
     def __hash__(self) -> int:
         return hash(id(self))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CardView):
+            return False
+
+        return id(self) == id(other)
 
 
 def _card_to_view(entities: Entities, card_entity_id: int) -> CardView:

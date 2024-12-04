@@ -10,6 +10,7 @@ class State(Enum):
     AWAIT_EFFECT_TARGET = "AWAIT_EFFECT_TARGET"
 
 
+# TODO: encapsulate on enter in separate funcs
 def on_enter(
     state: State, entities: Entities, entity_selectable_ids: Optional[list[int]] = None
 ) -> None:

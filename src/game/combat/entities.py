@@ -21,7 +21,8 @@ class EffectType(Enum):
     DISCARD = "DISCARD"
     ZERO_BLOCK = "ZERO_BLOCK"
     PLAY_CARD = "PLAY_CARD"
-    MOD_TICK = "MOD_TICK"
+    MOD_TICK = "MOD_TICK"  # TODO: rename
+    GAIN_STR = "GAIN_STR"
 
 
 class EffectTargetType(Enum):
@@ -65,6 +66,7 @@ class Block:
 @dataclass
 class ModifierType:
     WEAK = "WEAK"
+    STR = "STR"
 
 
 @dataclass
@@ -99,7 +101,8 @@ class MonsterMove:
 
 @dataclass
 class Monster(Actor):
-    move: Optional[MonsterMove] = None
+    move: Optional[MonsterMove] = None  # TODO: rename to move_current
+    move_history: list[MonsterMove] = field(default_factory=list)
 
 
 class CardName(Enum):

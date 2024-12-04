@@ -20,7 +20,7 @@ def combat_start(combat_manager: CombatManager) -> None:
     for monster in combat_manager.entities.get_monsters():
         ais[monster.name](monster)
 
-    # Set start of turn to character & call it's turn start
+    # Set start of turn to character & call its turn start
     combat_manager.entities.actor_turn_id = combat_manager.entities.character_id
     _queue_turn_start_effects(
         combat_manager.entities, combat_manager.effect_queue, combat_manager.entities.character_id
@@ -43,7 +43,7 @@ def _queue_turn_start_effects(
         # TODO: empty for now
         pass
 
-    # Process effects
+    # Queue effects
     effect_queue.add_to_bot(actor_id, *effects)
 
 

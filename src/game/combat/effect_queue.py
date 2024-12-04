@@ -89,23 +89,21 @@ def _resolve_effect_selection_type(
     if effect_selection_type is None:
         return entity_ids
 
-    if (
-        effect_selection_type == EffectSelectionType.RANDOM
-    ):  # TODO: add support for multiple random targets
+    if effect_selection_type == EffectSelectionType.RANDOM:
+        # TODO: add support for multiple random targets
         return [random.choice(entity_ids)]
 
     if effect_selection_type == EffectSelectionType.INPUT:
         # TODO: make more readable?
         if entities.effect_target_id is None:
-            num_target = (
-                1  # TODO: this can depend on the number of entities to select (e.g., "Prepared")
-            )
+            # TODO: this can depend on the number of entities to select (e.g., "Prepared")
+            num_target = 1
             if len(entity_ids) > num_target:
                 raise EffectNeedsInputTargets
 
             return entity_ids
 
-        return [entities.effect_target_id]  # TODO: clear id?
+        return [entities.effect_target_id]
 
     raise ValueError(f"Unsupported effect selection type: {effect_selection_type}")
 
@@ -126,9 +124,6 @@ def process_queue(entities: Entities, effect_queue: EffectQueue) -> list[int] | 
 
             # Return selectable entities (which are the effect's query entities)
             return query_ids
-
-        # Clear effect target TODO: maybe should happen when the effect selection type is resolved
-        entities.effect_target_id = None
 
         for target_id in target_ids:
             # TODO: improve payload handling and definiton

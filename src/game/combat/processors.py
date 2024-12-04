@@ -8,6 +8,7 @@ from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
 from src.game.combat.entities import ModifierType
+from src.game.combat.factories import strength
 from src.game.combat.factories import weak
 
 
@@ -90,6 +91,25 @@ def _processor_gain_weak(
     return [], []
 
 
+def _processor_gain_str(
+    entities: Entities, effect_payload: EffectPayload
+) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
+    target = entities.get_entity(effect_payload.target_id)
+    value = int(effect_payload.value)
+
+    # TODO: use defaultdict?
+    try:
+        modifier_str = target.modifiers[ModifierType.STR]
+        modifier_str.stacks = min(modifier_str.stacks + value, modifier_str.stacks_max)
+
+    except KeyError:
+        modifier_str = strength()
+        modifier_str.stacks = value  # TODO: fix
+        target.modifiers[ModifierType.STR] = modifier_str
+
+    return [], []
+
+
 def _processor_mod_tick(
     entities: Entities, effect_payload: EffectPayload
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
@@ -119,6 +139,21 @@ def _processor_apply_weak(
 
     if ModifierType.WEAK in source.modifiers:
         effect_payload.value *= 0.75
+
+    return [], []
+
+
+def _processor_apply_str(
+    entities: Entities, effect_payload: EffectPayload
+) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
+    source = entities.get_entity(effect_payload.source_id)
+
+    # TODO: improve
+    if isinstance(source, Card):
+        source = entities.get_entity(entities.character_id)
+
+    if ModifierType.STR in source.modifiers:
+        effect_payload.value += source.modifiers[ModifierType.STR].stacks
 
     return [], []
 
@@ -179,7 +214,7 @@ def get_effect_processors(effect_type: EffectType) -> list[Callable]:  # TODO: a
 
 # Dictionary to hold effect type to processing function mappings
 processors = {
-    EffectType.DEAL_DAMAGE: [_processor_apply_weak, _processor_deal_damage],
+    EffectType.DEAL_DAMAGE: [_processor_apply_str, _processor_apply_weak, _processor_deal_damage],
     EffectType.GAIN_BLOCK: [_processor_gain_block],
     EffectType.GAIN_WEAK: [_processor_gain_weak],
     EffectType.DRAW_CARD: [_processor_draw_card],
@@ -188,4 +223,5 @@ processors = {
     EffectType.ZERO_BLOCK: [_processor_zero_block],
     EffectType.PLAY_CARD: [_processor_play_card],
     EffectType.MOD_TICK: [_processor_mod_tick],
+    EffectType.GAIN_STR: [_processor_gain_str],
 }

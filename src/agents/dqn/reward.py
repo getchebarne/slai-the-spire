@@ -10,5 +10,5 @@ def compute_reward(combat_view: CombatView, game_over_flag: bool) -> float:
         # Loss
         return -1
 
-    # Win
+    # Win TODO: the agent may gain health, think about this
     return combat_view.character.health.current / combat_view.character.health.max

@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from src.game.combat.manager import CombatManager
 from src.game.combat.view.card import CardView
+from src.game.combat.view.card import view_discard_pile
+from src.game.combat.view.card import view_draw_pile
 from src.game.combat.view.card import view_hand
 from src.game.combat.view.character import CharacterView
 from src.game.combat.view.character import view_character
@@ -25,8 +27,8 @@ class CombatView:
     energy: EnergyView
     effect: EffectView
     entity_selectable_ids: list[int]  # TODO: revisit
-    # draw pile
-    # discard pile
+    draw_pile: set[CardView]
+    disc_pile: set[CardView]
 
 
 def view_combat(combat_manager: CombatManager) -> CombatView:
@@ -38,4 +40,6 @@ def view_combat(combat_manager: CombatManager) -> CombatView:
         view_energy(combat_manager.entities),
         view_effect(combat_manager.effect_queue, combat_manager.state),
         combat_manager.entities.entity_selectable_ids.copy(),  # revisit
+        view_draw_pile(combat_manager.entities),
+        view_discard_pile(combat_manager.entities),
     )
