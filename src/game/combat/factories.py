@@ -1,3 +1,5 @@
+import random
+
 from src.game.combat.entities import Card
 from src.game.combat.entities import CardName
 from src.game.combat.entities import Character
@@ -21,6 +23,12 @@ def dummy() -> Monster:
     max_health = 30
 
     return Monster("Dummy", Health(max_health))
+
+
+def jaw_worm() -> Monster:
+    max_health = random.randint(42, 46)
+
+    return Monster("Jaw Worm", Health(max_health))
 
 
 def strike() -> Card:
@@ -86,3 +94,7 @@ def energy() -> Energy:
 
 def weak() -> Modifier:
     return Modifier(stacks_min=0, stacks_max=999, stacks_duration=True)
+
+
+def strength() -> Modifier:
+    return Modifier(stacks_min=0, stacks_max=999, stacks_duration=False)

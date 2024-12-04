@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
@@ -7,48 +5,87 @@ from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.constant import MAX_MONSTERS
 from src.game.combat.entities import CardName
 from src.game.combat.view import CombatView
+from src.game.combat.view.actor import ActorView
+from src.game.combat.view.actor import ModifierViewType
 from src.game.combat.view.card import CardView
 from src.game.combat.view.character import CharacterView
 from src.game.combat.view.energy import EnergyView
+from src.game.combat.view.monster import IntentView
 from src.game.combat.view.monster import MonsterView
 from src.game.combat.view.state import StateView
 
 
+CARD_NAME_IDX = {
+    CardName.STRIKE: 1,
+    CardName.DEFEND: 2,
+    CardName.NEUTRALIZE: 3,
+    CardName.SURVIVOR: 4,
+}
+STATE_IDX = {
+    StateView.DEFAULT: 0,
+    StateView.AWAIT_CARD_TARGET: 1,
+    StateView.AWAIT_EFFECT_TARGET: 2,
+}
+
+
 def _encode_state(state_view: StateView, embedding_table_state: nn.Embedding) -> torch.Tensor:
-    # TODO: move this
-    if state_view == StateView.DEFAULT:
-        state_idx = 0
-
-    elif state_view == StateView.AWAIT_CARD_TARGET:
-        state_idx = 1
-
-    elif state_view == StateView.AWAIT_EFFECT_TARGET:
-        state_idx = 2
-
-    return embedding_table_state(torch.tensor(state_idx))
-
-
-def _encode_character(character_view: CharacterView) -> torch.Tensor:
-    return torch.tensor(
-        [character_view.health.max, character_view.health.current, character_view.block.current]
-    )
+    return embedding_table_state(torch.tensor(STATE_IDX[state_view]))
 
 
 def _encode_energy(energy_view: EnergyView) -> torch.Tensor:
     return torch.tensor([energy_view.max, energy_view.current])
 
 
-def _encode_monsters(monster_views: list[MonsterView]) -> torch.Tensor:
+def _encode_actor(actor_view: ActorView) -> torch.Tensor:
+    # TODO: impove, make more readable
+    mod_encs = []
+    for modifier_view_type in [ModifierViewType.WEAK, ModifierViewType.STR]:
+        # Find the first matching modifier, if any
+        modifier_match = next(
+            (modifier for modifier in actor_view.modifiers if modifier.type == modifier_view_type),
+            None,
+        )
+
+        # Encode the modifier, or a default modifier if none exists
+        encoded_modifier = torch.tensor(
+            [1, modifier_match.stacks] if modifier_match is not None else [0, 0]
+        )
+        mod_encs.append(encoded_modifier)
+
     return torch.concat(
         [
             torch.tensor(
+                [actor_view.health.max, actor_view.health.current, actor_view.block.current]
+            ),
+            *mod_encs,
+        ]
+    )
+
+
+def _encode_character(character_view: CharacterView) -> torch.Tensor:
+    return _encode_actor(character_view)
+
+
+def _encode_intent(intent_view: IntentView) -> torch.Tensor:
+    return torch.tensor(
+        [
+            intent_view.damage or 0,
+            intent_view.instances or 0,
+            intent_view.block,
+            intent_view.buff,
+        ],
+        dtype=torch.float,
+    )
+
+
+def _encode_monsters(monster_views: list[MonsterView]) -> torch.Tensor:
+    # TODO: fix this it's ugly
+    return torch.concat(
+        [
+            torch.concat(
                 [
-                    monster_view.health.max,
-                    monster_view.health.current,
-                    monster_view.block.current,
-                    0 if monster_view.intent.damage is None else monster_view.intent.damage[0],
-                    0 if monster_view.intent.damage is None else monster_view.intent.damage[1],
-                    int(monster_view.intent.block),
+                    _encode_actor(monster_view),
+                    _encode_intent(monster_view.intent),
                 ]
             )
             for monster_view in monster_views
@@ -56,54 +93,69 @@ def _encode_monsters(monster_views: list[MonsterView]) -> torch.Tensor:
     )
 
 
-def _encode_card(
-    card_view: Optional[CardView], embbeding_table_card_name: nn.Embedding
-) -> torch.Tensor:
-    if card_view is None:
-        # TODO: move this
-        PAD_COST = -1
-        PAD_IS_ACTIVE = False
-        PAD_INDEX = 0
-        return torch.concat(
-            [
-                torch.tensor((PAD_COST, PAD_IS_ACTIVE)),
-                embbeding_table_card_name(torch.tensor(PAD_INDEX)),
-            ]
-        )
-
-    # TODO: move this
-    if card_view.name == CardName.STRIKE:
-        card_name_idx = 1
-
-    elif card_view.name == CardName.DEFEND:
-        card_name_idx = 2
-
-    elif card_view.name == CardName.NEUTRALIZE:
-        card_name_idx = 3
-
-    elif card_view.name == CardName.SURVIVOR:
-        card_name_idx = 4
-
+def _encode_card(card_view: CardView, embedding_table_card_name: nn.Embedding) -> torch.Tensor:
     return torch.concat(
         [
-            torch.tensor((card_view.cost, card_view.is_active)),
-            embbeding_table_card_name(torch.tensor(card_name_idx)),
+            torch.tensor([card_view.is_active, card_view.cost], dtype=torch.float),
+            embedding_table_card_name(torch.tensor(CARD_NAME_IDX[card_view.name])),
         ]
     )
 
 
-def _encode_hand(hand: list[CardView], embbeding_table_card_name: nn.Embedding) -> torch.Tensor:
+def _encode_card_pad(embedding_table_card_name: nn.Embedding) -> torch.Tensor:
+    return torch.concat(
+        [
+            torch.tensor([-1, -1], dtype=torch.float),
+            embedding_table_card_name(torch.tensor(0)),
+        ]
+    )
+
+
+def _encode_hand(hand: list[CardView], embedding_table_card_name: nn.Embedding) -> torch.Tensor:
     # Pad to MAX_HAND_SIZE cards
     hand_pad = hand + [None] * (MAX_HAND_SIZE - len(hand))
 
     return torch.flatten(
-        torch.concat([_encode_card(card, embbeding_table_card_name) for card in hand_pad])
+        torch.concat(
+            [
+                (
+                    _encode_card(card, embedding_table_card_name)
+                    if card is not None
+                    else _encode_card_pad(embedding_table_card_name)
+                )
+                for card in hand_pad
+            ]
+        )
+    )
+
+
+def _encode_draw_pile(
+    draw_pile: set[CardView], embedding_table_card_name: nn.Embedding
+) -> torch.Tensor:
+    if not draw_pile:
+        return _encode_card_pad(embedding_table_card_name)
+
+    return torch.sum(
+        torch.stack([_encode_card(card, embedding_table_card_name) for card in draw_pile]),
+        dim=0,
+    )
+
+
+def _encode_disc_pile(
+    disc_pile: set[CardView], embedding_table_card_name: nn.Embedding
+) -> torch.Tensor:
+    if not disc_pile:
+        return _encode_card_pad(embedding_table_card_name)
+
+    return torch.sum(
+        torch.stack([_encode_card(card, embedding_table_card_name) for card in disc_pile]),
+        dim=0,
     )
 
 
 def _encode_combat(
     combat_view: CombatView,
-    embbeding_table_card_name: nn.Embedding,
+    embedding_table_card_name: nn.Embedding,
     embedding_table_state: nn.Embedding,
 ) -> torch.Tensor:
     return torch.flatten(
@@ -112,8 +164,10 @@ def _encode_combat(
                 _encode_state(combat_view.state, embedding_table_state),
                 _encode_character(combat_view.character),
                 _encode_monsters(combat_view.monsters),
-                _encode_hand(combat_view.hand, embbeding_table_card_name),
+                _encode_hand(combat_view.hand, embedding_table_card_name),
                 _encode_energy(combat_view.energy),
+                _encode_draw_pile(combat_view.draw_pile, embedding_table_card_name),
+                _encode_disc_pile(combat_view.disc_pile, embedding_table_card_name),
             ]
         )
     )

@@ -96,7 +96,17 @@ if __name__ == "__main__":
     combat_manager = create_combat_manager()
 
     # Instance agent
-    agent = RandomAgent()
+    # agent = RandomAgent()
+    import torch
+
+    from src.agents.dqn.models.embedding_mlp import EmbeddingMLP
+    from src.agents.dqn_a import DQNAgent
+
+    model = EmbeddingMLP(5, 3, 2, [128, 128, 128])
+    model.load_state_dict(
+        torch.load("/Users/getchebarne/Desktop/slai-the-spire/experiments/test-jaw/model.pth")
+    )
+    agent = DQNAgent(model)
 
     # Execute
     main(combat_manager, agent)

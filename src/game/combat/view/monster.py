@@ -9,38 +9,44 @@ from src.game.combat.view.actor import _actor_to_view
 
 @dataclass
 class IntentView:
-    damage: tuple[int, int] | None  # TODO: maybe change to `damage` and `instances`
+    damage: int | None
+    instances: int | None
     block: bool
+    buff: bool
 
 
 @dataclass
 class MonsterView(ActorView):
     entity_id: int
     intent: IntentView
-    # is_selectable: bool
 
 
 def _move_to_intent(move: MonsterMove) -> IntentView:
     # Initialze empty intent
-    intent = IntentView(None, False)
+    intent = IntentView(None, None, False, False)
 
     # Iterate over the move's effects
     for effect in move.effects:
         if effect.type == EffectType.DEAL_DAMAGE:
-            if intent.damage is None:
-                intent.damage = (effect.value, 1)
+            if intent.damage is None and intent.instances is None:
+                intent.damage = effect.value
+                intent.instances = 1
 
                 continue
 
-            if intent.damage[0] != effect.value:
+            if intent.damage != effect.value:
                 raise ValueError(
                     f"All {move.__class__.__name__}'s damage instances must be of the same value"
                 )
 
-            intent.damage[1] += 1
+            intent.instances += 1
 
         if not intent.block and effect.type == EffectType.GAIN_BLOCK:
             intent.block = True
+
+        # TODO: add support for other buffs
+        if not intent.buff and effect.type == EffectType.GAIN_STR:
+            intent.buff = True
 
     return intent
 

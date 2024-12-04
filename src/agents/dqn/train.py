@@ -25,6 +25,7 @@ from src.game.combat.phase import combat_start
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
+from src.game.combat.view.state import StateView
 
 
 def _train_on_batch(
@@ -67,13 +68,15 @@ def _train_on_batch(
 
 def _get_action(combat_view: CombatView, agent: DQNAgent, epsilon: float) -> Action:
     if random.uniform(0, 1) < epsilon:
-        # Explore TODO: fix, add end turn
-        if combat_view.entity_selectable_ids:
-            return Action(
-                ActionType.SELECT_ENTITY, random.choice(combat_view.entity_selectable_ids)
-            )
+        # Explore
+        actions = [
+            Action(ActionType.SELECT_ENTITY, entity_selectable_id)
+            for entity_selectable_id in combat_view.entity_selectable_ids
+        ]
+        if combat_view.state == StateView.DEFAULT:
+            actions.append(Action(ActionType.END_TURN))
 
-        return Action(ActionType.END_TURN)
+        return random.choice(actions)
 
     # Exploit
     return agent.select_action(combat_view)
@@ -192,9 +195,13 @@ def train(
         writer.add_scalar("Epsilon", epsilons[epoch], epoch)
         writer.add_scalar("Final HP", combat_view_end.character.health.current, epoch)
 
+        # Evaluate
         if (epoch % eval_every) == 0:
             final_hp = _evaluate_agent(agent)
             writer.add_scalar("Eval/Final HP", final_hp, epoch)
+
+    # Save model
+    torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
 
 # TODO: fix path
@@ -204,10 +211,12 @@ def _load_config(config_path: str = "src/agents/dqn/config.yml") -> dict:
         return yaml.safe_load(file)
 
 
+# TODO: use **kwargs, improve signature
 def _init_model(config_model: dict) -> nn.Module:
     return getattr(models, config_model["name"])(**config_model["kwargs"])
 
 
+# TODO: use **kwargs, improve signature
 def _init_optimizer(config_optimizer: dict, model: nn.Module) -> torch.optim.Optimizer:
     return getattr(torch.optim, config_optimizer["name"])(
         **config_optimizer["kwargs"], params=model.parameters()
