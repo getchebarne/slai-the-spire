@@ -27,7 +27,7 @@ def _energy_str(energy: EnergyView) -> str:
 
 
 def _card_str(card: CardView) -> str:
-    return f"({card.cost}) {card.name}"
+    return f"({card.cost}) {card.name.name}"
 
 
 def _hand_str(hand: list[CardView]) -> str:
@@ -81,7 +81,7 @@ def _intent_str(intent_view: Optional[IntentView]) -> str:
         return str_
 
     if intent_view.damage is not None:
-        str_ = f"{str_}{intent_view.damage[0]} x {intent_view.damage[1]}"
+        str_ = f"{str_}{intent_view.damage} x {intent_view.instances}"
 
     if intent_view.block:
         if str_ != "":
@@ -89,6 +89,13 @@ def _intent_str(intent_view: Optional[IntentView]) -> str:
 
         else:
             str_ = "Blocking"
+
+    if intent_view.buff:
+        if str_ != "":
+            str_ = f"{str_} & Buffing"
+
+        else:
+            str_ = "Buffing"
 
     return str_
 
