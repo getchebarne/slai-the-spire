@@ -14,7 +14,7 @@ from src.game.combat.entities import Monster
 
 
 def silent() -> Character:
-    max_health = 70
+    max_health = 50
 
     return Character("Silent", Health(max_health))
 
