@@ -1,4 +1,6 @@
+import os
 import random
+import shutil
 
 import torch
 import torch.nn as nn
@@ -28,6 +30,7 @@ from src.game.combat.view import view_combat
 from src.game.combat.view.state import StateView
 
 
+# TODO: add discount to config
 def _train_on_batch(
     batch: Batch, model: nn.Module, optimizer: torch.optim.Optimizer, discount: float = 0.99
 ) -> float:
@@ -133,7 +136,7 @@ def _play_episode(
         combat_view_tp1 = view_combat(combat_manager)
         valid_action_mask_tp1 = get_valid_action_mask(combat_view_tp1)
         game_over_flag = is_game_over(combat_manager.entities)
-        reward = compute_reward(combat_view_tp1, game_over_flag)
+        reward = compute_reward(combat_view_t, combat_view_tp1)
 
         # Store transition in memory
         action_idx = action_to_action_idx(action, combat_view_t)
@@ -165,6 +168,7 @@ def train(
     buffer_size: int,
     batch_size: int,
     eval_every: int,
+    save_every: int,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     value_start: float,
@@ -200,8 +204,9 @@ def train(
             final_hp = _evaluate_agent(agent)
             writer.add_scalar("Eval/Final HP", final_hp, epoch)
 
-    # Save model
-    torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
+        # Save model
+        if (epoch % save_every) == 0:
+            torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
 
 # TODO: fix path
@@ -228,12 +233,17 @@ if __name__ == "__main__":
     model = _init_model(config["model"])
     optimizer = _init_optimizer(config["optimizer"], model)
 
+    # Copy config
+    os.makedirs(f"experiments/{config['exp_name']}")
+    shutil.copy("src/agents/dqn/config.yml", f"experiments/{config['exp_name']}/config.yml")
+
     train(
         config["exp_name"],
         int(config["num_episodes"]),
         int(config["buffer_size"]),
         config["batch_size"],
         config["eval_every"],
+        config["save_every"],
         model,
         optimizer,
         config["value_start"],
