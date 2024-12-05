@@ -1,15 +1,16 @@
-exp_name: test-jaw-3
-num_episodes: 2.0e+4
-buffer_size: 1.0e+3
-batch_size: 48
+exp_name: test-jaw-11
+num_episodes: 4.0e+4
+buffer_size: 5.0e+3
+batch_size: 64
 eval_every: 5
+save_every: 500
 
 model: 
   name: EmbeddingMLP
   kwargs:
-    card_name_embedding_size: 5
+    card_name_embedding_size: 4
     state_embedding_size: 3
-    linear_sizes: [256, 256, 256, 256]
+    linear_sizes: [256, 512, 512, 256]
 
 optimizer:
   name: SGD
