@@ -1,7 +1,6 @@
 from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.entities import Entities
 from src.game.combat.factories import defend
-from src.game.combat.factories import dummy
 from src.game.combat.factories import energy
 from src.game.combat.factories import jaw_worm
 from src.game.combat.factories import neutralize
