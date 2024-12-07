@@ -1,8 +1,8 @@
 from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.entities import Entities
 from src.game.combat.factories import defend
+from src.game.combat.factories import dummy
 from src.game.combat.factories import energy
-from src.game.combat.factories import jaw_worm
 from src.game.combat.factories import neutralize
 from src.game.combat.factories import silent
 from src.game.combat.factories import strike
@@ -15,7 +15,7 @@ def create_combat_manager() -> CombatManager:
     # TODO: create functions for this
     entities = Entities()
     entities.character_id = entities.create_entity(silent())
-    entities.monster_ids = [entities.create_entity(jaw_worm())]
+    entities.monster_ids = [entities.create_entity(dummy())]
     entities.energy_id = entities.create_entity(energy())
     entities.card_in_deck_ids = {
         entities.create_entity(strike()),
