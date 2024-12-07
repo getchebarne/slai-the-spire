@@ -134,7 +134,7 @@ def draw_combat(combat_view: CombatView) -> str:
     # Separator
     separator = "-" * N_COL
 
-    return (
+    _str = (
         monster_strs
         + "\n"
         + character_str
@@ -143,7 +143,7 @@ def draw_combat(combat_view: CombatView) -> str:
         + "\n"
         + hand_str
         + "\n"
-        + combat_view.state.name
-        + "\n"
         + separator
     )
+
+    print(_str)
