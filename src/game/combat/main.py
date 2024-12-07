@@ -4,7 +4,7 @@ from src.agents.random import BaseAgent
 from src.agents.random import RandomAgent
 from src.game.combat.action import Action
 from src.game.combat.create import create_combat_manager
-from src.game.combat.drawer import drawer
+from src.game.combat.drawer import draw_combat
 from src.game.combat.effect_queue import process_queue
 from src.game.combat.entities import Card
 from src.game.combat.entities import Effect
@@ -80,7 +80,7 @@ def main(combat_manager: CombatManager, agent: BaseAgent) -> None:
     while not is_game_over(combat_manager.entities):
         # Get combat view and draw it on the terminal
         combat_view = view_combat(combat_manager)
-        drawer(combat_view)
+        draw_combat(combat_view)
 
         # Get action from agent
         action = agent.select_action(combat_view)
