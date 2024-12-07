@@ -17,9 +17,7 @@ WHITE = "\033[37;1m"
 RED = "\033[31;1m"
 CYAN = "\033[36;1m"
 SELECTED = "\033[32;1m"
-SELECTABLE = "\033[38;5;65m"
 RESET = "\033[0m"
-S = "\U000002E2"
 
 
 def _energy_str(energy: EnergyView) -> str:
@@ -117,21 +115,21 @@ def _monster_str(monster_view: MonsterView) -> str:
     return "\n".join(right_aligned_lines)
 
 
-def _view_str(view: CombatView) -> str:
+def draw_combat(combat_view: CombatView) -> str:
     # Effect
     # effect_str = _effect_str(view.effect)
 
     # Monsters
-    monster_strs = "\n".join([f"{_monster_str(monster)}" for monster in view.monsters])
+    monster_strs = "\n".join([f"{_monster_str(monster)}" for monster in combat_view.monsters])
 
     # Character
-    character_str = _actor_str(view.character)
+    character_str = _actor_str(combat_view.character)
 
     # Energy
-    energy_str = _energy_str(view.energy)
+    energy_str = _energy_str(combat_view.energy)
 
     # Hand
-    hand_str = _hand_str(view.hand)
+    hand_str = _hand_str(combat_view.hand)
 
     # Separator
     separator = "-" * N_COL
@@ -145,20 +143,7 @@ def _view_str(view: CombatView) -> str:
         + "\n"
         + hand_str
         + "\n"
+        + combat_view.state.name
+        + "\n"
         + separator
     )
-
-
-class CombatDrawer:
-    def __init__(self, prev_view_str: Optional[str] = None):
-        self.prev_view_str = prev_view_str
-
-    def __call__(self, combat_view: CombatView) -> None:
-        view_str = _view_str(combat_view)
-
-        # if view_str != self.prev_view_str: TODO: reactivate?
-        print(view_str)
-        self.prev_view_str = view_str
-
-
-drawer = CombatDrawer()
