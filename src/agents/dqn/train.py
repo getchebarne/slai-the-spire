@@ -136,7 +136,7 @@ def _play_episode(
         combat_view_tp1 = view_combat(combat_manager)
         valid_action_mask_tp1 = get_valid_action_mask(combat_view_tp1)
         game_over_flag = is_game_over(combat_manager.entities)
-        reward = compute_reward(combat_view_t, combat_view_tp1)
+        reward = compute_reward(combat_view_t, combat_view_tp1, game_over_flag)
 
         # Store transition in memory
         action_idx = action_to_action_idx(action, combat_view_t)
