@@ -9,16 +9,15 @@ import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from src.agents.dqn import models
+from src.agents.dqn.encoder import encode_combat_view
 from src.agents.dqn.explorer import linear_decay
 from src.agents.dqn.memory import Batch
 from src.agents.dqn.memory import ReplayBuffer
 from src.agents.dqn.memory import Sample
 from src.agents.dqn.reward import compute_reward
-from src.agents.dqn.utils import action_to_action_idx
+from src.agents.dqn.utils import action_idx_to_action
 from src.agents.dqn.utils import get_valid_action_mask
 from src.agents.dqn_a import DQNAgent
-from src.game.combat.action import Action
-from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_manager
 from src.game.combat.main import process
 from src.game.combat.main import step
@@ -27,34 +26,31 @@ from src.game.combat.phase import combat_start
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
-from src.game.combat.view.state import StateView
 
 
 # TODO: add discount to config
 def _train_on_batch(
-    batch: Batch, model: nn.Module, optimizer: torch.optim.Optimizer, discount: float = 0.99
+    batch: Batch,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    discount: float = 0.99,
 ) -> float:
     # Set model to train mode
     model.train()
 
     # Forward pass
-    q_ts = model(batch.entities_ts).gather(
-        1,
-        torch.tensor(batch.actions, dtype=torch.int64).reshape(-1, 1),
-    )
+    q_ts = model(batch.state_ts.to(device)).gather(1, batch.actions.view((-1, 1)).to(device))
     # Predict next entities's Q values
     with torch.no_grad():
-        q_tp1s = model(batch.entities_tp1s)
+        q_tp1s = model(batch.state_tp1s.to(device))
 
     # Get maximum next entities's Q value
-    q_tp1_maxs, _ = torch.max(
-        q_tp1s - (1 - torch.tensor(batch.valid_action_mask_tp1s, dtype=torch.int)) * 1e20, dim=1
-    )
+    q_tp1_maxs, _ = torch.max(q_tp1s - (1 - batch.valid_action_mask_tp1s.to(device)) * 1e20, dim=1)
 
     # Calculate target
     q_targets = (
-        torch.tensor(batch.rewards)
-        + discount * q_tp1_maxs * (1 - torch.tensor(batch.game_over_flags, dtype=torch.int))
+        batch.rewards.to(device) + discount * q_tp1_maxs * (1 - batch.game_over_flags.to(device))
     ).reshape(-1, 1)
 
     # Backward pass
@@ -69,20 +65,35 @@ def _train_on_batch(
     return loss.item()
 
 
-def _get_action(combat_view: CombatView, agent: DQNAgent, epsilon: float) -> Action:
-    if random.uniform(0, 1) < epsilon:
-        # Explore
-        actions = [
-            Action(ActionType.SELECT_ENTITY, entity_selectable_id)
-            for entity_selectable_id in combat_view.entity_selectable_ids
-        ]
-        if combat_view.state == StateView.DEFAULT:
-            actions.append(Action(ActionType.END_TURN))
+def _get_action_idx(
+    combat_view: CombatView,
+    combat_view_encoded: torch.Tensor,
+    model: nn.Module,
+    device: torch.device,
+    epsilon: float,
+) -> int:
+    valid_action_mask = get_valid_action_mask(combat_view)
 
-        return random.choice(actions)
+    if random.uniform(0, 1) < epsilon:
+        return random.choice(
+            [action_idx for action_idx, is_valid in enumerate(valid_action_mask) if is_valid]
+        )
 
     # Exploit
-    return agent.select_action(combat_view)
+    with torch.no_grad():
+        q_values = model(combat_view_encoded.unsqueeze(0).to(device))
+
+    # Calculate action w/ highest q-value (masking invalid actions)
+    action_idx = (
+        (
+            q_values.to(torch.device("cpu"))
+            - (1 - torch.tensor(valid_action_mask, dtype=torch.long)) * 1e20
+        )
+        .argmax()
+        .item()
+    )
+
+    return action_idx
 
 
 def _evaluate_agent(agent: DQNAgent) -> int:
@@ -93,10 +104,10 @@ def _evaluate_agent(agent: DQNAgent) -> int:
 
     while not is_game_over(combat_manager.entities):
         # Get combat view
-        combat_view_t = view_combat(combat_manager)
+        combat_view = view_combat(combat_manager)
 
         # Get action from agent
-        action = agent.select_action(combat_view_t)
+        action = agent.select_action(combat_view)
 
         # Game step
         step(combat_manager, action)
@@ -106,11 +117,12 @@ def _evaluate_agent(agent: DQNAgent) -> int:
 
 
 def _play_episode(
-    agent: DQNAgent,
+    model: DQNAgent,
     optimizer: torch.optim.Optimizer,
     replay_buffer: ReplayBuffer,
     epsilon: float,
     batch_size: int,
+    device: torch.device,
 ) -> tuple[CombatManager, float, int]:
     # Get new game TODO: improve this
     combat_manager = create_combat_manager()
@@ -125,11 +137,13 @@ def _play_episode(
 
         # Get combat view
         combat_view_t = view_combat(combat_manager)
+        combat_view_t_encoded = encode_combat_view(combat_view_t, torch.device("cpu"))
 
         # Get action from agent
-        action = _get_action(combat_view_t, agent, epsilon)
+        action_idx = _get_action_idx(combat_view_t, combat_view_t_encoded, model, device, epsilon)
 
         # Game step
+        action = action_idx_to_action(action_idx, combat_view_t)
         step(combat_manager, action)
 
         # Get new entities, new valid actions, game over flag and instant reward
@@ -139,14 +153,13 @@ def _play_episode(
         reward = compute_reward(combat_view_t, combat_view_tp1, game_over_flag)
 
         # Store transition in memory
-        action_idx = action_to_action_idx(action, combat_view_t)
         replay_buffer.store(
             Sample(
-                combat_view_t,
-                combat_view_tp1,
+                combat_view_t_encoded,
+                encode_combat_view(combat_view_tp1, torch.device("cpu")),
                 action_idx,
                 reward,
-                valid_action_mask_tp1,
+                torch.tensor(valid_action_mask_tp1, dtype=torch.float32),
                 game_over_flag,
             )
         )
@@ -156,7 +169,7 @@ def _play_episode(
         if batch is None:
             continue
 
-        loss_batch = _train_on_batch(batch, agent.model, optimizer)
+        loss_batch = _train_on_batch(batch, model, optimizer, device)
         loss_episode += loss_batch
 
     return combat_manager, loss_episode / num_moves, num_moves
@@ -174,6 +187,7 @@ def train(
     value_start: float,
     value_end: float,
     episode_elbow: int,
+    device: torch.device,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
 
@@ -186,10 +200,13 @@ def train(
     # Explorer
     epsilons = linear_decay(num_episodes, episode_elbow, value_start, value_end)
 
+    # Send model to device TODO move
+    model = model.to(device)
+
     # Train
     for epoch in range(num_episodes):
         combat_manager, epoch_loss, num_moves = _play_episode(
-            agent, optimizer, replay_buffer, epsilons[epoch], batch_size
+            model, optimizer, replay_buffer, epsilons[epoch], batch_size, device
         )
         # View end state
         combat_view_end = view_combat(combat_manager)
@@ -249,4 +266,5 @@ if __name__ == "__main__":
         config["value_start"],
         config["value_end"],
         config["episode_elbow"],
+        torch.device("mps"),
     )
