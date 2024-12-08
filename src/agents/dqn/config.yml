@@ -1,5 +1,5 @@
-exp_name: dummy/8
-num_episodes: 2.0e+5
+exp_name: dummy/12
+num_episodes: 3.0e+5
 buffer_size: 5.0e+3
 batch_size: 64
 eval_every: 5
@@ -8,9 +8,8 @@ save_every: 10000
 model: 
   name: EmbeddingMLP
   kwargs:
-    card_name_embedding_size: 4
     state_embedding_size: 3
-    linear_sizes: [256, 512, 1024, 512, 256]
+    linear_sizes: [256, 512, 512, 256]
 
 optimizer:
   name: SGD
@@ -20,6 +19,6 @@ optimizer:
     # momentum: 0.90
 
 # Explorer
-episode_elbow: 1.0e+4
+episode_elbow: 2.0e+4
 value_start: 1
 value_end: 1.0e-1
