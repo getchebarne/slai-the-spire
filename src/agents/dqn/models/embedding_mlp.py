@@ -4,6 +4,7 @@ import torch.nn as nn
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.constant import MAX_MONSTERS
 from src.game.combat.entities import CardName
+from src.game.combat.entities import EffectType
 from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ModifierViewType
 from src.game.combat.view.card import CardView
@@ -26,7 +27,6 @@ STATE_IDX = {
 }
 MAX_LEN_DISC_PILE = 10
 MAX_LEN_DRAW_PILE = 7
-PAD_METADATA = -1
 MODIFIER_TYPES = [ModifierViewType.WEAK, ModifierViewType.STR]
 
 
@@ -107,57 +107,57 @@ def _encode_batch_monsters(batch_monsters: list[list[MonsterView]]) -> torch.Ten
     return torch.stack(_tensors)
 
 
-def _encode_batch_hand(
-    batch_hand: list[list[CardView]], embedding_table_card_name: nn.Embedding
-) -> torch.Tensor:
+def _encode_card_view(card_view: CardView) -> torch.Tensor:
+    effect_type_map = {
+        EffectType.DEAL_DAMAGE: 0,
+        EffectType.GAIN_BLOCK: 1,
+        EffectType.GAIN_WEAK: 2,
+        EffectType.DISCARD: 3,
+    }
+    # damage, block, weak, discard, cost, is_active
+    _list = [0, 0, 0, 0, card_view.cost, card_view.is_active]
+    for effect in card_view.effects:
+        if effect.type in effect_type_map:
+            _list[effect_type_map[effect.type]] = effect.value
+
+    return torch.tensor(_list, dtype=torch.float)
+
+
+def _encode_batch_hand(batch_hand: list[list[CardView]]) -> torch.Tensor:
     batch_size = len(batch_hand)
 
-    # Initialize tensors to store CardName indexes and metadata (is_active and cost)
-    tensor_idxs_card_name = torch.zeros((batch_size, MAX_HAND_SIZE), dtype=torch.long)
-    tensor_metadata = PAD_METADATA * torch.ones((batch_size, MAX_HAND_SIZE, 2), dtype=torch.float)
+    # Pre-allocate tensor: first two indices from PAD_METADATA, rest are zeros
+    tensor_metadata = torch.zeros((batch_size, MAX_HAND_SIZE + 1, 6), dtype=torch.float)
+    # tensor_metadata[:, :, :2] = PAD_METADATA TODO: reenable?
 
-    # Iterate over batch samples
     for idx_batch, hand in enumerate(batch_hand):
         for idx_card, card_view in enumerate(hand):
-            # Card name
-            tensor_idxs_card_name[idx_batch, idx_card] = CARD_NAME_IDX[card_view.name]
+            tensor_metadata[idx_batch, idx_card] = _encode_card_view(card_view)
 
-            # Metadata
-            tensor_metadata[idx_batch, idx_card, 0] = card_view.is_active
-            tensor_metadata[idx_batch, idx_card, 1] = card_view.cost
-
-    # Calculate CardName embeddings
-    tensor_embeddings_card_name = embedding_table_card_name(tensor_idxs_card_name)
-
-    # Flatten tensors
-    embeddings_card_name = torch.flatten(tensor_embeddings_card_name, start_dim=1)
-    embeddings_metadata = torch.flatten(tensor_metadata, start_dim=1)
-
-    # Concatenate along feature dimension
-    return torch.cat([embeddings_card_name, embeddings_metadata], dim=1)
-
-
-def _encode_batch_pile(
-    batch_pile: list[set[CardView]], embedding_table_card_name: nn.Embedding, max_len: int
-) -> torch.Tensor:
-    batch_size = len(batch_pile)
-
-    # Initialize tensor to store CardName indexes
-    tensor_idxs_card_name = torch.zeros((batch_size, max_len), dtype=torch.long)
-
-    # Iterate over batch samples
-    for idx_batch, pile in enumerate(batch_pile):
-        # Sort pile to ensure consistent encoding
-        pile_sort = sorted(CARD_NAME_IDX[card.name] for card in pile)
-        tensor_idxs_card_name[idx_batch, : len(pile_sort)] = torch.tensor(
-            pile_sort, dtype=torch.long
+        tensor_metadata[idx_batch, -1, :] = torch.sum(
+            tensor_metadata[idx_batch, :MAX_HAND_SIZE, :], dim=0
         )
 
-    # Calculate CardName embeddings
-    embeddings_card_name = embedding_table_card_name(tensor_idxs_card_name)
+    return torch.flatten(tensor_metadata, start_dim=1)
 
-    # Flatten and return
-    return torch.flatten(embeddings_card_name, start_dim=1)
+
+def _encode_batch_pile(batch_pile: list[set[CardView]], max_len: int) -> torch.Tensor:
+    batch_size = len(batch_pile)
+
+    # Pre-allocate tensor with zeros for padding
+    tensor_metadata = torch.zeros((batch_size, max_len + 1, 6), dtype=torch.float)
+
+    for idx_batch, pile in enumerate(batch_pile):
+        # Sort pile to ensure consistent encoding
+        pile_sorted = sorted(pile, key=lambda x: x.name.name)
+        for idx_card, card_view in enumerate(pile_sorted):
+            tensor_metadata[idx_batch, idx_card] = _encode_card_view(card_view)
+
+        tensor_metadata[idx_batch, -1, :] = torch.sum(
+            tensor_metadata[idx_batch, :max_len, :], dim=0
+        )
+
+    return torch.flatten(tensor_metadata, start_dim=1)
 
 
 class MLP(nn.Module):
@@ -190,19 +190,13 @@ class MLP(nn.Module):
 
 
 class EmbeddingMLP(nn.Module):
-    def __init__(
-        self, card_name_embedding_size: int, state_embedding_size: int, linear_sizes: list[int]
-    ):
+    def __init__(self, state_embedding_size: int, linear_sizes: list[int]):
         super().__init__()
 
-        self._card_name_embedding_size = card_name_embedding_size
         self._state_embedding_size = state_embedding_size
         self._linear_sizes = linear_sizes
 
         # Modules
-        self._card_name_embedding = nn.Embedding(
-            len(CardName) + 1, card_name_embedding_size, padding_idx=0
-        )
         self._state_embedding = nn.Embedding(len(StateView), state_embedding_size)
         self._mlp = MLP(linear_sizes)
         self._last = nn.Linear(linear_sizes[-1], MAX_HAND_SIZE + MAX_MONSTERS + 1, bias=True)
@@ -231,10 +225,10 @@ class EmbeddingMLP(nn.Module):
                 _encode_batch_state(states, self._state_embedding),
                 _encode_batch_character(characters),
                 _encode_batch_monsters(monsters),
-                _encode_batch_hand(hands, self._card_name_embedding),
+                _encode_batch_hand(hands),
                 _encode_batch_energy(energies),
-                _encode_batch_pile(draw_piles, self._card_name_embedding, MAX_LEN_DRAW_PILE),
-                _encode_batch_pile(disc_piles, self._card_name_embedding, MAX_LEN_DISC_PILE),
+                _encode_batch_pile(draw_piles, MAX_LEN_DRAW_PILE),
+                _encode_batch_pile(disc_piles, MAX_LEN_DISC_PILE),
             ],
             dim=1,
         )

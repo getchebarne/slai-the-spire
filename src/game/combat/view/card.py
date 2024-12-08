@@ -2,12 +2,14 @@ from dataclasses import dataclass
 
 from src.game.combat.entities import CardName
 from src.game.combat.entities import Entities
+from src.game.combat.entities import Effect
 
 
 @dataclass
 class CardView:
     entity_id: int
     name: CardName
+    effects: list[Effect]  # TODO: implement EffectView
     cost: int
     is_active: bool
 
@@ -27,6 +29,7 @@ def _card_to_view(entities: Entities, card_entity_id: int) -> CardView:
     return CardView(
         card_entity_id,
         card.name,
+        card.effects,
         card.cost,
         True if card_entity_id == entities.card_active_id else False,
     )
