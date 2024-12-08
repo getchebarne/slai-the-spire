@@ -2,27 +2,29 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+import torch
 
-from src.game.combat.view import CombatView
+from src.game.combat.constant import MAX_HAND_SIZE
+from src.game.combat.constant import MAX_MONSTERS
 
 
 @dataclass
 class Batch:
-    entities_ts: list[CombatView]
-    entities_tp1s: list[CombatView]
-    actions: list[int]
-    rewards: list[float]
-    valid_action_mask_tp1s: list[list[bool]]
-    game_over_flags: list[bool]
+    state_ts: torch.Tensor
+    state_tp1s: torch.Tensor
+    actions: torch.Tensor
+    rewards: torch.Tensor
+    valid_action_mask_tp1s: torch.Tensor
+    game_over_flags: torch.Tensor
 
 
 @dataclass
 class Sample:
-    entities_t: CombatView
-    entities_tp1: CombatView
+    state_t: torch.Tensor
+    state_tp1: torch.Tensor
     action: int
     reward: float
-    valid_action_mask_tp1: list[bool]
+    valid_action_mask_tp1: torch.Tensor
     game_over_flag: bool
 
 
@@ -30,12 +32,17 @@ class ReplayBuffer:
     def __init__(self, size: int):
         self._size = size
 
-        self._entities_ts: list[CombatView] = [None] * size
-        self._entities_tp1s: list[CombatView] = [None] * size
-        self._actions: list[int] = [None] * size
-        self._rewards: list[float] = [None] * size
-        self._valid_action_mask_tp1s: list[CombatView] = [None] * size
-        self._game_over_flags: list[CombatView] = [None] * size
+        # Initially, these are None because we don't know the dimensions yet
+        self._state_ts = None
+        self._state_tp1s = None
+
+        # Preallocate tensors with fixed shapes for scalars
+        self._actions = torch.zeros(size, dtype=torch.long)
+        self._rewards = torch.zeros(size, dtype=torch.float32)
+        self._valid_action_mask_tp1s = torch.zeros(
+            (size, MAX_HAND_SIZE + MAX_MONSTERS + 1), dtype=torch.float32
+        )
+        self._game_over_flags = torch.zeros(size, dtype=torch.float32)
 
         # Current write index
         self._index: int = 0
@@ -54,43 +61,42 @@ class ReplayBuffer:
         return self._size
 
     def store(self, sample: Sample) -> None:
-        self._entities_ts[self._index] = sample.entities_t
-        self._entities_tp1s[self._index] = sample.entities_tp1
+        # Initialize tensors for state if not already initialized
+        if self._state_ts is None:
+            state_shape = sample.state_t.shape
+
+            self._state_ts = torch.zeros((self._size, *state_shape), dtype=sample.state_t.dtype)
+            self._state_tp1s = torch.zeros(
+                (self._size, *state_shape), dtype=sample.state_tp1.dtype
+            )
+
+        # Store the data in the appropriate location
+        self._state_ts[self._index] = sample.state_t
+        self._state_tp1s[self._index] = sample.state_tp1
         self._actions[self._index] = sample.action
         self._rewards[self._index] = sample.reward
         self._valid_action_mask_tp1s[self._index] = sample.valid_action_mask_tp1
         self._game_over_flags[self._index] = sample.game_over_flag
 
         # Increment index
-        self._index = (self._index + 1) % len(self)
+        self._index = (self._index + 1) % self._size
 
         # Set full if needed
         self._full = self._full or self._index == 0
 
     def sample(self, batch_size: int) -> Optional[Batch]:
         if self._index < batch_size and not self._full:
-            return
+            return None
 
-        high = len(self) if self._full else self._index
+        high = self._size if self._full else self._index
         sample_indexes = self._rng.integers(low=0, high=high, size=batch_size)
 
-        # Initialize empty batch
-        batch = Batch(
-            entities_ts=[None] * batch_size,
-            entities_tp1s=[None] * batch_size,
-            actions=[None] * batch_size,
-            rewards=[None] * batch_size,
-            valid_action_mask_tp1s=[None] * batch_size,
-            game_over_flags=[None] * batch_size,
+        # Gather sampled data
+        return Batch(
+            state_ts=self._state_ts[sample_indexes],
+            state_tp1s=self._state_tp1s[sample_indexes],
+            actions=self._actions[sample_indexes],
+            rewards=self._rewards[sample_indexes],
+            valid_action_mask_tp1s=self._valid_action_mask_tp1s[sample_indexes],
+            game_over_flags=self._game_over_flags[sample_indexes],
         )
-
-        # Fill it
-        for batch_index, sample_index in enumerate(sample_indexes):
-            batch.entities_ts[batch_index] = self._entities_ts[sample_index]
-            batch.entities_tp1s[batch_index] = self._entities_tp1s[sample_index]
-            batch.actions[batch_index] = self._actions[sample_index]
-            batch.rewards[batch_index] = self._rewards[sample_index]
-            batch.valid_action_mask_tp1s[batch_index] = self._valid_action_mask_tp1s[sample_index]
-            batch.game_over_flags[batch_index] = self._game_over_flags[sample_index]
-
-        return batch

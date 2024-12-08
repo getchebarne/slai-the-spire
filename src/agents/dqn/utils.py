@@ -18,7 +18,7 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
         monster.entity_id in combat_view.entity_selectable_ids for monster in combat_view.monsters
     ] + [False] * (MAX_MONSTERS - len(combat_view.monsters))
 
-    # End turn. TODO: improve
+    # End turn
     valid_action_mask.append(combat_view.state == State.DEFAULT)
 
     return valid_action_mask

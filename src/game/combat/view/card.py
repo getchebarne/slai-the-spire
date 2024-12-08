@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
 from src.game.combat.entities import CardName
-from src.game.combat.entities import Entities
 from src.game.combat.entities import Effect
+from src.game.combat.entities import Entities
 
 
 @dataclass
