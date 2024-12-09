@@ -206,10 +206,8 @@ def _processor_zero_block(
     return [], []
 
 
-def get_effect_processors(effect_type: EffectType) -> list[Callable]:  # TODO: add argument type
+def get_effect_processors(effect_type: EffectType) -> list[Callable]:
     return processors[effect_type]
-
-    return [], []
 
 
 # Dictionary to hold effect type to processing function mappings
