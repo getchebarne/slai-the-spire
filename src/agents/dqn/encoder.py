@@ -48,7 +48,12 @@ def _encode_character_view(character_view: CharacterView, device: torch.device) 
     ]
 
     return torch.tensor(
-        [character_view.health.current, character_view.block.current, *modifier_stacks],
+        [
+            character_view.health.current,
+            character_view.block.current,
+            character_view.health.current + character_view.block.current,
+            *modifier_stacks,
+        ],
         device=device,
         dtype=torch.float32,
     )
@@ -75,6 +80,7 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
                 [
                     monster_view.health.current,
                     monster_view.block.current,
+                    monster_view.health.current + monster_view.block.current,
                     # Intent
                     monster_view.intent.damage or 0,
                     monster_view.intent.instances or 0,
@@ -116,21 +122,21 @@ def _encode_hand_view(hand: list[CardView], device: torch.device) -> torch.Tenso
         # Card name
         _tensor[idx] = _encode_card_view(card_view, device)
 
-    _tensor[-1] = torch.sum(torch.sum(_tensor[:MAX_HAND_SIZE], dim=0))
+    _tensor[-1] = torch.sum(_tensor[:MAX_HAND_SIZE], dim=0)
 
     return torch.flatten(_tensor)
 
 
 def _encode_pile_view(pile: set[CardView], max_len: int, device: torch.device) -> torch.Tensor:
     # Pre-allocate tensor with zeros for padding
-    _tensor = torch.zeros((max_len + 1, 6), device=device, dtype=torch.float32)
+    _tensor = torch.zeros((max_len + 1, 5), device=device, dtype=torch.float32)
 
     # Sort pile to ensure consistent encoding
     pile_sorted = sorted(pile, key=lambda x: x.name.name)
 
     # Iterate
     for idx, card_view in enumerate(pile_sorted):
-        _tensor[idx] = _encode_card_view(card_view, device)
+        _tensor[idx] = _encode_card_view(card_view, device)[:5]
 
     _tensor[-1] = torch.sum(_tensor[:max_len], dim=0)
 

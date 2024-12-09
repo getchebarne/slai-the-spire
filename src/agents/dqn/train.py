@@ -41,11 +41,12 @@ def _train_on_batch(
 
     # Forward pass
     q_ts = model(batch.state_ts.to(device)).gather(1, batch.actions.view((-1, 1)).to(device))
-    # Predict next entities's Q values
+
+    # Predict next state's Q values
     with torch.no_grad():
         q_tp1s = model(batch.state_tp1s.to(device))
 
-    # Get maximum next entities's Q value
+    # Get maximum next state's Q value
     q_tp1_maxs, _ = torch.max(q_tp1s - (1 - batch.valid_action_mask_tp1s.to(device)) * 1e20, dim=1)
 
     # Calculate target
@@ -266,5 +267,5 @@ if __name__ == "__main__":
         config["value_start"],
         config["value_end"],
         config["episode_elbow"],
-        torch.device("mps"),
+        torch.device("cpu"),
     )

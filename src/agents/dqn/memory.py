@@ -69,6 +69,8 @@ class ReplayBuffer:
             self._state_tp1s = torch.zeros(
                 (self._size, *state_shape), dtype=sample.state_tp1.dtype
             )
+            print(f"{self._state_ts.shape=}")
+            print(f"{self._state_tp1s.shape=}")
 
         # Store the data in the appropriate location
         self._state_ts[self._index] = sample.state_t
