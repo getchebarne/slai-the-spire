@@ -1,10 +1,11 @@
 from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.entities import Entities
+from src.game.combat.factories import dagger_throw
 from src.game.combat.factories import defend
-from src.game.combat.factories import dummy
 from src.game.combat.factories import energy
 from src.game.combat.factories import jaw_worm
 from src.game.combat.factories import neutralize
+from src.game.combat.factories import prepared
 from src.game.combat.factories import silent
 from src.game.combat.factories import strike
 from src.game.combat.factories import survivor
@@ -31,6 +32,8 @@ def create_combat_manager() -> CombatManager:
         entities.create_entity(defend()),
         entities.create_entity(neutralize()),
         entities.create_entity(survivor()),
+        entities.create_entity(dagger_throw()),
+        entities.create_entity(prepared()),
     }
     # Create effect queue
     effect_queue = EffectQueue()

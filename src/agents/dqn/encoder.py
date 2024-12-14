@@ -12,6 +12,12 @@ from src.game.combat.view.state import StateView
 
 
 MODIFIER_TYPES = [ModifierViewType.WEAK, ModifierViewType.STR]
+EFFECT_TYPE_MAP = [
+    EffectType.DEAL_DAMAGE,
+    EffectType.GAIN_BLOCK,
+    EffectType.DISCARD,
+    EffectType.GAIN_WEAK,
+]
 MAX_LEN_DISC_PILE = 10
 MAX_LEN_DRAW_PILE = 7
 
@@ -97,50 +103,71 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
     return torch.concat(_tensors)
 
 
-def _encode_card_view(card_view: CardView, device: torch.device) -> torch.Tensor:
+def _encode_card_view_hand(card_view: CardView) -> list[int]:
     effect_type_map = {
         EffectType.DEAL_DAMAGE: 0,
         EffectType.GAIN_BLOCK: 1,
         EffectType.GAIN_WEAK: 2,
         EffectType.DISCARD: 3,
+        EffectType.DRAW_CARD: 4,
     }
-    # damage, block, weak, discard, cost, is_active
-    _list = [0, 0, 0, 0, card_view.cost, card_view.is_active]
+    # damage, block, weak, discard, draw, cost, is_active
+    _list = [0, 0, 0, 0, 0, card_view.cost, card_view.is_active]
     for effect in card_view.effects:
         if effect.type in effect_type_map:
             _list[effect_type_map[effect.type]] = effect.value
 
-    return torch.tensor(_list, device=device, dtype=torch.float32)
+    return _list
+
+
+def _encode_card_view_pile(card_view: CardView) -> list[int]:
+    effect_type_map = {
+        EffectType.DEAL_DAMAGE: 0,
+        EffectType.GAIN_BLOCK: 1,
+        EffectType.GAIN_WEAK: 2,
+        EffectType.DISCARD: 3,
+        EffectType.DRAW_CARD: 4,
+    }
+    # damage, block, weak, discard, cost
+    _list = [0, 0, 0, 0, 0, card_view.cost]
+    for effect in card_view.effects:
+        if effect.type in effect_type_map:
+            _list[effect_type_map[effect.type]] = effect.value
+
+    return _list
 
 
 def _encode_hand_view(hand: list[CardView], device: torch.device) -> torch.Tensor:
     # Initialize tensors to store CardName indexes and metadata (is_active and cost)
-    _tensor = torch.zeros((MAX_HAND_SIZE + 1, 6), device=device, dtype=torch.float32)
+    _tensor = torch.zeros((MAX_HAND_SIZE, 7), device=device, dtype=torch.float32)
 
     # Iterate over batch samples
     for idx, card_view in enumerate(hand):
         # Card name
-        _tensor[idx] = _encode_card_view(card_view, device)
-
-    _tensor[-1] = torch.sum(_tensor[:MAX_HAND_SIZE], dim=0)
+        _tensor[idx] = torch.tensor(
+            _encode_card_view_hand(card_view), device=device, dtype=torch.float32
+        )
 
     return torch.flatten(_tensor)
 
 
 def _encode_pile_view(pile: set[CardView], max_len: int, device: torch.device) -> torch.Tensor:
-    # Pre-allocate tensor with zeros for padding
-    _tensor = torch.zeros((max_len + 1, 5), device=device, dtype=torch.float32)
+    if pile:
+        return torch.cat(
+            [
+                torch.sum(
+                    torch.tensor(
+                        [_encode_card_view_pile(card_view) for card_view in pile],
+                        device=device,
+                        dtype=torch.float32,
+                    ),
+                    dim=0,
+                ),
+                torch.tensor([len(pile)], device=device, dtype=torch.float32),
+            ]
+        )
 
-    # Sort pile to ensure consistent encoding
-    pile_sorted = sorted(pile, key=lambda x: x.name.name)
-
-    # Iterate
-    for idx, card_view in enumerate(pile_sorted):
-        _tensor[idx] = _encode_card_view(card_view, device)[:5]
-
-    _tensor[-1] = torch.sum(_tensor[:max_len], dim=0)
-
-    return torch.flatten(_tensor)
+    return torch.zeros(7, device=device, dtype=torch.float32)
 
 
 def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.Tensor:
@@ -150,8 +177,8 @@ def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.T
             _encode_energy_view(combat_view.energy, device),
             _encode_character_view(combat_view.character, device),
             _encode_monster_views(combat_view.monsters, device),
-            _encode_hand_view(combat_view.hand, device),
             _encode_pile_view(combat_view.draw_pile, MAX_LEN_DRAW_PILE, device),
             _encode_pile_view(combat_view.disc_pile, MAX_LEN_DISC_PILE, device),
+            _encode_hand_view(combat_view.hand, device),
         ],
     )

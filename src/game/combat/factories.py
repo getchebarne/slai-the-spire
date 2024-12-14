@@ -86,6 +86,48 @@ def neutralize() -> Card:
     )
 
 
+def dagger_throw() -> Card:
+    cost = 1
+    damage = 9
+    draw = 1
+    discard = 1
+
+    return Card(
+        CardName.DAGGER_THROW,
+        cost,
+        [
+            Effect(EffectType.DEAL_DAMAGE, damage, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.DRAW_CARD, draw),
+            Effect(
+                EffectType.DISCARD,
+                discard,
+                EffectTargetType.CARD_IN_HAND,
+                EffectSelectionType.INPUT,
+            ),
+        ],
+    )
+
+
+def prepared() -> Card:
+    cost = 0
+    draw = 1
+    discard = 1
+
+    return Card(
+        CardName.PREPARED,
+        cost,
+        [
+            Effect(EffectType.DRAW_CARD, draw),
+            Effect(
+                EffectType.DISCARD,
+                discard,
+                EffectTargetType.CARD_IN_HAND,
+                EffectSelectionType.INPUT,
+            ),
+        ],
+    )
+
+
 def energy() -> Energy:
     energy = 3
 
