@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
+from src.game.combat.entities import ModifierType
+from src.game.combat.entities import Monster
 from src.game.combat.entities import MonsterMove
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
@@ -51,10 +53,25 @@ def _move_to_intent(move: MonsterMove) -> IntentView:
     return intent
 
 
+# TODO: should only be calculated in 1 place
+def _correct_intent_damage(damage: int | None, monster: Monster) -> int | None:
+    if damage is None:
+        return
+
+    if ModifierType.STR in monster.modifiers:
+        damage += monster.modifiers[ModifierType.STR].stacks
+
+    if ModifierType.WEAK in monster.modifiers:
+        damage *= 0.75
+
+    return int(damage)
+
+
 def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
     monster = entities.get_entity(monster_entity_id)
     actor_view = _actor_to_view(monster)
     intent_view = _move_to_intent(monster.move)
+    intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
 
     return MonsterView(
         actor_view.name,
