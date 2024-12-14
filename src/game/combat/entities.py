@@ -110,6 +110,8 @@ class CardName(Enum):
     DEFEND = "DEFEND"
     NEUTRALIZE = "NEUTRALIZE"
     SURVIVOR = "SURVIVOR"
+    DAGGER_THROW = "DAGGER_THROW"
+    PREPARED = "PREPARED"
 
 
 @dataclass
