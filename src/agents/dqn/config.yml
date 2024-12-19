@@ -1,4 +1,4 @@
-exp_name: jaw/deck-ddqn
+exp_name: jaw/delete
 num_episodes: 1.0e+6
 buffer_size: 5.0e+3
 batch_size: 64

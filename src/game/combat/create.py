@@ -33,7 +33,7 @@ def create_combat_manager() -> CombatManager:
         entities.create_entity(neutralize()),
         entities.create_entity(survivor()),
         entities.create_entity(dagger_throw()),
-        entities.create_entity(prepared()),
+        # entities.create_entity(prepared()),
     }
     # Create effect queue
     effect_queue = EffectQueue()
