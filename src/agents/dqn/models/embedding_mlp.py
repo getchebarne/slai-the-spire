@@ -37,25 +37,55 @@ class MLP(nn.Module):
         return self._mlp(x)
 
 
+class MHABlock(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, ff_hidden_dim: int):
+        super().__init__()
+
+        # Multi-head attention layer
+        self.mha = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads)
+
+        # Layer normalization layers
+        self.ln_1 = nn.LayerNorm(embed_dim)
+        self.ln_2 = nn.LayerNorm(embed_dim)
+
+        # Feedforward network
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim, ff_hidden_dim), nn.ReLU(), nn.Linear(ff_hidden_dim, embed_dim)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Multi-head attention with residual connection
+        x_mha, _ = self.mha(x, x, x, need_weights=False)
+        x = self.ln_1(x + x_mha)
+
+        # Feedforward with residual connection
+        x_ffn = self.ffn(x)
+        x = self.ln_2(x + x_ffn)
+
+        return x
+
+
 class EmbeddingMLP(nn.Module):
     def __init__(self, linear_sizes: list[int]):
         super().__init__()
 
         self._linear_sizes = linear_sizes
 
-        self._d_card = 24
+        self._d_card = 32
 
         # Modules
-        self._mlp = MLP(linear_sizes)
-        self._enc_card_1 = nn.Linear(7, self._d_card)
-        self._enc_card_2 = nn.Linear(self._d_card, self._d_card)
-        self._enc_card_3 = nn.Linear(self._d_card, self._d_card)
+        self._enc_card = nn.Linear(7, self._d_card)
         self._pos = nn.Embedding(5, self._d_card)
-        self._mha = nn.MultiheadAttention(self._d_card, num_heads=3, batch_first=True)
-        self._ln_1 = nn.LayerNorm(self._d_card)
-        self._ln_2 = nn.LayerNorm(self._d_card)
+
+        self._mha_1 = MHABlock(self._d_card, self._d_card // 8, 32)
+        self._mha_2 = MHABlock(self._d_card, self._d_card // 8, 32)
+
+        self._active = nn.Parameter(torch.randn(self._d_card))
+
         self._ln_3 = nn.LayerNorm(self._d_card * 10)
-        self._enc_other = nn.Linear(27, self._d_card * 5)
+        self._enc_other = nn.Linear(54, self._d_card * 5)
+
+        self._mlp = MLP(linear_sizes)
         self._last = nn.Linear(linear_sizes[-1], 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1, bias=True)
 
         # LayerNorms
@@ -69,34 +99,34 @@ class EmbeddingMLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
 
-        # Cards
-        x_hand = x[:, : MAX_HAND_SIZE * 7].view(batch_size, MAX_HAND_SIZE, 7)
+        # Active mask
+        x_mask = x[:, :MAX_HAND_SIZE]
 
-        # Cards linear encoding + pos encoding
-        x_hand = self._enc_card_1(x_hand)
+        # Cards
+        x_hand = x[:, MAX_HAND_SIZE : MAX_HAND_SIZE + MAX_HAND_SIZE * 7].view(
+            batch_size, MAX_HAND_SIZE, 7
+        )
+
+        # Other
+        x_other = x[:, MAX_HAND_SIZE + MAX_HAND_SIZE * 7 :]
 
         # Sum positional encodings
+        x_hand = self._enc_card(x_hand)
         pos_idxs = torch.arange(5).expand(batch_size, 5).to(x.device)
         pos_embs = self._pos(pos_idxs)
         x_hand += pos_embs
 
         # MHA
-        x_hand_mha, _ = self._mha(x_hand, x_hand, x_hand, need_weights=False)
+        x_hand_mha = self._mha_1(x_hand)
+        x_hand_mha = self._mha_2(x_hand_mha)
 
-        # First residual
-        x_hand = self._ln_1(x_hand + x_hand_mha)
+        # Active embedding
+        x_hand_mha += self._active.unsqueeze(0).unsqueeze(0) * x_mask.unsqueeze(-1)
 
-        # Second residual
-        x_hand = self._ln_2(x_hand + self._enc_card_3(F.relu(self._enc_card_2(x_hand))))
-
-        # Flatten
-        x_hand = torch.flatten(x_hand, start_dim=1)
-
-        # Flatten hand
-        x_hand = torch.flatten(x_hand, start_dim=1)
+        # Final hand embedding
+        x_hand = torch.flatten(x_hand_mha, start_dim=1)
 
         # Other
-        x_other = x[:, MAX_HAND_SIZE * 7 :]
         x_other = self._enc_other(x_other)
 
         # Concat

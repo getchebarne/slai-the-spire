@@ -1,25 +1,29 @@
+import math
+
 import torch
+import numpy as np
 
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.entities import EffectType
 from src.game.combat.view import CombatView
+from src.game.combat.view import StateView
 from src.game.combat.view.actor import ModifierViewType
 from src.game.combat.view.card import CardView
 from src.game.combat.view.character import CharacterView
 from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import MonsterView
-from src.game.combat.view.state import StateView
 
 
 MODIFIER_TYPES = [ModifierViewType.WEAK, ModifierViewType.STR]
-EFFECT_TYPE_MAP = [
-    EffectType.DEAL_DAMAGE,
-    EffectType.GAIN_BLOCK,
-    EffectType.DISCARD,
-    EffectType.GAIN_WEAK,
-]
-MAX_LEN_DISC_PILE = 10
-MAX_LEN_DRAW_PILE = 7
+EFFECT_TYPE_MAP = {
+    EffectType.DEAL_DAMAGE: 0,
+    EffectType.GAIN_BLOCK: 1,
+    EffectType.DISCARD: 2,
+    EffectType.GAIN_WEAK: 3,
+    EffectType.DRAW_CARD: 4,
+}
+MAX_LEN_DISC_PILE = 12
+MAX_LEN_DRAW_PILE = 9
 
 
 def _encode_state_view(state_view: StateView, device: torch.device) -> torch.Tensor:
@@ -36,7 +40,7 @@ def _encode_state_view(state_view: StateView, device: torch.device) -> torch.Ten
 
 
 def _encode_energy_view(energy_view: EnergyView, device: torch.device) -> torch.Tensor:
-    return torch.tensor([energy_view.current], device=device, dtype=torch.float32)
+    return torch.tensor([np.log(energy_view.current + 1)], device=device, dtype=torch.float32)
 
 
 def _encode_character_view(character_view: CharacterView, device: torch.device) -> torch.Tensor:
@@ -44,7 +48,7 @@ def _encode_character_view(character_view: CharacterView, device: torch.device) 
     modifier_stacks = [
         next(
             (
-                modifier.stacks
+                np.log(modifier.stacks + 1)
                 for modifier in character_view.modifiers
                 if modifier.type == modifier_type
             ),
@@ -55,9 +59,9 @@ def _encode_character_view(character_view: CharacterView, device: torch.device) 
 
     return torch.tensor(
         [
-            character_view.health.current,
-            character_view.block.current,
-            character_view.health.current + character_view.block.current,
+            np.log(character_view.health.current + 1),
+            np.log(character_view.block.current + 1),
+            np.log(character_view.health.current + character_view.block.current + 1),
             *modifier_stacks,
         ],
         device=device,
@@ -73,7 +77,7 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
         modifier_stacks = [
             next(
                 (
-                    modifier.stacks
+                    np.log(modifier.stacks + 1)
                     for modifier in monster_view.modifiers
                     if modifier.type == modifier_type
                 ),
@@ -84,12 +88,12 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
         _tensors.append(
             torch.tensor(
                 [
-                    monster_view.health.current,
-                    monster_view.block.current,
-                    monster_view.health.current + monster_view.block.current,
+                    np.log(monster_view.health.current + 1),
+                    np.log(monster_view.block.current + 1),
+                    np.log(monster_view.health.current + monster_view.block.current + 1),
                     # Intent
-                    monster_view.intent.damage or 0,
-                    monster_view.intent.instances or 0,
+                    np.log(monster_view.intent.damage or 0 + 1),
+                    np.log(monster_view.intent.instances or 0 + 1),
                     monster_view.intent.block,
                     monster_view.intent.buff,
                     # Modifiers
@@ -103,82 +107,72 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
     return torch.concat(_tensors)
 
 
-def _encode_card_view_hand(card_view: CardView) -> list[int]:
-    effect_type_map = {
-        EffectType.DEAL_DAMAGE: 0,
-        EffectType.GAIN_BLOCK: 1,
-        EffectType.GAIN_WEAK: 2,
-        EffectType.DISCARD: 3,
-        EffectType.DRAW_CARD: 4,
-    }
-    # damage, block, weak, discard, draw, cost, is_active
-    _list = [0, 0, 0, 0, 0, card_view.cost, card_view.is_active]
+def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
+    # cost, damage, block, weak, discard, draw,
+    _list = [np.log(card_view.cost + 1), 0, 0, 0, 0, 0, np.log(energy_current + 1)]
     for effect in card_view.effects:
-        if effect.type in effect_type_map:
-            _list[effect_type_map[effect.type]] = effect.value
+        if effect.type in EFFECT_TYPE_MAP:
+            _list[EFFECT_TYPE_MAP[effect.type] + 1] = np.log(effect.value + 1)
 
     return _list
 
 
-def _encode_card_view_pile(card_view: CardView) -> list[int]:
-    effect_type_map = {
-        EffectType.DEAL_DAMAGE: 0,
-        EffectType.GAIN_BLOCK: 1,
-        EffectType.GAIN_WEAK: 2,
-        EffectType.DISCARD: 3,
-        EffectType.DRAW_CARD: 4,
-    }
-    # damage, block, weak, discard, cost
-    _list = [0, 0, 0, 0, 0, card_view.cost]
-    for effect in card_view.effects:
-        if effect.type in effect_type_map:
-            _list[effect_type_map[effect.type]] = effect.value
-
-    return _list
+def _encode_card_pad(energy_current: int) -> list[int]:
+    # cost, damage, block, weak, discard, draw
+    return [np.log(10 + 1), 0, 0, 0, 0, 0, np.log(energy_current + 1)]
 
 
-def _encode_hand_view(hand: list[CardView], device: torch.device) -> torch.Tensor:
-    # Initialize tensors to store CardName indexes and metadata (is_active and cost)
-    _tensor = torch.zeros((MAX_HAND_SIZE, 7), device=device, dtype=torch.float32)
+def _encode_hand_view(
+    hand_view: list[CardView], energy_current: int, device: torch.device
+) -> torch.Tensor:
+    _list = []
+    _mask = [0] * MAX_HAND_SIZE
+    for idx, card_view in enumerate(hand_view):
+        _list.append(_encode_card_view(card_view, energy_current))
 
-    # Iterate over batch samples
-    for idx, card_view in enumerate(hand):
-        # Card name
-        _tensor[idx] = torch.tensor(
-            _encode_card_view_hand(card_view), device=device, dtype=torch.float32
-        )
+        if card_view.is_active:
+            _mask[idx] = 1
 
-    return torch.flatten(_tensor)
+    _list += [_encode_card_pad(energy_current)] * (MAX_HAND_SIZE - len(hand_view))
+
+    return torch.flatten(torch.tensor(_list, device=device, dtype=torch.float32)), torch.tensor(
+        _mask, device=device, dtype=torch.float32
+    )
 
 
-def _encode_pile_view(pile: set[CardView], max_len: int, device: torch.device) -> torch.Tensor:
-    if pile:
+def _encode_pile_view(pile_view: set[CardView], device: torch.device) -> torch.Tensor:
+    if pile_view:
+        _list = [_encode_card_view(card_view, math.inf)[:-1] for card_view in pile_view]
+
         return torch.cat(
             [
-                torch.sum(
-                    torch.tensor(
-                        [_encode_card_view_pile(card_view) for card_view in pile],
-                        device=device,
-                        dtype=torch.float32,
-                    ),
-                    dim=0,
-                ),
-                torch.tensor([len(pile)], device=device, dtype=torch.float32),
+                torch.sum(torch.tensor(_list, device=device, dtype=torch.float32), dim=0),
+                torch.mean(torch.tensor(_list, device=device, dtype=torch.float32), dim=0),
+                torch.max(torch.tensor(_list, device=device, dtype=torch.float32), dim=0)[0],
             ]
         )
 
-    return torch.zeros(7, device=device, dtype=torch.float32)
+    return torch.tensor([0] * 3 * 6, device=device, dtype=torch.float32)
 
 
 def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.Tensor:
+    tensor_hand, tensor_mask = _encode_hand_view(
+        combat_view.hand, combat_view.energy.current, device
+    )
+    # print(tensor_mask.shape)
+    # print(tensor_hand.shape)
+    # print(_encode_pile_view(combat_view.draw_pile, device).shape)
+    # print(_encode_pile_view(combat_view.disc_pile, device).shape)
+    # print("#" * 10)
     return torch.concat(
         [
-            _encode_state_view(combat_view.state, device),
+            tensor_mask,
+            tensor_hand,
+            _encode_pile_view(combat_view.draw_pile, device),
+            _encode_pile_view(combat_view.disc_pile, device),
             _encode_energy_view(combat_view.energy, device),
             _encode_character_view(combat_view.character, device),
             _encode_monster_views(combat_view.monsters, device),
-            _encode_pile_view(combat_view.draw_pile, MAX_LEN_DRAW_PILE, device),
-            _encode_pile_view(combat_view.disc_pile, MAX_LEN_DISC_PILE, device),
-            _encode_hand_view(combat_view.hand, device),
+            _encode_state_view(combat_view.state, device),
         ],
     )
