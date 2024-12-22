@@ -40,7 +40,7 @@ class ReplayBuffer:
         self._actions = torch.zeros(size, dtype=torch.long)
         self._rewards = torch.zeros(size, dtype=torch.float32)
         self._valid_action_mask_tp1s = torch.zeros(
-            (size, MAX_HAND_SIZE + MAX_MONSTERS + 1), dtype=torch.float32
+            (size, 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1), dtype=torch.float32
         )
         self._game_over_flags = torch.zeros(size, dtype=torch.float32)
 

@@ -8,10 +8,24 @@ from src.game.combat.view import CombatView
 
 # TODO: these should be more "global", i.e., not specific to the DQN agent
 def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
-    # Cards in hand
-    valid_action_mask = [
-        card.entity_id in combat_view.entity_selectable_ids for card in combat_view.hand
-    ] + [False] * (MAX_HAND_SIZE - len(combat_view.hand))
+    if combat_view.state == State.DEFAULT:
+        # Cards in hand
+        valid_action_mask = [
+            card.entity_id in combat_view.entity_selectable_ids for card in combat_view.hand
+        ] + [False] * ((MAX_HAND_SIZE - len(combat_view.hand)) + MAX_HAND_SIZE)
+
+    elif combat_view.state == State.AWAIT_EFFECT_TARGET:
+        valid_action_mask = (
+            [False] * MAX_HAND_SIZE
+            + [card.entity_id in combat_view.entity_selectable_ids for card in combat_view.hand]
+            + [False] * (MAX_HAND_SIZE - len(combat_view.hand))
+        )
+
+    elif combat_view.state == State.AWAIT_CARD_TARGET:
+        valid_action_mask = [False] * 2 * MAX_HAND_SIZE
+
+    else:
+        raise ValueError
 
     # Monsters
     valid_action_mask += [
@@ -25,13 +39,18 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
 
 
 def action_idx_to_action(action_idx: int, combat_view: CombatView) -> Action:
-    if action_idx < 5:
-        return Action(ActionType.SELECT_ENTITY, combat_view.hand[action_idx].entity_id)
+    if action_idx < 2 * MAX_HAND_SIZE:
+        return Action(
+            ActionType.SELECT_ENTITY, combat_view.hand[action_idx % MAX_HAND_SIZE].entity_id
+        )
 
-    if action_idx == 5:
-        return Action(ActionType.SELECT_ENTITY, combat_view.monsters[5 - action_idx].entity_id)
+    if action_idx == 2 * MAX_HAND_SIZE:
+        return Action(
+            ActionType.SELECT_ENTITY,
+            combat_view.monsters[2 * MAX_HAND_SIZE - action_idx].entity_id,
+        )
 
-    if action_idx == 6:
+    if action_idx == 2 * MAX_HAND_SIZE + 1:
         return Action(ActionType.END_TURN)
 
     raise ValueError(f"Unsupported action index: {action_idx}")
@@ -39,14 +58,20 @@ def action_idx_to_action(action_idx: int, combat_view: CombatView) -> Action:
 
 def action_to_action_idx(action: Action, combat_view: CombatView) -> int:
     if action.type == ActionType.END_TURN:
-        return 6
+        return 2 * MAX_HAND_SIZE + 1
 
     for idx, card in enumerate(combat_view.hand):
         if card.entity_id == action.target_id:
-            return idx
+            if combat_view.state == State.DEFAULT:
+                return idx
+
+            if combat_view.state == State.AWAIT_EFFECT_TARGET:
+                return MAX_HAND_SIZE + idx
+
+            raise ValueError(f"Selected card while in {combat_view.state}")
 
     for idx, monster in enumerate(combat_view.monsters):
         if monster.entity_id == action.target_id:
-            return idx + 5
+            return 2 * MAX_HAND_SIZE + idx
 
     raise ValueError(f"Unable to convert action: {action}")
