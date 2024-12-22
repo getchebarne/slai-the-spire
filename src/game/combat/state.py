@@ -39,4 +39,5 @@ def on_enter(
         if entity_selectable_ids is None:
             raise ValueError(f"Must specify `entity_selectable_ids` for state {state}")
 
+        entities.card_active_id = None
         entities.entity_selectable_ids = entity_selectable_ids
