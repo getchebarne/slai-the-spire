@@ -5,6 +5,7 @@ batch_size: 64
 log_every: 100
 eval_every: 100
 save_every: 10000
+transfer_every: 10000
 
 model: 
   name: CardTransformer

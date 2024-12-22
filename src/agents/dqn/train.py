@@ -1,6 +1,7 @@
 import os
 import random
 import shutil
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -24,35 +25,45 @@ from src.game.combat.main import step
 from src.game.combat.manager import CombatManager
 from src.game.combat.phase import combat_start
 from src.game.combat.utils import is_game_over
-from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
 
 
 # TODO: add discount to config
 def _train_on_batch(
     batch: Batch,
-    model: nn.Module,
+    model_online: nn.Module,
+    model_target: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     discount: float = 0.995,
 ) -> float:
     # Set model to train mode
-    model.train()
+    model_online.train()
 
     # Forward pass
-    q_ts = model(batch.state_ts.to(device)).gather(1, batch.actions.view((-1, 1)).to(device))
+    q_ts = model_online(batch.state_ts.to(device)).gather(1, batch.actions.view(-1, 1).to(device))
 
-    # Predict next state's Q values
+    # Predict next state's Q values with both the online and target models
     with torch.no_grad():
-        q_tp1s = model(batch.state_tp1s.to(device))
+        state_tp1s_device = batch.state_tp1s.to(device)
+        q_tp1s_online = model_online(state_tp1s_device)
+        q_tp1s_target = model_target(state_tp1s_device)
 
-    # Get maximum next state's Q value
-    q_tp1_maxs, _ = torch.max(q_tp1s - (1 - batch.valid_action_mask_tp1s.to(device)) * 1e20, dim=1)
+        # Select the action with the highest Q value using the online model
+        best_actions = torch.argmax(
+            q_tp1s_online - 1e20 * (1 - batch.valid_action_mask_tp1s.to(device)),
+            dim=1,
+            keepdim=True,
+        )
 
-    # Calculate target
-    q_targets = (
-        batch.rewards.to(device) + discount * q_tp1_maxs * (1 - batch.game_over_flags.to(device))
-    ).reshape(-1, 1)
+        # Get the Q value of the selected best action from the target model
+        q_tp1_maxs = q_tp1s_target.gather(1, best_actions)
+
+        # Calculate target
+        q_targets = (
+            batch.rewards.view(-1, 1).to(device)
+            + discount * q_tp1_maxs * (1 - batch.game_over_flags.view(-1, 1).to(device))
+        ).reshape(-1, 1)
 
     # Backward pass
     optimizer.zero_grad()
@@ -67,14 +78,12 @@ def _train_on_batch(
 
 
 def _get_action_idx(
-    combat_view: CombatView,
+    valid_action_mask: list[bool],
     combat_view_encoded: torch.Tensor,
     model: nn.Module,
     device: torch.device,
     epsilon: float,
 ) -> int:
-    valid_action_mask = get_valid_action_mask(combat_view)
-
     if random.uniform(0, 1) < epsilon:
         return random.choice(
             [action_idx for action_idx, is_valid in enumerate(valid_action_mask) if is_valid]
@@ -88,7 +97,7 @@ def _get_action_idx(
     action_idx = (
         (
             q_values.to(torch.device("cpu"))
-            - (1 - torch.tensor(valid_action_mask, dtype=torch.long)) * 1e20
+            - (1 - torch.tensor(valid_action_mask, dtype=torch.float32)) * 1e20
         )
         .argmax()
         .item()
@@ -118,7 +127,10 @@ def _evaluate_agent(agent: DQNAgent) -> int:
 
 
 def _play_episode(
-    model: DQNAgent,
+    step_global: int,
+    model_online: nn.Module,
+    model_target: nn.Module,
+    transfer_every: int,
     optimizer: torch.optim.Optimizer,
     replay_buffer: ReplayBuffer,
     epsilon: float,
@@ -136,18 +148,21 @@ def _play_episode(
     while not is_game_over(combat_manager.entities):
         num_moves += 1
 
-        # Get combat view
+        # Get combat view, encode it, and get valid action mask
         combat_view_t = view_combat(combat_manager)
         combat_view_t_encoded = encode_combat_view(combat_view_t, torch.device("cpu"))
+        valid_action_mask_t = get_valid_action_mask(combat_view_t)
 
         # Get action from agent
-        action_idx = _get_action_idx(combat_view_t, combat_view_t_encoded, model, device, epsilon)
+        action_idx = _get_action_idx(
+            valid_action_mask_t, combat_view_t_encoded, model_online, device, epsilon
+        )
 
         # Game step
         action = action_idx_to_action(action_idx, combat_view_t)
         step(combat_manager, action)
 
-        # Get new entities, new valid actions, game over flag and instant reward
+        # Get new state, new valid actions, game over flag and instant reward
         combat_view_tp1 = view_combat(combat_manager)
         valid_action_mask_tp1 = get_valid_action_mask(combat_view_tp1)
         game_over_flag = is_game_over(combat_manager.entities)
@@ -166,14 +181,19 @@ def _play_episode(
         )
 
         # Train
-        batch = replay_buffer.sample(batch_size)
-        if batch is None:
+        if replay_buffer.num_samples < batch_size:
             continue
 
-        loss_batch = _train_on_batch(batch, model, optimizer, device)
-        loss_episode += loss_batch
+        # Sample buffer
+        batch = replay_buffer.sample(batch_size)
 
-    return combat_manager, loss_episode / num_moves, num_moves
+        loss_batch = _train_on_batch(batch, model_online, model_target, optimizer, device)
+        loss_episode += loss_batch
+        step_global += 1
+        if (step_global % transfer_every) == 0:
+            _transfer_params(model_online, model_target)
+
+    return combat_manager, loss_episode / num_moves, num_moves, step_global
 
 
 def train(
@@ -184,7 +204,9 @@ def train(
     log_every: int,
     eval_every: int,
     save_every: int,
-    model: nn.Module,
+    transfer_every: int,
+    model_online: nn.Module,
+    model_target: nn.Module,
     optimizer: torch.optim.Optimizer,
     epsilons: list[float],
     device: torch.device,
@@ -195,15 +217,25 @@ def train(
     replay_buffer = ReplayBuffer(buffer_size)
 
     # Instantiate agent
-    agent = DQNAgent(model)
+    agent = DQNAgent(model_online)
 
-    # Send model to device TODO move
-    model = model.to(device)
+    # Send models to device TODO: move
+    model_online.to(device)
+    model_target.to(device)
 
     # Train
+    step_global = 0
     for episode in range(num_episodes):
-        combat_manager, loss, num_moves = _play_episode(
-            model, optimizer, replay_buffer, epsilons[episode], batch_size, device
+        combat_manager, loss, num_moves, step_global = _play_episode(
+            step_global,
+            model_online,
+            model_target,
+            transfer_every,
+            optimizer,
+            replay_buffer,
+            epsilons[episode],
+            batch_size,
+            device,
         )
         # View end state
         combat_view_end = view_combat(combat_manager)
@@ -221,7 +253,7 @@ def train(
 
         # Save model
         if (episode % save_every) == 0:
-            torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
+            torch.save(model_online.state_dict(), f"experiments/{exp_name}/model.pth")
 
 
 # TODO: fix path
@@ -247,11 +279,17 @@ def _init_optimizer(name: str, model: nn.Module, **kwargs) -> torch.optim.Optimi
     return getattr(torch.optim, name)(**kwargs, params=model.parameters())
 
 
+def _transfer_params(model_online: nn.Module, model_target: nn.Module) -> None:
+    for param_online, param_target in zip(model_online.parameters(), model_target.parameters()):
+        param_target.data.copy_(param_online.data)
+
+
 if __name__ == "__main__":
     config = _load_config()
-    model = _init_model(config["model"]["name"], **config["model"]["kwargs"])
+    model_online = _init_model(config["model"]["name"], **config["model"]["kwargs"])
+    model_target = deepcopy(model_online)
     optimizer = _init_optimizer(
-        config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]
+        config["optimizer"]["name"], model_online, **config["optimizer"]["kwargs"]
     )
 
     # Copy config
@@ -271,7 +309,9 @@ if __name__ == "__main__":
         config["log_every"],
         config["eval_every"],
         config["save_every"],
-        model,
+        config["transfer_every"],
+        model_online,
+        model_target,
         optimizer,
         epsilons,
         torch.device("cpu"),

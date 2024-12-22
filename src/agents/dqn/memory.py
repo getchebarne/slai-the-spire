@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 import torch
@@ -57,8 +56,12 @@ class ReplayBuffer:
     def full(self) -> bool:
         return self._full
 
-    def __len__(self) -> int:
-        return self._size
+    @property
+    def num_samples(self) -> int:
+        if self._full:
+            return self._size
+
+        return self._index
 
     def store(self, sample: Sample) -> None:
         # Initialize tensors for state if not already initialized
@@ -86,9 +89,9 @@ class ReplayBuffer:
         # Set full if needed
         self._full = self._full or self._index == 0
 
-    def sample(self, batch_size: int) -> Optional[Batch]:
+    def sample(self, batch_size: int) -> Batch:
         if self._index < batch_size and not self._full:
-            return None
+            raise ValueError(f"Can't sample {batch_size} samples with only {self._index} samples")
 
         high = self._size if self._full else self._index
         sample_indexes = self._rng.integers(low=0, high=high, size=batch_size)
