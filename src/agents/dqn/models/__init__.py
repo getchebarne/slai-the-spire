@@ -1,1 +1,1 @@
-from src.agents.dqn.models.embedding_mlp import EmbeddingMLP  # noqa
+from src.agents.dqn.models.card_transformer import CardTransformer  # noqa

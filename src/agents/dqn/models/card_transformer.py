@@ -2,10 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.agents.dqn.encoder import MAX_LEN_DISC_PILE
-from src.agents.dqn.encoder import MAX_LEN_DRAW_PILE
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.constant import MAX_MONSTERS
+from src.game.combat.constant import NUM_EFFECTS
 
 
 class MLP(nn.Module):
@@ -65,60 +64,108 @@ class MHABlock(nn.Module):
         return x
 
 
-class EmbeddingMLP(nn.Module):
+class ResidualMLP(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int):
+        super().__init__()
+
+        self._input_dim = input_dim
+        self._output_dim = output_dim
+
+        # Fully connected layers
+        self._fc_1 = nn.Linear(input_dim, output_dim)
+        self._fc_2 = nn.Linear(output_dim, output_dim)
+        self._fc_3 = nn.Linear(output_dim, output_dim)
+
+        # Layer normalization for the residual connection
+        self._ln = nn.LayerNorm(output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Project the input features to `output_dim` & save residual
+        x = self._fc_1(x)
+        x_res = x
+
+        # Process features w/ two-layer MLP
+        x = self._fc_2(x)
+        x = F.relu(x)
+        x = self._fc_3(x)
+        x = F.relu(x)
+
+        # Make residual connection and layer-normalize
+        x = self._ln(x + x_res)
+
+        return x
+
+
+class CardTransformer(nn.Module):
     def __init__(self, linear_sizes: list[int]):
         super().__init__()
 
         self._linear_sizes = linear_sizes
 
-        self._d_card = 32
+        self._d_card = 48
 
         # Modules
-        self._enc_card = nn.Linear(7, self._d_card)
-        self._pos = nn.Embedding(5, self._d_card)
+        self._enc_card = nn.Linear(NUM_EFFECTS, self._d_card)
+        self._cost = nn.Embedding(4, self._d_card)
+        self._energy = nn.Embedding(4, self._d_card)
 
-        self._mha_1 = MHABlock(self._d_card, self._d_card // 8, 32)
-        self._mha_2 = MHABlock(self._d_card, self._d_card // 8, 32)
+        self._mha_1 = MHABlock(self._d_card, self._d_card // 8, self._d_card)
+        # self._mha_2 = MHABlock(self._d_card, self._d_card // 8, 32)
 
         self._active = nn.Parameter(torch.randn(self._d_card))
 
-        self._ln_3 = nn.LayerNorm(self._d_card * 10)
-        self._enc_other = nn.Linear(54, self._d_card * 5)
+        self._enc_other = ResidualMLP(29, self._d_card * MAX_HAND_SIZE // 2)
+        self._ln_3 = nn.LayerNorm(self._d_card * MAX_HAND_SIZE + self._d_card * MAX_HAND_SIZE // 2)
 
         self._mlp = MLP(linear_sizes)
-        self._last = nn.Linear(linear_sizes[-1], 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1, bias=True)
-
-        # LayerNorms
-        # self._ln_hand = nn.LayerNorm(48)
-        # self._ln_draw = nn.LayerNorm(48)
-        # self._ln_disc = nn.LayerNorm(48)
-        # self._ln_cards = nn.LayerNorm(48 * 7)
-        # self._ln_other = nn.LayerNorm(48 * 2)
-        # self._ln_hid = nn.LayerNorm(48 * 9)
+        self._last = nn.Linear(linear_sizes[-1], 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
 
         # Active mask
-        x_mask = x[:, :MAX_HAND_SIZE]
+        high = MAX_HAND_SIZE
+        x_mask = x[:, :high]
 
-        # Cards
-        x_hand = x[:, MAX_HAND_SIZE : MAX_HAND_SIZE + MAX_HAND_SIZE * 7].view(
-            batch_size, MAX_HAND_SIZE, 7
-        )
+        # Costs + MAX_HAND_SIZE 1 cost x card
+        low = high
+        high += MAX_HAND_SIZE
+        x_costs = x[:, low:high].view(batch_size, MAX_HAND_SIZE)
+        x_costs = self._cost(x_costs)
+
+        # Cards + MAX_HAND_SIZE * 5 effect x card
+        low = high
+        NUM_EFFECTS = 5
+        high += MAX_HAND_SIZE * NUM_EFFECTS
+        x_cards = x[:, low:high].to(torch.float32).view(batch_size, MAX_HAND_SIZE, NUM_EFFECTS)
+
+        # Energy
+        low = high
+        high += 1
+        x_energy = x[:, low:high]  # (B, D)
+        x_energy = self._energy(x_energy)
 
         # Other
-        x_other = x[:, MAX_HAND_SIZE + MAX_HAND_SIZE * 7 :]
+        low = high
+        x_other = x[:, low:].to(torch.float32)
 
         # Sum positional encodings
-        x_hand = self._enc_card(x_hand)
-        pos_idxs = torch.arange(5).expand(batch_size, 5).to(x.device)
-        pos_embs = self._pos(pos_idxs)
-        x_hand += pos_embs
+        # pos_idxs = torch.arange(MAX_HAND_SIZE, device=x.device)  # (B, D)
+        # pos_embs = self._pos(pos_idxs).unsqueeze(0)  # (B, 1, D)
+        # x_hand += pos_embs  # (B, L, D)
+
+        # Get card encodings
+        x_hand = self._enc_card(x_cards)  # (B, L, D)
+
+        # Sum energy encoding
+        x_hand += x_energy
+
+        # Sum cost encodings
+        x_hand += x_costs
 
         # MHA
         x_hand_mha = self._mha_1(x_hand)
-        x_hand_mha = self._mha_2(x_hand_mha)
+        # x_hand_mha = self._mha_2(x_hand_mha)
 
         # Active embedding
         x_hand_mha += self._active.unsqueeze(0).unsqueeze(0) * x_mask.unsqueeze(-1)
