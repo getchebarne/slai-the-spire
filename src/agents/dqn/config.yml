@@ -1,7 +1,8 @@
-exp_name: jaw/attn-noposenc
+exp_name: jaw/delete
 num_episodes: 1.0e+6
 buffer_size: 5.0e+3
 batch_size: 64
+log_every: 100
 eval_every: 100
 save_every: 10000
 
