@@ -34,7 +34,7 @@ def _train_on_batch(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    discount: float = 0.99,
+    discount: float = 0.995,
 ) -> float:
     # Set model to train mode
     model.train()
@@ -181,13 +181,12 @@ def train(
     num_episodes: int,
     buffer_size: int,
     batch_size: int,
+    log_every: int,
     eval_every: int,
     save_every: int,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    value_start: float,
-    value_end: float,
-    episode_elbow: int,
+    epsilons: list[float],
     device: torch.device,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
@@ -198,32 +197,30 @@ def train(
     # Instantiate agent
     agent = DQNAgent(model)
 
-    # Explorer
-    epsilons = linear_decay(num_episodes, episode_elbow, value_start, value_end)
-
     # Send model to device TODO move
     model = model.to(device)
 
     # Train
-    for epoch in range(num_episodes):
-        combat_manager, epoch_loss, num_moves = _play_episode(
-            model, optimizer, replay_buffer, epsilons[epoch], batch_size, device
+    for episode in range(num_episodes):
+        combat_manager, loss, num_moves = _play_episode(
+            model, optimizer, replay_buffer, epsilons[episode], batch_size, device
         )
         # View end state
         combat_view_end = view_combat(combat_manager)
 
-        writer.add_scalar("Epoch loss", epoch_loss, epoch)
-        writer.add_scalar("Number of moves", num_moves, epoch)
-        writer.add_scalar("Epsilon", epsilons[epoch], epoch)
-        writer.add_scalar("Final HP", combat_view_end.character.health.current, epoch)
+        if (episode % log_every) == 0:
+            writer.add_scalar("Loss", loss, episode)
+            writer.add_scalar("Number of moves", num_moves, episode)
+            writer.add_scalar("Epsilon", epsilons[episode], episode)
+            writer.add_scalar("Final HP", combat_view_end.character.health.current, episode)
 
         # Evaluate
-        if (epoch % eval_every) == 0:
-            final_hp = _evaluate_agent(agent)
-            writer.add_scalar("Eval/Final HP", final_hp, epoch)
+        if (episode % eval_every) == 0:
+            hp_final = _evaluate_agent(agent)
+            writer.add_scalar("Eval/Final HP", hp_final, episode)
 
         # Save model
-        if (epoch % save_every) == 0:
+        if (episode % save_every) == 0:
             torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
 
@@ -231,41 +228,51 @@ def train(
 # TODO: parse values accordingly
 def _load_config(config_path: str = "src/agents/dqn/config.yml") -> dict:
     with open(config_path, "r") as file:
-        return yaml.safe_load(file)
+        config = yaml.safe_load(file)
+
+    # Parse integer values
+    config["num_episodes"] = int(config["num_episodes"])
+    config["buffer_size"] = int(config["buffer_size"])
+
+    return config
 
 
 # TODO: use **kwargs, improve signature
-def _init_model(config_model: dict) -> nn.Module:
-    return getattr(models, config_model["name"])(**config_model["kwargs"])
+def _init_model(name: str, **kwargs) -> nn.Module:
+    return getattr(models, name)(**kwargs)
 
 
 # TODO: use **kwargs, improve signature
-def _init_optimizer(config_optimizer: dict, model: nn.Module) -> torch.optim.Optimizer:
-    return getattr(torch.optim, config_optimizer["name"])(
-        **config_optimizer["kwargs"], params=model.parameters()
-    )
+def _init_optimizer(name: str, model: nn.Module, **kwargs) -> torch.optim.Optimizer:
+    return getattr(torch.optim, name)(**kwargs, params=model.parameters())
 
 
 if __name__ == "__main__":
     config = _load_config()
-    model = _init_model(config["model"])
-    optimizer = _init_optimizer(config["optimizer"], model)
+    model = _init_model(config["model"]["name"], **config["model"]["kwargs"])
+    optimizer = _init_optimizer(
+        config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]
+    )
 
     # Copy config
     os.makedirs(f"experiments/{config['exp_name']}")
     shutil.copy("src/agents/dqn/config.yml", f"experiments/{config['exp_name']}/config.yml")
 
+    # Get epsilons TODO add other epsilon schedules
+    epsilons = linear_decay(
+        config["num_episodes"], config["episode_elbow"], config["value_start"], config["value_end"]
+    )
+
     train(
         config["exp_name"],
-        int(config["num_episodes"]),
-        int(config["buffer_size"]),
+        config["num_episodes"],
+        config["buffer_size"],
         config["batch_size"],
+        config["log_every"],
         config["eval_every"],
         config["save_every"],
         model,
         optimizer,
-        config["value_start"],
-        config["value_end"],
-        config["episode_elbow"],
+        epsilons,
         torch.device("cpu"),
     )
