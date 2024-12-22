@@ -86,6 +86,56 @@ def neutralize() -> Card:
     )
 
 
+def leg_sweep() -> Card:
+    cost = 2
+    weak = 2
+    block = 11
+
+    return Card(
+        CardName.LEG_SWEEP,
+        cost,
+        [
+            Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER),
+            Effect(EffectType.GAIN_WEAK, weak, EffectTargetType.CARD_TARGET),
+        ],
+    )
+
+
+def dash() -> Card:
+    cost = 2
+    block = 10
+    damage = 10
+
+    return Card(
+        CardName.DASH,
+        cost,
+        [
+            Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER),
+            Effect(EffectType.DEAL_DAMAGE, damage, EffectTargetType.CARD_TARGET),
+        ],
+    )
+
+
+def acrobatics() -> Card:
+    cost = 1
+    draw = 3
+    discard = 1
+
+    return Card(
+        CardName.ACROBATICS,
+        cost,
+        [
+            Effect(EffectType.DRAW_CARD, draw),
+            Effect(
+                EffectType.DISCARD,
+                discard,
+                EffectTargetType.CARD_IN_HAND,
+                EffectSelectionType.INPUT,
+            ),
+        ],
+    )
+
+
 def dagger_throw() -> Card:
     cost = 1
     damage = 9
@@ -124,6 +174,21 @@ def prepared() -> Card:
                 EffectTargetType.CARD_IN_HAND,
                 EffectSelectionType.INPUT,
             ),
+        ],
+    )
+
+
+def backflip() -> Card:
+    cost = 1
+    block = 5
+    draw = 2
+
+    return Card(
+        CardName.BACKFLIP,
+        cost,
+        [
+            Effect(EffectType.GAIN_BLOCK, block, EffectTargetType.CHARACTER),
+            Effect(EffectType.DRAW_CARD, draw),
         ],
     )
 

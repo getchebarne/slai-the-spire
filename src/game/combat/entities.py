@@ -112,6 +112,10 @@ class CardName(Enum):
     SURVIVOR = "SURVIVOR"
     DAGGER_THROW = "DAGGER_THROW"
     PREPARED = "PREPARED"
+    LEG_SWEEP = "LEG_SWEEP"
+    ACROBATICS = "ACROBATICS"
+    BACKFLIP = "BACKFLIP"
+    DASH = "DASH"
 
 
 @dataclass
