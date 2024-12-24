@@ -41,7 +41,9 @@ class MHABlock(nn.Module):
         super().__init__()
 
         # Multi-head attention layer
-        self.mha = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads)
+        self.mha = nn.MultiheadAttention(
+            embed_dim=embed_dim, num_heads=num_heads, batch_first=True
+        )
 
         # Layer normalization layers
         self.ln_1 = nn.LayerNorm(embed_dim)
@@ -52,9 +54,41 @@ class MHABlock(nn.Module):
             nn.Linear(embed_dim, ff_hidden_dim), nn.ReLU(), nn.Linear(ff_hidden_dim, embed_dim)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Multi-head attention with residual connection
-        x_mha, _ = self.mha(x, x, x, need_weights=False)
+        self.pad_embedding = nn.Parameter(torch.randn(ff_hidden_dim))
+
+    def masked_attention(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        fully_masked = mask.all(dim=1)  # Shape: (B,)
+
+        if fully_masked.all():
+            # If all sequences are fully masked, return all zeros
+            return torch.zeros_like(x)
+
+        if not fully_masked.any():
+            # If no sequences are fully masked, process normally
+            output, _ = self.mha(x, x, x, key_padding_mask=mask, need_weights=False)
+            return output
+
+        # For mixed case, only process unmasked sequences
+        unmasked_indices = ~fully_masked
+
+        # Select only unmasked sequences and their masks
+        x_unmasked = x[unmasked_indices]
+        mask_unmasked = mask[unmasked_indices]
+
+        # Process unmasked sequences
+        output_unmasked, _ = self.mha(
+            x_unmasked, x_unmasked, x_unmasked, key_padding_mask=mask_unmasked, need_weights=False
+        )
+
+        # Create output tensor
+        output = torch.zeros_like(x)
+        output[unmasked_indices] = output_unmasked
+
+        return output
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # Multi-head attention
+        x_mha = self.masked_attention(x, mask)
         x = self.ln_1(x + x_mha)
 
         # Feedforward with residual connection
@@ -72,26 +106,26 @@ class ResidualMLP(nn.Module):
         self._output_dim = output_dim
 
         # Fully connected layers
-        self._fc_1 = nn.Linear(input_dim, output_dim)
-        self._fc_2 = nn.Linear(output_dim, output_dim)
-        self._fc_3 = nn.Linear(output_dim, output_dim)
+        self.fc1 = nn.Linear(input_dim, output_dim)
+        self.fc2 = nn.Linear(output_dim, output_dim)
+        self.fc3 = nn.Linear(output_dim, output_dim)
 
         # Layer normalization for the residual connection
-        self._ln = nn.LayerNorm(output_dim)
+        self.ln = nn.LayerNorm(output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Project the input features to `output_dim` & save residual
-        x = self._fc_1(x)
+        x = self.fc1(x)
         x_res = x
 
         # Process features w/ two-layer MLP
-        x = self._fc_2(x)
+        x = self.fc2(x)
         x = F.relu(x)
-        x = self._fc_3(x)
+        x = self.fc3(x)
         x = F.relu(x)
 
         # Make residual connection and layer-normalize
-        x = self._ln(x + x_res)
+        x = self.ln(x + x_res)
 
         return x
 
@@ -106,32 +140,43 @@ class CardTransformer(nn.Module):
 
         # Modules
         self._enc_card = nn.Linear(NUM_EFFECTS, self._d_card)
-        self._cost = nn.Embedding(4, self._d_card)
-        self._energy = nn.Embedding(4, self._d_card)
+        # self._cost = nn.Embedding(4, self._d_card)
+        # self._energy = nn.Embedding(4, self._d_card)
+        self._energy = nn.Linear(1, self._d_card)
 
         self._mha_1 = MHABlock(self._d_card, self._d_card // 8, self._d_card)
-        # self._mha_2 = MHABlock(self._d_card, self._d_card // 8, 32)
 
         self._active = nn.Parameter(torch.randn(self._d_card))
 
         self._enc_other = ResidualMLP(29, self._d_card * MAX_HAND_SIZE // 2)
-        self._ln_3 = nn.LayerNorm(self._d_card * MAX_HAND_SIZE + self._d_card * MAX_HAND_SIZE // 2)
+        self._ln_3 = nn.LayerNorm(
+            self._d_card * MAX_HAND_SIZE + self._d_card * MAX_HAND_SIZE // 2 + self._d_card
+        )
 
         self._mlp = MLP(linear_sizes)
         self._last = nn.Linear(linear_sizes[-1], 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1)
 
+        # padding
+        self._padding = torch.tensor([0, 0, 0, 0, 0], dtype=torch.long)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
 
+        # Hand size
+        high = 1
+        x_size = x[:, :high]
+        x_size = torch.arange(MAX_HAND_SIZE).unsqueeze(0) < x_size  # (B, C)
+        x_size = x_size.view(batch_size, MAX_HAND_SIZE, 1)  # (B, C, 1)
+
         # Active mask
-        high = MAX_HAND_SIZE
-        x_mask = x[:, :high]
+        low = high
+        high += MAX_HAND_SIZE
+        x_mask = x[:, low:high]
 
         # Costs + MAX_HAND_SIZE 1 cost x card
         low = high
         high += MAX_HAND_SIZE
-        x_costs = x[:, low:high].view(batch_size, MAX_HAND_SIZE)
-        x_costs = self._cost(x_costs)
+        x_costs = x[:, low:high].view(batch_size, MAX_HAND_SIZE)  # (B, C)
 
         # Cards + MAX_HAND_SIZE * 5 effect x card
         low = high
@@ -142,8 +187,13 @@ class CardTransformer(nn.Module):
         # Energy
         low = high
         high += 1
-        x_energy = x[:, low:high]  # (B, D)
-        x_energy = self._energy(x_energy)
+        x_energy = x[:, low:high]  # (B, 1)
+
+        # Energy - Cost
+        x_energy_cost = (
+            self._energy((x_energy - x_costs).view(batch_size, MAX_HAND_SIZE, 1).to(torch.float32))
+            * x_size
+        )
 
         # Other
         low = high
@@ -155,29 +205,27 @@ class CardTransformer(nn.Module):
         # x_hand += pos_embs  # (B, L, D)
 
         # Get card encodings
-        x_hand = self._enc_card(x_cards)  # (B, L, D)
+        x_hand = self._enc_card(x_cards) * x_size  # (B, L, D)
 
         # Sum energy encoding
-        x_hand += x_energy
-
-        # Sum cost encodings
-        x_hand += x_costs
+        x_hand += x_energy_cost
 
         # MHA
-        x_hand_mha = self._mha_1(x_hand)
+        x_hand_mha = self._mha_1(x_hand, ~x_size.view(batch_size, MAX_HAND_SIZE))
         # x_hand_mha = self._mha_2(x_hand_mha)
 
         # Active embedding
         x_hand_mha += self._active.unsqueeze(0).unsqueeze(0) * x_mask.unsqueeze(-1)
 
         # Final hand embedding
+        x_hand_global = torch.mean(x_hand_mha * x_size, dim=1)
         x_hand = torch.flatten(x_hand_mha, start_dim=1)
 
         # Other
         x_other = self._enc_other(x_other)
 
         # Concat
-        x_hid = self._ln_3(torch.cat([x_hand, x_other], dim=1))
+        x_hid = self._ln_3(torch.cat([x_hand, x_hand_global, x_other], dim=1))
 
         # Process through MLP
         x = self._mlp(x_hid)

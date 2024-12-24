@@ -12,7 +12,7 @@ from src.game.combat.view.monster import MonsterView
 
 
 MODIFIER_TYPES = [ModifierViewType.WEAK, ModifierViewType.STR]
-COST_PAD = 3
+COST_PAD = 5
 EFFECT_TYPE_MAP = {
     EffectType.DEAL_DAMAGE: 0,
     EffectType.GAIN_BLOCK: 1,
@@ -160,6 +160,7 @@ def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.T
 
     return torch.concat(
         [
+            torch.tensor([len(combat_view.hand)], device=device, dtype=torch.long),
             tensor_mask,
             tensor_costs,
             tensor_cards,
