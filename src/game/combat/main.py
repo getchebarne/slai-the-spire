@@ -1,5 +1,3 @@
-from typing import Optional
-
 from src.agents.random import BaseAgent
 from src.agents.random import RandomAgent
 from src.game.combat.action import Action
@@ -12,9 +10,9 @@ from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
 from src.game.combat.handle_input import handle_action
 from src.game.combat.manager import CombatManager
+from src.game.combat.manager import change_state
 from src.game.combat.phase import combat_start
 from src.game.combat.state import State
-from src.game.combat.state import on_enter
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
@@ -27,14 +25,6 @@ def _card_requires_target(card: Card) -> bool:
     return False
 
 
-# TODO: move to state.py
-def _set_state(
-    state: State, combat_manager: CombatManager, entity_selectable_ids: Optional[list[int]] = None
-) -> None:
-    on_enter(state, combat_manager.entities, entity_selectable_ids)
-    combat_manager.state = state
-
-
 # TODO: find more suitable name
 def process(combat_manager: CombatManager) -> None:
     # Check if there's an active card
@@ -44,7 +34,7 @@ def process(combat_manager: CombatManager) -> None:
         if _card_requires_target(combat_manager.entities.get_entity(card_active_id)):
             if combat_manager.entities.card_target_id is None:
                 # Need to wait for card target
-                _set_state(State.AWAIT_CARD_TARGET, combat_manager)
+                change_state(combat_manager, State.AWAIT_CARD_TARGET)
 
                 return
 
@@ -57,11 +47,11 @@ def process(combat_manager: CombatManager) -> None:
     # Process queue TODO: should be standalone
     query_ids = process_queue(combat_manager.entities, combat_manager.effect_queue)
     if query_ids is None:
-        _set_state(State.DEFAULT, combat_manager)
+        change_state(combat_manager, State.DEFAULT)
 
         return
 
-    _set_state(State.AWAIT_EFFECT_TARGET, combat_manager, query_ids)
+    change_state(combat_manager, State.AWAIT_EFFECT_TARGET, query_ids)
 
 
 def step(combat_manager: CombatManager, action: Action) -> None:

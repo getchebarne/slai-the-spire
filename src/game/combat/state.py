@@ -12,7 +12,7 @@ class State(Enum):
 
 # TODO: encapsulate on enter in separate funcs
 def on_enter(
-    state: State, entities: Entities, entity_selectable_ids: Optional[list[int]] = None
+    entities: Entities, state: State, entity_selectable_ids: Optional[list[int]] = None
 ) -> None:
     if state == State.DEFAULT:
         # Reset active card, card target, and effect target
