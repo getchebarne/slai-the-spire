@@ -92,17 +92,11 @@ class Character(Actor):
     pass
 
 
-# TODO: maybe make flat
-@dataclass
-class MonsterMove:
-    name: str
-    effects: list[Effect]
-
-
 @dataclass
 class Monster(Actor):
-    move: Optional[MonsterMove] = None  # TODO: rename to move_current
-    move_history: list[MonsterMove] = field(default_factory=list)
+    moves: dict[str, list[Effect]] = field(default=dict)  # TODO: change default?
+    move_name_current: str | None = None
+    move_name_history: list[str] = field(default_factory=list)
 
 
 class CardName(Enum):

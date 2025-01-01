@@ -18,7 +18,10 @@ def combat_start(combat_manager: CombatManager) -> None:
 
     # Get first move from monsters. TODO: revisit
     for monster in combat_manager.entities.get_monsters():
-        ais[monster.name](monster)
+        monster.move_name_current = ais[monster.name](
+            monster.move_name_current, monster.move_name_history
+        )
+        monster.move_name_history.append(monster.move_name_current)  # TODO: improve
 
     # Set start of turn to character & call its turn start
     combat_manager.entities.actor_turn_id = combat_manager.entities.character_id
