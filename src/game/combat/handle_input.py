@@ -27,10 +27,15 @@ def _handle_end_turn(combat_manager: CombatManager) -> None:
         _queue_turn_start_effects(combat_manager.entities, combat_manager.effect_queue, monster_id)
 
         # Queue monster's move's effects
-        combat_manager.effect_queue.add_to_bot(monster_id, *monster.move.effects)
+        combat_manager.effect_queue.add_to_bot(
+            monster_id, *monster.moves[monster.move_name_current]
+        )
 
         # Update monster's move
-        ais[monster.name](monster)
+        monster.move_name_current = ais[monster.name](
+            monster.move_name_current, monster.move_name_history
+        )
+        monster.move_name_history.append(monster.move_name_current)  # TODO: improve
 
         # Monster's turn end
         _queue_turn_end_effects(combat_manager.entities, combat_manager.effect_queue, monster_id)

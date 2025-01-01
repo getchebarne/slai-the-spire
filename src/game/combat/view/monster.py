@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 
+from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
 from src.game.combat.entities import ModifierType
 from src.game.combat.entities import Monster
-from src.game.combat.entities import MonsterMove
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
 
@@ -23,12 +23,12 @@ class MonsterView(ActorView):
     intent: IntentView
 
 
-def _move_to_intent(move: MonsterMove) -> IntentView:
+def _move_effects_to_intent(move_effects: list[Effect]) -> IntentView:
     # Initialze empty intent
     intent = IntentView(None, None, False, False)
 
     # Iterate over the move's effects
-    for effect in move.effects:
+    for effect in move_effects:
         if effect.type == EffectType.DEAL_DAMAGE:
             if intent.damage is None and intent.instances is None:
                 intent.damage = effect.value
@@ -37,9 +37,7 @@ def _move_to_intent(move: MonsterMove) -> IntentView:
                 continue
 
             if intent.damage != effect.value:
-                raise ValueError(
-                    f"All {move.__class__.__name__}'s damage instances must be of the same value"
-                )
+                raise ValueError("All of the move's damage instances must have the same value")
 
             intent.instances += 1
 
@@ -70,7 +68,7 @@ def _correct_intent_damage(damage: int | None, monster: Monster) -> int | None:
 def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
     monster = entities.get_entity(monster_entity_id)
     actor_view = _actor_to_view(monster)
-    intent_view = _move_to_intent(monster.move)
+    intent_view = _move_effects_to_intent(monster.moves[monster.move_name_current])
     intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
 
     return MonsterView(

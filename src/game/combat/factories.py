@@ -19,16 +19,39 @@ def silent() -> Character:
     return Character("Silent", Health(max_health))
 
 
+# TODO: improve move parametrization
 def dummy() -> Monster:
     max_health = 30
 
-    return Monster("Dummy", Health(max_health))
+    return Monster(
+        "Dummy",
+        Health(max_health),
+        moves={
+            "Attack": [Effect(EffectType.DEAL_DAMAGE, 10, EffectTargetType.CHARACTER)],
+            "Defend": [Effect(EffectType.GAIN_BLOCK, 10, EffectTargetType.SOURCE)],
+        },
+    )
 
 
+# TODO: improve move parametrization
 def jaw_worm() -> Monster:
     max_health = random.randint(42, 46)
 
-    return Monster("Jaw Worm", Health(max_health))
+    return Monster(
+        "Jaw Worm",
+        Health(max_health),
+        moves={
+            "Chomp": [Effect(EffectType.DEAL_DAMAGE, 12, EffectTargetType.CHARACTER)],
+            "Thrash": [
+                Effect(EffectType.DEAL_DAMAGE, 7, EffectTargetType.CHARACTER),
+                Effect(EffectType.GAIN_BLOCK, 5, EffectTargetType.SOURCE),
+            ],
+            "Bellow": [
+                Effect(EffectType.GAIN_STR, 5, EffectTargetType.SOURCE),
+                Effect(EffectType.GAIN_BLOCK, 9, EffectTargetType.SOURCE),
+            ],
+        },
+    )
 
 
 def strike() -> Card:
@@ -193,10 +216,8 @@ def backflip() -> Card:
     )
 
 
-def energy() -> Energy:
-    energy = 3
-
-    return Energy(energy)
+def energy(max_: int = 3, current: int = 3) -> Energy:
+    return Energy(max_, current)
 
 
 def weak() -> Modifier:
