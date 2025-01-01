@@ -12,7 +12,6 @@ from src.game.combat.view.monster import MonsterView
 
 
 MODIFIER_TYPES = [ModifierViewType.WEAK, ModifierViewType.STR]
-COST_PAD = 5
 EFFECT_TYPE_MAP = {
     EffectType.DEAL_DAMAGE: 0,
     EffectType.GAIN_BLOCK: 1,
@@ -103,52 +102,45 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
     return torch.concat(_tensors)
 
 
-def _encode_card_view(card_view: CardView) -> list[int]:
-    # cost, damage, block, weak, discard, draw,
-    _list = [card_view.cost, 0, 0, 0, 0, 0]
+def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
+    # playable, cost, damage, block, weak, discard, draw,
+    _list = [card_view.cost <= energy_current, card_view.cost, 0, 0, 0, 0, 0]
     for effect in card_view.effects:
         if effect.type in EFFECT_TYPE_MAP:
-            _list[EFFECT_TYPE_MAP[effect.type] + 1] = effect.value
+            _list[EFFECT_TYPE_MAP[effect.type] + 2] = effect.value
 
     return _list
 
 
 def _encode_card_pad() -> list[int]:
-    # cost, damage, block, weak, discard, draw
-    return [COST_PAD, 0, 0, 0, 0, 0]
+    # playable, cost, damage, block, weak, discard, draw
+    cost = 5
+    playable = False
+    return [playable, cost, 0, 0, 0, 0, 0]
 
 
-def _encode_hand_view(hand_view: list[CardView], device: torch.device) -> torch.Tensor:
+def _encode_hand_view(
+    hand_view: list[CardView], energy_current: int, device: torch.device
+) -> torch.Tensor:
     _cards = []
-    _costs = []
-    _mask = [0] * MAX_HAND_SIZE
+    _active_mask = [0] * MAX_HAND_SIZE
+
     for idx, card_view in enumerate(hand_view):
-        cost_card = _encode_card_view(card_view)
-        cost = cost_card[0]
-        card = cost_card[1:]
-        _costs.append(cost)
-        _cards.append(card)
+        _cards.append(_encode_card_view(card_view, energy_current))
 
         if card_view.is_active:
-            _mask[idx] = 1
+            _active_mask[idx] = 1
 
-    for i in range(MAX_HAND_SIZE - len(hand_view)):
-        cost_card = _encode_card_pad()
-        cost = cost_card[0]
-        card = cost_card[1:]
-        _costs.append(cost)
-        _cards.append(card)
-
+    _cards += [_encode_card_pad()] * (MAX_HAND_SIZE - len(_cards))
     return (
-        torch.tensor(_costs, device=device, dtype=torch.long),
         torch.flatten(torch.tensor(_cards, device=device, dtype=torch.long)),
-        torch.tensor(_mask, device=device, dtype=torch.long),
+        torch.tensor(_active_mask, device=device, dtype=torch.long),
     )
 
 
 def _encode_pile_view(pile_view: set[CardView], device: torch.device) -> torch.Tensor:
     if pile_view:
-        _list = [_encode_card_view(card_view) for card_view in pile_view]
+        _list = [_encode_card_view(card_view, -int(1e9))[1:] for card_view in pile_view]
 
         return torch.sum(torch.tensor(_list, device=device, dtype=torch.long), dim=0)
 
@@ -156,14 +148,15 @@ def _encode_pile_view(pile_view: set[CardView], device: torch.device) -> torch.T
 
 
 def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.Tensor:
-    tensor_costs, tensor_cards, tensor_mask = _encode_hand_view(combat_view.hand, device)
+    tensor_hand, tensor_active_mask = _encode_hand_view(
+        combat_view.hand, combat_view.energy.current, device
+    )
 
     return torch.concat(
         [
             torch.tensor([len(combat_view.hand)], device=device, dtype=torch.long),
-            tensor_mask,
-            tensor_costs,
-            tensor_cards,
+            tensor_active_mask,
+            tensor_hand,
             _encode_energy_view(combat_view.energy, device),
             _encode_pile_view(combat_view.draw_pile, device),
             _encode_pile_view(combat_view.disc_pile, device),
