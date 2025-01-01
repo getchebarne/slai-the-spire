@@ -13,33 +13,34 @@ from src.game.combat.entities import Modifier
 from src.game.combat.entities import Monster
 
 
-def silent() -> Character:
-    max_health = 50
+def silent(health_current: int | None = None) -> Character:
+    health_max = 50
 
-    return Character("Silent", Health(max_health))
+    return Character("Silent", Health(health_max, health_current))
 
 
 # TODO: improve move parametrization
-def dummy() -> Monster:
-    max_health = 30
+def dummy(health_current: int | None = None, move_name_current: str | None = None) -> Monster:
+    health_max = 30
 
     return Monster(
         "Dummy",
-        Health(max_health),
+        Health(health_max, health_current),
         moves={
             "Attack": [Effect(EffectType.DEAL_DAMAGE, 10, EffectTargetType.CHARACTER)],
             "Defend": [Effect(EffectType.GAIN_BLOCK, 10, EffectTargetType.SOURCE)],
         },
+        move_name_current=move_name_current,
     )
 
 
 # TODO: improve move parametrization
 def jaw_worm() -> Monster:
-    max_health = random.randint(42, 46)
+    health_max = random.randint(42, 46)
 
     return Monster(
         "Jaw Worm",
-        Health(max_health),
+        Health(health_max),
         moves={
             "Chomp": [Effect(EffectType.DEAL_DAMAGE, 12, EffectTargetType.CHARACTER)],
             "Thrash": [
