@@ -13,14 +13,14 @@ def compute_reward(
         return combat_view_tp1.character.health.current / combat_view_tp1.character.health.max
 
     # Card diff
-    weight_cards_in_hand = 0.0075
-    diff_cards_in_hand = weight_cards_in_hand * (
-        len(combat_view_tp1.hand) - len(combat_view_t.hand)
-    )
+    # weight_cards_in_hand = 0.0500
+    # diff_cards_in_hand = weight_cards_in_hand * (
+    #     len(combat_view_tp1.hand) - len(combat_view_t.hand)
+    # )
 
-    # Energy diff
-    weight_energy = 0.0075
-    diff_energy = weight_energy * (combat_view_tp1.energy.current - combat_view_t.energy.current)
+    # # Energy diff
+    # weight_energy = 0.0500
+    # diff_energy = weight_energy * (combat_view_tp1.energy.current - combat_view_t.energy.current)
 
     # Damage
     # weight_damage = 0.0375
@@ -34,4 +34,4 @@ def compute_reward(
     ) / combat_view_t.character.health.max
 
     # Still going
-    return diff_health + diff_cards_in_hand + diff_energy
+    return diff_health
