@@ -1,4 +1,4 @@
-exp_name: jaw/delete
+exp_name: jaw/ultimate
 num_episodes: 1.0e+6
 buffer_size: 5.0e+3
 batch_size: 64
@@ -10,7 +10,9 @@ transfer_every: 10000
 model: 
   name: CardTransformer
   kwargs:
-    linear_sizes: [1024, 1024, 1024]
+    dim_card: 64
+    attn_card_num_heads: 8
+    linear_sizes: [256, 256]
 
 optimizer:
   name: SGD
