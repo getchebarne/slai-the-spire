@@ -102,21 +102,22 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
     return torch.concat(_tensors)
 
 
-def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
-    # playable, cost, damage, block, weak, discard, draw,
-    _list = [card_view.cost <= energy_current, card_view.cost, 0, 0, 0, 0, 0]
+def _encode_card_view(card_view: CardView, energy_current: int, card_count: int) -> list[int]:
+    # playable, count, cost, damage, block, weak, discard, draw
+    _list = [card_view.cost <= energy_current, card_count, card_view.cost, 0, 0, 0, 0, 0]
     for effect in card_view.effects:
         if effect.type in EFFECT_TYPE_MAP:
-            _list[EFFECT_TYPE_MAP[effect.type] + 2] = effect.value
+            _list[EFFECT_TYPE_MAP[effect.type] + 3] = effect.value
 
     return _list
 
 
 def _encode_card_pad() -> list[int]:
-    # playable, cost, damage, block, weak, discard, draw
+    # playable, count, cost, damage, block, weak, discard, draw
     cost = 5
     playable = False
-    return [playable, cost, 0, 0, 0, 0, 0]
+    card_count = 0
+    return [playable, card_count, cost, 0, 0, 0, 0, 0]
 
 
 def _encode_hand_view(
@@ -125,8 +126,15 @@ def _encode_hand_view(
     _cards = []
     _active_mask = [0] * MAX_HAND_SIZE
 
+    # Count occurrences of each card type in the hand
+    card_type_counts = {}
+    for card_view in hand_view:
+        card_type = card_view.name  # Assuming `card_type` uniquely identifies a card
+        card_type_counts[card_type] = card_type_counts.get(card_type, 0) + 1
+
     for idx, card_view in enumerate(hand_view):
-        _cards.append(_encode_card_view(card_view, energy_current))
+        card_count = card_type_counts[card_view.name]
+        _cards.append(_encode_card_view(card_view, energy_current, card_count))
 
         if card_view.is_active:
             _active_mask[idx] = 1
@@ -140,7 +148,7 @@ def _encode_hand_view(
 
 def _encode_pile_view(pile_view: set[CardView], device: torch.device) -> torch.Tensor:
     if pile_view:
-        _list = [_encode_card_view(card_view, -int(1e9))[1:] for card_view in pile_view]
+        _list = [_encode_card_view(card_view, -int(1e9), -int(1e9))[2:] for card_view in pile_view]
 
         return torch.sum(torch.tensor(_list, device=device, dtype=torch.long), dim=0)
 
@@ -158,8 +166,8 @@ def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.T
             tensor_active_mask,
             tensor_hand,
             _encode_energy_view(combat_view.energy, device),
-            _encode_pile_view(combat_view.draw_pile, device),
-            _encode_pile_view(combat_view.disc_pile, device),
+            # _encode_pile_view(combat_view.draw_pile, device),
+            # _encode_pile_view(combat_view.disc_pile, device),
             _encode_character_view(combat_view.character, device),
             _encode_monster_views(combat_view.monsters, device),
             _encode_state_view(combat_view.state, device),
