@@ -128,14 +128,14 @@ class CardTransformer(nn.Module):
         self._linear_sizes = linear_sizes
 
         # Modules
-        self._enc_card = nn.Linear(2 + NUM_EFFECTS, self._dim_card)
+        self._enc_card = nn.Linear(3 + NUM_EFFECTS, self._dim_card)
         self._hand_transformer_1 = HandTransformer(
             self._dim_card, self._attn_card_num_heads, self._dim_card
         )
         self._hand_transformer_2 = HandTransformer(
             self._dim_card, self._attn_card_num_heads, self._dim_card
         )
-        self._enc_other = ResidualMLP(30, self._dim_card)
+        self._enc_other = ResidualMLP(18, self._dim_card)
 
         self._ln_common = nn.LayerNorm(self._dim_card * 5)
         self._mlp_common = MLP([self._dim_card * 5] + linear_sizes)
@@ -167,8 +167,8 @@ class CardTransformer(nn.Module):
 
         # Hand
         low = high
-        high += MAX_HAND_SIZE * (2 + NUM_EFFECTS)
-        x_cards = x[:, low:high].to(torch.float32).view(batch_size, MAX_HAND_SIZE, 2 + NUM_EFFECTS)
+        high += MAX_HAND_SIZE * (3 + NUM_EFFECTS)
+        x_cards = x[:, low:high].to(torch.float32).view(batch_size, MAX_HAND_SIZE, 3 + NUM_EFFECTS)
 
         # Other
         low = high
