@@ -129,7 +129,7 @@ class Card(Entity):
 
 
 @dataclass
-class Energy:
+class Energy(Entity):
     max: int = 3
     current: Optional[int] = None
 
