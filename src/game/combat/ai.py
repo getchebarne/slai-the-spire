@@ -1,6 +1,11 @@
 import random
 from typing import Callable
 
+from src.game.combat.entities import Effect
+from src.game.combat.entities import EffectTargetType
+from src.game.combat.entities import EffectType
+from src.game.combat.entities import MonsterMove
+
 
 ais: dict[str, Callable] = {}
 
@@ -14,17 +19,23 @@ def register_ai(monster_name: str) -> Callable:
 
 
 @register_ai("Dummy")
-def ai_dummy(move_name_current: str | None, move_name_history: list[str]) -> str:
-    if move_name_current is None:
-        return random.choice(["Attack", "Defend"])
+def ai_dummy(move_current: MonsterMove | None, move_history: list[MonsterMove]) -> MonsterMove:
+    move_attack = MonsterMove(
+        "Attack", [Effect(EffectType.DEAL_DAMAGE, 5, EffectTargetType.CHARACTER)]
+    )
+    move_defend = MonsterMove(
+        "Defend", [Effect(EffectType.GAIN_BLOCK, 5, EffectTargetType.SOURCE)]
+    )
+    if move_current is None:
+        return random.choice([move_attack, move_defend])
 
-    if move_name_current == "Attack":
-        return "Defend"
+    if move_current.name == "Attack":
+        return move_defend
 
-    if move_name_current == "Defend":
-        return "Attack"
+    if move_current.name == "Defend":
+        return move_attack
 
-    raise ValueError(f"Unsupported move name: {move_name_current}")
+    raise ValueError(f"Unsupported move name: {move_current.name}")
 
 
 @register_ai("Jaw Worm")

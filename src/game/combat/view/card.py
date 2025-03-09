@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-from src.game.combat.entities import CardName
 from src.game.combat.entities import Effect
 from src.game.combat.entities import Entities
 
@@ -8,7 +7,7 @@ from src.game.combat.entities import Entities
 @dataclass
 class CardView:
     entity_id: int
-    name: CardName
+    name: str
     effects: list[Effect]  # TODO: implement EffectView
     cost: int
     is_active: bool
@@ -24,7 +23,7 @@ class CardView:
 
 
 def _card_to_view(entities: Entities, card_entity_id: int) -> CardView:
-    card = entities.get_entity(card_entity_id)
+    card = entities.all[card_entity_id]
 
     return CardView(
         card_entity_id,

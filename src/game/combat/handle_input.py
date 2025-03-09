@@ -1,74 +1,87 @@
+from dataclasses import replace
+
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.ai import ais
-from src.game.combat.manager import CombatManager
-from src.game.combat.phase import _queue_turn_end_effects
-from src.game.combat.phase import _queue_turn_start_effects
-from src.game.combat.state import State
+from src.game.combat.phase import queue_turn_end_effects
+from src.game.combat.phase import queue_turn_start_effects
+from src.game.combat.state import CombatState
+from src.game.combat.state import add_to_bot
 
 
 class InvalidActionError(Exception):
     pass
 
 
-def _handle_end_turn(combat_manager: CombatManager) -> None:
-    if combat_manager.state != State.DEFAULT:
+def _handle_end_turn(combat_state: CombatState) -> CombatState:
+    if combat_state.entities.card_active_id is not None or combat_state.effect_queue:
         raise InvalidActionError
 
     # Character's turn end
-    _queue_turn_end_effects(
-        combat_manager.entities, combat_manager.effect_queue, combat_manager.entities.character_id
+    entities_new, effect_queue_new = queue_turn_end_effects(
+        combat_state.entities, combat_state.effect_queue, combat_state.entities.character_id
     )
+    combat_state.entities = entities_new
+    combat_state.effect_queue = effect_queue_new
 
-    for monster_id in combat_manager.entities.monster_ids:
-        monster = combat_manager.entities.get_entity(monster_id)
+    for monster_id in combat_state.entities.monster_ids:
+        monster = combat_state.entities.all[monster_id]
 
         # Monster's turn start
-        _queue_turn_start_effects(combat_manager.entities, combat_manager.effect_queue, monster_id)
+        combat_state.effect_queue = queue_turn_start_effects(
+            combat_state.entities, combat_state.effect_queue, monster_id
+        )
 
         # Queue monster's move's effects
-        combat_manager.effect_queue.add_to_bot(
-            monster_id, *monster.moves[monster.move_name_current]
+        combat_state.effect_queue = add_to_bot(
+            combat_state.effect_queue, monster_id, *monster.move_current.effects
         )
 
         # Update monster's move
-        monster.move_name_current = ais[monster.name](
-            monster.move_name_current, monster.move_name_history
+        monster = replace(
+            monster, move_current=ais[monster.name](monster.move_current, monster.move_history)
         )
-        monster.move_name_history.append(monster.move_name_current)  # TODO: improve
+        # TODO: improve this
+        monster = replace(monster, move_history=monster.move_history + [monster.move_current])
 
         # Monster's turn end
-        _queue_turn_end_effects(combat_manager.entities, combat_manager.effect_queue, monster_id)
+        entities_new, effect_queue_new = queue_turn_end_effects(
+            combat_state.entities, combat_state.effect_queue, monster_id
+        )
+        combat_state.entities = entities_new
+        combat_state.effect_queue = effect_queue_new
 
     # Character's turn start
-    _queue_turn_start_effects(
-        combat_manager.entities, combat_manager.effect_queue, combat_manager.entities.character_id
+    combat_state.effect_queue = queue_turn_start_effects(
+        combat_state.entities, combat_state.effect_queue, combat_state.entities.character_id
     )
 
-
-def _handle_select_entity(combat_manager: CombatManager, target_id: int) -> None:
-    if combat_manager.state == State.DEFAULT:
-        # Set active card in `combat_manager.entities`
-        combat_manager.entities.card_active_id = target_id
-
-        return
-
-    if combat_manager.state == State.AWAIT_CARD_TARGET:
-        # Set card target in `combat_manager.entities`
-        combat_manager.entities.card_target_id = target_id
-
-        return
-
-    if combat_manager.state == State.AWAIT_EFFECT_TARGET:
-        # Set effect target in `combat_manager.entities`
-        combat_manager.entities.effect_target_id = target_id
-
-        return
+    return combat_state
 
 
-def handle_action(combat_manager: CombatManager, action: Action) -> None:
+def _handle_select_entity(combat_state: CombatState, target_id: int) -> CombatState:
+    if combat_state.entities.card_active_id is None and not combat_state.effect_queue:
+        # Set active card in `combat_state.entities`
+        combat_state.entities = replace(combat_state.entities, card_active_id=target_id)
+
+        return combat_state
+
+    if combat_state.entities.card_active_id is not None and not combat_state.effect_queue:
+        # Set card target in `combat_state.entities`
+        combat_state.entities = replace(combat_state.entities, card_target_id=target_id)
+
+        return combat_state
+
+    if combat_state.entities.card_active_id is None and combat_state.effect_queue:
+        # Set effect target in `combat_state.entities`
+        combat_state.entities = replace(combat_state.entities, effect_target_id=target_id)
+
+        return combat_state
+
+
+def handle_action(combat_state: CombatState, action: Action) -> None:
     if action.type == ActionType.END_TURN:
-        _handle_end_turn(combat_manager)
+        _handle_end_turn(combat_state)
 
     elif action.type == ActionType.SELECT_ENTITY:
-        _handle_select_entity(combat_manager, action.target_id)
+        _handle_select_entity(combat_state, action.target_id)

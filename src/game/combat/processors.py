@@ -1,225 +1,216 @@
 import random
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import replace
 
-from src.game.combat.entities import Card
 from src.game.combat.entities import Effect
-from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
+from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import Entities
-from src.game.combat.entities import ModifierType
-from src.game.combat.factories import strength
-from src.game.combat.factories import weak
+from src.game.combat.state import QueuedEffect
 
 
-@dataclass
-class EffectPayload:
-    source_id: int
-    target_id: int
-    value: float | int
+WEAK_FACTOR = 0.75
+BLOCK_MAX = 999
 
 
+def process_effect(
+    entities: Entities, source_id: int, target_id: int, effect: Effect
+) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
+    if effect.type == EffectType.DEAL_DAMAGE:
+        return _processor_deal_damage(entities, source_id, target_id, effect.value)
+
+    if effect.type == EffectType.GAIN_BLOCK:
+        return _processor_gain_block(entities, target_id, effect.value)
+
+    if effect.type == EffectType.PLAY_CARD:
+        return _processor_play_card(entities, target_id)
+
+    if effect.type == EffectType.DRAW_CARD:
+        return _processor_draw_card(entities, effect.value)
+
+    if effect.type == EffectType.REFILL_ENERGY:
+        return _processor_refill_energy(entities)
+
+    if effect.type == EffectType.DISCARD:
+        return _processor_discard(entities, target_id)
+
+    if effect.type == EffectType.ZERO_BLOCK:
+        return _processor_zero_block(entities, target_id)
+
+    if effect.type == EffectType.DECREASE_ENERGY:
+        return _processor_decrease_energy(entities, effect.value)
+
+    raise ValueError(f"Unsupported effect type: {effect.type}")
+
+
+# TODO: rename to damage
 def _processor_deal_damage(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.get_entity(effect_payload.target_id)
-    damage = int(effect_payload.value)
+    entities: Entities, source_id: int, target_id: int, value: int
+) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
+    source = entities.all[source_id]
+    target = entities.all[target_id]
 
-    health = target.health
-    block = target.block
+    # Apply strength
+    value += source.modifier_strength.stacks_current
 
-    # Remove block
-    damage_over_block = max(0, damage - block.current)
-    block.current = max(0, block.current - damage)
+    # Apply weak
+    if source.modifier_weak.stacks_current > 0:
+        value *= WEAK_FACTOR
 
-    # Remove health
-    health.current = max(0, health.current - damage_over_block)
+    # Calculate damage over block
+    value = int(value)
+    damage_over_block = max(0, value - target.block_current)
 
-    return [], []
+    # TODO; add comment
+    all_new = entities.all.copy()
+    all_new[target_id] = replace(
+        target,
+        block_current=max(0, target.block_current - value),
+        health_current=max(0, target.health_current - damage_over_block),
+    )
+
+    return replace(entities, all=all_new), [], []
 
 
 def _processor_gain_block(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.get_entity(effect_payload.target_id)
-    value = int(effect_payload.value)
+    entities: Entities, target_id: int, value: int
+) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
+    target = entities.all[target_id]
 
-    block = target.block
-    block.current = min(block.current + value, block.max)
+    # TODO; add comment
+    all_new = entities.all.copy()
+    all_new[target_id] = replace(
+        target,
+        block_current=min(target.block_current + value, BLOCK_MAX),
+    )
 
-    return [], []
+    entities_new = replace(entities, all=all_new)
+
+    return entities_new, [], []
 
 
 def _processor_play_card(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target_id = effect_payload.target_id
-    target = entities.get_entity(target_id)
-    energy = entities.get_entity(entities.energy_id)
+    entities: Entities, target_id: int
+) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
+    target = entities.all[target_id]
 
-    if target.cost > energy.current:
-        raise ValueError(f"Can't play card {target} with {energy.current} energy")
+    # TODO: think about having source_id=character_id here
+    effect_card = [
+        QueuedEffect(effect, source_id=entities.character_id) for effect in target.effects
+    ]
 
-    # Subtract energy
-    # TODO: should be effect
-    energy.current -= target.cost
-
-    # Add effect to discard the card
-    # TODO: think about creating effects w/ target already
-    effect_discard = (None, Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_ACTIVE))
-    effect_card = [(target_id, effect) for effect in target.effects]
-
-    return [effect_discard] + effect_card, []
-
-
-def _processor_gain_weak(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.get_entity(effect_payload.target_id)
-    value = int(effect_payload.value)
-
-    # TODO: use defaultdict?
-    try:
-        modifier_weak = target.modifiers[ModifierType.WEAK]
-        modifier_weak.stacks = min(modifier_weak.stacks + value, modifier_weak.stacks_max)
-
-    except KeyError:
-        modifier_weak = weak()
-        modifier_weak.stacks = value  # TODO: fix
-        target.modifiers[ModifierType.WEAK] = modifier_weak
-
-    return [], []
-
-
-def _processor_gain_str(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.get_entity(effect_payload.target_id)
-    value = int(effect_payload.value)
-
-    # TODO: use defaultdict?
-    try:
-        modifier_str = target.modifiers[ModifierType.STR]
-        modifier_str.stacks = min(modifier_str.stacks + value, modifier_str.stacks_max)
-
-    except KeyError:
-        modifier_str = strength()
-        modifier_str.stacks = value  # TODO: fix
-        target.modifiers[ModifierType.STR] = modifier_str
-
-    return [], []
-
-
-def _processor_mod_tick(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.get_entity(effect_payload.target_id)
-
-    for _, modifier in target.modifiers.items():
-        if modifier.stacks_duration:
-            modifier.stacks -= 1
-
-    target.modifiers = {
-        modifier_type: modifier
-        for modifier_type, modifier in target.modifiers.items()
-        if modifier.stacks > modifier.stacks_min
-    }
-
-    return [], []
-
-
-def _processor_apply_weak(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    source = entities.get_entity(effect_payload.source_id)
-
-    # TODO: improve
-    if isinstance(source, Card):
-        source = entities.get_entity(entities.character_id)
-
-    if ModifierType.WEAK in source.modifiers:
-        effect_payload.value *= 0.75
-
-    return [], []
-
-
-def _processor_apply_str(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    source = entities.get_entity(effect_payload.source_id)
-
-    # TODO: improve
-    if isinstance(source, Card):
-        source = entities.get_entity(entities.character_id)
-
-    if ModifierType.STR in source.modifiers:
-        effect_payload.value += source.modifiers[ModifierType.STR].stacks
-
-    return [], []
+    return (
+        entities,
+        [
+            QueuedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
+            # TODO: add support for queueing effects w/ target_id
+            QueuedEffect(Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_ACTIVE)),
+            *effect_card,
+        ],
+        [],
+    )
 
 
 # TODO: handle infinite loop
 def _processor_draw_card(
-    entities: Entities, effect_payload: EffectPayload
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    value = int(effect_payload.value)
+    entities: Entities, amount: int
+) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
+    card_in_draw_pile_ids = entities.card_in_draw_pile_ids.copy()
+    card_in_discard_pile_ids = entities.card_in_discard_pile_ids.copy()
+    card_in_hand_ids = entities.card_in_hand_ids.copy()
 
-    for _ in range(value):
-        if len(entities.card_in_draw_pile_ids) == 0:
+    for _ in range(amount):
+        if len(card_in_draw_pile_ids) == 0:
             # Shuffle discard pile into draw pile
             # TODO: make effect
-            entities.card_in_draw_pile_ids = list(entities.card_in_discard_pile_ids)
-            random.shuffle(entities.card_in_draw_pile_ids)
+            card_in_draw_pile_ids = list(card_in_discard_pile_ids)
+            random.shuffle(card_in_draw_pile_ids)
 
-            entities.card_in_discard_pile_ids = set()
+            card_in_discard_pile_ids = set()
 
-        entities.card_in_hand_ids.append(entities.card_in_draw_pile_ids.pop(0))
+        card_in_hand_ids.append(card_in_draw_pile_ids.pop(0))
 
-    return [], []
+    entities_new = replace(
+        entities,
+        card_in_draw_pile_ids=card_in_draw_pile_ids,
+        card_in_hand_ids=card_in_hand_ids,
+        card_in_discard_pile_ids=card_in_discard_pile_ids,
+    )
+
+    return entities_new, [], []
 
 
 def _processor_refill_energy(
-    entities: Entities, effect_payload: EffectPayload
+    entities: Entities,
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    energy = entities.get_entity(entities.energy_id)
-    energy.current = energy.max
+    energy_id = entities.energy_id
+    energy = entities.all[energy_id]
 
-    return [], []
+    # Create a new energy entity with updated current value
+    energy_new = replace(energy, current=energy.max)
+
+    # Create a new list with the updated entity
+    all_new = entities.all.copy()
+    all_new[energy_id] = energy_new
+
+    # Create new Entities with the updated list
+    entities_new = replace(entities, all=all_new)
+
+    return entities_new, [], []
+
+
+def _processor_decrease_energy(
+    entities: Entities, value: int
+) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
+    energy_id = entities.energy_id
+    energy = entities.all[energy_id]
+
+    # Create a new energy entity with updated current value
+    energy_new = replace(energy, current=energy.current - value)
+
+    # Create a new list with the updated entity
+    all_new = entities.all.copy()
+    all_new[energy_id] = energy_new
+
+    # Create new Entities with the updated list
+    entities_new = replace(entities, all=all_new)
+
+    return entities_new, [], []
 
 
 def _processor_discard(
-    entities: Entities, effect_payload: EffectPayload
+    entities: Entities, target_id: int
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    entities.card_in_hand_ids.remove(effect_payload.target_id)
-    entities.card_in_discard_pile_ids.add(effect_payload.target_id)
+    # Create copies of collections we need to modify
+    card_in_hand_ids = entities.card_in_hand_ids.copy()
+    card_in_discard_pile_ids = entities.card_in_discard_pile_ids.copy()
 
-    return [], []
+    # Update collections
+    card_in_hand_ids.remove(target_id)
+    card_in_discard_pile_ids.add(target_id)
+
+    # Create new Entities with updated collections
+    new_entities = replace(
+        entities,
+        card_in_hand_ids=card_in_hand_ids,
+        card_in_discard_pile_ids=card_in_discard_pile_ids,
+    )
+
+    return new_entities, [], []
 
 
 def _processor_zero_block(
-    entities: Entities, effect_payload: EffectPayload
+    entities: Entities, target_id: int
 ) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.get_entity(effect_payload.target_id)
+    target = entities.all[target_id]
 
-    target.block.current = 0
+    # Create a new target entity with block set to 0
+    target_new = replace(target, block_current=0)
 
-    return [], []
+    # Create a new list with the updated entity
+    all_new = entities.all.copy()
+    all_new[target_id] = target_new
 
+    # Create new Entities with the updated list
+    new_entities = replace(entities, all=all_new)
 
-def get_effect_processors(effect_type: EffectType) -> list[Callable]:
-    return processors[effect_type]
-
-
-# Dictionary to hold effect type to processing function mappings
-processors = {
-    EffectType.DEAL_DAMAGE: [_processor_apply_str, _processor_apply_weak, _processor_deal_damage],
-    EffectType.GAIN_BLOCK: [_processor_gain_block],
-    EffectType.GAIN_WEAK: [_processor_gain_weak],
-    EffectType.DRAW_CARD: [_processor_draw_card],
-    EffectType.REFILL_ENERGY: [_processor_refill_energy],
-    EffectType.DISCARD: [_processor_discard],
-    EffectType.ZERO_BLOCK: [_processor_zero_block],
-    EffectType.PLAY_CARD: [_processor_play_card],
-    EffectType.MOD_TICK: [_processor_mod_tick],
-    EffectType.GAIN_STR: [_processor_gain_str],
-}
+    return new_entities, [], []

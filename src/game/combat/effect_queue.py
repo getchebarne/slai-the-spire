@@ -1,56 +1,19 @@
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 
-from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectSelectionType
 from src.game.combat.entities import EffectTargetType
-from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
-from src.game.combat.processors import EffectPayload
-from src.game.combat.processors import get_effect_processors
+from src.game.combat.processors import process_effect
+from src.game.combat.state import QueuedEffect
+from src.game.combat.state import add_to_bot
+from src.game.combat.state import add_to_top
 
 
 class EffectNeedsInputTargets(Exception):
     pass
-
-
-class EffectQueue:
-    def __init__(self):
-        self._source_id_effects: list[tuple[int, Effect]] = []
-
-    def __len__(self) -> int:
-        return len(self._source_id_effects)
-
-    def __iter__(self) -> EffectQueue:
-        return self
-
-    def __next__(self) -> tuple[int, Effect]:
-        if not self._source_id_effects:
-            # No more effects to process
-            raise StopIteration
-
-        return self._source_id_effects.pop(0)
-
-    def add_to_bot(self, source_id: int, *effects: Effect) -> None:
-        self._source_id_effects += [(source_id, effect) for effect in effects]
-
-    def add_to_top(self, source_id: int, *effects: Effect) -> None:
-        self._source_id_effects = [
-            (source_id, effect) for effect in effects
-        ] + self._source_id_effects
-
-    # TODO: revisit
-    def next_effect_type(self) -> EffectType:
-        return self._source_id_effects[0][1].type
-
-    def __str__(self) -> str:
-        if not self._source_id_effects:
-            return "EffectQueue is empty."
-
-        return "EffectQueue:\n" + "\n".join(
-            f"  Source ID {source_id}: {effect}" for source_id, effect in self._source_id_effects
-        )
 
 
 def _resolve_effect_target_type(
@@ -86,6 +49,7 @@ def _resolve_effect_target_type(
 def _resolve_effect_selection_type(
     entities: Entities, entity_ids: list[int] | None, effect_selection_type: EffectSelectionType
 ) -> list[int]:
+    # TODO: check this case outsde this function
     if effect_selection_type is None:
         return entity_ids
 
@@ -109,8 +73,16 @@ def _resolve_effect_selection_type(
 
 
 # TODO: improve
-def process_queue(entities: Entities, effect_queue: EffectQueue) -> list[int] | None:
-    for source_id, effect in effect_queue:
+def process_queue(
+    entities: Entities, effect_queue: list[QueuedEffect]
+) -> tuple[Entities, list[QueuedEffect]]:
+    effect_queue_new = effect_queue.copy()
+
+    while effect_queue_new:
+        queued_effect = effect_queue_new.pop(0)
+        source_id = queued_effect.source_id
+        effect = queued_effect.effect
+
         # Get effect's query entities
         query_ids = _resolve_effect_target_type(entities, source_id, effect.target_type)
 
@@ -119,20 +91,24 @@ def process_queue(entities: Entities, effect_queue: EffectQueue) -> list[int] | 
             target_ids = _resolve_effect_selection_type(entities, query_ids, effect.selection_type)
 
         except EffectNeedsInputTargets:
-            # Add effect back to the top of the queue
-            effect_queue.add_to_top(source_id, effect)
-
-            # Return selectable entities (which are the effect's query entities)
-            return query_ids
+            # Put effect back into queue at position 0
+            effect_queue_new.insert(0, queued_effect)
+            return replace(entities, entity_selectable_ids=query_ids), effect_queue_new
 
         for target_id in target_ids:
-            # TODO: improve payload handling and definiton
-            payload = EffectPayload(source_id, target_id, effect.value)
-            for processor in get_effect_processors(effect.type):
-                effects_bot, effects_top = processor(entities, payload)
+            # Process the effect, get new entities & new effects to add to the queue
+            entities, effects_bot, effects_top = process_effect(
+                entities, source_id, target_id, effect
+            )
 
-                for source_id, effect_bot in effects_bot:
-                    effect_queue.add_to_bot(source_id, effect_bot)
+            for queued_effect in effects_bot:
+                effect_queue_new = add_to_bot(
+                    effect_queue_new, queued_effect.source_id, queued_effect.effect
+                )
 
-                for source_id, effect_top in effects_top:
-                    effect_queue.add_to_top(source_id, effect_top)
+            for queued_effect in effects_top:
+                effect_queue_new = add_to_top(
+                    effect_queue_new, queued_effect.source_id, queued_effect.effect
+                )
+
+    return entities, effect_queue_new

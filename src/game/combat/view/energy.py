@@ -15,4 +15,4 @@ def _energy_to_view(energy: Energy) -> EnergyView:
 
 
 def view_energy(entities: Entities) -> EnergyView:
-    return _energy_to_view(entities.get_energy())
+    return _energy_to_view(entities.all[entities.energy_id])

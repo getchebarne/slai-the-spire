@@ -1,14 +1,12 @@
-from abc import ABC
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Optional
 
 
 # TODO: split this into multiple scripts
 
 
-@dataclass
-class Entity(ABC):
+@dataclass(frozen=True)
+class Entity:
     pass
 
 
@@ -23,6 +21,7 @@ class EffectType(Enum):
     PLAY_CARD = "PLAY_CARD"
     MOD_TICK = "MOD_TICK"  # TODO: rename
     GAIN_STR = "GAIN_STR"
+    DECREASE_ENERGY = "DECREASE_ENERGY"
 
 
 class EffectTargetType(Enum):
@@ -39,80 +38,58 @@ class EffectSelectionType(Enum):
     RANDOM = "RANDOM"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Effect:
     type: EffectType
-    value: Optional[int] = None
-    target_type: Optional[EffectTargetType] = None
-    selection_type: Optional[EffectSelectionType] = None
+    value: int | None = None
+    target_type: EffectTargetType | None = None
+    selection_type: EffectSelectionType | None = None
 
 
-@dataclass
-class Health:
-    max: int
-    current: Optional[int] = None
-
-    def __post_init__(self):
-        if self.current is None:
-            self.current = self.max
-
-
-@dataclass
-class Block:
-    max: int = 999
-    current: int = 0
-
-
-@dataclass
-class ModifierType:
-    WEAK = "WEAK"
-    STR = "STR"
-
-
-@dataclass
+@dataclass(frozen=True)
 class Modifier:
-    stacks: Optional[int] = None
-    stacks_min: Optional[int] = None
-    stacks_max: Optional[int] = None
+    stacks_current: int | None = None
+    stacks_min: int | None = None
+    stacks_max: int | None = None
     stacks_duration: bool = False
     turn_start_effects: list[Effect] = field(default_factory=list)
     turn_end_effects: list[Effect] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Actor(Entity):
     name: str
-    health: Health
-    block: Block = field(default_factory=Block)
-    modifiers: dict[ModifierType, Modifier] = field(default_factory=dict)
+    health_current: int
+    health_max: int
+    block_current: int = 0
+
+    # Modifiers
+    modifier_weak: Modifier = field(
+        default_factory=lambda: Modifier(0, stacks_min=0, stacks_max=999, stacks_duration=True)
+    )
+    modifier_strength: Modifier = field(
+        default_factory=lambda: Modifier(0, stacks_min=0, stacks_max=999, stacks_duration=False)
+    )
 
 
-@dataclass
+@dataclass(frozen=True)
 class Character(Actor):
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
+class MonsterMove:
+    name: str
+    effects: list[Effect]
+
+
+@dataclass(frozen=True)
 class Monster(Actor):
-    moves: dict[str, list[Effect]] = field(default=dict)  # TODO: change default?
-    move_name_current: str | None = None
-    move_name_history: list[str] = field(default_factory=list)
+    move_current: MonsterMove | None = None  # TODO: revisit None
+    move_history: list[MonsterMove] = field(default_factory=list)
 
 
-class CardName(Enum):
-    STRIKE = "STRIKE"
-    DEFEND = "DEFEND"
-    NEUTRALIZE = "NEUTRALIZE"
-    SURVIVOR = "SURVIVOR"
-    DAGGER_THROW = "DAGGER_THROW"
-    PREPARED = "PREPARED"
-    LEG_SWEEP = "LEG_SWEEP"
-    ACROBATICS = "ACROBATICS"
-    BACKFLIP = "BACKFLIP"
-    DASH = "DASH"
-
-
-@dataclass
+@dataclass(frozen=True)
 class Card(Entity):
     name: str
     cost: int
@@ -128,92 +105,67 @@ class Card(Entity):
         return id(self) == id(other)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Energy(Entity):
     max: int = 3
-    current: Optional[int] = None
+    current: int | None = None
 
     def __post_init__(self):
         if self.current is None:
             self.current = self.max
 
 
-@dataclass
+# TODO: rename?
+@dataclass(frozen=True)
 class Entities:
-    # List mapping entity ids to entities
-    _entities: list[Entity] = field(default_factory=list)
+    all: list[Entity] = field(default_factory=list)
 
     # Specific entities
-    character_id: Optional[int] = None
+    character_id: int | None = None
     monster_ids: list[int] = field(default_factory=list)
-    energy_id: Optional[int] = None
+    energy_id: int | None = None
     card_in_deck_ids: set[int] = field(default_factory=set)
     card_in_draw_pile_ids: list[int] = field(default_factory=list)
     card_in_hand_ids: list[int] = field(default_factory=list)
     card_in_discard_pile_ids: set[int] = field(default_factory=set)
 
-    # Card target
-    card_target_id: Optional[int] = None
+    # Card target # TODO: should merge w/ effect_target_id
+    card_target_id: int | None = None
 
     # Active card
-    card_active_id: Optional[int] = None
+    card_active_id: int | None = None
 
     # Effect target
-    effect_target_id: Optional[int] = None
+    effect_target_id: int | None = None
 
     # TODO;
-    entity_selectable_ids: Optional[list[int]] = field(default_factory=list)
+    entity_selectable_ids: list[int] = field(default_factory=list)
 
-    def create_entity(self, entity: Entity) -> int:
-        entity_id = len(self._entities)
-        self._entities.append(entity)
+    #
+    actor_turn_id: int | None = None
 
-        return entity_id
+    # TODO: merge?
+    # effect_source_id: int | None = None
+    # effect_target_id: int | None = None
 
-    def get_entity(self, entity_id: int) -> Entity:
-        return self._entities[entity_id]
 
-    def get_character(self) -> Character:
-        return self._entities[self.character_id]
+def get_entity(entities: Entities, entity_id: int) -> Entity:
+    return entities.all[entity_id]  # TODO: `Entities` could be just a list
 
-    def get_monsters(self) -> list[Monster]:
-        return [self._entities[monster_id] for monster_id in self.monster_ids]
 
-    def get_energy(self) -> Energy:
-        return self._entities[self.energy_id]
+# TODO: add single-entity counterpart?
+def add_entities(entities: Entities, *new_entities: Entity) -> tuple[Entities, list[int]]:
+    # Create a copy of the current entities list
+    new_entities_list = list(entities.all)
 
-    def get_deck(self) -> set[Card]:
-        return {self._entities[card_id] for card_id in self.card_in_deck_ids}
+    # Track the IDs assigned to the new entities
+    new_entity_ids = []
 
-    def get_draw_pile(self) -> list[Card]:
-        return [self._entities[card_id] for card_id in self.card_in_draw_pile_ids]
+    # Add each entity and record its ID
+    for entity in new_entities:
+        entity_id = len(new_entities_list)
+        new_entities_list.append(entity)
+        new_entity_ids.append(entity_id)
 
-    def get_hand(self) -> list[Card]:
-        return [self._entities[card_id] for card_id in self.card_in_hand_ids]
-
-    def get_discard_pile(self) -> set[Card]:
-        return {self._entities[card_id] for card_id in self.card_in_discard_pile_ids}
-
-    def get_card_target(self) -> Optional[Entity]:
-        if self.card_target_id is None:
-            return None
-
-        return self._entities[self.card_target_id]
-
-    def get_active_card(self) -> Optional[Card]:
-        if self.card_active_id is None:
-            return None
-
-        return self._entities[self.card_active_id]
-
-    def get_actor_turn(self) -> Optional[Actor]:
-        if self.actor_turn_id is None:
-            return None
-
-        return self._entities[self.actor_turn_id]
-
-    def get_effect_target(self) -> Optional[Entity]:
-        if self.effect_target_id is None:
-            return None
-
-        return self._entities[self.effect_target_id]
+    # Create and return a new Entities instance with the updated list
+    return replace(entities, all=new_entities_list), new_entity_ids

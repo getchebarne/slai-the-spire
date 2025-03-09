@@ -1,54 +1,41 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from src.game.combat.entities import Actor
-from src.game.combat.entities import ModifierType
 
 
-ModifierViewType = ModifierType
+# TODO: reenable
+# @dataclass
+# class ModifierView:
+#     type: ModifierViewType
+#     stacks: Optional[int]
 
-
-@dataclass
-class HealthView:
-    current: int
-    max: int
-
-
-@dataclass
-class BlockView:
-    current: int
-
-
-@dataclass
-class ModifierView:
-    type: ModifierViewType
-    stacks: Optional[int]
-
-    def __hash__(self) -> int:
-        return hash(id(self))
+#     def __hash__(self) -> int:
+#         return hash(id(self))
 
 
 @dataclass
 class ActorView:
     name: str
-    health: HealthView
-    block: BlockView
-    modifiers: set[ModifierView]
+    health_current: int
+    health_max: int
+    block_current: int
+    # modifiers: set[ModifierView]
 
 
-def _modifier_views(actor: Actor) -> set[ModifierView]:
-    return {
-        ModifierView(modifier_type, modifier.stacks)
-        for modifier_type, modifier in actor.modifiers.items()
-    }
+# def _modifier_views(actor: Actor) -> set[ModifierView]:
+#     return {
+#         ModifierView(modifier_type, modifier.stacks)
+#         for modifier_type, modifier in actor.modifiers.items()
+#     }
 
 
 def _actor_to_view(actor: Actor) -> ActorView:
-    modifiers = _modifier_views(actor)
+    # modifiers = _modifier_views(actor)
 
     return ActorView(
         actor.name,
-        HealthView(actor.health.current, actor.health.max),
-        BlockView(actor.block.current),
-        modifiers,
+        actor.health_current,
+        actor.health_max,
+        actor.block_current,
+        # modifiers,
     )
