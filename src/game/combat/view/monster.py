@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectType
 from src.game.combat.entities import Entities
-from src.game.combat.entities import ModifierType
 from src.game.combat.entities import Monster
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
@@ -52,30 +51,32 @@ def _move_effects_to_intent(move_effects: list[Effect]) -> IntentView:
 
 
 # TODO: should only be calculated in 1 place
-def _correct_intent_damage(damage: int | None, monster: Monster) -> int | None:
-    if damage is None:
-        return
+# TODO: reenable
+# def _correct_intent_damage(damage: int | None, monster: Monster) -> int | None:
+#     if damage is None:
+#         return
 
-    if ModifierType.STR in monster.modifiers:
-        damage += monster.modifiers[ModifierType.STR].stacks
+#     if ModifierType.STR in monster.modifiers:
+#         damage += monster.modifiers[ModifierType.STR].stacks
 
-    if ModifierType.WEAK in monster.modifiers:
-        damage *= 0.75
+#     if ModifierType.WEAK in monster.modifiers:
+#         damage *= 0.75
 
-    return int(damage)
+#     return int(damage)
 
 
 def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
-    monster = entities.get_entity(monster_entity_id)
+    monster = entities.all[monster_entity_id]
     actor_view = _actor_to_view(monster)
-    intent_view = _move_effects_to_intent(monster.moves[monster.move_name_current])
-    intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
+    intent_view = _move_effects_to_intent(monster.move_current.effects)
+    # intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
 
     return MonsterView(
         actor_view.name,
-        actor_view.health,
-        actor_view.block,
-        actor_view.modifiers,
+        actor_view.health_current,
+        actor_view.health_max,
+        actor_view.block_current,
+        # actor_view.modifiers,
         monster_entity_id,  # TODO: revisit order
         intent_view,
     )

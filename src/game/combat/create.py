@@ -1,48 +1,62 @@
-from src.game.combat.effect_queue import EffectQueue
+from dataclasses import replace
+
 from src.game.combat.entities import Entities
-from src.game.combat.factories import backflip
-from src.game.combat.factories import dagger_throw
-from src.game.combat.factories import dash
-from src.game.combat.factories import defend
-from src.game.combat.factories import energy
-from src.game.combat.factories import jaw_worm
-from src.game.combat.factories import leg_sweep
-from src.game.combat.factories import neutralize
-from src.game.combat.factories import silent
-from src.game.combat.factories import strike
-from src.game.combat.factories import survivor
-from src.game.combat.manager import CombatManager
+from src.game.combat.entities import add_entities
+from src.game.combat.factories import create_backflip
+from src.game.combat.factories import create_dagger_throw
+from src.game.combat.factories import create_dash
+from src.game.combat.factories import create_defend
+from src.game.combat.factories import create_dummy
+from src.game.combat.factories import create_energy
+from src.game.combat.factories import create_leg_sweep
+from src.game.combat.factories import create_neutralize
+from src.game.combat.factories import create_silent
+from src.game.combat.factories import create_strike
+from src.game.combat.factories import create_survivor
+from src.game.combat.state import CombatState
 
 
-def create_combat_manager() -> CombatManager:
+# TODO: improve double assign
+def create_combat_state() -> CombatState:
     # Create entities
-    # TODO: create functions for this
     entities = Entities()
-    entities.character_id = entities.create_entity(silent())
-    entities.monster_ids = [entities.create_entity(jaw_worm())]
-    entities.energy_id = entities.create_entity(energy())
-    entities.card_in_deck_ids = {
-        entities.create_entity(strike()),
-        entities.create_entity(strike()),
-        entities.create_entity(strike()),
-        entities.create_entity(strike()),
-        entities.create_entity(strike()),
-        entities.create_entity(defend()),
-        entities.create_entity(defend()),
-        entities.create_entity(defend()),
-        entities.create_entity(defend()),
-        entities.create_entity(defend()),
-        entities.create_entity(neutralize()),
-        entities.create_entity(survivor()),
-        entities.create_entity(dagger_throw()),
-        entities.create_entity(leg_sweep()),
-        entities.create_entity(backflip()),
-        entities.create_entity(dash()),
-    }
+
+    # Character
+    entities, character_id = add_entities(entities, create_silent(50, 50))
+    entities = replace(entities, character_id=character_id[0])
+
+    # Monsters
+    entities, monster_ids = add_entities(entities, create_dummy(50, 50, None))
+    entities = replace(entities, monster_ids=monster_ids)
+
+    # Energy
+    entities, energy_id = add_entities(entities, create_energy())
+    entities = replace(entities, energy_id=energy_id[0])
+
+    # Deck
+    entities, card_in_deck_ids = add_entities(
+        entities,
+        create_strike(),
+        create_strike(),
+        create_strike(),
+        create_strike(),
+        create_strike(),
+        create_defend(),
+        create_defend(),
+        create_defend(),
+        create_defend(),
+        create_defend(),
+        # create_neutralize(),
+        # create_survivor(),
+        # create_dagger_throw(),
+        # create_leg_sweep(),
+        # create_backflip(),
+        # create_dash(),
+    )
+    entities = replace(entities, card_in_deck_ids=card_in_deck_ids)
+
     # Create effect queue
-    effect_queue = EffectQueue()
+    effect_queue = []
 
-    # Create combat manager w/ entities and effect queue
-    combat_manager = CombatManager(entities=entities, effect_queue=effect_queue)
-
-    return combat_manager
+    # Return combat state w/ entities and effect queue
+    return CombatState(entities=entities, effect_queue=effect_queue)

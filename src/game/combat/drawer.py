@@ -3,9 +3,7 @@ from typing import Optional
 
 from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
-from src.game.combat.view.actor import BlockView
-from src.game.combat.view.actor import HealthView
-from src.game.combat.view.actor import ModifierView
+# from src.game.combat.view.actor import ModifierView TODO: reenable
 from src.game.combat.view.card import CardView
 from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import IntentView
@@ -25,7 +23,7 @@ def _energy_str(energy: EnergyView) -> str:
 
 
 def _card_str(card: CardView) -> str:
-    return f"({card.cost}) {card.name.name}"
+    return f"({card.cost}) {card.name}"
 
 
 def _hand_str(hand: list[CardView]) -> str:
@@ -41,29 +39,30 @@ def _hand_str(hand: list[CardView]) -> str:
     return "HAND: " + " / ".join(card_strings)
 
 
-def _health_str(health: HealthView) -> str:
-    return f"HP: {health.current}/{health.max}"
+def _health_str(health_current: int, health_max: int) -> str:
+    return f"HP: {health_current}/{health_max}"
 
 
-def _block_str(block: BlockView) -> str:
-    return f"BLK: {block.current}"
+def _block_str(block_current: int) -> str:
+    return f"BLK: {block_current}"
 
 
 def _actor_str(actor: ActorView, n_col: int = 0) -> str:
-    modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
+    # modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
     # actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
     return (
         f"{WHITE}{actor.name:>{n_col}}{RESET}\n"
         f"{WHITE}{'-' * len(actor.name):>{n_col}}{RESET}\n"
-        f"{RED}{_health_str(actor.health):>{n_col}}{RESET}\n"
-        f"{CYAN}{_block_str(actor.block):>{n_col}}{RESET}\n"
-        f"{modifier_strs:>{n_col}}"
+        f"{RED}{_health_str(actor.health_current, actor.health_max):>{n_col}}{RESET}\n"
+        f"{CYAN}{_block_str(actor.block_current):>{n_col}}{RESET}\n"
+        # f"{modifier_strs:>{n_col}}"
     )
 
 
-def _modifier_str(modifier_view: ModifierView) -> str:
-    # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
-    return f"{modifier_view.type}: {modifier_view.stacks}"
+# TODO: reenable
+# def _modifier_str(modifier_view: ModifierView) -> str:
+#     # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
+#     return f"{modifier_view.type}: {modifier_view.stacks}"
 
 
 # def _effect_str(effect_view: Optional[EffectView]) -> str:

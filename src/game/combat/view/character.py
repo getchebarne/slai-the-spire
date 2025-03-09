@@ -11,8 +11,12 @@ class CharacterView(ActorView):
 
 
 def view_character(entities: Entities) -> CharacterView:
-    actor_view = _actor_to_view(entities.get_character())
+    actor_view = _actor_to_view(entities.all[entities.character_id])
 
     return CharacterView(
-        actor_view.name, actor_view.health, actor_view.block, actor_view.modifiers
+        actor_view.name,
+        actor_view.health_current,
+        actor_view.health_max,
+        actor_view.block_current,
+        # actor_view.modifiers,
     )
