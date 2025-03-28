@@ -14,7 +14,7 @@ from src.game.combat.factories import create_survivor
 from src.game.combat.state import CombatState
 
 
-# TODO: see if we can make this code prettier
+# TODO: parametrize deck, monster, etc.
 def create_combat_state() -> CombatState:
     # Create empty EntityManager
     entity_manager = EntityManager([])
@@ -42,4 +42,4 @@ def create_combat_state() -> CombatState:
     entity_manager.id_energy = id_energy
     entity_manager.id_cards_in_deck = id_cards_in_deck
 
-    return CombatState(entity_manager, effect_queue=[])
+    return CombatState(entity_manager, [])

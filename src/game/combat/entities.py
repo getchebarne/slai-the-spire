@@ -1,52 +1,11 @@
 from dataclasses import dataclass, field
-from enum import Enum
 
-
-# TODO: split this into multiple scripts
+from src.game.combat.effect import Effect
 
 
 @dataclass
 class Entity:
     pass
-
-
-# TODO: relocate to effect.py or sth like that
-class EffectType(Enum):
-    DEAL_DAMAGE = "DEAL_DAMAGE"
-    GAIN_BLOCK = "GAIN_BLOCK"
-    GAIN_WEAK = "GAIN_WEAK"
-    DRAW_CARD = "DRAW_CARD"
-    REFILL_ENERGY = "REFILL_ENERGY"
-    DISCARD = "DISCARD"
-    ZERO_BLOCK = "ZERO_BLOCK"
-    PLAY_CARD = "PLAY_CARD"
-    MOD_TICK = "MOD_TICK"  # TODO: rename
-    GAIN_STR = "GAIN_STR"
-    DECREASE_ENERGY = "DECREASE_ENERGY"
-    SHUFFLE_DECK_INTO_DRAW_PILE = "SHUFFLE_DECK_INTO_DRAW_PILE"
-    UPDATE_MOVE = "UPDATE_MOVE"
-
-
-class EffectTargetType(Enum):
-    CHARACTER = "CHARACTER"
-    MONSTER = "MONSTER"
-    CARD_TARGET = "CARD_TARGET"
-    CARD_IN_HAND = "CARD_IN_HAND"
-    CARD_ACTIVE = "CARD_ACTIVE"
-    SOURCE = "SOURCE"
-
-
-class EffectSelectionType(Enum):
-    INPUT = "INPUT"
-    RANDOM = "RANDOM"
-
-
-@dataclass
-class Effect:
-    type: EffectType
-    value: int | None = None
-    target_type: EffectTargetType | None = None
-    selection_type: EffectSelectionType | None = None
 
 
 @dataclass

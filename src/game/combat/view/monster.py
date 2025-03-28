@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from src.game.combat.entities import Effect
-from src.game.combat.entities import EffectType
+from src.game.combat.effect import Effect
+from src.game.combat.effect import EffectType
 from src.game.combat.entities import EntityManager
 from src.game.combat.entities import Monster
 from src.game.combat.view.actor import ActorView
