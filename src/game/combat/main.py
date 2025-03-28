@@ -51,6 +51,9 @@ def _handle_end_turn(cs: CombatState) -> list[SourcedEffect]:
 
 
 def _handle_select_entity(cs: CombatState, id_target: int) -> list[SourcedEffect]:
+    cs.entity_manager.id_effect_target = None
+    cs.entity_manager.id_card_target = None
+
     if cs.entity_manager.id_card_active is None and not cs.effect_queue:
         # Selected card
         card = cs.entity_manager.entities[id_target]
