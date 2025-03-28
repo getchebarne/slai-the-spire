@@ -1,22 +1,15 @@
 import random
-from dataclasses import dataclass
 
 from src.game.combat.ai import ais
 from src.game.combat.entities import Card
-from src.game.combat.entities import Effect
-from src.game.combat.entities import EffectType
+from src.game.combat.effect import Effect
+from src.game.combat.effect import EffectType
 from src.game.combat.entities import EntityManager
+from src.game.combat.effect import SourcedEffect
 
 
 WEAK_FACTOR = 0.75
 BLOCK_MAX = 999
-
-
-@dataclass(frozen=True)
-class ToBeQueuedEffect:
-    effect: Effect
-    id_source: int | None = None
-    id_target: int | None = None
 
 
 def apply_effect(
@@ -25,7 +18,7 @@ def apply_effect(
     effect_value: int | None,
     id_source: int | None,
     id_target: int | None,
-) -> tuple[list[ToBeQueuedEffect], list[ToBeQueuedEffect]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     if effect_type == EffectType.DEAL_DAMAGE:
         return _apply_deal_damage(entity_manager, id_source, id_target, effect_value)
 
@@ -106,9 +99,9 @@ def _apply_play_card(
     return (
         [
             # TODO; move to engine?
-            ToBeQueuedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
-            ToBeQueuedEffect(Effect(EffectType.DISCARD), id_target=id_target),
-            *[ToBeQueuedEffect(effect, id_source=id_target) for effect in target.effects],
+            SourcedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
+            SourcedEffect(Effect(EffectType.DISCARD), id_target=id_target),
+            *[SourcedEffect(effect, id_source=id_target) for effect in target.effects],
         ],
         [],
     )

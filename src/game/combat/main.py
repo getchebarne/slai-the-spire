@@ -4,13 +4,13 @@ from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
+from src.game.combat.effect import SourcedEffect
 from src.game.combat.effect_queue import add_to_bot
 from src.game.combat.effect_queue import process_effect_queue
 from src.game.combat.entities import Card
-from src.game.combat.entities import Effect
-from src.game.combat.entities import EffectTargetType
-from src.game.combat.entities import EffectType
-from src.game.combat.phase import ToBeQueuedEffect  # TODO: define elsewhere
+from src.game.combat.effect import Effect
+from src.game.combat.effect import EffectTargetType
+from src.game.combat.effect import EffectType
 from src.game.combat.phase import get_end_of_turn_effects
 from src.game.combat.phase import get_start_of_combat_effects
 from src.game.combat.phase import get_start_of_turn_effects
@@ -31,41 +31,35 @@ class InvalidActionError(Exception):
     pass
 
 
-def _handle_end_turn(cs: CombatState) -> list[ToBeQueuedEffect]:
+def _handle_end_turn(cs: CombatState) -> list[SourcedEffect]:
     # Character's turn end
-    to_be_queued_effects = get_end_of_turn_effects(
-        cs.entity_manager, cs.entity_manager.id_character
-    )
+    sourced_effects = get_end_of_turn_effects(cs.entity_manager, cs.entity_manager.id_character)
 
     # Monsters
     for id_monster in cs.entity_manager.id_monsters:
         monster = cs.entity_manager.entities[id_monster]
 
         # Turn start
-        to_be_queued_effects += get_start_of_turn_effects(cs.entity_manager, id_monster)
+        sourced_effects += get_start_of_turn_effects(cs.entity_manager, id_monster)
 
         # Move's effects
-        to_be_queued_effects += [
-            ToBeQueuedEffect(effect, id_monster) for effect in monster.move_current.effects
+        sourced_effects += [
+            SourcedEffect(effect, id_monster) for effect in monster.move_current.effects
         ]
 
         # Update move
-        to_be_queued_effects += [
-            ToBeQueuedEffect(Effect(EffectType.UPDATE_MOVE), id_target=id_monster)
-        ]
+        sourced_effects += [SourcedEffect(Effect(EffectType.UPDATE_MOVE), id_target=id_monster)]
 
         # Turn end
-        to_be_queued_effects += get_end_of_turn_effects(cs.entity_manager, id_monster)
+        sourced_effects += get_end_of_turn_effects(cs.entity_manager, id_monster)
 
     # Character's turn start
-    to_be_queued_effects += get_start_of_turn_effects(
-        cs.entity_manager, cs.entity_manager.id_character
-    )
+    sourced_effects += get_start_of_turn_effects(cs.entity_manager, cs.entity_manager.id_character)
 
-    return to_be_queued_effects
+    return sourced_effects
 
 
-def _handle_select_entity(cs: CombatState, id_target: int) -> list[ToBeQueuedEffect]:
+def _handle_select_entity(cs: CombatState, id_target: int) -> list[SourcedEffect]:
     if cs.entity_manager.id_card_active is None and not cs.effect_queue:
         # Selected card
         card = cs.entity_manager.entities[id_target]
@@ -77,9 +71,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> list[ToBeQueuedEff
 
         # Play the card
         return [
-            ToBeQueuedEffect(
-                Effect(EffectType.PLAY_CARD), cs.entity_manager.id_character, id_target
-            )
+            SourcedEffect(Effect(EffectType.PLAY_CARD), cs.entity_manager.id_character, id_target)
         ]
 
     if cs.entity_manager.id_card_active is not None and not cs.effect_queue:
@@ -90,7 +82,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> list[ToBeQueuedEff
         cs.entity_manager.id_card_target = id_target
 
         return [
-            ToBeQueuedEffect(
+            SourcedEffect(
                 Effect(EffectType.PLAY_CARD),
                 cs.entity_manager.id_character,
                 id_card_active,
@@ -104,7 +96,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> list[ToBeQueuedEff
         return []
 
 
-def handle_action(cs: CombatState, action: Action) -> list[ToBeQueuedEffect]:
+def handle_action(cs: CombatState, action: Action) -> list[SourcedEffect]:
     if action.type == ActionType.END_TURN:
         if cs.entity_manager.id_card_active is not None or cs.effect_queue:
             raise InvalidActionError
@@ -117,14 +109,8 @@ def handle_action(cs: CombatState, action: Action) -> list[ToBeQueuedEffect]:
 
 def step(cs: CombatState, action: Action) -> None:
     # Handle action
-    to_be_queued_effects = handle_action(cs, action)
-    for to_be_queued_effect in to_be_queued_effects:
-        add_to_bot(
-            cs.effect_queue,
-            to_be_queued_effect.effect,
-            to_be_queued_effect.id_source,
-            to_be_queued_effect.id_target,
-        )
+    sourced_effects = handle_action(cs, action)
+    add_to_bot(cs.effect_queue, *sourced_effects)
 
     # Process round
     id_queries = process_effect_queue(cs.entity_manager, cs.effect_queue)
@@ -144,14 +130,9 @@ def step(cs: CombatState, action: Action) -> None:
 
 def main(cs: CombatState, agent: BaseAgent) -> None:
     # Combat start
-    to_be_queued_effects = get_start_of_combat_effects(cs.entity_manager)
-    for to_be_queued_effect in to_be_queued_effects:
-        add_to_bot(
-            cs.effect_queue,
-            to_be_queued_effect.effect,
-            to_be_queued_effect.id_source,
-            to_be_queued_effect.id_target,
-        )
+    sourced_effects = get_start_of_combat_effects(cs.entity_manager)
+    add_to_bot(cs.effect_queue, *sourced_effects)
+
     # TODO: only call once
     process_effect_queue(cs.entity_manager, cs.effect_queue)
 

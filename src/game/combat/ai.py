@@ -1,9 +1,9 @@
 import random
 from typing import Callable
 
-from src.game.combat.entities import Effect
-from src.game.combat.entities import EffectTargetType
-from src.game.combat.entities import EffectType
+from src.game.combat.effect import Effect
+from src.game.combat.effect import EffectTargetType
+from src.game.combat.effect import EffectType
 from src.game.combat.entities import MonsterMove
 
 
