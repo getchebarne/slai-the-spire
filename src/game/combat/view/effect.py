@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from src.game.combat.effect_queue import EffectQueue
 from src.game.combat.effect import EffectType
+from src.game.combat.effect_queue import EffectQueue
 
 
 EffectViewType = EffectType

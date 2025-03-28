@@ -4,27 +4,18 @@ from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
+from src.game.combat.effect import Effect
+from src.game.combat.effect import EffectType
 from src.game.combat.effect import SourcedEffect
 from src.game.combat.effect_queue import add_to_bot
 from src.game.combat.effect_queue import process_effect_queue
-from src.game.combat.entities import Card
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectTargetType
-from src.game.combat.effect import EffectType
 from src.game.combat.phase import get_end_of_turn_effects
 from src.game.combat.phase import get_start_of_combat_effects
 from src.game.combat.phase import get_start_of_turn_effects
 from src.game.combat.state import CombatState
+from src.game.combat.utils import card_requires_target
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
-
-
-def _card_requires_target(card: Card) -> bool:
-    for effect in card.effects:
-        if effect.target_type == EffectTargetType.CARD_TARGET:
-            return True
-
-    return False
 
 
 class InvalidActionError(Exception):
@@ -63,7 +54,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> list[SourcedEffect
     if cs.entity_manager.id_card_active is None and not cs.effect_queue:
         # Selected card
         card = cs.entity_manager.entities[id_target]
-        if _card_requires_target(card):
+        if card_requires_target(card):
             cs.entity_manager.id_card_active = id_target
             cs.entity_manager.id_selectables = cs.entity_manager.id_monsters
 
@@ -128,16 +119,18 @@ def step(cs: CombatState, action: Action) -> None:
                 cs.entity_manager.id_selectables.append(id_card_in_hand)
 
 
-def main(cs: CombatState, agent: BaseAgent) -> None:
-    # Combat start
+def _start_combat(cs: CombatState) -> None:
+    # Queue start of combat effects and process them
     sourced_effects = get_start_of_combat_effects(cs.entity_manager)
     add_to_bot(cs.effect_queue, *sourced_effects)
-
-    # TODO: only call once
     process_effect_queue(cs.entity_manager, cs.effect_queue)
 
-    # TODO: move
+    # TODO: find better way to do this
     cs.entity_manager.id_selectables = cs.entity_manager.id_cards_in_hand
+
+
+def main(cs: CombatState, agent: BaseAgent) -> None:
+    _start_combat(cs)
 
     while not is_game_over(combat_state.entity_manager):
         # Get combat view and draw it on the terminal

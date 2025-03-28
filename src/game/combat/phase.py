@@ -1,8 +1,8 @@
-from src.game.combat.effect import SourcedEffect
-from src.game.combat.entities import Character
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import EffectType
+from src.game.combat.effect import SourcedEffect
+from src.game.combat.entities import Character
 from src.game.combat.entities import EntityManager
 
 
