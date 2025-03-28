@@ -1,3 +1,5 @@
+from src.game.combat.effect import EffectTargetType
+from src.game.combat.entities import Card
 from src.game.combat.entities import EntityManager
 
 
@@ -8,3 +10,11 @@ def is_game_over(entity_manager: EntityManager) -> bool:
     return character.health_current <= 0 or all(
         [monster.health_current <= 0 for monster in monsters]
     )
+
+
+def card_requires_target(card: Card) -> bool:
+    for effect in card.effects:
+        if effect.target_type == EffectTargetType.CARD_TARGET:
+            return True
+
+    return False

@@ -1,11 +1,11 @@
 import random
 
 from src.game.combat.ai import ais
-from src.game.combat.entities import Card
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
-from src.game.combat.entities import EntityManager
 from src.game.combat.effect import SourcedEffect
+from src.game.combat.entities import Card
+from src.game.combat.entities import EntityManager
 
 
 WEAK_FACTOR = 0.75
@@ -52,10 +52,9 @@ def apply_effect(
     raise ValueError(f"Unsupported effect type: {effect_type}")
 
 
-# TODO: rename to damage
 def _apply_deal_damage(
     entity_manager: EntityManager, id_source: int, id_target: int, value: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     source = entity_manager.entities[id_source]
 
     # TODO: think if there's a better solution
@@ -84,7 +83,7 @@ def _apply_deal_damage(
 
 def _apply_gain_block(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
     target.block_current = min(target.block_current + value, BLOCK_MAX)
@@ -93,7 +92,7 @@ def _apply_gain_block(
 
 def _apply_play_card(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
     return (
@@ -110,7 +109,7 @@ def _apply_play_card(
 # TODO: handle infinite loop
 def _apply_draw_card(
     entity_manager: EntityManager, amount: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     id_cards_in_draw_pile = entity_manager.id_cards_in_draw_pile
     id_cards_in_hand = entity_manager.id_cards_in_hand
     id_cards_in_disc_pile = entity_manager.id_cards_in_disc_pile
@@ -132,7 +131,7 @@ def _apply_draw_card(
 
 def _apply_refill_energy(
     entity_manager: EntityManager,
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     energy = entity_manager.entities[entity_manager.id_energy]
     energy.current = energy.max
 
@@ -141,7 +140,7 @@ def _apply_refill_energy(
 
 def _apply_decrease_energy(
     entity_manager: EntityManager, value: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     energy = entity_manager.entities[entity_manager.id_energy]
 
     if energy.current < value:
@@ -154,7 +153,7 @@ def _apply_decrease_energy(
 
 def _apply_discard(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     entity_manager.id_cards_in_hand.remove(id_target)
     entity_manager.id_cards_in_disc_pile.append(id_target)
 
@@ -163,7 +162,7 @@ def _apply_discard(
 
 def _apply_zero_block(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
     target.block_current = 0
@@ -173,7 +172,7 @@ def _apply_zero_block(
 
 def _apply_shuffle_deck_into_draw_pile(
     entity_manager: EntityManager,
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     entity_manager.id_cards_in_draw_pile = entity_manager.id_cards_in_deck.copy()
     random.shuffle(entity_manager.id_cards_in_draw_pile)
 
@@ -182,7 +181,7 @@ def _apply_shuffle_deck_into_draw_pile(
 
 def _apply_update_move(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
     move_new = ais[target.name](target.move_current, target.move_history)

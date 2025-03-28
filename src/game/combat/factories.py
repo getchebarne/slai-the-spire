@@ -1,11 +1,11 @@
 import random
 
-from src.game.combat.entities import Card
-from src.game.combat.entities import Character
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectSelectionType
 from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import EffectType
+from src.game.combat.entities import Card
+from src.game.combat.entities import Character
 from src.game.combat.entities import Energy
 from src.game.combat.entities import Monster
 from src.game.combat.entities import MonsterMove
