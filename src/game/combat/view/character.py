@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from src.game.combat.entities import Entities
+from src.game.combat.entities import EntityManager
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
 
@@ -10,8 +10,8 @@ class CharacterView(ActorView):
     pass
 
 
-def view_character(entities: Entities) -> CharacterView:
-    actor_view = _actor_to_view(entities.all[entities.character_id])
+def view_character(entity_manager: EntityManager) -> CharacterView:
+    actor_view = _actor_to_view(entity_manager.entities[entity_manager.id_character])
 
     return CharacterView(
         actor_view.name,

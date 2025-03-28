@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from src.game.combat.entities import Energy
-from src.game.combat.entities import Entities
+from src.game.combat.entities import EntityManager
 
 
 @dataclass
@@ -14,5 +14,5 @@ def _energy_to_view(energy: Energy) -> EnergyView:
     return EnergyView(energy.current, energy.max)
 
 
-def view_energy(entities: Entities) -> EnergyView:
-    return _energy_to_view(entities.all[entities.energy_id])
+def view_energy(entity_manager: EntityManager) -> EnergyView:
+    return _energy_to_view(entity_manager.entities[entity_manager.id_energy])

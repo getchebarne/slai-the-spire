@@ -1,7 +1,5 @@
-from dataclasses import replace
-
-from src.game.combat.entities import Entities
-from src.game.combat.entities import add_entities
+from src.game.combat.entities import EntityManager
+from src.game.combat.entities import create_entity
 from src.game.combat.factories import create_backflip
 from src.game.combat.factories import create_dagger_throw
 from src.game.combat.factories import create_dash
@@ -16,47 +14,32 @@ from src.game.combat.factories import create_survivor
 from src.game.combat.state import CombatState
 
 
-# TODO: improve double assign
+# TODO: see if we can make this code prettier
 def create_combat_state() -> CombatState:
+    # Create empty EntityManager
+    entity_manager = EntityManager([])
+
     # Create entities
-    entities = Entities()
+    id_charater = create_entity(entity_manager, create_silent(50, 50))
+    id_monsters = [create_entity(entity_manager, create_dummy(50, 50))]
+    id_energy = create_entity(entity_manager, create_energy(3, 3))
+    id_cards_in_deck = [
+        create_entity(entity_manager, create_strike()),
+        create_entity(entity_manager, create_strike()),
+        create_entity(entity_manager, create_strike()),
+        create_entity(entity_manager, create_strike()),
+        create_entity(entity_manager, create_strike()),
+        create_entity(entity_manager, create_defend()),
+        create_entity(entity_manager, create_defend()),
+        create_entity(entity_manager, create_defend()),
+        create_entity(entity_manager, create_defend()),
+        create_entity(entity_manager, create_defend()),
+    ]
 
-    # Character
-    entities, character_id = add_entities(entities, create_silent(50, 50))
-    entities = replace(entities, character_id=character_id[0])
+    # Assign corresponding ids
+    entity_manager.id_character = id_charater
+    entity_manager.id_monsters = id_monsters
+    entity_manager.id_energy = id_energy
+    entity_manager.id_cards_in_deck = id_cards_in_deck
 
-    # Monsters
-    entities, monster_ids = add_entities(entities, create_dummy(50, 50, None))
-    entities = replace(entities, monster_ids=monster_ids)
-
-    # Energy
-    entities, energy_id = add_entities(entities, create_energy())
-    entities = replace(entities, energy_id=energy_id[0])
-
-    # Deck
-    entities, card_in_deck_ids = add_entities(
-        entities,
-        create_strike(),
-        create_strike(),
-        create_strike(),
-        create_strike(),
-        create_strike(),
-        create_defend(),
-        create_defend(),
-        create_defend(),
-        create_defend(),
-        create_defend(),
-        # create_neutralize(),
-        # create_survivor(),
-        # create_dagger_throw(),
-        # create_leg_sweep(),
-        # create_backflip(),
-        # create_dash(),
-    )
-    entities = replace(entities, card_in_deck_ids=card_in_deck_ids)
-
-    # Create effect queue
-    effect_queue = []
-
-    # Return combat state w/ entities and effect queue
-    return CombatState(entities=entities, effect_queue=effect_queue)
+    return CombatState(entity_manager, effect_queue=[])

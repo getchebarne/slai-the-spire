@@ -1,53 +1,75 @@
 import random
-from dataclasses import replace
+from dataclasses import dataclass
 
+from src.game.combat.ai import ais
+from src.game.combat.entities import Card
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectType
-from src.game.combat.entities import EffectTargetType
-from src.game.combat.entities import Entities
-from src.game.combat.state import QueuedEffect
+from src.game.combat.entities import EntityManager
 
 
 WEAK_FACTOR = 0.75
 BLOCK_MAX = 999
 
 
-def process_effect(
-    entities: Entities, source_id: int, target_id: int, effect: Effect
-) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
-    if effect.type == EffectType.DEAL_DAMAGE:
-        return _processor_deal_damage(entities, source_id, target_id, effect.value)
+@dataclass(frozen=True)
+class ToBeQueuedEffect:
+    effect: Effect
+    id_source: int | None = None
+    id_target: int | None = None
 
-    if effect.type == EffectType.GAIN_BLOCK:
-        return _processor_gain_block(entities, target_id, effect.value)
 
-    if effect.type == EffectType.PLAY_CARD:
-        return _processor_play_card(entities, target_id)
+def apply_effect(
+    entity_manager: EntityManager,
+    effect_type: EffectType,
+    effect_value: int | None,
+    id_source: int | None,
+    id_target: int | None,
+) -> tuple[list[ToBeQueuedEffect], list[ToBeQueuedEffect]]:
+    if effect_type == EffectType.DEAL_DAMAGE:
+        return _apply_deal_damage(entity_manager, id_source, id_target, effect_value)
 
-    if effect.type == EffectType.DRAW_CARD:
-        return _processor_draw_card(entities, effect.value)
+    if effect_type == EffectType.GAIN_BLOCK:
+        return _apply_gain_block(entity_manager, id_target, effect_value)
 
-    if effect.type == EffectType.REFILL_ENERGY:
-        return _processor_refill_energy(entities)
+    if effect_type == EffectType.PLAY_CARD:
+        return _apply_play_card(entity_manager, id_target)
 
-    if effect.type == EffectType.DISCARD:
-        return _processor_discard(entities, target_id)
+    if effect_type == EffectType.DRAW_CARD:
+        return _apply_draw_card(entity_manager, effect_value)
 
-    if effect.type == EffectType.ZERO_BLOCK:
-        return _processor_zero_block(entities, target_id)
+    if effect_type == EffectType.REFILL_ENERGY:
+        return _apply_refill_energy(entity_manager)
 
-    if effect.type == EffectType.DECREASE_ENERGY:
-        return _processor_decrease_energy(entities, effect.value)
+    if effect_type == EffectType.DISCARD:
+        return _apply_discard(entity_manager, id_target)
 
-    raise ValueError(f"Unsupported effect type: {effect.type}")
+    if effect_type == EffectType.ZERO_BLOCK:
+        return _apply_zero_block(entity_manager, id_target)
+
+    if effect_type == EffectType.DECREASE_ENERGY:
+        return _apply_decrease_energy(entity_manager, effect_value)
+
+    if effect_type == EffectType.SHUFFLE_DECK_INTO_DRAW_PILE:
+        return _apply_shuffle_deck_into_draw_pile(entity_manager)
+
+    if effect_type == EffectType.UPDATE_MOVE:
+        return _apply_update_move(entity_manager, id_target)
+
+    raise ValueError(f"Unsupported effect type: {effect_type}")
 
 
 # TODO: rename to damage
-def _processor_deal_damage(
-    entities: Entities, source_id: int, target_id: int, value: int
-) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
-    source = entities.all[source_id]
-    target = entities.all[target_id]
+def _apply_deal_damage(
+    entity_manager: EntityManager, id_source: int, id_target: int, value: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    source = entity_manager.entities[id_source]
+
+    # TODO: think if there's a better solution
+    if isinstance(source, Card):
+        source = entity_manager.entities[entity_manager.id_character]
+
+    target = entity_manager.entities[id_target]
 
     # Apply strength
     value += source.modifier_strength.stacks_current
@@ -60,157 +82,118 @@ def _processor_deal_damage(
     value = int(value)
     damage_over_block = max(0, value - target.block_current)
 
-    # TODO; add comment
-    all_new = entities.all.copy()
-    all_new[target_id] = replace(
-        target,
-        block_current=max(0, target.block_current - value),
-        health_current=max(0, target.health_current - damage_over_block),
-    )
+    # Apply changes
+    target.block_current = max(0, target.block_current - value)
+    target.health_current = max(0, target.health_current - damage_over_block)
 
-    return replace(entities, all=all_new), [], []
+    return [], []
 
 
-def _processor_gain_block(
-    entities: Entities, target_id: int, value: int
-) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
-    target = entities.all[target_id]
+def _apply_gain_block(
+    entity_manager: EntityManager, id_target: int, value: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    target = entity_manager.entities[id_target]
 
-    # TODO; add comment
-    all_new = entities.all.copy()
-    all_new[target_id] = replace(
-        target,
-        block_current=min(target.block_current + value, BLOCK_MAX),
-    )
-
-    entities_new = replace(entities, all=all_new)
-
-    return entities_new, [], []
+    target.block_current = min(target.block_current + value, BLOCK_MAX)
+    return [], []
 
 
-def _processor_play_card(
-    entities: Entities, target_id: int
-) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
-    target = entities.all[target_id]
-
-    # TODO: think about having source_id=character_id here
-    effect_card = [
-        QueuedEffect(effect, source_id=entities.character_id) for effect in target.effects
-    ]
+def _apply_play_card(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    target = entity_manager.entities[id_target]
 
     return (
-        entities,
         [
-            QueuedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
-            # TODO: add support for queueing effects w/ target_id
-            QueuedEffect(Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_ACTIVE)),
-            *effect_card,
+            # TODO; move to engine?
+            ToBeQueuedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
+            ToBeQueuedEffect(Effect(EffectType.DISCARD), id_target=id_target),
+            *[ToBeQueuedEffect(effect, id_source=id_target) for effect in target.effects],
         ],
         [],
     )
 
 
 # TODO: handle infinite loop
-def _processor_draw_card(
-    entities: Entities, amount: int
-) -> tuple[Entities, list[QueuedEffect], list[QueuedEffect]]:
-    card_in_draw_pile_ids = entities.card_in_draw_pile_ids.copy()
-    card_in_discard_pile_ids = entities.card_in_discard_pile_ids.copy()
-    card_in_hand_ids = entities.card_in_hand_ids.copy()
+def _apply_draw_card(
+    entity_manager: EntityManager, amount: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    id_cards_in_draw_pile = entity_manager.id_cards_in_draw_pile
+    id_cards_in_hand = entity_manager.id_cards_in_hand
+    id_cards_in_disc_pile = entity_manager.id_cards_in_disc_pile
 
     for _ in range(amount):
-        if len(card_in_draw_pile_ids) == 0:
-            # Shuffle discard pile into draw pile
-            # TODO: make effect
-            card_in_draw_pile_ids = list(card_in_discard_pile_ids)
-            random.shuffle(card_in_draw_pile_ids)
+        if len(id_cards_in_draw_pile) == 0:
+            # Shuffle discard pile into draw pile TODO: make effect
+            id_cards_in_draw_pile.extend(id_cards_in_disc_pile)
+            random.shuffle(id_cards_in_draw_pile)
 
-            card_in_discard_pile_ids = set()
+            # Clear the discard pile
+            id_cards_in_disc_pile.clear()
 
-        card_in_hand_ids.append(card_in_draw_pile_ids.pop(0))
+        # Draw a card from the draw pile and add to hand
+        id_cards_in_hand.append(id_cards_in_draw_pile.pop(0))
 
-    entities_new = replace(
-        entities,
-        card_in_draw_pile_ids=card_in_draw_pile_ids,
-        card_in_hand_ids=card_in_hand_ids,
-        card_in_discard_pile_ids=card_in_discard_pile_ids,
-    )
-
-    return entities_new, [], []
+    return [], []
 
 
-def _processor_refill_energy(
-    entities: Entities,
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    energy_id = entities.energy_id
-    energy = entities.all[energy_id]
+def _apply_refill_energy(
+    entity_manager: EntityManager,
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    energy = entity_manager.entities[entity_manager.id_energy]
+    energy.current = energy.max
 
-    # Create a new energy entity with updated current value
-    energy_new = replace(energy, current=energy.max)
-
-    # Create a new list with the updated entity
-    all_new = entities.all.copy()
-    all_new[energy_id] = energy_new
-
-    # Create new Entities with the updated list
-    entities_new = replace(entities, all=all_new)
-
-    return entities_new, [], []
+    return [], []
 
 
-def _processor_decrease_energy(
-    entities: Entities, value: int
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    energy_id = entities.energy_id
-    energy = entities.all[energy_id]
+def _apply_decrease_energy(
+    entity_manager: EntityManager, value: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    energy = entity_manager.entities[entity_manager.id_energy]
 
-    # Create a new energy entity with updated current value
-    energy_new = replace(energy, current=energy.current - value)
+    if energy.current < value:
+        raise ValueError(f"Can't dercrease current energy ({energy.current}) by {value}")
 
-    # Create a new list with the updated entity
-    all_new = entities.all.copy()
-    all_new[energy_id] = energy_new
+    energy.current = energy.current - value
 
-    # Create new Entities with the updated list
-    entities_new = replace(entities, all=all_new)
-
-    return entities_new, [], []
+    return [], []
 
 
-def _processor_discard(
-    entities: Entities, target_id: int
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    # Create copies of collections we need to modify
-    card_in_hand_ids = entities.card_in_hand_ids.copy()
-    card_in_discard_pile_ids = entities.card_in_discard_pile_ids.copy()
+def _apply_discard(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    entity_manager.id_cards_in_hand.remove(id_target)
+    entity_manager.id_cards_in_disc_pile.append(id_target)
 
-    # Update collections
-    card_in_hand_ids.remove(target_id)
-    card_in_discard_pile_ids.add(target_id)
-
-    # Create new Entities with updated collections
-    new_entities = replace(
-        entities,
-        card_in_hand_ids=card_in_hand_ids,
-        card_in_discard_pile_ids=card_in_discard_pile_ids,
-    )
-
-    return new_entities, [], []
+    return [], []
 
 
-def _processor_zero_block(
-    entities: Entities, target_id: int
-) -> tuple[list[tuple[int, Effect]], list[tuple[int, Effect]]]:
-    target = entities.all[target_id]
+def _apply_zero_block(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    target = entity_manager.entities[id_target]
 
-    # Create a new target entity with block set to 0
-    target_new = replace(target, block_current=0)
+    target.block_current = 0
 
-    # Create a new list with the updated entity
-    all_new = entities.all.copy()
-    all_new[target_id] = target_new
+    return [], []
 
-    # Create new Entities with the updated list
-    new_entities = replace(entities, all=all_new)
 
-    return new_entities, [], []
+def _apply_shuffle_deck_into_draw_pile(
+    entity_manager: EntityManager,
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    entity_manager.id_cards_in_draw_pile = entity_manager.id_cards_in_deck.copy()
+    random.shuffle(entity_manager.id_cards_in_draw_pile)
+
+    return [], []
+
+
+def _apply_update_move(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[tuple[Effect, int, int]], list[tuple[Effect, int, int]]]:
+    target = entity_manager.entities[id_target]
+
+    move_new = ais[target.name](target.move_current, target.move_history)
+    target.move_current = move_new
+    target.move_history.append(move_new)
+
+    return [], []
