@@ -1,19 +1,20 @@
-from dataclasses import replace
-
 from src.agents.random import BaseAgent
 from src.agents.random import RandomAgent
 from src.game.combat.action import Action
+from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
-from src.game.combat.effect_queue import process_queue
+from src.game.combat.effect_queue import add_to_bot
+from src.game.combat.effect_queue import process_effect_queue
 from src.game.combat.entities import Card
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectTargetType
 from src.game.combat.entities import EffectType
-from src.game.combat.handle_input import handle_action
-from src.game.combat.phase import start_combat
+from src.game.combat.phase import ToBeQueuedEffect  # TODO: define elsewhere
+from src.game.combat.phase import get_end_of_turn_effects
+from src.game.combat.phase import get_start_of_combat_effects
+from src.game.combat.phase import get_start_of_turn_effects
 from src.game.combat.state import CombatState
-from src.game.combat.state import add_to_bot
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
@@ -26,71 +27,138 @@ def _card_requires_target(card: Card) -> bool:
     return False
 
 
-# TODO: find more suitable name
-def process(combat_state: CombatState) -> CombatState:
-    # Check if there's an active card
-    card_active_id = combat_state.entities.card_active_id
-    # TODO: a card shouldn't be able to be active and not in the hand at the same time
-    if card_active_id is not None and card_active_id in combat_state.entities.card_in_hand_ids:
-        # Check if the card requires target
-        if _card_requires_target(combat_state.entities.all[card_active_id]):
-            if combat_state.entities.card_target_id is None:
-                # Need to wait for card target
-                combat_state.entities = replace(
-                    combat_state.entities, entity_selectable_ids=combat_state.entities.monster_ids
-                )
+class InvalidActionError(Exception):
+    pass
 
-                return combat_state
 
-        # Play card
-        combat_state.effect_queue = add_to_bot(
-            combat_state.effect_queue,
-            combat_state.entities.character_id,
-            Effect(EffectType.PLAY_CARD, target_type=EffectTargetType.CARD_ACTIVE),
+def _handle_end_turn(cs: CombatState) -> list[ToBeQueuedEffect]:
+    # Character's turn end
+    to_be_queued_effects = get_end_of_turn_effects(
+        cs.entity_manager, cs.entity_manager.id_character
+    )
+
+    # Monsters
+    for id_monster in cs.entity_manager.id_monsters:
+        monster = cs.entity_manager.entities[id_monster]
+
+        # Turn start
+        to_be_queued_effects += get_start_of_turn_effects(cs.entity_manager, id_monster)
+
+        # Move's effects
+        to_be_queued_effects += [
+            ToBeQueuedEffect(effect, id_monster) for effect in monster.move_current.effects
+        ]
+
+        # Update move
+        to_be_queued_effects += [
+            ToBeQueuedEffect(Effect(EffectType.UPDATE_MOVE), id_target=id_monster)
+        ]
+
+        # Turn end
+        to_be_queued_effects += get_end_of_turn_effects(cs.entity_manager, id_monster)
+
+    # Character's turn start
+    to_be_queued_effects += get_start_of_turn_effects(
+        cs.entity_manager, cs.entity_manager.id_character
+    )
+
+    return to_be_queued_effects
+
+
+def _handle_select_entity(cs: CombatState, id_target: int) -> list[ToBeQueuedEffect]:
+    if cs.entity_manager.id_card_active is None and not cs.effect_queue:
+        # Selected card
+        card = cs.entity_manager.entities[id_target]
+        if _card_requires_target(card):
+            cs.entity_manager.id_card_active = id_target
+            cs.entity_manager.id_selectables = cs.entity_manager.id_monsters
+
+            return []
+
+        # Play the card
+        return [
+            ToBeQueuedEffect(
+                Effect(EffectType.PLAY_CARD), cs.entity_manager.id_character, id_target
+            )
+        ]
+
+    if cs.entity_manager.id_card_active is not None and not cs.effect_queue:
+        # Selected the active card's target, play the card
+        id_card_active = cs.entity_manager.id_card_active
+
+        cs.entity_manager.id_card_active = None
+        cs.entity_manager.id_card_target = id_target
+
+        return [
+            ToBeQueuedEffect(
+                Effect(EffectType.PLAY_CARD),
+                cs.entity_manager.id_character,
+                id_card_active,
+            )
+        ]
+
+    if cs.entity_manager.id_card_active is None and cs.effect_queue:
+        # Selected the active effect's target
+        cs.entity_manager.id_effect_target = id_target
+
+        return []
+
+
+def handle_action(cs: CombatState, action: Action) -> list[ToBeQueuedEffect]:
+    if action.type == ActionType.END_TURN:
+        if cs.entity_manager.id_card_active is not None or cs.effect_queue:
+            raise InvalidActionError
+
+        return _handle_end_turn(cs)
+
+    elif action.type == ActionType.SELECT_ENTITY:
+        return _handle_select_entity(cs, action.target_id)
+
+
+def step(cs: CombatState, action: Action) -> None:
+    # Handle action
+    to_be_queued_effects = handle_action(cs, action)
+    for to_be_queued_effect in to_be_queued_effects:
+        add_to_bot(
+            cs.effect_queue,
+            to_be_queued_effect.effect,
+            to_be_queued_effect.id_source,
+            to_be_queued_effect.id_target,
         )
 
-    # Process queue
-    entities_new, effect_queue_new = process_queue(
-        combat_state.entities, combat_state.effect_queue
-    )
-    if effect_queue_new:
-        # TODO: this shouldn't happen here
-        entities_new = replace(entities_new, card_active_id=None)
-
-        return CombatState(entities_new, effect_queue_new)
-
-    # Reset active card, card target, and effect target
-    entities_new = replace(
-        entities_new,
-        card_active_id=None,
-        card_target_id=None,
-        effect_target_id=None,
-        entity_selectable_ids=[
-            card_in_hand_id
-            for card_in_hand_id in entities_new.card_in_hand_ids
-            if entities_new.all[card_in_hand_id].cost
-            <= entities_new.all[entities_new.energy_id].current
-        ],
-    )
-    return CombatState(entities_new, effect_queue_new)
-
-
-def step(combat_state: CombatState, action: Action) -> None:
-    # Handle action
-    handle_action(combat_state, action)
-
     # Process round
-    combat_state_new = process(combat_state)
+    id_queries = process_effect_queue(cs.entity_manager, cs.effect_queue)
+    if id_queries is not None:
+        cs.entity_manager.id_selectables = id_queries
 
-    return combat_state_new
+        return
+
+    # Back to default state
+    if cs.entity_manager.id_card_active is None:
+        cs.entity_manager.id_selectables = []
+        for id_card_in_hand in cs.entity_manager.id_cards_in_hand:
+            card = cs.entity_manager.entities[id_card_in_hand]
+            if card.cost <= cs.entity_manager.entities[cs.entity_manager.id_energy].current:
+                cs.entity_manager.id_selectables.append(id_card_in_hand)
 
 
-def main(combat_state: CombatState, agent: BaseAgent) -> None:
-    # Combat start TODO: change name
-    combat_state = start_combat(combat_state)
-    combat_state = process(combat_state)
+def main(cs: CombatState, agent: BaseAgent) -> None:
+    # Combat start
+    to_be_queued_effects = get_start_of_combat_effects(cs.entity_manager)
+    for to_be_queued_effect in to_be_queued_effects:
+        add_to_bot(
+            cs.effect_queue,
+            to_be_queued_effect.effect,
+            to_be_queued_effect.id_source,
+            to_be_queued_effect.id_target,
+        )
+    # TODO: only call once
+    process_effect_queue(cs.entity_manager, cs.effect_queue)
 
-    while not is_game_over(combat_state.entities):
+    # TODO: move
+    cs.entity_manager.id_selectables = cs.entity_manager.id_cards_in_hand
+
+    while not is_game_over(combat_state.entity_manager):
         # Get combat view and draw it on the terminal
         combat_view = view_combat(combat_state)
         draw_combat(combat_view)
@@ -99,7 +167,7 @@ def main(combat_state: CombatState, agent: BaseAgent) -> None:
         action = agent.select_action(combat_view)
 
         # Game step
-        combat_state = step(combat_state, action)
+        step(cs, action)
 
     # TODO: combat end
 

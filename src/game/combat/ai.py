@@ -38,6 +38,7 @@ def ai_dummy(move_current: MonsterMove | None, move_history: list[MonsterMove]) 
     raise ValueError(f"Unsupported move name: {move_current.name}")
 
 
+# TODO: update w/ new Monster changes
 @register_ai("Jaw Worm")
 def ai_jaw_worm(move_name_current: str | None, move_name_history: list[str]) -> str:
     if move_name_current is None:

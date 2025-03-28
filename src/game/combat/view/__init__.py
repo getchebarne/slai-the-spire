@@ -30,12 +30,12 @@ class CombatView:
 
 def view_combat(combat_state: CombatState) -> CombatView:
     return CombatView(
-        view_character(combat_state.entities),
-        view_monsters(combat_state.entities),
-        view_hand(combat_state.entities),
-        view_energy(combat_state.entities),
+        view_character(combat_state.entity_manager),
+        view_monsters(combat_state.entity_manager),
+        view_hand(combat_state.entity_manager),
+        view_energy(combat_state.entity_manager),
         view_effect(combat_state.effect_queue),
-        combat_state.entities.entity_selectable_ids.copy(),  # revisit
-        view_draw_pile(combat_state.entities),
-        view_discard_pile(combat_state.entities),
+        combat_state.entity_manager.id_selectables,  # revisit
+        view_draw_pile(combat_state.entity_manager),
+        view_discard_pile(combat_state.entity_manager),
     )

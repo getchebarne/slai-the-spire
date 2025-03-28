@@ -15,10 +15,8 @@ def create_silent(health_current: int, health_max: int) -> Character:
     return Character("Silent", health_current=health_current, health_max=health_max)
 
 
-def create_dummy(health_current: int, health_max: int, move_current: MonsterMove) -> Monster:
-    return Monster(
-        "Dummy", health_current=health_current, health_max=health_max, move_current=move_current
-    )
+def create_dummy(health_current: int, health_max: int) -> Monster:
+    return Monster("Dummy", health_current=health_current, health_max=health_max)
 
 
 def create_jaw_worm(move_current: MonsterMove) -> Monster:
@@ -170,5 +168,5 @@ def create_backflip() -> Card:
     )
 
 
-def create_energy(max_: int = 3, current: int = 3) -> Energy:
+def create_energy(max_: int, current: int) -> Energy:
     return Energy(max_, current)

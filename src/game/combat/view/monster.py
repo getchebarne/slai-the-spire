@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from src.game.combat.entities import Effect
 from src.game.combat.entities import EffectType
-from src.game.combat.entities import Entities
+from src.game.combat.entities import EntityManager
 from src.game.combat.entities import Monster
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import _actor_to_view
@@ -65,8 +65,8 @@ def _move_effects_to_intent(move_effects: list[Effect]) -> IntentView:
 #     return int(damage)
 
 
-def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
-    monster = entities.all[monster_entity_id]
+def _monster_to_view(entity_manager: EntityManager, id_monster: int) -> MonsterView:
+    monster = entity_manager.entities[id_monster]
     actor_view = _actor_to_view(monster)
     intent_view = _move_effects_to_intent(monster.move_current.effects)
     # intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
@@ -77,12 +77,12 @@ def _monster_to_view(entities: Entities, monster_entity_id: int) -> MonsterView:
         actor_view.health_max,
         actor_view.block_current,
         # actor_view.modifiers,
-        monster_entity_id,  # TODO: revisit order
+        id_monster,  # TODO: revisit order
         intent_view,
     )
 
 
-def view_monsters(entities: Entities) -> list[MonsterView]:
+def view_monsters(entity_manager: EntityManager) -> list[MonsterView]:
     return [
-        _monster_to_view(entities, monster_entity_id) for monster_entity_id in entities.monster_ids
+        _monster_to_view(entity_manager, id_monster) for id_monster in entity_manager.id_monsters
     ]
