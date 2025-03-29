@@ -122,7 +122,7 @@ def step(cs: CombatState, action: Action) -> None:
                 cs.entity_manager.id_selectables.append(id_card_in_hand)
 
 
-def _start_combat(cs: CombatState) -> None:
+def start_combat(cs: CombatState) -> None:
     # Queue start of combat effects and process them
     sourced_effects = get_start_of_combat_effects(cs.entity_manager)
     add_to_bot(cs.effect_queue, *sourced_effects)
@@ -133,7 +133,7 @@ def _start_combat(cs: CombatState) -> None:
 
 
 def main(cs: CombatState, agent: BaseAgent) -> None:
-    _start_combat(cs)
+    start_combat(cs)
 
     while not is_game_over(combat_state.entity_manager):
         # Get combat view and draw it on the terminal

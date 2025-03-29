@@ -34,7 +34,7 @@ def create_combat_state() -> CombatState:
         create_entity(entity_manager, create_defend()),
         create_entity(entity_manager, create_defend()),
         create_entity(entity_manager, create_defend()),
-        create_entity(entity_manager, create_survivor()),
+        # create_entity(entity_manager, create_survivor()),
     ]
 
     # Assign corresponding ids
