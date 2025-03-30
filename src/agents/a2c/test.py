@@ -1,22 +1,22 @@
 import torch
 import yaml
 
-from src.agents.a2c.model import ActorCritic
 from src.agents.a2c.encode import encode_combat_view
-from src.agents.a2c.utils import get_valid_action_mask
+from src.agents.a2c.model import ActorCritic
 from src.agents.a2c.utils import action_idx_to_action
+from src.agents.a2c.utils import get_valid_action_mask
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.create import create_combat_state
+from src.game.combat.drawer import draw_combat
 from src.game.combat.main import start_combat
 from src.game.combat.main import step
-from src.game.combat.drawer import draw_combat
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
 
 if __name__ == "__main__":
     # Select experiment
-    exp_name = "dummy/a2c-3"
+    exp_name = "dummy/a2c-6"
 
     # Load config
     with open(

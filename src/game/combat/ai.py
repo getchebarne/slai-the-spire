@@ -21,10 +21,10 @@ def register_ai(monster_name: str) -> Callable:
 @register_ai("Dummy")
 def ai_dummy(move_current: MonsterMove | None, move_history: list[MonsterMove]) -> MonsterMove:
     move_attack = MonsterMove(
-        "Attack", [Effect(EffectType.DEAL_DAMAGE, 5, EffectTargetType.CHARACTER)]
+        "Attack", [Effect(EffectType.DEAL_DAMAGE, 12, EffectTargetType.CHARACTER)]
     )
     move_defend = MonsterMove(
-        "Defend", [Effect(EffectType.GAIN_BLOCK, 5, EffectTargetType.SOURCE)]
+        "Defend", [Effect(EffectType.GAIN_BLOCK, 12, EffectTargetType.SOURCE)]
     )
     if move_current is None:
         return random.choice([move_attack, move_defend])

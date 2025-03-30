@@ -52,7 +52,6 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
         action_idx = dist.sample().item()
 
         # Game step
-        # draw_combat(combat_view_t)
         action = action_idx_to_action(action_idx, combat_view_t)
         step(cs, action)
 

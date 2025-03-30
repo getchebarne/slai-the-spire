@@ -19,7 +19,7 @@ EFFECT_TYPE_MAP = {
 
 
 def _encode_energy_view(energy_view: EnergyView, device: torch.device) -> torch.Tensor:
-    return torch.tensor([energy_view.current, energy_view.max], device=device, dtype=torch.float32)
+    return torch.tensor([energy_view.current], device=device, dtype=torch.float32)
 
 
 # TODO: add modifiers
@@ -40,7 +40,6 @@ def _encode_character_view(character_view: CharacterView, device: torch.device) 
 def _encode_monster_views(monster_views: list[MonsterView], device: torch.device) -> torch.Tensor:
     tensors = []
     for monster_view in monster_views:
-        print(monster_view.intent.damage)
         tensors.append(
             torch.tensor(
                 [
