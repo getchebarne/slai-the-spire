@@ -7,6 +7,7 @@ from src.game.combat.effect import EffectType
 from src.game.combat.entities import Card
 from src.game.combat.entities import Character
 from src.game.combat.entities import Energy
+from src.game.combat.entities import Modifier
 from src.game.combat.entities import Monster
 from src.game.combat.entities import MonsterMove
 
@@ -170,3 +171,11 @@ def create_backflip() -> Card:
 
 def create_energy(max_: int, current: int) -> Energy:
     return Energy(max_, current)
+
+
+def create_modifier_weak(stacks_current: int) -> Modifier:
+    return Modifier(stacks_current, 1, 999, True)
+
+
+def create_modifier_strength(stacks_current: int) -> Modifier:
+    return Modifier(stacks_current, 1, 999, False)

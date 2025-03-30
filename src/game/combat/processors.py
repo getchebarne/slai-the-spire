@@ -6,6 +6,8 @@ from src.game.combat.effect import EffectType
 from src.game.combat.effect import SourcedEffect
 from src.game.combat.entities import Card
 from src.game.combat.entities import EntityManager
+from src.game.combat.entities import ModifierType
+from src.game.combat.factories import create_modifier_weak
 
 
 WEAK_FACTOR = 0.75
@@ -70,10 +72,11 @@ def _apply_deal_damage(
     target = entity_manager.entities[id_target]
 
     # Apply strength
-    value += source.modifier_strength.stacks_current
+    if ModifierType.STRENGTH in source.modifiers:
+        value += source.modifiers[ModifierType.STRENGTH].stacks_current
 
     # Apply weak
-    if source.modifier_weak.stacks_current > 0:
+    if ModifierType.WEAK in source.modifiers:
         value *= WEAK_FACTOR
 
     # Calculate damage over block
@@ -161,7 +164,12 @@ def _apply_gain_weak(
     entity_manager: EntityManager, id_target: int, value: int
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
-    target.modifier_weak.stacks_current += value
+    if ModifierType.WEAK in target.modifiers:
+        target.modifiers[ModifierType.WEAK].stacks_current += value
+
+        return [], []
+
+    target.modifiers[ModifierType.WEAK] = create_modifier_weak(value)
 
     return [], []
 
@@ -171,10 +179,12 @@ def _apply_mod_tick(
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
-    # TODO: improve this it's bad
-    target.modifier_weak.stacks_current = max(
-        target.modifier_weak.stacks_current - 1, target.modifier_weak.stacks_min
-    )
+    for modifier_type, modifier in list(target.modifiers.items()):
+        if modifier.stacks_duration:
+            modifier.stacks_current -= 1
+
+            if modifier.stacks_current < modifier.stacks_min:
+                del target.modifiers[modifier_type]
 
     return [], []
 
