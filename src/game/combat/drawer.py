@@ -3,7 +3,6 @@ from typing import Optional
 
 from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
-# from src.game.combat.view.actor import ModifierView TODO: reenable
 from src.game.combat.view.card import CardView
 from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import IntentView
@@ -48,21 +47,17 @@ def _block_str(block_current: int) -> str:
 
 
 def _actor_str(actor: ActorView, n_col: int = 0) -> str:
-    # modifier_strs = "\n".join([_modifier_str(modifier_view) for modifier_view in actor.modifiers])
-    # actor_name = f"{actor.name} (T)" if actor.is_turn else actor.name
-    return (
+    str_ = (
         f"{WHITE}{actor.name:>{n_col}}{RESET}\n"
         f"{WHITE}{'-' * len(actor.name):>{n_col}}{RESET}\n"
         f"{RED}{_health_str(actor.health_current, actor.health_max):>{n_col}}{RESET}\n"
         f"{CYAN}{_block_str(actor.block_current):>{n_col}}{RESET}\n"
-        # f"{modifier_strs:>{n_col}}"
     )
+    if actor.modifier_weak.stacks_current > 0:
+        str_weak = f"WK: {actor.modifier_weak.stacks_current}"
+        str_ += f"{str_weak:>{n_col}}"
 
-
-# TODO: reenable
-# def _modifier_str(modifier_view: ModifierView) -> str:
-#     # TODO: create modifier abbreviations (e.g., "Weak" -> "WK")
-#     return f"{modifier_view.type}: {modifier_view.stacks}"
+    return str_
 
 
 # def _effect_str(effect_view: Optional[EffectView]) -> str:

@@ -22,7 +22,7 @@ class CombatView:
     monsters: list[MonsterView]
     hand: list[CardView]
     energy: EnergyView
-    effect: EffectView
+    effect: EffectView | None
     entity_selectable_ids: list[int]  # TODO: revisit
     draw_pile: set[CardView]
     disc_pile: set[CardView]

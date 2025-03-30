@@ -13,6 +13,8 @@ from src.game.combat.view.monster import MonsterView
 EFFECT_TYPE_MAP = {
     EffectType.DEAL_DAMAGE: 0,
     EffectType.GAIN_BLOCK: 1,
+    EffectType.DISCARD: 2,
+    EffectType.GAIN_WEAK: 3,
 }
 
 
@@ -38,6 +40,7 @@ def _encode_character_view(character_view: CharacterView, device: torch.device) 
 def _encode_monster_views(monster_views: list[MonsterView], device: torch.device) -> torch.Tensor:
     tensors = []
     for monster_view in monster_views:
+        print(monster_view.intent.damage)
         tensors.append(
             torch.tensor(
                 [
@@ -49,6 +52,7 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
                     monster_view.intent.instances or 0,
                     monster_view.intent.block,
                     # monster_view.intent.buff,
+                    monster_view.modifier_weak.stacks_current,
                 ],
                 dtype=torch.float32,
                 device=device,
@@ -59,21 +63,20 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
 
 
 def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
-    # damage, block, playable, cost, is_active
-    card_encoded = [0, 0]
+    # damage, block, discard, gain_weak, playable, cost, is_active
+    card_encoded = [0, 0, 0, 0]
     for effect in card_view.effects:
-        if effect.type in EFFECT_TYPE_MAP:
-            card_encoded[EFFECT_TYPE_MAP[effect.type]] = effect.value
+        card_encoded[EFFECT_TYPE_MAP[effect.type]] = effect.value
 
     return card_encoded + [card_view.cost <= energy_current, card_view.cost, card_view.is_active]
 
 
 def _encode_card_view_pad() -> list[int]:
-    # damage, block, playable, cost, is_active
+    # damage, block, discard, gain_weak, playable, cost, is_active
     cost = 5
     playable = False
     is_active = False
-    return [0, 0, playable, cost, is_active]
+    return [0, 0, 0, 0, playable, cost, is_active]
 
 
 def _encode_hand_view(

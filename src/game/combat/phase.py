@@ -38,10 +38,12 @@ def get_start_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> l
 def get_end_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> list[SourcedEffect]:
     actor = entity_manager.entities[id_actor]
 
+    sourced_effects = [SourcedEffect(Effect(EffectType.MOD_TICK), id_target=id_actor)]
+
     # Character-specific effects
     if isinstance(actor, Character):
-        return [
+        return sourced_effects + [
             SourcedEffect(Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_IN_HAND))
         ]
 
-    return []
+    return sourced_effects

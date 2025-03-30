@@ -3,9 +3,8 @@ from dataclasses import dataclass
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
 from src.game.combat.entities import EntityManager
-from src.game.combat.entities import Monster
 from src.game.combat.view.actor import ActorView
-from src.game.combat.view.actor import _actor_to_view
+from src.game.combat.view.actor import actor_to_view
 
 
 @dataclass
@@ -65,9 +64,10 @@ def _move_effects_to_intent(move_effects: list[Effect]) -> IntentView:
 #     return int(damage)
 
 
+# TODO: revisit id_monster instead of using `Monster`
 def _monster_to_view(entity_manager: EntityManager, id_monster: int) -> MonsterView:
     monster = entity_manager.entities[id_monster]
-    actor_view = _actor_to_view(monster)
+    actor_view = actor_to_view(monster)
     intent_view = _move_effects_to_intent(monster.move_current.effects)
     # intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
 
@@ -76,7 +76,7 @@ def _monster_to_view(entity_manager: EntityManager, id_monster: int) -> MonsterV
         actor_view.health_current,
         actor_view.health_max,
         actor_view.block_current,
-        # actor_view.modifiers,
+        actor_view.modifier_weak,
         id_monster,  # TODO: revisit order
         intent_view,
     )
