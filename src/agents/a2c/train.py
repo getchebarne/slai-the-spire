@@ -75,8 +75,8 @@ def _update(
     episode_result: EpisodeResult,
     optimizer: torch.optim.Optimizer,
     gamma: float,
-    value_coef: float,
-    entropy_coef: float,
+    coef_value: float,
+    coef_entropy: float,
     max_grad_norm: float,
 ) -> float:
     # Compute returns and advantages
@@ -102,12 +102,12 @@ def _update(
     entropies = torch.cat(episode_result.entropies)
 
     # Calculate losses
-    policy_loss = -1 * (log_probs * advantages).mean()
+    policy_loss = -1 * torch.mean(log_probs * advantages)
     value_loss = F.mse_loss(values.squeeze(), returns)
-    entropy_loss = -1 * entropies.mean()
+    entropy_loss = -1 * torch.mean(entropies)
 
     # Total loss
-    loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss
+    loss = policy_loss + coef_value * value_loss + coef_entropy * entropy_loss
 
     # Update network
     optimizer.zero_grad()
@@ -155,10 +155,9 @@ def train(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     gamma: float,
-    # TODO: parametrize, remove defaults
-    value_coef: float = 0.50,
-    entropy_coef: float = 0.01,
-    max_grad_norm: float = 0.50,
+    coef_value: float,
+    coefs_entropy: list[float],
+    max_grad_norm: float,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
 
@@ -168,12 +167,13 @@ def train(
     # Train
     for num_episode in range(num_episodes):
         cs, episode_result = _play_episode(model, device)
+        coef_entropy = coefs_entropy[num_episode]
         loss = _update(
             episode_result,
             optimizer,
             gamma,
-            value_coef,
-            entropy_coef,
+            coef_value,
+            coef_entropy,
             max_grad_norm,
         )
         combat_view_end = view_combat(cs)
@@ -181,6 +181,7 @@ def train(
         if (num_episode % log_every) == 0:
             writer.add_scalar("Loss", loss, num_episode)
             writer.add_scalar("Final HP", combat_view_end.character.health_current, num_episode)
+            writer.add_scalar("Entropy coef.", coef_entropy, num_episode)
 
         # Evaluate agent
         if (num_episode % eval_every) == 0:
@@ -200,6 +201,7 @@ def _load_config(config_path: str = "src/agents/a2c/config.yml") -> dict:
 
     # Parse integer values
     config["num_episodes"] = int(config["num_episodes"])
+    config["coef_entropy_elbow"] = int(config["coef_entropy_elbow"])
 
     return config
 
@@ -207,6 +209,21 @@ def _load_config(config_path: str = "src/agents/a2c/config.yml") -> dict:
 # TODO: use **kwargs, improve signature
 def _init_optimizer(name: str, model: ActorCritic, **kwargs) -> torch.optim.Optimizer:
     return getattr(torch.optim, name)(**kwargs, params=model.parameters())
+
+
+def _get_coefs_entropy(num_episodes: int, elbow: int, max_: float, min_: float) -> list[float]:
+    coefs_entropy = []
+    slope = (min_ - max_) / elbow
+    offset = max_
+    for num_episode in range(num_episodes):
+        if num_episode <= elbow:
+            coef_entropy = slope * num_episode + offset
+        else:
+            coef_entropy = min_
+
+        coefs_entropy.append(coef_entropy)
+
+    return coefs_entropy
 
 
 if __name__ == "__main__":
@@ -226,6 +243,12 @@ if __name__ == "__main__":
     os.makedirs(f"experiments/{config['exp_name']}")
     shutil.copy("src/agents/a2c/config.yml", f"experiments/{config['exp_name']}/config.yml")
 
+    coefs_entropy = _get_coefs_entropy(
+        config["num_episodes"],
+        config["coef_entropy_elbow"],
+        config["coef_entropy_max"],
+        config["coef_entropy_min"],
+    )
     train(
         config["exp_name"],
         config["num_episodes"],
@@ -236,4 +259,7 @@ if __name__ == "__main__":
         optimizer,
         torch.device("cpu"),
         config["gamma"],
+        config["coef_value"],
+        coefs_entropy,
+        config["max_grad_norm"],
     )

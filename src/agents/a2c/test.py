@@ -106,7 +106,7 @@ def display_game(game: tuple[int, list]) -> None:
 
 
 if __name__ == "__main__":
-    exp_name = "jaw/a2c"
+    exp_name = "jaw/a2c-2"
     device = torch.device("cpu")
 
     model, config = load_model(exp_name)

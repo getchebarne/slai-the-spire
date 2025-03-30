@@ -1,4 +1,4 @@
-# TODO: this is very tightly coupled with model.py
+# TODO: this is very tightly coupled with model.py, improve it
 import torch
 
 from src.game.combat.constant import MAX_HAND_SIZE
@@ -70,6 +70,7 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
                     monster_view.intent.instances or 0,
                     monster_view.intent.block,
                     monster_view.intent.buff,
+                    # Modifiers
                     *_encode_modifiers(monster_view),
                 ],
                 dtype=torch.float32,
