@@ -45,7 +45,7 @@ def _move_effects_to_intent(move_effects: list[Effect]) -> IntentView:
             intent.block = True
 
         # TODO: add support for other buffs
-        if not intent.buff and effect.type == EffectType.GAIN_STR:
+        if not intent.buff and effect.type == EffectType.GAIN_STRENGTH:
             intent.buff = True
 
     return intent

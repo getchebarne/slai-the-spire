@@ -9,7 +9,6 @@ from src.game.combat.entities import Character
 from src.game.combat.entities import Energy
 from src.game.combat.entities import Modifier
 from src.game.combat.entities import Monster
-from src.game.combat.entities import MonsterMove
 
 
 def create_silent(health_current: int, health_max: int) -> Character:
@@ -20,13 +19,11 @@ def create_dummy(health_current: int, health_max: int) -> Monster:
     return Monster("Dummy", health_current=health_current, health_max=health_max)
 
 
-def create_jaw_worm(move_current: MonsterMove) -> Monster:
+def create_jaw_worm() -> Monster:
     health_max = random.randint(42, 46)
     health_current = health_max
 
-    return Monster(
-        "Jaw Worm", health_current=health_current, health_max=health_max, move_current=move_current
-    )
+    return Monster("Jaw Worm", health_current=health_current, health_max=health_max)
 
 
 def create_strike() -> Card:
