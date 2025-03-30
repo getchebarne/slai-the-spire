@@ -12,10 +12,10 @@ def compute_reward(
         # Win
         return combat_view_tp1.character.health_current / combat_view_tp1.character.health_max
 
-    # Health
+    # Still going. Penalize instant health loss
     diff_health = (
         combat_view_tp1.character.health_current - combat_view_t.character.health_current
     ) / combat_view_t.character.health_max
 
-    # Still going
-    return diff_health
+    # Add a small penalization term to discourage unnecessary actions
+    return diff_health - 0.01
