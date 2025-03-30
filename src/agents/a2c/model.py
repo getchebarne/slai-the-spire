@@ -44,7 +44,7 @@ class ActorCritic(nn.Module):
         self._mlp_shared = MLP(layer_sizes_shared)
         self._mlp_actor = nn.Sequential(
             MLP(layer_sizes_actor),
-            nn.Linear(layer_sizes_actor[-1], MAX_HAND_SIZE + MAX_MONSTERS + 1),
+            nn.Linear(layer_sizes_actor[-1], 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1),
         )
         self._mlp_critic = nn.Sequential(
             MLP(layer_sizes_critic), nn.Linear(layer_sizes_critic[-1], 1)

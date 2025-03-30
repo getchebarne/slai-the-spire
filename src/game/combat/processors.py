@@ -43,6 +43,12 @@ def apply_effect(
     if effect_type == EffectType.DECREASE_ENERGY:
         return _apply_decrease_energy(entity_manager, effect_value)
 
+    if effect_type == EffectType.GAIN_WEAK:
+        return _apply_gain_weak(entity_manager, id_target, effect_value)
+
+    if effect_type == EffectType.MOD_TICK:
+        return _apply_mod_tick(entity_manager, id_target)
+
     if effect_type == EffectType.SHUFFLE_DECK_INTO_DRAW_PILE:
         return _apply_shuffle_deck_into_draw_pile(entity_manager)
 
@@ -147,6 +153,28 @@ def _apply_decrease_energy(
         raise ValueError(f"Can't dercrease current energy ({energy.current}) by {value}")
 
     energy.current = energy.current - value
+
+    return [], []
+
+
+def _apply_gain_weak(
+    entity_manager: EntityManager, id_target: int, value: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    target = entity_manager.entities[id_target]
+    target.modifier_weak.stacks_current += value
+
+    return [], []
+
+
+def _apply_mod_tick(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    target = entity_manager.entities[id_target]
+
+    # TODO: improve this it's bad
+    target.modifier_weak.stacks_current = max(
+        target.modifier_weak.stacks_current - 1, target.modifier_weak.stacks_min
+    )
 
     return [], []
 
