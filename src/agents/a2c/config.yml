@@ -1,4 +1,4 @@
-exp_name: dummy/a2c-6
+exp_name: dummy/a2c-sym
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
@@ -6,9 +6,10 @@ save_every: 10000
 gamma: 0.99
 
 model:
-  layer_sizes_shared: [46, 256, 256]
+  layer_sizes_shared: [91, 256, 256]
   layer_sizes_actor: [256, 128, 64]
   layer_sizes_critic: [256, 128, 64]
+  dim_card: 16
 
 optimizer:
   name: Adam

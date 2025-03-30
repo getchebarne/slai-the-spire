@@ -16,7 +16,7 @@ from src.game.combat.view import view_combat
 
 if __name__ == "__main__":
     # Select experiment
-    exp_name = "dummy/a2c-6"
+    exp_name = "dummy/a2c-sym"
 
     # Load config
     with open(
@@ -29,6 +29,7 @@ if __name__ == "__main__":
         config["model"]["layer_sizes_shared"],
         config["model"]["layer_sizes_actor"],
         config["model"]["layer_sizes_critic"],
+        config["model"]["dim_card"],
     )
     model.load_state_dict(
         torch.load(f"/Users/getchebarne/Desktop/slai-the-spire/experiments/{exp_name}/model.pth")
