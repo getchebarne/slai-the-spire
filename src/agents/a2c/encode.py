@@ -69,7 +69,7 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
                     monster_view.intent.damage or 0,
                     monster_view.intent.instances or 0,
                     monster_view.intent.block,
-                    # monster_view.intent.buff,
+                    monster_view.intent.buff,
                     *_encode_modifiers(monster_view),
                 ],
                 dtype=torch.float32,
