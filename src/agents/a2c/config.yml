@@ -1,4 +1,4 @@
-exp_name: dummy/delete
+exp_name: dummy/a2c-6
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
@@ -6,13 +6,13 @@ save_every: 10000
 gamma: 0.99
 
 model:
-  layer_sizes_shared: [47, 256, 256]
+  layer_sizes_shared: [46, 256, 256]
   layer_sizes_actor: [256, 128, 64]
   layer_sizes_critic: [256, 128, 64]
 
 optimizer:
-  name: SGD
+  name: Adam
   kwargs:
-    lr: 1.0e-4
-    nesterov: True
-    momentum: 0.90
+    lr: 2.5e-5
+    # nesterov: True
+    # momentum: 0.90
