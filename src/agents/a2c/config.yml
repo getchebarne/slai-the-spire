@@ -1,12 +1,17 @@
-exp_name: jaw/a2c
+exp_name: jaw/a2c-2
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
 save_every: 10000
 gamma: 0.99
+coef_value: 0.50
+coef_entropy_max: 0.05
+coef_entropy_min: 0.01
+coef_entropy_elbow: 2.5e+5 
+max_grad_norm: 0.50
 
 model:
-  layer_sizes_shared: [126, 256, 256]
+  layer_sizes_shared: [127, 256, 256]
   layer_sizes_actor: [256, 128, 64]
   layer_sizes_critic: [256, 128, 64]
   dim_card: 16
