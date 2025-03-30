@@ -216,6 +216,7 @@ if __name__ == "__main__":
         config["model"]["layer_sizes_shared"],
         config["model"]["layer_sizes_actor"],
         config["model"]["layer_sizes_critic"],
+        config["model"]["dim_card"],
     )
     optimizer = _init_optimizer(
         config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]

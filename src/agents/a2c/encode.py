@@ -9,6 +9,8 @@ from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import MonsterView
 
 
+# TODO: this is very tightly coupled with model.py
+
 # TODO: add more effects
 EFFECT_TYPE_MAP = {
     EffectType.DEAL_DAMAGE: 0,
@@ -89,15 +91,14 @@ def _encode_hand_view(
     # Padded cards
     card_views_encoded += [_encode_card_view_pad()] * (MAX_HAND_SIZE - len(hand_view))
 
-    return torch.flatten(torch.tensor(card_views_encoded, dtype=torch.float32, device=device))
+    return torch.tensor(card_views_encoded, dtype=torch.float32, device=device)
 
 
-def encode_combat_view(combat_view: CombatView, device: torch.device) -> torch.Tensor:
-    return torch.cat(
-        [
-            _encode_hand_view(combat_view.hand, combat_view.energy.current, device),
-            _encode_energy_view(combat_view.energy, device),
-            _encode_character_view(combat_view.character, device),
-            _encode_monster_views(combat_view.monsters, device),
-        ],
-    )
+# TODO: make dataclass
+def encode_combat_view(combat_view: CombatView, device: torch.device) -> dict[str, torch.Tensor]:
+    return {
+        "hand": _encode_hand_view(combat_view.hand, combat_view.energy.current, device),
+        "energy": _encode_energy_view(combat_view.energy, device),
+        "character": _encode_character_view(combat_view.character, device),
+        "monsters": _encode_monster_views(combat_view.monsters, device),
+    }
