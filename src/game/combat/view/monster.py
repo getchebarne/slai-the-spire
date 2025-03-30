@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
 from src.game.combat.entities import EntityManager
+from src.game.combat.entities import ModifierType
+from src.game.combat.entities import Monster
 from src.game.combat.view.actor import ActorView
 from src.game.combat.view.actor import actor_to_view
 
@@ -49,19 +51,17 @@ def _move_effects_to_intent(move_effects: list[Effect]) -> IntentView:
     return intent
 
 
-# TODO: should only be calculated in 1 place
-# TODO: reenable
-# def _correct_intent_damage(damage: int | None, monster: Monster) -> int | None:
-#     if damage is None:
-#         return
+def _correct_intent_damage(damage: int | None, monster: Monster) -> int | None:
+    if damage is None:
+        return
 
-#     if ModifierType.STR in monster.modifiers:
-#         damage += monster.modifiers[ModifierType.STR].stacks
+    if ModifierType.STRENGTH in monster.modifiers:
+        damage += monster.modifiers[ModifierType.STRENGTH].stacks_current
 
-#     if ModifierType.WEAK in monster.modifiers:
-#         damage *= 0.75
+    if ModifierType.WEAK in monster.modifiers:
+        damage *= 0.75
 
-#     return int(damage)
+    return int(damage)
 
 
 # TODO: revisit id_monster instead of using `Monster`
@@ -69,14 +69,14 @@ def _monster_to_view(entity_manager: EntityManager, id_monster: int) -> MonsterV
     monster = entity_manager.entities[id_monster]
     actor_view = actor_to_view(monster)
     intent_view = _move_effects_to_intent(monster.move_current.effects)
-    # intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
+    intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
 
     return MonsterView(
         actor_view.name,
         actor_view.health_current,
         actor_view.health_max,
         actor_view.block_current,
-        actor_view.modifier_weak,
+        actor_view.modifiers,
         id_monster,  # TODO: revisit order
         intent_view,
     )

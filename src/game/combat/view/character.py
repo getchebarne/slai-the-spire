@@ -18,5 +18,5 @@ def view_character(entity_manager: EntityManager) -> CharacterView:
         actor_view.health_current,
         actor_view.health_max,
         actor_view.block_current,
-        actor_view.modifier_weak,
+        actor_view.modifiers,
     )

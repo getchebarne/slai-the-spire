@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import Enum
 
 from src.game.combat.effect import Effect
 
@@ -6,6 +7,11 @@ from src.game.combat.effect import Effect
 @dataclass
 class Entity:
     pass
+
+
+class ModifierType(Enum):
+    WEAK = "WEAK"
+    STRENGTH = "STRENGTH"
 
 
 @dataclass
@@ -24,14 +30,7 @@ class Actor(Entity):
     health_current: int
     health_max: int
     block_current: int = 0
-
-    # Modifiers
-    modifier_weak: Modifier = field(
-        default_factory=lambda: Modifier(0, stacks_min=0, stacks_max=999, stacks_duration=True)
-    )
-    modifier_strength: Modifier = field(
-        default_factory=lambda: Modifier(0, stacks_min=0, stacks_max=999, stacks_duration=False)
-    )
+    modifiers: dict[ModifierType, Modifier] = field(default_factory=dict)
 
 
 @dataclass

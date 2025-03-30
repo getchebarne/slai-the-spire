@@ -1,15 +1,18 @@
+# TODO: this is very tightly coupled with model.py
 import torch
 
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.effect import EffectType
 from src.game.combat.view import CombatView
+from src.game.combat.view.actor import ActorView
+from src.game.combat.view.actor import ModifierViewType
 from src.game.combat.view.card import CardView
 from src.game.combat.view.character import CharacterView
 from src.game.combat.view.energy import EnergyView
 from src.game.combat.view.monster import MonsterView
 
 
-# TODO: this is very tightly coupled with model.py
+MODIFIER_VIEW_TYPES = [modifier_view_type.name for modifier_view_type in ModifierViewType]
 
 # TODO: add more effects
 EFFECT_TYPE_MAP = {
@@ -24,13 +27,26 @@ def _encode_energy_view(energy_view: EnergyView, device: torch.device) -> torch.
     return torch.tensor([energy_view.current], device=device, dtype=torch.float32)
 
 
-# TODO: add modifiers
+def _encode_modifiers(actor_view: ActorView) -> list[int]:
+    modifier_encodings = [0] * len(MODIFIER_VIEW_TYPES)
+    for i, modifier_view_type in enumerate(MODIFIER_VIEW_TYPES):
+        if modifier_view_type in actor_view.modifiers:
+            stacks_current = actor_view.modifiers[modifier_view_type].stacks_current
+            if stacks_current is None:
+                modifier_encodings[i] = 1
+            else:
+                modifier_encodings[i] = stacks_current
+
+    return modifier_encodings
+
+
 def _encode_character_view(character_view: CharacterView, device: torch.device) -> torch.Tensor:
     return torch.tensor(
         [
             character_view.health_current,
             character_view.block_current,
             character_view.health_current + character_view.block_current,
+            *_encode_modifiers(character_view),
         ],
         dtype=torch.float32,
         device=device,
@@ -38,7 +54,6 @@ def _encode_character_view(character_view: CharacterView, device: torch.device) 
 
 
 # TODO: add support for multiple monsters
-# TODO: add modifiers
 def _encode_monster_views(monster_views: list[MonsterView], device: torch.device) -> torch.Tensor:
     tensors = []
     for monster_view in monster_views:
@@ -53,7 +68,7 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
                     monster_view.intent.instances or 0,
                     monster_view.intent.block,
                     # monster_view.intent.buff,
-                    monster_view.modifier_weak.stacks_current,
+                    *_encode_modifiers(monster_view),
                 ],
                 dtype=torch.float32,
                 device=device,

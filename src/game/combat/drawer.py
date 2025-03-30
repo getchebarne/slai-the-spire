@@ -47,17 +47,20 @@ def _block_str(block_current: int) -> str:
 
 
 def _actor_str(actor: ActorView, n_col: int = 0) -> str:
-    str_ = (
+    modifier_strs = "\n".join(
+        [
+            f"{modifier_view_type.name}: {stacks_current}"
+            for modifier_view_type, stacks_current in actor.modifiers.items()
+        ]
+    )
+
+    return (
         f"{WHITE}{actor.name:>{n_col}}{RESET}\n"
         f"{WHITE}{'-' * len(actor.name):>{n_col}}{RESET}\n"
         f"{RED}{_health_str(actor.health_current, actor.health_max):>{n_col}}{RESET}\n"
         f"{CYAN}{_block_str(actor.block_current):>{n_col}}{RESET}\n"
+        f"{modifier_strs:>{n_col}}"
     )
-    if actor.modifier_weak.stacks_current > 0:
-        str_weak = f"WK: {actor.modifier_weak.stacks_current}"
-        str_ += f"{str_weak:>{n_col}}"
-
-    return str_
 
 
 # def _effect_str(effect_view: Optional[EffectView]) -> str:
