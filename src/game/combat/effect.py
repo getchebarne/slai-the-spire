@@ -8,7 +8,7 @@ class EffectType(Enum):
     DISCARD = "DISCARD"
     DRAW_CARD = "DRAW_CARD"
     GAIN_BLOCK = "GAIN_BLOCK"
-    GAIN_STR = "GAIN_STR"
+    GAIN_STRENGTH = "GAIN_STRENGTH"
     GAIN_WEAK = "GAIN_WEAK"
     MOD_TICK = "MOD_TICK"  # TODO: rename
     PLAY_CARD = "PLAY_CARD"

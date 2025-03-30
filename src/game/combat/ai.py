@@ -40,36 +40,51 @@ def ai_dummy(move_current: MonsterMove | None, move_history: list[MonsterMove]) 
 
 # TODO: update w/ new Monster changes
 @register_ai("Jaw Worm")
-def ai_jaw_worm(move_name_current: str | None, move_name_history: list[str]) -> str:
-    if move_name_current is None:
-        return "Chomp"
+def ai_jaw_worm(move_current: MonsterMove | None, move_history: list[MonsterMove]) -> MonsterMove:
+    move_chomp = MonsterMove(
+        "Chomp", [Effect(EffectType.DEAL_DAMAGE, 12, EffectTargetType.CHARACTER)]
+    )
+    move_bellow = MonsterMove(
+        "Bellow",
+        [
+            Effect(EffectType.GAIN_STRENGTH, 5, EffectTargetType.SOURCE),
+            Effect(EffectType.GAIN_BLOCK, 9, EffectTargetType.SOURCE),
+        ],
+    )
+    move_thrash = MonsterMove(
+        "Thrash",
+        [
+            Effect(EffectType.DEAL_DAMAGE, 7, EffectTargetType.CHARACTER),
+            Effect(EffectType.GAIN_BLOCK, 5, EffectTargetType.SOURCE),
+        ],
+    )
+    if move_current is None:
+        return move_chomp
 
     num = random.randint(0, 99)
     if num < 25:
-        if move_name_history[-1] == "Chomp":
+        if move_history[-1].name == "Chomp":
             if random.random() < 0.5625:  # 56.25% chance
-                return "Bellow"
+                return move_bellow
 
-            return "Thrash"
+            return move_thrash
 
-        return "Chomp"
+        return move_chomp
 
     elif num < 55:
         # TODO: must be false if there's not at least 2 moves in history
-        if len(move_name_history) >= 2 and all(
-            [move_name == "Thrash" for move_name in move_name_history[-2:]]
-        ):
+        if len(move_history) >= 2 and all([move.name == "Thrash" for move in move_history[-2:]]):
             if random.random() < 0.357:  # 35.7% chance
-                return "Chomp"
+                return move_chomp
 
-            return "Bellow"
+            return move_bellow
 
-        return "Thrash"
+        return move_thrash
 
-    if move_name_history[-1] == "Bellow":
+    if move_history[-1].name == "Bellow":
         if random.random() < 0.416:  # 41.6% chance
-            return "Chomp"
+            return move_chomp
 
-        return "Thrash"
+        return move_thrash
 
-    return "Bellow"
+    return move_bellow

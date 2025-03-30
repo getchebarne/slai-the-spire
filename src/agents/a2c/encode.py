@@ -14,13 +14,15 @@ from src.game.combat.view.monster import MonsterView
 
 MODIFIER_VIEW_TYPES = [modifier_view_type.name for modifier_view_type in ModifierViewType]
 
-# TODO: add more effects
-EFFECT_TYPE_MAP = {
-    EffectType.DEAL_DAMAGE: 0,
-    EffectType.GAIN_BLOCK: 1,
-    EffectType.DISCARD: 2,
-    EffectType.GAIN_WEAK: 3,
-}
+# TODO: create some sort of variable where I can access the effects defined in cards
+# instead of doing this
+EFFECT_TYPES = [
+    EffectType.DEAL_DAMAGE,
+    EffectType.GAIN_BLOCK,
+    EffectType.DISCARD,
+    EffectType.GAIN_WEAK,
+    EffectType.DRAW_CARD,
+]
 
 
 def _encode_energy_view(energy_view: EnergyView, device: torch.device) -> torch.Tensor:
@@ -78,21 +80,20 @@ def _encode_monster_views(monster_views: list[MonsterView], device: torch.device
     return torch.cat(tensors)
 
 
+# TODO: in the future, I should also encode the target and selection types
 def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
-    # damage, block, discard, gain_weak, playable, cost, is_active
-    card_encoded = [0, 0, 0, 0]
+    card_encoded = [0] * len(EFFECT_TYPES)
     for effect in card_view.effects:
-        card_encoded[EFFECT_TYPE_MAP[effect.type]] = effect.value
+        card_encoded[EFFECT_TYPES.index(effect.type)] = effect.value
 
     return card_encoded + [card_view.cost <= energy_current, card_view.cost, card_view.is_active]
 
 
 def _encode_card_view_pad() -> list[int]:
-    # damage, block, discard, gain_weak, playable, cost, is_active
-    cost = 5
     playable = False
+    cost = 5
     is_active = False
-    return [0, 0, 0, 0, playable, cost, is_active]
+    return [0] * len(EFFECT_TYPES) + [playable, cost, is_active]
 
 
 def _encode_hand_view(

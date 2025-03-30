@@ -7,6 +7,7 @@ from src.game.combat.effect import SourcedEffect
 from src.game.combat.entities import Card
 from src.game.combat.entities import EntityManager
 from src.game.combat.entities import ModifierType
+from src.game.combat.factories import create_modifier_strength
 from src.game.combat.factories import create_modifier_weak
 
 
@@ -56,6 +57,9 @@ def apply_effect(
 
     if effect_type == EffectType.UPDATE_MOVE:
         return _apply_update_move(entity_manager, id_target)
+
+    if effect_type == EffectType.GAIN_STRENGTH:
+        return _apply_gain_strength(entity_manager, id_target, effect_value)
 
     raise ValueError(f"Unsupported effect type: {effect_type}")
 
@@ -170,6 +174,20 @@ def _apply_gain_weak(
         return [], []
 
     target.modifiers[ModifierType.WEAK] = create_modifier_weak(value)
+
+    return [], []
+
+
+def _apply_gain_strength(
+    entity_manager: EntityManager, id_target: int, value: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    target = entity_manager.entities[id_target]
+    if ModifierType.STRENGTH in target.modifiers:
+        target.modifiers[ModifierType.STRENGTH].stacks_current += value
+
+        return [], []
+
+    target.modifiers[ModifierType.STRENGTH] = create_modifier_strength(value)
 
     return [], []
 
