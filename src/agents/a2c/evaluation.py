@@ -1,6 +1,7 @@
 import random
 
-from src.agents.base import BaseAgent
+from src.agents.a2c.model import ActorCritic
+from src.agents.a2c.model import select_action
 from src.game.combat.action import ActionType
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectTargetType
@@ -23,7 +24,7 @@ from src.game.combat.view import view_combat
 
 
 # TODO: improve
-def create_combat_state(
+def _create_combat_state(
     health_current_char: int | None = None,
     health_current_dummy: int | None = None,
     move_current: MonsterMove | None = None,
@@ -46,8 +47,9 @@ def create_combat_state(
     return CombatState(entity_manager, [])
 
 
-def evaluate_blunder(agent: BaseAgent) -> bool:
-    cs = create_combat_state(
+def evaluate_blunder(model: ActorCritic) -> bool:
+    cs = _create_combat_state(
+        health_current_char=random.randint(1, 6),
         health_current_dummy=random.randint(1, 6),
         energy_current=1,
         move_current=random.choice(
@@ -66,7 +68,7 @@ def evaluate_blunder(agent: BaseAgent) -> bool:
     cs.entity_manager.id_cards_in_hand = [id_strike, id_defend]
 
     combat_view = view_combat(cs)
-    action = agent.select_action(combat_view)
+    action = select_action(model, combat_view, greedy=True)
 
     if action.type != ActionType.SELECT_ENTITY:
         return False
@@ -77,8 +79,9 @@ def evaluate_blunder(agent: BaseAgent) -> bool:
     return True
 
 
-def evaluate_lethal(agent: BaseAgent) -> bool:
-    cs = create_combat_state(
+def evaluate_lethal(model: ActorCritic) -> bool:
+    cs = _create_combat_state(
+        health_current_char=random.randint(1, 6),
         health_current_dummy=random.randint(13, 18),
         energy_current=3,
         move_current=random.choice(
@@ -93,10 +96,10 @@ def evaluate_lethal(agent: BaseAgent) -> bool:
         ),
     )
     cs.entity_manager.card_in_hand_ids = [
-        cs.entity_manager.create_entity(cs.entity_manager, create_strike()),
-        cs.entity_manager.create_entity(cs.entity_manager, create_strike()),
-        cs.entity_manager.create_entity(cs.entity_manager, create_strike()),
-        cs.entity_manager.create_entity(cs.entity_manager, create_defend()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_defend()),
     ]
 
     while not is_game_over(cs.entity_manager):
@@ -104,7 +107,7 @@ def evaluate_lethal(agent: BaseAgent) -> bool:
         combat_view = view_combat(cs)
 
         # Get action from agent
-        action = agent.select_action(combat_view)
+        action = select_action(model, combat_view, greedy=True)
         if action.type == ActionType.END_TURN:
             return False
 
@@ -114,11 +117,12 @@ def evaluate_lethal(agent: BaseAgent) -> bool:
     return True
 
 
-def evaluate_draw_first(agent: BaseAgent) -> bool:
-    cs = create_combat_state(
+def evaluate_draw_first(model: ActorCritic) -> bool:
+    cs = _create_combat_state(
+        health_current_char=random.randint(1, 6),
         health_current_dummy=random.randint(20, 25),
         energy_current=3,
-        move_name_current=MonsterMove(
+        move_current=MonsterMove(
             "Attack", [Effect(EffectType.DEAL_DAMAGE, 12, EffectTargetType.CHARACTER)]
         ),
     )
@@ -137,7 +141,7 @@ def evaluate_draw_first(agent: BaseAgent) -> bool:
     ]
 
     combat_view = view_combat(cs)
-    action = agent.select_action(combat_view)
+    action = select_action(model, combat_view, greedy=True)
 
     if action.type != ActionType.SELECT_ENTITY:
         return False
@@ -148,31 +152,37 @@ def evaluate_draw_first(agent: BaseAgent) -> bool:
     return True
 
 
-def evaluate_dagger_throw_over_strike(agent: BaseAgent) -> bool:
-    cs = create_combat_state(
+def evaluate_dagger_throw_over_strike(model: ActorCritic) -> bool:
+    cs = _create_combat_state(
+        health_current_char=random.randint(1, 6),
         health_current_dummy=random.randint(20, 25),
         energy_current=1,
-        move_name_current=random.choice(["Attack", "Defend"]),
+        move_current=random.choice(
+            [
+                MonsterMove(
+                    "Attack", [Effect(EffectType.DEAL_DAMAGE, 12, EffectTargetType.CHARACTER)]
+                ),
+                MonsterMove(
+                    "Defend", [Effect(EffectType.GAIN_BLOCK, 12, EffectTargetType.SOURCE)]
+                ),
+            ]
+        ),
     )
-    id_dagger_throw = cs.entities.create_entity(dagger_throw())
-    cs.entities.card_in_hand_ids = [
-        cs.entities.create_entity(strike()),
-        cs.entities.create_entity(strike()),
-        cs.entities.create_entity(strike()),
+    id_dagger_throw = create_entity(cs.entity_manager, create_dagger_throw())
+    cs.entity_manager.card_in_hand_ids = [
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
         id_dagger_throw,
     ]
-    cs.entities.card_in_draw_pile_ids = [
-        cs.entities.create_entity(strike()),
-        cs.entities.create_entity(dash()),
-        cs.entities.create_entity(defend()),
+    cs.entity_manager.card_in_draw_pile_ids = [
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_dash()),
+        create_entity(cs.entity_manager, create_defend()),
     ]
-    change_state(cs, State.DEFAULT)
 
-    # Get combat view
     combat_view = view_combat(cs)
-
-    # Get action from agent
-    action = agent.select_action(combat_view)
+    action = select_action(model, combat_view, greedy=True)
 
     if action.type != ActionType.SELECT_ENTITY:
         return False

@@ -7,8 +7,9 @@ import yaml
 
 from src.agents.a2c.encode import encode_combat_view
 from src.agents.a2c.model import ActorCritic
-from src.agents.a2c.utils import action_idx_to_action
-from src.agents.a2c.utils import get_valid_action_mask
+from src.agents.a2c.model import action_idx_to_action
+from src.agents.a2c.model import get_valid_action_mask
+from src.agents.a2c.model import select_action
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
