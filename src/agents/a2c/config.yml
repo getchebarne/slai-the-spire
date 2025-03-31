@@ -1,4 +1,4 @@
-exp_name: jaw/a2c-2
+exp_name: jaw/a2c-transf
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
@@ -11,10 +11,8 @@ coef_entropy_elbow: 2.5e+5
 max_grad_norm: 0.50
 
 model:
-  layer_sizes_shared: [127, 256, 256]
-  layer_sizes_actor: [256, 128, 64]
-  layer_sizes_critic: [256, 128, 64]
-  dim_card: 16
+  dim_card: 4
+  num_heads: 4
 
 optimizer:
   name: Adam

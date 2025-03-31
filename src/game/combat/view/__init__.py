@@ -24,8 +24,8 @@ class CombatView:
     energy: EnergyView
     effect: EffectView | None
     entity_selectable_ids: list[int]  # TODO: revisit
-    draw_pile: set[CardView]
-    disc_pile: set[CardView]
+    draw_pile: list[CardView]
+    disc_pile: list[CardView]
 
 
 def view_combat(combat_state: CombatState) -> CombatView:

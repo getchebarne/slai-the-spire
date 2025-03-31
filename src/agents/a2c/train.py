@@ -1,5 +1,6 @@
 import os
 import shutil
+from collections import deque
 from dataclasses import dataclass, field
 
 import torch
@@ -23,10 +24,10 @@ from src.game.combat.view import view_combat
 
 @dataclass
 class EpisodeResult:
-    log_probs: list[float] = field(default_factory=list)
-    values: list[float] = field(default_factory=list)
+    log_probs: list[torch.Tensor] = field(default_factory=list)
+    values: list[torch.Tensor] = field(default_factory=list)
     rewards: list[float] = field(default_factory=list)
-    entropies: list[float] = field(default_factory=list)
+    entropies: list[torch.Tensor] = field(default_factory=list)
 
 
 def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState, EpisodeResult]:
@@ -49,10 +50,10 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
 
         # Sample action from the action-selection distribution
         dist = torch.distributions.Categorical(probs)
-        action_idx = dist.sample().item()
+        action_idx = dist.sample()
 
         # Game step
-        action = action_idx_to_action(action_idx, combat_view_t)
+        action = action_idx_to_action(action_idx.item(), combat_view_t)
         step(cs, action)
 
         # Get new state, new valid actions, game over flag and instant reward
@@ -61,9 +62,7 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
         reward = compute_reward(combat_view_t, combat_view_tp1, game_over_flag)
 
         # Store the transition information
-        episode_result.log_probs.append(
-            dist.log_prob(torch.tensor(action_idx, dtype=torch.long, device=device)).unsqueeze(0)
-        )
+        episode_result.log_probs.append(dist.log_prob(action_idx).unsqueeze(0))
         episode_result.values.append(value)
         episode_result.rewards.append(reward)
         episode_result.entropies.append(dist.entropy().unsqueeze(0))
@@ -71,48 +70,55 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
     return cs, episode_result
 
 
-def _update(
+def _update_model(
     episode_result: EpisodeResult,
     optimizer: torch.optim.Optimizer,
     gamma: float,
     coef_value: float,
     coef_entropy: float,
     max_grad_norm: float,
+    device: torch.device,
 ) -> float:
-    # Compute returns and advantages
-    returns = []
-    advantages = []
-    R = 0
-    for reward, value in zip(reversed(episode_result.rewards), reversed(episode_result.values)):
-        R = reward + gamma * R
-        returns.insert(0, R)
-        advantage = R - value.item()
-        advantages.insert(0, advantage)
+    # Compute returns and advantages. Use `deque` so that inserting to the left is O(1)
+    ret_discs = deque()
+    advantages = deque()
 
-    returns = torch.tensor(returns, dtype=torch.float32)
-    advantages = torch.tensor(advantages, dtype=torch.float32)
+    ret_disc = 0
+    for reward, value in zip(reversed(episode_result.rewards), reversed(episode_result.values)):
+        # Calculate discounted return
+        ret_disc = reward + gamma * ret_disc
+        ret_discs.appendleft(ret_disc)
+
+        # Calculate advantage
+        advantage = ret_disc - value.item()  # TODO: detaching `value` from compute graph?
+        advantages.appendleft(advantage)
+
+    ret_discs = torch.tensor(ret_discs, dtype=torch.float32, device=device)
+    advantages = torch.tensor(advantages, dtype=torch.float32, device=device)
 
     # Normalize advantages
     if len(advantages) > 1:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-    # Convert lists to tensors
+    # Convert lists of 1-dimensional tensors to single len-episode-tensors
     log_probs = torch.cat(episode_result.log_probs)
     values = torch.cat(episode_result.values)
     entropies = torch.cat(episode_result.entropies)
 
     # Calculate losses
     policy_loss = -1 * torch.mean(log_probs * advantages)
-    value_loss = F.mse_loss(values.squeeze(), returns)
+    value_loss = F.mse_loss(values.squeeze(), ret_discs)
     entropy_loss = -1 * torch.mean(entropies)
 
     # Total loss
     loss = policy_loss + coef_value * value_loss + coef_entropy * entropy_loss
 
-    # Update network
+    # Calculate gradients. Clip them if necessary
     optimizer.zero_grad()
     loss.backward()
     nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
+    # Take optimization step and return episode loss
     optimizer.step()
 
     return loss.item()
@@ -168,13 +174,8 @@ def train(
     for num_episode in range(num_episodes):
         cs, episode_result = _play_episode(model, device)
         coef_entropy = coefs_entropy[num_episode]
-        loss = _update(
-            episode_result,
-            optimizer,
-            gamma,
-            coef_value,
-            coef_entropy,
-            max_grad_norm,
+        loss = _update_model(
+            episode_result, optimizer, gamma, coef_value, coef_entropy, max_grad_norm, device
         )
         combat_view_end = view_combat(cs)
 
@@ -229,12 +230,7 @@ def _get_coefs_entropy(num_episodes: int, elbow: int, max_: float, min_: float) 
 if __name__ == "__main__":
     config = _load_config()
 
-    model = ActorCritic(
-        config["model"]["layer_sizes_shared"],
-        config["model"]["layer_sizes_actor"],
-        config["model"]["layer_sizes_critic"],
-        config["model"]["dim_card"],
-    )
+    model = ActorCritic(config["model"]["dim_card"], config["model"]["num_heads"])
     optimizer = _init_optimizer(
         config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]
     )
