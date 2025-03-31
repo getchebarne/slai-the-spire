@@ -9,14 +9,17 @@ from src.game.combat.entities import Character
 from src.game.combat.entities import Energy
 from src.game.combat.entities import Modifier
 from src.game.combat.entities import Monster
+from src.game.combat.entities import MonsterMove
 
 
 def create_silent(health_current: int, health_max: int) -> Character:
     return Character("Silent", health_current=health_current, health_max=health_max)
 
 
-def create_dummy(health_current: int, health_max: int) -> Monster:
-    return Monster("Dummy", health_current=health_current, health_max=health_max)
+def create_dummy(
+    health_current: int, health_max: int, move_current: MonsterMove | None
+) -> Monster:
+    return Monster("Dummy", health_current, health_max, move_current=move_current)
 
 
 def create_jaw_worm() -> Monster:

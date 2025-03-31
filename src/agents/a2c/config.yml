@@ -1,4 +1,4 @@
-exp_name: jaw/a2c-mlp
+exp_name: jaw/a2c-scen
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100

@@ -10,10 +10,14 @@ import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from src.agents.a2c.encode import encode_combat_view
+from src.agents.a2c.evaluation import evaluate_blunder
+from src.agents.a2c.evaluation import evaluate_dagger_throw_over_strike
+from src.agents.a2c.evaluation import evaluate_draw_first
+from src.agents.a2c.evaluation import evaluate_lethal
 from src.agents.a2c.model import ActorCritic
+from src.agents.a2c.model import action_idx_to_action
+from src.agents.a2c.model import get_valid_action_mask
 from src.agents.a2c.reward import compute_reward
-from src.agents.a2c.utils import action_idx_to_action
-from src.agents.a2c.utils import get_valid_action_mask
 from src.game.combat.create import create_combat_state
 from src.game.combat.main import start_combat
 from src.game.combat.main import step
@@ -187,7 +191,24 @@ def train(
         # Evaluate agent
         if (num_episode % eval_every) == 0:
             hp_final = _evaluate_agent(model, device)
+
+            # TODO: parametrize
+            num_eval = 25
+            blunder = []
+            dagger = []
+            draw = []
+            lethal = []
+            for _ in range(num_eval):
+                blunder.append(evaluate_blunder(model))
+                dagger.append(evaluate_dagger_throw_over_strike(model))
+                draw.append(evaluate_draw_first(model))
+                lethal.append(evaluate_lethal(model))
+
             writer.add_scalar("Eval/Final HP", hp_final, num_episode)
+            writer.add_scalar("Scenario/Blunder", sum(blunder) / len(blunder), num_episode)
+            writer.add_scalar("Scenario/Dagger", sum(dagger) / len(dagger), num_episode)
+            writer.add_scalar("Scenario/Draw", sum(draw) / len(draw), num_episode)
+            writer.add_scalar("Scenario/Lethal", sum(lethal) / len(lethal), num_episode)
 
         # Save model
         if (num_episode % save_every) == 0:
@@ -230,7 +251,7 @@ def _get_coefs_entropy(num_episodes: int, elbow: int, max_: float, min_: float) 
 if __name__ == "__main__":
     config = _load_config()
 
-    model = ActorCritic(config["model"]["dim_card"], config["model"]["num_heads"])
+    model = ActorCritic(config["model"]["dim_card"])
     optimizer = _init_optimizer(
         config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]
     )
