@@ -29,6 +29,7 @@ EFFECT_TYPES = [
 ]
 
 
+# TODO: add batching?
 @dataclass(frozen=True)
 class Encoding:
     character: torch.Tensor
@@ -150,14 +151,13 @@ def get_energy_encoding_dim() -> torch.Size:
     return _encode_energy_view(energy_view_dummy, torch.device("cpu")).shape
 
 
-# TODO: make dataclass
 def encode_combat_view(combat_view: CombatView, device: torch.device) -> dict[str, torch.Tensor]:
     return Encoding(
         _encode_character_view(combat_view.character, device),
         _encode_monster_view(combat_view.monsters[0], device),
         _encode_energy_view(combat_view.energy, device),
         _encode_hand_view(combat_view.hand, combat_view.energy.current, device),
-        _encode_pile_view(combat_view.draw_pile, combat_view.energy.current, device),
-        _encode_pile_view(combat_view.disc_pile, combat_view.energy.current, device),
+        _encode_pile_view(combat_view.draw_pile, -1, device),
+        _encode_pile_view(combat_view.disc_pile, -1, device),
         len(combat_view.hand),
     )
