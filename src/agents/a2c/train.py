@@ -82,7 +82,7 @@ def _update_model(
     coef_entropy: float,
     max_grad_norm: float,
     device: torch.device,
-) -> float:
+) -> tuple[float, float, float, float]:
     # Compute returns and advantages. Use `deque` so that inserting to the left is O(1)
     ret_discs = deque()
     advantages = deque()
@@ -110,22 +110,22 @@ def _update_model(
     entropies = torch.cat(episode_result.entropies)
 
     # Calculate losses
-    policy_loss = -1 * torch.mean(log_probs * advantages)
-    value_loss = F.mse_loss(values.squeeze(), ret_discs)
-    entropy_loss = -1 * torch.mean(entropies)
+    loss_policy = -1 * torch.mean(log_probs * advantages)
+    loss_value = F.mse_loss(values.squeeze(), ret_discs)
+    loss_entropy = -1 * torch.mean(entropies)
 
     # Total loss
-    loss = policy_loss + coef_value * value_loss + coef_entropy * entropy_loss
+    loss_total = loss_policy + coef_value * loss_value + coef_entropy * loss_entropy
 
     # Calculate gradients. Clip them if necessary
     optimizer.zero_grad()
-    loss.backward()
+    loss_total.backward()
     nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
 
     # Take optimization step and return episode loss
     optimizer.step()
 
-    return loss.item()
+    return loss_total.item(), loss_policy.item(), loss_value.item(), loss_entropy.item()
 
 
 def _evaluate_agent(model: ActorCritic, device: torch.device) -> int:
@@ -178,14 +178,19 @@ def train(
     for num_episode in range(num_episodes):
         cs, episode_result = _play_episode(model, device)
         coef_entropy = coefs_entropy[num_episode]
-        loss = _update_model(
+        loss_total, loss_policy, loss_value, loss_entropy = _update_model(
             episode_result, optimizer, gamma, coef_value, coef_entropy, max_grad_norm, device
         )
         combat_view_end = view_combat(cs)
 
         if (num_episode % log_every) == 0:
-            writer.add_scalar("Loss", loss, num_episode)
-            writer.add_scalar("Final HP", combat_view_end.character.health_current, num_episode)
+            writer.add_scalar("Loss/total", loss_total, num_episode)
+            writer.add_scalar("Loss/policy", loss_policy, num_episode)
+            writer.add_scalar("Loss/value", loss_value, num_episode)
+            writer.add_scalar("Loss/entropy", loss_entropy, num_episode)
+            writer.add_scalar(
+                "Training/Health", combat_view_end.character.health_current, num_episode
+            )
             writer.add_scalar("Entropy coef.", coef_entropy, num_episode)
 
         # Evaluate agent
@@ -199,12 +204,12 @@ def train(
             draw = []
             lethal = []
             for _ in range(num_eval):
-                blunder.append(evaluate_blunder(model))
-                dagger.append(evaluate_dagger_throw_over_strike(model))
-                draw.append(evaluate_draw_first(model))
-                lethal.append(evaluate_lethal(model))
+                blunder.append(evaluate_blunder(model, device))
+                dagger.append(evaluate_dagger_throw_over_strike(model, device))
+                draw.append(evaluate_draw_first(model, device))
+                lethal.append(evaluate_lethal(model, device))
 
-            writer.add_scalar("Eval/Final HP", hp_final, num_episode)
+            writer.add_scalar("Evaluation/Health", hp_final, num_episode)
             writer.add_scalar("Scenario/Blunder", sum(blunder) / len(blunder), num_episode)
             writer.add_scalar("Scenario/Dagger", sum(dagger) / len(dagger), num_episode)
             writer.add_scalar("Scenario/Draw", sum(draw) / len(draw), num_episode)

@@ -14,7 +14,7 @@ class ActorView:
     health_current: int
     health_max: int
     block_current: int
-    modifiers: dict[ModifierViewType, int]
+    modifiers: dict[ModifierViewType, int | None]
 
 
 def actor_to_view(actor: Actor) -> ActorView:

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import torch
 
-from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.effect import EffectType
 from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
@@ -16,7 +15,7 @@ from src.game.combat.view.monster import IntentView
 from src.game.combat.view.monster import MonsterView
 
 
-MODIFIER_VIEW_TYPES = [modifier_view_type.name for modifier_view_type in ModifierViewType]
+MODIFIER_VIEW_TYPES = [modifier_view_type for modifier_view_type in ModifierViewType]
 
 # TODO: create some sort of variable where I can access the effects defined in cards
 # instead of doing this
@@ -39,8 +38,6 @@ class Encoding:
     draw_pile: torch.Tensor
     disc_pile: torch.Tensor
 
-    hand_size: int
-
 
 def _encode_energy_view(energy_view: EnergyView, device: torch.device) -> torch.Tensor:
     return torch.tensor([energy_view.current, energy_view.max], device=device, dtype=torch.float32)
@@ -50,7 +47,7 @@ def _encode_actor_modifiers(actor_view: ActorView) -> list[int]:
     modifier_encodings = [0] * len(MODIFIER_VIEW_TYPES)
     for i, modifier_view_type in enumerate(MODIFIER_VIEW_TYPES):
         if modifier_view_type in actor_view.modifiers:
-            stacks_current = actor_view.modifiers[modifier_view_type].stacks_current
+            stacks_current = actor_view.modifiers[modifier_view_type]
             if stacks_current is None:
                 modifier_encodings[i] = 1
             else:
@@ -101,34 +98,14 @@ def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
     return card_encoded + [card_view.cost, card_view.cost <= energy_current, card_view.is_active]
 
 
-def _encode_card_view_pad() -> list[int]:
-    playable = False
-    cost = 4
-    is_active = False
-    return [0] * len(EFFECT_TYPES) + [cost, playable, is_active]
-
-
-def _encode_hand_view(
+def _encode_card_views(
     card_views: list[CardView], energy_current: int, device: torch.device
 ) -> torch.Tensor:
-    card_encodings = []
-    for card_view in card_views:
-        card_encodings.append(_encode_card_view(card_view, energy_current))
-
-    # Padding (missing) cards
-    card_encodings += [_encode_card_view_pad()] * (MAX_HAND_SIZE - len(card_views))
-
-    return torch.tensor(card_encodings, dtype=torch.float32, device=device)
-
-
-def _encode_pile_view(
-    card_views: list[CardView], energy_current: int, device: torch.device
-) -> torch.Tensor:
-    card_encodings = []
-    for card_view in card_views:
-        card_encodings.append(_encode_card_view(card_view, energy_current))
-
-    return torch.tensor(card_encodings, dtype=torch.float32, device=device)
+    return torch.tensor(
+        [_encode_card_view(card_view, energy_current) for card_view in card_views],
+        dtype=torch.float32,
+        device=device,
+    )
 
 
 def get_character_encoding_dim() -> torch.Size:
@@ -156,8 +133,7 @@ def encode_combat_view(combat_view: CombatView, device: torch.device) -> dict[st
         _encode_character_view(combat_view.character, device),
         _encode_monster_view(combat_view.monsters[0], device),
         _encode_energy_view(combat_view.energy, device),
-        _encode_hand_view(combat_view.hand, combat_view.energy.current, device),
-        _encode_pile_view(combat_view.draw_pile, -1, device),
-        _encode_pile_view(combat_view.disc_pile, -1, device),
-        len(combat_view.hand),
+        _encode_card_views(combat_view.hand, combat_view.energy.current, device),
+        _encode_card_views(combat_view.draw_pile, -1, device),
+        _encode_card_views(combat_view.disc_pile, -1, device),
     )

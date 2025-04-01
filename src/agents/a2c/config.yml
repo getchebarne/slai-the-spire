@@ -1,11 +1,11 @@
-exp_name: jaw/a2c-scen
+exp_name: a2c/jaw/5
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
 save_every: 10000
 gamma: 0.99
 coef_value: 0.500
-coef_entropy_max: 0.075
+coef_entropy_max: 0.050
 coef_entropy_min: 0.010
 coef_entropy_elbow: 2.5e+5 
 max_grad_norm: 0.500
@@ -16,4 +16,4 @@ model:
 optimizer:
   name: Adam
   kwargs:
-    lr: 2.5e-5
+    lr: 2.5e-4
