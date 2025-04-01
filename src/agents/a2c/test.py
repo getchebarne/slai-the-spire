@@ -35,7 +35,7 @@ def load_model(exp_name: str) -> tuple[ActorCritic, dict[str, Any]]:
     with open(exp_path / "config.yml", "r") as file:
         config = yaml.safe_load(file)
 
-    model = ActorCritic(config["model"]["dim_card"], config["model"]["num_heads"])
+    model = ActorCritic(config["model"]["dim_card"])
 
     model.load_state_dict(torch.load(exp_path / "model.pth"))
 
@@ -102,7 +102,7 @@ def display_game(game: tuple[int, list]) -> None:
 
 
 if __name__ == "__main__":
-    exp_name = "jaw/a2c-mlp"
+    exp_name = "a2c/jaw/5"
     device = torch.device("cpu")
 
     model, config = load_model(exp_name)
