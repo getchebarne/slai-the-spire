@@ -43,7 +43,7 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
     while not is_game_over(cs.entity_manager):
         # Get combat view, encode it, and get valid action mask
         combat_view_t = view_combat(cs)
-        combat_view_t_encoded = encode_combat_view(combat_view_t, device)
+        combat_view_t_encoded, index_mapping = encode_combat_view(combat_view_t, device)
         valid_action_mask_t = get_valid_action_mask(combat_view_t)
 
         # Get action probabilities and state value
@@ -57,7 +57,7 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
         action_idx = dist.sample()
 
         # Game step
-        action = action_idx_to_action(action_idx.item(), combat_view_t)
+        action = action_idx_to_action(action_idx.item(), combat_view_t, index_mapping)
         step(cs, action)
 
         # Get new state, new valid actions, game over flag and instant reward
@@ -83,26 +83,32 @@ def _update_model(
     max_grad_norm: float,
     device: torch.device,
 ) -> tuple[float, float, float, float]:
-    # Compute returns and advantages. Use `deque` so that inserting to the left is O(1)
-    ret_discs = deque()
+    # Calculate TD targets and advantages
+    td_targets = deque()
     advantages = deque()
 
-    ret_disc = 0
-    for reward, value in zip(reversed(episode_result.rewards), reversed(episode_result.values)):
-        # Calculate discounted return
-        ret_disc = reward + gamma * ret_disc
-        ret_discs.appendleft(ret_disc)
+    # For the last step, there's no next state, so we use just the reward (or 0 if bootstrapping with value)
+    # Assuming the last value is for the terminal state, otherwise you'd use 0 here
+    next_value = 0
 
-        # Calculate advantage
-        advantage = ret_disc - value.item()  # TODO: detaching `value` from compute graph?
+    for reward, value, next_value_tensor in zip(
+        reversed(episode_result.rewards),
+        reversed(episode_result.values),
+        reversed(
+            episode_result.values[1:]
+            + [torch.tensor([next_value], dtype=torch.float32, device=device)]
+        ),
+    ):
+        # Calculate TD target: r + γV(s')
+        td_target = reward + gamma * next_value_tensor.item()
+        td_targets.appendleft(td_target)
+
+        # Calculate advantage: TD target - V(s)
+        advantage = td_target - value.item()
         advantages.appendleft(advantage)
 
-    ret_discs = torch.tensor(ret_discs, dtype=torch.float32, device=device)
+    td_targets = torch.tensor(td_targets, dtype=torch.float32, device=device)
     advantages = torch.tensor(advantages, dtype=torch.float32, device=device)
-
-    # Normalize advantages
-    if len(advantages) > 1:
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     # Convert lists of 1-dimensional tensors to single len-episode-tensors
     log_probs = torch.cat(episode_result.log_probs)
@@ -111,7 +117,7 @@ def _update_model(
 
     # Calculate losses
     loss_policy = -1 * torch.mean(log_probs * advantages)
-    loss_value = F.mse_loss(values.squeeze(), ret_discs)
+    loss_value = F.mse_loss(values.squeeze(), td_targets)
     loss_entropy = -1 * torch.mean(entropies)
 
     # Total loss
@@ -136,8 +142,8 @@ def _evaluate_agent(model: ActorCritic, device: torch.device) -> int:
     while not is_game_over(cs.entity_manager):
         # Get combat view
         combat_view = view_combat(cs)
+        combat_view_encoded, index_mapping = encode_combat_view(combat_view, device)
         valid_action_mask = get_valid_action_mask(combat_view)
-        combat_view_encoded = encode_combat_view(combat_view, device)
 
         # Get action from agent
         probs, _ = model(
@@ -147,7 +153,7 @@ def _evaluate_agent(model: ActorCritic, device: torch.device) -> int:
 
         # Game step
         action_idx = torch.argmax(probs).item()
-        action = action_idx_to_action(action_idx, combat_view)
+        action = action_idx_to_action(action_idx, combat_view, index_mapping)
 
         step(cs, action)
 
@@ -211,8 +217,6 @@ def train(
 
             writer.add_scalar("Evaluation/Health", hp_final, num_episode)
             writer.add_scalar("Scenario/Blunder", sum(blunder) / len(blunder), num_episode)
-            writer.add_scalar("Scenario/Dagger", sum(dagger) / len(dagger), num_episode)
-            writer.add_scalar("Scenario/Draw", sum(draw) / len(draw), num_episode)
             writer.add_scalar("Scenario/Lethal", sum(lethal) / len(lethal), num_episode)
 
         # Save model
@@ -271,6 +275,8 @@ if __name__ == "__main__":
         config["coef_entropy_max"],
         config["coef_entropy_min"],
     )
+
+    print(f"{config['exp_name']=}")
     train(
         config["exp_name"],
         config["num_episodes"],
