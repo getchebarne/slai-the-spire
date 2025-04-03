@@ -1,4 +1,4 @@
-exp_name: a2c/jaw/5
+exp_name: a2c/jaw/sorted-ent-td-2
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
@@ -7,7 +7,7 @@ gamma: 0.99
 coef_value: 0.500
 coef_entropy_max: 0.050
 coef_entropy_min: 0.010
-coef_entropy_elbow: 2.5e+5 
+coef_entropy_elbow: 2.5e+5
 max_grad_norm: 0.500
 
 model:
@@ -16,4 +16,4 @@ model:
 optimizer:
   name: Adam
   kwargs:
-    lr: 2.5e-4
+    lr: 1.0e-4

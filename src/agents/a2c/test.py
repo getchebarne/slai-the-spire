@@ -58,19 +58,21 @@ def run_simulation(
             valid_action_mask = torch.tensor(
                 get_valid_action_mask(combat_view), dtype=torch.bool, device=device
             )
-
+            encoding, index_mapping = encode_combat_view(combat_view, device)
             with torch.no_grad():
-                prob, _ = model(
-                    encode_combat_view(combat_view, device),
-                    valid_action_mask,
-                )
+                prob, _ = model(encoding, valid_action_mask)
 
             action_idx = torch.argmax(prob).item()
-            action = action_idx_to_action(action_idx, combat_view)
+            action = action_idx_to_action(action_idx, combat_view, index_mapping)
 
             step(cs, action)
 
-            combat_views.append((combat_view, prob, valid_action_mask))
+            prob_c = prob.clone()
+            for idx_new, idx_old in index_mapping.items():
+                prob_c[idx_old] = prob[idx_new]
+                prob_c[idx_old + MAX_HAND_SIZE] = prob[idx_new + MAX_HAND_SIZE]
+
+            combat_views.append((combat_view, prob_c, valid_action_mask))
 
         games.append((combat_view.character.health_current, combat_views))
 
@@ -102,7 +104,7 @@ def display_game(game: tuple[int, list]) -> None:
 
 
 if __name__ == "__main__":
-    exp_name = "a2c/jaw/5"
+    exp_name = "a2c/jaw/sorted-ent-td"
     device = torch.device("cpu")
 
     model, config = load_model(exp_name)

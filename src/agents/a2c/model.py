@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.agents.a2c.encode import Encoding
+from src.agents.a2c.encode import _sort_card_views_and_return_mapping
 from src.agents.a2c.encode import encode_combat_view
 from src.agents.a2c.encode import get_card_encoding_dim
 from src.agents.a2c.encode import get_character_encoding_dim
@@ -53,33 +54,29 @@ class ActorCritic(nn.Module):
         # Card embedding and transformer
         self._embedding_card_pad = nn.Parameter(torch.randn(DIM_ENC_CARD))
         self._embedding_card = nn.Linear(DIM_ENC_CARD, dim_card)
-        self._embedding_card_draw_pile_pad = nn.Parameter(torch.randn(3 * dim_card))
-        self._embedding_card_disc_pile_pad = nn.Parameter(torch.randn(3 * dim_card))
+        self._embedding_card_active = nn.Parameter(torch.randn(dim_card))
 
         # Other state variables (i.e., character, monsters, energy)
-        self._embedding_other = MLP([DIM_OTHER, 3 * dim_card, 3 * dim_card])
-
-        # Global layer normalization
-        self._ln_global = nn.LayerNorm(12 * dim_card)
+        self._embedding_other = MLP([DIM_OTHER + 1, 3 * dim_card, 3 * dim_card])
 
         # Actor
         self._mlp_actor_card = nn.Sequential(
-            MLP([13 * dim_card, 13 * dim_card, 13 * dim_card]),
-            nn.Linear(13 * dim_card, 2),
+            MLP([11 * dim_card, 11 * dim_card, 11 * dim_card]),
+            nn.Linear(11 * dim_card, 2),
         )
         self._mlp_actor_monster = nn.Sequential(
-            MLP([12 * dim_card, 12 * dim_card, 12 * dim_card]),
-            nn.Linear(12 * dim_card, 1),
+            MLP([10 * dim_card, 10 * dim_card, 10 * dim_card]),
+            nn.Linear(10 * dim_card, 1),
         )
         self._mlp_actor_end_turn = nn.Sequential(
-            MLP([12 * dim_card, 12 * dim_card, 12 * dim_card]),
-            nn.Linear(12 * dim_card, 1),
+            MLP([10 * dim_card, 10 * dim_card, 10 * dim_card]),
+            nn.Linear(10 * dim_card, 1),
         )
 
         # Critic
         self._mlp_critic = nn.Sequential(
-            MLP([12 * dim_card, 12 * dim_card, 12 * dim_card]),
-            nn.Linear(12 * dim_card, 1),
+            MLP([10 * dim_card, 10 * dim_card, 10 * dim_card]),
+            nn.Linear(10 * dim_card, 1),
         )
 
     def forward(
@@ -95,34 +92,8 @@ class ActorCritic(nn.Module):
             ]
         )
         x_card_hand = self._embedding_card(x_card_hand)
-
-        # Draw pile
-        draw_pile_size = encoding.draw_pile.shape[0]
-        if draw_pile_size > 0:
-            x_card_draw_pile = self._embedding_card(encoding.draw_pile)
-            x_card_draw_pile = torch.cat(
-                [
-                    torch.mean(x_card_draw_pile, dim=0),
-                    torch.sum(x_card_draw_pile, dim=0),
-                    torch.max(x_card_draw_pile, dim=0)[0],
-                ]
-            )
-        else:
-            x_card_draw_pile = self._embedding_card_draw_pile_pad
-
-        # Discard pile
-        disc_pile_size = encoding.disc_pile.shape[0]
-        if disc_pile_size > 0:
-            x_card_disc_pile = self._embedding_card(encoding.disc_pile)
-            x_card_disc_pile = torch.cat(
-                [
-                    torch.mean(x_card_disc_pile, dim=0),
-                    torch.sum(x_card_disc_pile, dim=0),
-                    torch.max(x_card_disc_pile, dim=0)[0],
-                ]
-            )
-        else:
-            x_card_disc_pile = self._embedding_card_disc_pile_pad
+        if encoding.idx_card_active is not None:
+            x_card_hand[encoding.idx_card_active] += self._embedding_card_active
 
         # Other
         x_other = self._embedding_other(
@@ -131,6 +102,7 @@ class ActorCritic(nn.Module):
                     encoding.character,
                     encoding.monster,
                     encoding.energy,
+                    encoding.effect,
                 ]
             )
         )
@@ -138,19 +110,14 @@ class ActorCritic(nn.Module):
         # Concatenate
         x_global = torch.cat(
             [
-                torch.mean(x_card_hand, dim=0),
-                torch.sum(x_card_hand, dim=0),
-                torch.max(x_card_hand, dim=0)[0],
-                x_card_draw_pile,
-                x_card_disc_pile,
+                torch.flatten(x_card_hand),
                 x_other,
             ]
         )
-        x_global = self._ln_global(x_global)
 
         # Actor
         logit_cards = self._mlp_actor_card(
-            torch.cat([x_global.expand((MAX_HAND_SIZE, 12 * self._dim_card)), x_card_hand], dim=1)
+            torch.cat([x_global.expand((MAX_HAND_SIZE, 10 * self._dim_card)), x_card_hand], dim=1)
         )
         logit_monster = self._mlp_actor_monster(x_global)
         logit_end_turn = self._mlp_actor_end_turn(x_global)
@@ -186,7 +153,8 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
 
         return valid_action_mask
 
-    valid_action_mask = [card.cost <= combat_view.energy.current for card in combat_view.hand]
+    hand_sorted, _ = _sort_card_views_and_return_mapping(combat_view.hand)
+    valid_action_mask = [card.cost <= combat_view.energy.current for card in hand_sorted]
     valid_action_mask.extend([False] * (MAX_HAND_SIZE - len(combat_view.hand)))
     valid_action_mask.extend([False] * MAX_HAND_SIZE)
     valid_action_mask.extend([False, True])
@@ -196,11 +164,13 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
 
 # TODO: adapt for multiple monsters
 # TODO: adapt for discard
-def action_idx_to_action(action_idx: int, combat_view: CombatView) -> Action:
+def action_idx_to_action(
+    action_idx: int, combat_view: CombatView, index_mapping: dict[int, int]
+) -> Action:
     if action_idx < 2 * MAX_HAND_SIZE:
-        return Action(
-            ActionType.SELECT_ENTITY, combat_view.hand[action_idx % MAX_HAND_SIZE].entity_id
-        )
+        # Undo hand sorting
+        action_idx = index_mapping[action_idx % MAX_HAND_SIZE]
+        return Action(ActionType.SELECT_ENTITY, combat_view.hand[action_idx].entity_id)
 
     if action_idx == 2 * MAX_HAND_SIZE:
         return Action(ActionType.SELECT_ENTITY, combat_view.monsters[0].entity_id)
@@ -218,7 +188,7 @@ def select_action(
     greedy: bool,
     device: torch.device = torch.device("cpu"),
 ) -> tuple[Action, torch.Tensor, torch.Tensor]:
-    encoding = encode_combat_view(combat_view, device)
+    encoding, index_mapping = encode_combat_view(combat_view, device)
     valid_action_mask = get_valid_action_mask(combat_view)
 
     probs, _ = model(encoding, torch.tensor(valid_action_mask, dtype=torch.bool, device=device))
@@ -229,6 +199,6 @@ def select_action(
         dist = torch.distributions.Categorical(probs)
         action_idx = dist.sample()
 
-    action = action_idx_to_action(action_idx.item(), combat_view)
+    action = action_idx_to_action(action_idx.item(), combat_view, index_mapping)
 
     return action
