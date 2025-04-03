@@ -2,8 +2,8 @@ import random
 
 import torch
 
-from src.agents.a2c.model import ActorCritic
-from src.agents.a2c.model import select_action
+from src.agents.a2c.models.actor import Actor
+from src.agents.a2c.models.actor import select_action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.entities import create_entity
@@ -17,7 +17,7 @@ from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
 
-def evaluate_blunder(model: ActorCritic, device: torch.device) -> bool:
+def evaluate_blunder(model: Actor, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -48,7 +48,7 @@ def evaluate_blunder(model: ActorCritic, device: torch.device) -> bool:
     return False
 
 
-def evaluate_lethal(model: ActorCritic, device: torch.device) -> bool:
+def evaluate_lethal(model: Actor, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -80,7 +80,7 @@ def evaluate_lethal(model: ActorCritic, device: torch.device) -> bool:
     return False
 
 
-def evaluate_draw_first(model: ActorCritic, device: torch.device) -> bool:
+def evaluate_draw_first(model: Actor, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -108,7 +108,7 @@ def evaluate_draw_first(model: ActorCritic, device: torch.device) -> bool:
     return True
 
 
-def evaluate_dagger_throw_over_strike(model: ActorCritic, device: torch.device) -> bool:
+def evaluate_dagger_throw_over_strike(model: Actor, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 

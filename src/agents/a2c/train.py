@@ -11,12 +11,11 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.agents.a2c.encode import encode_combat_view
 from src.agents.a2c.evaluation import evaluate_blunder
-from src.agents.a2c.evaluation import evaluate_dagger_throw_over_strike
-from src.agents.a2c.evaluation import evaluate_draw_first
 from src.agents.a2c.evaluation import evaluate_lethal
-from src.agents.a2c.model import ActorCritic
-from src.agents.a2c.model import action_idx_to_action
-from src.agents.a2c.model import get_valid_action_mask
+from src.agents.a2c.models.actor import Actor
+from src.agents.a2c.models.actor import action_idx_to_action
+from src.agents.a2c.models.actor import get_valid_action_mask
+from src.agents.a2c.models.critic import Critic
 from src.agents.a2c.reward import compute_reward
 from src.game.combat.create import create_combat_state
 from src.game.combat.main import start_combat
@@ -34,7 +33,9 @@ class EpisodeResult:
     entropies: list[torch.Tensor] = field(default_factory=list)
 
 
-def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState, EpisodeResult]:
+def _play_episode(
+    model_actor: Actor, model_critic: Critic, device: torch.device
+) -> tuple[CombatState, EpisodeResult]:
     # Get new game TODO: improve this
     cs = create_combat_state()
     start_combat(cs)
@@ -47,13 +48,14 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
         valid_action_mask_t = get_valid_action_mask(combat_view_t)
 
         # Get action probabilities and state value
-        probs, value = model(
+        x_prob = model_actor(
             combat_view_t_encoded,
             torch.tensor(valid_action_mask_t, dtype=torch.bool, device=device),
         )
+        x_value = model_critic(combat_view_t_encoded)
 
         # Sample action from the action-selection distribution
-        dist = torch.distributions.Categorical(probs)
+        dist = torch.distributions.Categorical(x_prob)
         action_idx = dist.sample()
 
         # Game step
@@ -67,7 +69,7 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
 
         # Store the transition information
         episode_result.log_probs.append(dist.log_prob(action_idx).unsqueeze(0))
-        episode_result.values.append(value)
+        episode_result.values.append(x_value)
         episode_result.rewards.append(reward)
         episode_result.entropies.append(dist.entropy().unsqueeze(0))
 
@@ -76,22 +78,22 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState
 
 def _update_model(
     episode_result: EpisodeResult,
-    optimizer: torch.optim.Optimizer,
+    model_actor: Actor,
+    model_critic: Critic,
+    optimizer_actor: torch.optim.Optimizer,
+    optimizer_critic: torch.optim.Optimizer,
     gamma: float,
-    coef_value: float,
     coef_entropy: float,
     max_grad_norm: float,
     device: torch.device,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float]:
     # Calculate TD targets and advantages
     td_targets = deque()
     advantages = deque()
 
-    # For the last step, there's no next state, so we use just the reward (or 0 if bootstrapping with value)
-    # Assuming the last value is for the terminal state, otherwise you'd use 0 here
+    # For the last step, there's no next state, so we use just the reward
     next_value = 0
-
-    for reward, value, next_value_tensor in zip(
+    for reward, value_t, value_tp1 in zip(
         reversed(episode_result.rewards),
         reversed(episode_result.values),
         reversed(
@@ -100,11 +102,11 @@ def _update_model(
         ),
     ):
         # Calculate TD target: r + γV(s')
-        td_target = reward + gamma * next_value_tensor.item()
+        td_target = reward + gamma * value_tp1.item()
         td_targets.appendleft(td_target)
 
         # Calculate advantage: TD target - V(s)
-        advantage = td_target - value.item()
+        advantage = td_target - value_t.item()
         advantages.appendleft(advantage)
 
     td_targets = torch.tensor(td_targets, dtype=torch.float32, device=device)
@@ -117,24 +119,31 @@ def _update_model(
 
     # Calculate losses
     loss_policy = -1 * torch.mean(log_probs * advantages)
-    loss_value = F.mse_loss(values.squeeze(), td_targets)
     loss_entropy = -1 * torch.mean(entropies)
+    loss_value = F.mse_loss(values.squeeze(), td_targets)
 
-    # Total loss
-    loss_total = loss_policy + coef_value * loss_value + coef_entropy * loss_entropy
+    # Calculate gradients
+    loss_policy_entropy = loss_policy + coef_entropy * loss_entropy
 
-    # Calculate gradients. Clip them if necessary
-    optimizer.zero_grad()
-    loss_total.backward()
-    nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    optimizer_actor.zero_grad()
+    optimizer_critic.zero_grad()
 
-    # Take optimization step and return episode loss
-    optimizer.step()
+    loss_policy_entropy.backward()
+    loss_value.backward()
 
-    return loss_total.item(), loss_policy.item(), loss_value.item(), loss_entropy.item()
+    # Apply clipping
+    nn.utils.clip_grad_norm_(model_actor.parameters(), max_grad_norm)
+    nn.utils.clip_grad_norm_(model_critic.parameters(), max_grad_norm)
+
+    # Take optimization step
+    optimizer_actor.step()
+    optimizer_critic.step()
+
+    # Return losses for logging
+    return loss_policy.item(), loss_value.item(), loss_entropy.item()
 
 
-def _evaluate_agent(model: ActorCritic, device: torch.device) -> int:
+def _evaluate_agent(model_actor: Actor, device: torch.device) -> int:
     # Get new game TODO: improve this
     cs = create_combat_state()
     start_combat(cs)
@@ -146,13 +155,13 @@ def _evaluate_agent(model: ActorCritic, device: torch.device) -> int:
         valid_action_mask = get_valid_action_mask(combat_view)
 
         # Get action from agent
-        probs, _ = model(
+        x_prob = model_actor(
             combat_view_encoded,
             torch.tensor(valid_action_mask, dtype=torch.float32, device=device),
         )
 
         # Game step
-        action_idx = torch.argmax(probs).item()
+        action_idx = torch.argmax(x_prob).item()
         action = action_idx_to_action(action_idx, combat_view, index_mapping)
 
         step(cs, action)
@@ -167,61 +176,70 @@ def train(
     log_every: int,
     eval_every: int,
     save_every: int,
-    model: ActorCritic,
-    optimizer: torch.optim.Optimizer,
+    model_actor: Actor,
+    model_critic: Critic,
+    optimizer_actor: torch.optim.Optimizer,
+    optimizer_critic: torch.optim.Optimizer,
     device: torch.device,
     gamma: float,
-    coef_value: float,
     coefs_entropy: list[float],
     max_grad_norm: float,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
 
-    # Send model to device TODO: move
-    model.to(device)
+    # Send models to device
+    model_actor.to(device)
+    model_critic.to(device)
 
     # Train
     for num_episode in range(num_episodes):
-        cs, episode_result = _play_episode(model, device)
+        # Play episode, get trajectory
+        cs, episode_result = _play_episode(model_actor, model_critic, device)
+
+        # Fit the models
         coef_entropy = coefs_entropy[num_episode]
-        loss_total, loss_policy, loss_value, loss_entropy = _update_model(
-            episode_result, optimizer, gamma, coef_value, coef_entropy, max_grad_norm, device
+        loss_policy, loss_value, loss_entropy = _update_model(
+            episode_result,
+            model_actor,
+            model_critic,
+            optimizer_actor,
+            optimizer_critic,
+            gamma,
+            coef_entropy,
+            max_grad_norm,
+            device,
         )
         combat_view_end = view_combat(cs)
 
         if (num_episode % log_every) == 0:
-            writer.add_scalar("Loss/total", loss_total, num_episode)
             writer.add_scalar("Loss/policy", loss_policy, num_episode)
             writer.add_scalar("Loss/value", loss_value, num_episode)
-            writer.add_scalar("Loss/entropy", loss_entropy, num_episode)
             writer.add_scalar(
                 "Training/Health", combat_view_end.character.health_current, num_episode
             )
-            writer.add_scalar("Entropy coef.", coef_entropy, num_episode)
+            writer.add_scalar("Entropy/coef.", coef_entropy, num_episode)
+            writer.add_scalar("Entropy/value", -1 * loss_entropy, num_episode)
 
         # Evaluate agent
         if (num_episode % eval_every) == 0:
-            hp_final = _evaluate_agent(model, device)
+            hp_final = _evaluate_agent(model_actor, device)
 
             # TODO: parametrize
-            num_eval = 25
+            num_eval = 10
             blunder = []
-            dagger = []
-            draw = []
             lethal = []
             for _ in range(num_eval):
-                blunder.append(evaluate_blunder(model, device))
-                dagger.append(evaluate_dagger_throw_over_strike(model, device))
-                draw.append(evaluate_draw_first(model, device))
-                lethal.append(evaluate_lethal(model, device))
+                blunder.append(evaluate_blunder(model_actor, device))
+                lethal.append(evaluate_lethal(model_actor, device))
 
             writer.add_scalar("Evaluation/Health", hp_final, num_episode)
             writer.add_scalar("Scenario/Blunder", sum(blunder) / len(blunder), num_episode)
             writer.add_scalar("Scenario/Lethal", sum(lethal) / len(lethal), num_episode)
 
-        # Save model
+        # Save models
         if (num_episode % save_every) == 0:
-            torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
+            torch.save(model_actor.state_dict(), f"experiments/{exp_name}/model_actor.pth")
+            torch.save(model_critic.state_dict(), f"experiments/{exp_name}/model_critic.pth")
 
 
 # TODO: fix path
@@ -238,7 +256,7 @@ def _load_config(config_path: str = "src/agents/a2c/config.yml") -> dict:
 
 
 # TODO: use **kwargs, improve signature
-def _init_optimizer(name: str, model: ActorCritic, **kwargs) -> torch.optim.Optimizer:
+def _init_optimizer(name: str, model: Actor | Critic, **kwargs) -> torch.optim.Optimizer:
     return getattr(torch.optim, name)(**kwargs, params=model.parameters())
 
 
@@ -260,15 +278,23 @@ def _get_coefs_entropy(num_episodes: int, elbow: int, max_: float, min_: float) 
 if __name__ == "__main__":
     config = _load_config()
 
-    model = ActorCritic(config["model"]["dim_card"])
-    optimizer = _init_optimizer(
-        config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]
+    # Models
+    model_actor = Actor(config["model_actor"]["dim_card"])
+    model_critic = Critic(config["model_critic"]["dim_card"])
+
+    # Optimizers
+    optimizer_actor = _init_optimizer(
+        config["optimizer_actor"]["name"], model_actor, **config["optimizer_actor"]["kwargs"]
+    )
+    optimizer_critic = _init_optimizer(
+        config["optimizer_critic"]["name"], model_critic, **config["optimizer_critic"]["kwargs"]
     )
 
-    # Copy config
+    # Copy config to experiment directory
     os.makedirs(f"experiments/{config['exp_name']}")
     shutil.copy("src/agents/a2c/config.yml", f"experiments/{config['exp_name']}/config.yml")
 
+    # Get entropy coefficients
     coefs_entropy = _get_coefs_entropy(
         config["num_episodes"],
         config["coef_entropy_elbow"],
@@ -276,6 +302,7 @@ if __name__ == "__main__":
         config["coef_entropy_min"],
     )
 
+    # Start training
     print(f"{config['exp_name']=}")
     train(
         config["exp_name"],
@@ -283,11 +310,12 @@ if __name__ == "__main__":
         config["log_every"],
         config["eval_every"],
         config["save_every"],
-        model,
-        optimizer,
+        model_actor,
+        model_critic,
+        optimizer_actor,
+        optimizer_critic,
         torch.device("cpu"),
         config["gamma"],
-        config["coef_value"],
         coefs_entropy,
         config["max_grad_norm"],
     )

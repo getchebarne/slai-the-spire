@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -6,10 +5,9 @@ import torch
 import yaml
 
 from src.agents.a2c.encode import encode_combat_view
-from src.agents.a2c.model import ActorCritic
-from src.agents.a2c.model import action_idx_to_action
-from src.agents.a2c.model import get_valid_action_mask
-from src.agents.a2c.model import select_action
+from src.agents.a2c.models.actor import Actor
+from src.agents.a2c.models.actor import action_idx_to_action
+from src.agents.a2c.models.actor import get_valid_action_mask
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
@@ -17,6 +15,9 @@ from src.game.combat.main import start_combat
 from src.game.combat.main import step
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
+
+
+BASE_PATH = "/Users/getchebarne/Desktop/slai-the-spire/experiments"
 
 
 def format_probs(probs_array: np.ndarray, precision: int = 4) -> str:
@@ -28,22 +29,21 @@ def format_probs(probs_array: np.ndarray, precision: int = 4) -> str:
     )
 
 
-def load_model(exp_name: str) -> tuple[ActorCritic, dict[str, Any]]:
-    base_path = Path("/Users/getchebarne/Desktop/slai-the-spire/experiments")
-    exp_path = base_path / exp_name
+def load_model(exp_name: str) -> tuple[Actor, dict[str, Any]]:
+    exp_path = f"{BASE_PATH}/{exp_name}"
 
-    with open(exp_path / "config.yml", "r") as file:
+    with open(f"{exp_path}/config.yml", "r") as file:
         config = yaml.safe_load(file)
 
-    model = ActorCritic(config["model"]["dim_card"])
+    model = Actor(config["model_actor"]["dim_card"])
 
-    model.load_state_dict(torch.load(exp_path / "model.pth"))
+    model.load_state_dict(torch.load(f"{exp_path}/model_actor.pth"))
 
     return model, config
 
 
 def run_simulation(
-    model: ActorCritic, num_games: int = 250, device: torch.device = torch.device("cpu")
+    model: Actor, num_games: int = 250, device: torch.device = torch.device("cpu")
 ) -> list[tuple[int, list]]:
     games = []
 
@@ -60,7 +60,7 @@ def run_simulation(
             )
             encoding, index_mapping = encode_combat_view(combat_view, device)
             with torch.no_grad():
-                prob, _ = model(encoding, valid_action_mask)
+                prob = model(encoding, valid_action_mask)
 
             action_idx = torch.argmax(prob).item()
             action = action_idx_to_action(action_idx, combat_view, index_mapping)
@@ -104,13 +104,13 @@ def display_game(game: tuple[int, list]) -> None:
 
 
 if __name__ == "__main__":
-    exp_name = "a2c/jaw/sorted-ent-td"
+    exp_name = "a2c/jaw/newera"
     device = torch.device("cpu")
 
     model, config = load_model(exp_name)
     model.to(device)
 
-    games = run_simulation(model, num_games=250, device=device)
+    games = run_simulation(model, num_games=100, device=device)
 
     worst_game = games[0]
     display_game(worst_game)

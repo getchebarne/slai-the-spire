@@ -1,4 +1,4 @@
-# TODO: this is very tightly coupled with model.py, improve it
+# TODO: this is very tightly coupled with the models, improve it
 
 from dataclasses import dataclass
 
@@ -161,9 +161,7 @@ def encode_combat_view(
         _encode_energy_view(combat_view.energy, device),
         _encode_card_views(hand_sorted, combat_view.energy.current, device),
         idx_card_active,
-        torch.tensor(
-            [True if combat_view.effect is not None else False], dtype=torch.float32, device=device
-        ),
+        True if combat_view.effect is not None else False,
     )
 
     return encoding, index_mapping
