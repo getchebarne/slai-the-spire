@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 from src.game.combat.view import CombatView
 from src.game.combat.view.actor import ActorView
@@ -63,14 +62,14 @@ def _actor_str(actor: ActorView, n_col: int = 0) -> str:
     )
 
 
-# def _effect_str(effect_view: Optional[EffectView]) -> str:
+# def _effect_str(effect_view: EffectView | None) -> str:
 #     if effect_view is None:
 #         return "None"
 
 #     return f"{effect_view.type}: {effect_view.number_of_targets}"
 
 
-def _intent_str(intent_view: Optional[IntentView]) -> str:
+def _intent_str(intent_view: IntentView | None) -> str:
     str_ = ""
     if intent_view is None:
         return str_
