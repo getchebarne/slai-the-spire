@@ -1,9 +1,10 @@
 # TODO: this is very tightly coupled with the models, improve it
 
-from dataclasses import dataclass
-
+import numpy as np
 import torch
+import torch.nn.functional as F
 
+from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.effect import EffectType
 from src.game.combat.view import ActorView
 from src.game.combat.view import CardView
@@ -26,18 +27,6 @@ EFFECT_TYPES = [
     EffectType.GAIN_WEAK,
     EffectType.DRAW_CARD,
 ]
-
-
-# TODO: add batching?
-@dataclass(frozen=True)
-class Encoding:
-    character: torch.Tensor
-    monster: torch.Tensor
-    energy: torch.Tensor
-    hand: torch.Tensor
-
-    idx_card_active: int | None
-    effect: bool
 
 
 # TODO: in the future I'll need to add max-energy, it's always 3 for now
@@ -92,36 +81,26 @@ def _encode_monster_view(monster_view: MonsterView, device: torch.device) -> tor
 
 
 # TODO: in the future, I should also encode the target and selection types
-def _encode_card_view(card_view: CardView, energy_current: int) -> list[int]:
+def _encode_card_view(card_view: CardView) -> list[int]:
     card_encoded = [0] * len(EFFECT_TYPES)
     for effect in card_view.effects:
         card_encoded[EFFECT_TYPES.index(effect.type)] = effect.value
 
-    return card_encoded + [card_view.cost, energy_current - card_view.cost]
+    return card_encoded + [card_view.cost]
 
 
-def _encode_card_views(
-    card_views: list[CardView], energy_current: int, device: torch.device
-) -> torch.Tensor:
-    return torch.tensor(
-        [_encode_card_view(card_view, energy_current) for card_view in card_views],
-        dtype=torch.float32,
-        device=device,
+def _encode_card_views(card_views: list[CardView], device: torch.device) -> torch.Tensor:
+    return torch.flatten(
+        torch.tensor(
+            [_encode_card_view(card_view) for card_view in card_views]
+            + [
+                [float("inf")] * get_card_encoding_dim()
+                for _ in range(MAX_HAND_SIZE - len(card_views))
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
     )
-
-
-def _sort_card_views_and_return_mapping(
-    card_views: list[CardView],
-) -> tuple[list[CardView], dict[int, int]]:
-    card_views_indexes = list(enumerate(card_views))
-    card_views_indexes_sorted = sorted(card_views_indexes, key=lambda x: x[1].name)
-
-    card_views_sorted = [x[1] for x in card_views_indexes_sorted]
-    index_mapping = {
-        idx_new: idx_old for idx_new, (idx_old, _) in enumerate(card_views_indexes_sorted)
-    }
-
-    return card_views_sorted, index_mapping
 
 
 def get_character_encoding_dim() -> torch.Size:
@@ -130,13 +109,13 @@ def get_character_encoding_dim() -> torch.Size:
 
 
 def get_monster_encoding_dim() -> torch.Size:
-    monster_view_dummy = MonsterView("Dummy", 0, 0, 0, {}, 0, IntentView(None, None, False, False))
+    monster_view_dummy = MonsterView("Dummy", 0, 0, 0, {}, IntentView(None, None, False, False), 0)
     return _encode_monster_view(monster_view_dummy, torch.device("cpu")).shape
 
 
 def get_card_encoding_dim() -> int:
-    card_view_dummy = CardView(0, "Dummy", [], 0, False)
-    return len(_encode_card_view(card_view_dummy, 0))
+    card_view_dummy = CardView("Dummy", [], 0, False, 0)
+    return len(_encode_card_view(card_view_dummy))
 
 
 def get_energy_encoding_dim() -> torch.Size:
@@ -146,22 +125,28 @@ def get_energy_encoding_dim() -> torch.Size:
 
 def encode_combat_view(
     combat_view: CombatView, device: torch.device
-) -> tuple[dict[str, torch.Tensor], dict[int, int]]:
-    hand_sorted, index_mapping = _sort_card_views_and_return_mapping(combat_view.hand)
-
-    idx_card_active = -1
+) -> tuple[torch.Tensor, dict[int, int]]:
+    card_active_mask = [False] * MAX_HAND_SIZE
     for i, card_view in enumerate(combat_view.hand):
         if card_view.is_active:
-            idx_card_active = i
+            card_active_mask[i] = True
             break
 
-    encoding = Encoding(
-        _encode_character_view(combat_view.character, device),
-        _encode_monster_view(combat_view.monsters[0], device),
-        _encode_energy_view(combat_view.energy, device),
-        _encode_card_views(hand_sorted, combat_view.energy.current, device),
-        idx_card_active,
-        True if combat_view.effect is not None else False,
+    encoding = torch.cat(
+        [
+            # Hand size
+            torch.tensor([len(combat_view.hand)], dtype=torch.float32),
+            # Active card
+            torch.tensor(card_active_mask, dtype=torch.float32),
+            # Hand
+            _encode_card_views(combat_view.hand, device),
+            # Character
+            _encode_character_view(combat_view.character, device),
+            # Monster
+            _encode_monster_view(combat_view.monsters[0], device),
+            # Energy
+            _encode_energy_view(combat_view.energy, device),
+        ],
     )
 
-    return encoding, index_mapping
+    return encoding

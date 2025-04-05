@@ -1,5 +1,6 @@
-from src.agents.random import BaseAgent
-from src.agents.random import RandomAgent
+from typing import Callable
+
+from src.agents.pseudorandom import select_action
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
@@ -15,6 +16,7 @@ from src.game.combat.phase import get_start_of_turn_effects
 from src.game.combat.state import CombatState
 from src.game.combat.utils import card_requires_target
 from src.game.combat.utils import is_game_over
+from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
 
 
@@ -132,7 +134,8 @@ def start_combat(cs: CombatState) -> None:
     cs.entity_manager.id_selectables = cs.entity_manager.id_cards_in_hand
 
 
-def main(cs: CombatState, agent: BaseAgent) -> None:
+# TODO: fixx
+def main(cs: CombatState, select_action_fn: Callable[[CombatView], Action]) -> None:
     start_combat(cs)
 
     while not is_game_over(combat_state.entity_manager):
@@ -141,7 +144,7 @@ def main(cs: CombatState, agent: BaseAgent) -> None:
         draw_combat(combat_view)
 
         # Get action from agent
-        action = agent.select_action(combat_view)
+        action = select_action_fn(combat_view)
 
         # Game step
         step(cs, action)
@@ -153,8 +156,5 @@ if __name__ == "__main__":
     # Instance combat manager
     combat_state = create_combat_state()
 
-    # Instance agent
-    agent = RandomAgent()
-
     # Execute
-    main(combat_state, agent)
+    main(combat_state, select_action)

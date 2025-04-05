@@ -1,11 +1,11 @@
 import os
 
+from src.game.combat.view import ActorView
+from src.game.combat.view import CardView
 from src.game.combat.view import CombatView
-from src.game.combat.view.actor import ActorView
-from src.game.combat.view.card import CardView
-from src.game.combat.view.energy import EnergyView
-from src.game.combat.view.monster import IntentView
-from src.game.combat.view.monster import MonsterView
+from src.game.combat.view import EnergyView
+from src.game.combat.view import IntentView
+from src.game.combat.view import MonsterView
 
 
 N_COL, _ = os.get_terminal_size()
