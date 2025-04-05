@@ -9,11 +9,11 @@ from src.game.combat.constant import MAX_MONSTERS
 
 @dataclass
 class Batch:
-    state_ts: torch.Tensor
-    state_tp1s: torch.Tensor
+    states: torch.Tensor
+    states_next: torch.Tensor
     actions: torch.Tensor
     rewards: torch.Tensor
-    valid_action_mask_tp1s: torch.Tensor
+    valid_action_masks_next: torch.Tensor
     game_over_flags: torch.Tensor
 
 
@@ -23,23 +23,23 @@ class Sample:
     state_tp1: torch.Tensor
     action: int
     reward: float
-    valid_action_mask_tp1: torch.Tensor
+    valid_action_mask_next: torch.Tensor
     game_over_flag: bool
 
 
 class ReplayBuffer:
-    def __init__(self, size: int):
+    def __init__(self, size: int, seed: int = 42):
         self._size = size
 
-        # Initially, these are None because we don't know the dimensions yet
-        self._state_ts = None
-        self._state_tp1s = None
+        # These are `None` initially because we don't know their dimensions yet
+        self._states = None
+        self._states_next = None
 
         # Preallocate tensors with fixed shapes for scalars
         self._actions = torch.zeros(size, dtype=torch.long)
         self._rewards = torch.zeros(size, dtype=torch.float32)
-        self._valid_action_mask_tp1s = torch.zeros(
-            (size, 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1), dtype=torch.float32
+        self._valid_action_masks_next = torch.zeros(
+            (size, 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1), dtype=torch.bool
         )
         self._game_over_flags = torch.zeros(size, dtype=torch.float32)
 
@@ -49,8 +49,8 @@ class ReplayBuffer:
         # Whether the buffer is full or not
         self._full: bool = False
 
-        # RNG for sampling TODO: seed
-        self._rng = np.random.default_rng()
+        # RNG for sampling
+        self._rng = np.random.default_rng(seed)
 
     @property
     def full(self) -> bool:
@@ -65,22 +65,22 @@ class ReplayBuffer:
 
     def store(self, sample: Sample) -> None:
         # Initialize tensors for state if not already initialized
-        if self._state_ts is None:
+        if self._states is None:
             state_shape = sample.state_t.shape
 
-            self._state_ts = torch.zeros((self._size, *state_shape), dtype=sample.state_t.dtype)
-            self._state_tp1s = torch.zeros(
+            self._states = torch.zeros((self._size, *state_shape), dtype=sample.state_t.dtype)
+            self._states_next = torch.zeros(
                 (self._size, *state_shape), dtype=sample.state_tp1.dtype
             )
-            print(f"{self._state_ts.shape=}")
-            print(f"{self._state_tp1s.shape=}")
+            print(f"{self._states.shape=}")
+            print(f"{self._states_next.shape=}")
 
         # Store the data in the appropriate location
-        self._state_ts[self._index] = sample.state_t
-        self._state_tp1s[self._index] = sample.state_tp1
+        self._states[self._index] = sample.state_t
+        self._states_next[self._index] = sample.state_tp1
         self._actions[self._index] = sample.action
         self._rewards[self._index] = sample.reward
-        self._valid_action_mask_tp1s[self._index] = sample.valid_action_mask_tp1
+        self._valid_action_masks_next[self._index] = sample.valid_action_mask_next
         self._game_over_flags[self._index] = sample.game_over_flag
 
         # Increment index
@@ -98,10 +98,10 @@ class ReplayBuffer:
 
         # Gather sampled data
         return Batch(
-            state_ts=self._state_ts[sample_indexes],
-            state_tp1s=self._state_tp1s[sample_indexes],
+            states=self._states[sample_indexes],
+            states_next=self._states_next[sample_indexes],
             actions=self._actions[sample_indexes],
             rewards=self._rewards[sample_indexes],
-            valid_action_mask_tp1s=self._valid_action_mask_tp1s[sample_indexes],
+            valid_action_masks_next=self._valid_action_masks_next[sample_indexes],
             game_over_flags=self._game_over_flags[sample_indexes],
         )

@@ -2,13 +2,11 @@ import random
 
 import torch
 
-from src.agents.a2c.models.actor import Actor
-from src.agents.a2c.models.actor import select_action
+from src.agents.dqn.model import DeepQNetwork
+from src.agents.dqn.model import select_action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.entities import create_entity
-from src.game.combat.factories import create_backflip
-from src.game.combat.factories import create_dagger_throw
 from src.game.combat.factories import create_defend
 from src.game.combat.factories import create_strike
 from src.game.combat.main import start_combat
@@ -17,7 +15,7 @@ from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
 
-def evaluate_blunder(model: Actor, device: torch.device) -> bool:
+def evaluate_blunder(model: DeepQNetwork, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -36,7 +34,7 @@ def evaluate_blunder(model: Actor, device: torch.device) -> bool:
     while not is_game_over(cs.entity_manager):
         combat_view = view_combat(cs)
 
-        action = select_action(model, combat_view, greedy=True, device=device)
+        action, _ = select_action(model, combat_view, device=device)
         if action.type == ActionType.END_TURN:
             return False
 
@@ -48,7 +46,7 @@ def evaluate_blunder(model: Actor, device: torch.device) -> bool:
     return False
 
 
-def evaluate_lethal(model: Actor, device: torch.device) -> bool:
+def evaluate_lethal(model: DeepQNetwork, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -68,7 +66,7 @@ def evaluate_lethal(model: Actor, device: torch.device) -> bool:
     while not is_game_over(cs.entity_manager):
         combat_view = view_combat(cs)
 
-        action = select_action(model, combat_view, greedy=True, device=device)
+        action, _ = select_action(model, combat_view, device=device)
         if action.type == ActionType.END_TURN:
             return False
 
@@ -80,57 +78,57 @@ def evaluate_lethal(model: Actor, device: torch.device) -> bool:
     return False
 
 
-def evaluate_draw_first(model: Actor, device: torch.device) -> bool:
-    cs = create_combat_state()
-    start_combat(cs)
+# def evaluate_draw_first(model: Actor, device: torch.device) -> bool:
+#     cs = create_combat_state()
+#     start_combat(cs)
 
-    # Create a Backflip
-    id_backflip = create_entity(cs.entity_manager, create_backflip())
+#     # Create a Backflip
+#     id_backflip = create_entity(cs.entity_manager, create_backflip())
 
-    # Replace cards in the hand w/ Backflip and fillers
-    cs.entity_manager.card_in_hand_ids = [
-        create_entity(cs.entity_manager, create_strike()),
-        create_entity(cs.entity_manager, create_strike()),
-        create_entity(cs.entity_manager, create_defend()),
-        create_entity(cs.entity_manager, create_defend()),
-        id_backflip,
-    ]
+#     # Replace cards in the hand w/ Backflip and fillers
+#     cs.entity_manager.card_in_hand_ids = [
+#         create_entity(cs.entity_manager, create_strike()),
+#         create_entity(cs.entity_manager, create_strike()),
+#         create_entity(cs.entity_manager, create_defend()),
+#         create_entity(cs.entity_manager, create_defend()),
+#         id_backflip,
+#     ]
 
-    combat_view = view_combat(cs)
-    action = select_action(model, combat_view, greedy=True, device=device)
+#     combat_view = view_combat(cs)
+#     action = select_action(model, combat_view, device=device)
 
-    if action.type != ActionType.SELECT_ENTITY:
-        return False
+#     if action.type != ActionType.SELECT_ENTITY:
+#         return False
 
-    if action.target_id != id_backflip:
-        return False
+#     if action.target_id != id_backflip:
+#         return False
 
-    return True
+#     return True
 
 
-def evaluate_dagger_throw_over_strike(model: Actor, device: torch.device) -> bool:
-    cs = create_combat_state()
-    start_combat(cs)
+# def evaluate_dagger_throw_over_strike(model: Actor, device: torch.device) -> bool:
+#     cs = create_combat_state()
+#     start_combat(cs)
 
-    # Create a Dagger Throw
-    id_dagger_throw = create_entity(cs.entity_manager, create_dagger_throw())
+#     # Create a Dagger Throw
+#     id_dagger_throw = create_entity(cs.entity_manager, create_dagger_throw())
 
-    # Replace cards in the hand w/ Backflip and Strikes
-    cs.entity_manager.card_in_hand_ids = [
-        create_entity(cs.entity_manager, create_strike()),
-        create_entity(cs.entity_manager, create_strike()),
-        create_entity(cs.entity_manager, create_strike()),
-        create_entity(cs.entity_manager, create_strike()),
-        id_dagger_throw,
-    ]
+#     # Replace cards in the hand w/ Backflip and Strikes
+#     cs.entity_manager.card_in_hand_ids = [
+#         create_entity(cs.entity_manager, create_strike()),
+#         create_entity(cs.entity_manager, create_strike()),
+#         create_entity(cs.entity_manager, create_strike()),
+#         create_entity(cs.entity_manager, create_strike()),
+#         id_dagger_throw,
+#     ]
 
-    combat_view = view_combat(cs)
-    action = select_action(model, combat_view, greedy=True, device=device)
+#     combat_view = view_combat(cs)
+#     action = select_action(model, combat_view, device=device)
 
-    if action.type != ActionType.SELECT_ENTITY:
-        return False
+#     if action.type != ActionType.SELECT_ENTITY:
+#         return False
 
-    if action.target_id != id_dagger_throw:
-        return False
+#     if action.target_id != id_dagger_throw:
+#         return False
 
-    return True
+#     return True

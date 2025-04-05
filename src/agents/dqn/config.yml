@@ -1,18 +1,14 @@
-exp_name: jaw/ultimate
+exp_name: dqn/jaw/newera-2
 num_episodes: 1.0e+6
-buffer_size: 5.0e+3
-batch_size: 64
+buffer_size: 1.0e+5
+batch_size: 32
 log_every: 100
-eval_every: 100
-save_every: 10000
+save_every: 1000
 transfer_every: 10000
+discount: 0.99
 
 model: 
-  name: CardTransformer
-  kwargs:
-    dim_card: 64
-    attn_card_num_heads: 8
-    linear_sizes: [256, 256]
+  dim_card: 32
 
 optimizer:
   name: SGD
@@ -23,5 +19,5 @@ optimizer:
 
 # Explorer
 episode_elbow: 5.0e+4
-value_start: 1
-value_end: 1.25e-1
+value_start: 1.000
+value_end: 0.125

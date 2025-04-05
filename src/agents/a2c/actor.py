@@ -9,7 +9,7 @@ from src.agents.a2c.encode import get_card_encoding_dim
 from src.agents.a2c.encode import get_character_encoding_dim
 from src.agents.a2c.encode import get_energy_encoding_dim
 from src.agents.a2c.encode import get_monster_encoding_dim
-from src.agents.a2c.models.mlp import MLP
+from src.agents.models.mlp import MLP
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.constant import MAX_HAND_SIZE
