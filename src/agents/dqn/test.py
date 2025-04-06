@@ -66,7 +66,7 @@ def run_simulation(
 
 
 def display_game(game: tuple[int, list]) -> None:
-    for combat_view, probs, _ in game[1]:
+    for combat_view, probs in game[1]:
         draw_combat(combat_view)
 
         prob_array = probs.numpy().flatten()
@@ -88,7 +88,7 @@ def display_game(game: tuple[int, list]) -> None:
 
 
 if __name__ == "__main__":
-    exp_name = "dqn/jaw/newera"
+    exp_name = "dqn/jaw/newera-ohe-3"
     device = torch.device("cpu")
 
     model, config = load_model(exp_name)

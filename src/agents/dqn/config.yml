@@ -1,4 +1,4 @@
-exp_name: dqn/jaw/newera-2
+exp_name: dqn/jaw/newera-ohe-3
 num_episodes: 1.0e+6
 buffer_size: 1.0e+5
 batch_size: 32
@@ -6,18 +6,19 @@ log_every: 100
 save_every: 1000
 transfer_every: 10000
 discount: 0.99
+num_eval: 10
 
 model: 
   dim_card: 32
 
 optimizer:
-  name: SGD
+  name: Adam
   kwargs:
     lr: 1.0e-4
-    nesterov: True
-    momentum: 0.90
+    # nesterov: True
+    # momentum: 0.90
 
 # Explorer
 episode_elbow: 5.0e+4
-value_start: 1.000
-value_end: 0.125
+value_start: 1.00
+value_end: 0.10

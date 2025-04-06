@@ -18,12 +18,14 @@ from src.agents.dqn.model import DeepQNetwork
 from src.agents.dqn.model import action_idx_to_action
 from src.agents.dqn.model import get_valid_action_mask
 from src.agents.evaluation import evaluate_blunder
+from src.agents.evaluation import evaluate_dagger_throw_vs_strike
+from src.agents.evaluation import evaluate_draw_first_w_backflip
+from src.agents.evaluation import evaluate_final_hp
 from src.agents.evaluation import evaluate_lethal
 from src.agents.reward import compute_reward
 from src.game.combat.create import create_combat_state
 from src.game.combat.main import start_combat
 from src.game.combat.main import step
-from src.game.combat.state import CombatState
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
 
@@ -76,33 +78,6 @@ def _train_on_batch(
     return loss.item()
 
 
-def _evaluate_agent(model: DeepQNetwork, device: torch.device) -> int:
-    # Get new game
-    cs = create_combat_state()
-    start_combat(cs)
-
-    while not is_game_over(cs.entity_manager):
-        combat_view = view_combat(cs)
-        combat_view_tensor = encode_combat_view(combat_view, device)
-        valid_action_mask_tensor = torch.tensor(
-            [get_valid_action_mask(combat_view)], dtype=torch.bool, device=device
-        )
-
-        # Get action
-        with torch.no_grad():
-            q_values = model(combat_view_tensor.unsqueeze(0))
-
-        q_values[~valid_action_mask_tensor] = float("-inf")
-        action_idx = torch.argmax(q_values).item()
-        action = action_idx_to_action(action_idx, combat_view)
-
-        # Game step
-        step(cs, action)
-
-    # Return final health
-    return view_combat(cs).character.health_current
-
-
 def _play_episode(
     step_global: int,
     model_online: nn.Module,
@@ -114,7 +89,7 @@ def _play_episode(
     batch_size: int,
     device: torch.device,
     discount: float,
-) -> tuple[CombatState, float, int]:
+) -> tuple[float, int]:
     # Get new game
     cs = create_combat_state()
     start_combat(cs)
@@ -197,7 +172,7 @@ def _play_episode(
         if (step_global % transfer_every) == 0:
             _transfer_params(model_online, model_target)
 
-    return cs, loss_episode / num_moves, step_global
+    return loss_episode / num_moves, step_global
 
 
 def train(
@@ -212,22 +187,22 @@ def train(
     model_target: nn.Module,
     optimizer: torch.optim.Optimizer,
     epsilons: list[float],
-    device: torch.device,
     discount: float,
+    num_eval: int,
+    device: torch.device,
 ) -> None:
+    # Initialize objects
     writer = SummaryWriter(f"experiments/{exp_name}")
-
-    # Replay buffer
     replay_buffer = ReplayBuffer(buffer_size)
 
-    # Send models to device TODO: move
+    # Send models to device
     model_online.to(device)
     model_target.to(device)
 
     # Train
     step_global = 0
     for episode in range(num_episodes):
-        cs, loss, step_global = _play_episode(
+        loss, step_global = _play_episode(
             step_global,
             model_online,
             model_target,
@@ -239,27 +214,45 @@ def train(
             device,
             discount,
         )
-        # View end state
-        combat_view_end = view_combat(cs)
-
         if (episode % log_every) == 0:
             writer.add_scalar("Loss", loss, episode)
             writer.add_scalar("Epsilon", epsilons[episode], episode)
-            writer.add_scalar("Final HP", combat_view_end.character.health_current, episode)
 
-            # TODO: parametrize this
-            num_eval = 10
-            hp_final = []
-            blunder = []
-            lethal = []
-            for _ in range(num_eval):
-                hp_final.append(_evaluate_agent(model_online, device))
-                blunder.append(evaluate_blunder(model_online, device))
-                lethal.append(evaluate_lethal(model_online, device))
+            # TODO: abstract this
+            mean_final_hp = (
+                sum([evaluate_final_hp(model_online, device) for _ in range(num_eval)]) / num_eval
+            )
+            mean_blunder = (
+                sum([evaluate_blunder(model_online, device) for _ in range(num_eval)]) / num_eval
+            )
+            mean_lethal = (
+                sum([evaluate_lethal(model_online, device) for _ in range(num_eval)]) / num_eval
+            )
+            mean_draw_first_w_backflip = (
+                sum(
+                    [evaluate_draw_first_w_backflip(model_online, device) for _ in range(num_eval)]
+                )
+                / num_eval
+            )
+            mean_dagger_throw_vs_strike = (
+                sum(
+                    [
+                        evaluate_dagger_throw_vs_strike(model_online, device)
+                        for _ in range(num_eval)
+                    ]
+                )
+                / num_eval
+            )
 
-            writer.add_scalar("Evaluation/Health", sum(hp_final) / num_eval, episode)
-            writer.add_scalar("Scenario/Blunder", sum(blunder) / num_eval, episode)
-            writer.add_scalar("Scenario/Lethal", sum(lethal) / num_eval, episode)
+            writer.add_scalar("Evaluation/Final health", mean_final_hp, episode)
+            writer.add_scalar("Evaluation/Blunder", mean_blunder, episode)
+            writer.add_scalar("Evaluation/Lethal", mean_lethal, episode)
+            writer.add_scalar(
+                "Evaluation/Draw first w/ Backflip", mean_draw_first_w_backflip, episode
+            )
+            writer.add_scalar(
+                "Evaluation/Use Dagger Throw vs. Strike", mean_dagger_throw_vs_strike, episode
+            )
 
         # Save model
         if (episode % save_every) == 0:
@@ -318,6 +311,7 @@ if __name__ == "__main__":
         model_target,
         optimizer,
         epsilons,
-        torch.device("cpu"),
         config["discount"],
+        config["num_eval"],
+        torch.device("cpu"),
     )
