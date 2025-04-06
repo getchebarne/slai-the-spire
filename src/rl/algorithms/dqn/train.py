@@ -9,25 +9,26 @@ import torch.nn.functional as F
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
-from src.agents.dqn.encode import encode_combat_view
-from src.agents.dqn.explorer import linear_decay
-from src.agents.dqn.memory import Batch
-from src.agents.dqn.memory import ReplayBuffer
-from src.agents.dqn.memory import Sample
-from src.agents.dqn.model import DeepQNetwork
-from src.agents.dqn.model import action_idx_to_action
-from src.agents.dqn.model import get_valid_action_mask
-from src.agents.evaluation import evaluate_blunder
-from src.agents.evaluation import evaluate_dagger_throw_vs_strike
-from src.agents.evaluation import evaluate_draw_first_w_backflip
-from src.agents.evaluation import evaluate_final_hp
-from src.agents.evaluation import evaluate_lethal
-from src.agents.reward import compute_reward
 from src.game.combat.create import create_combat_state
 from src.game.combat.main import start_combat
 from src.game.combat.main import step
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
+from src.rl.algorithms.dqn.explorer import linear_decay
+from src.rl.algorithms.dqn.memory import Batch
+from src.rl.algorithms.dqn.memory import ReplayBuffer
+from src.rl.algorithms.dqn.memory import Sample
+from src.rl.encoding import encode_combat_view
+from src.rl.evaluation import evaluate_blunder
+from src.rl.evaluation import evaluate_dagger_throw_vs_strike
+from src.rl.evaluation import evaluate_draw_first_w_backflip
+from src.rl.evaluation import evaluate_final_hp
+from src.rl.evaluation import evaluate_lethal
+from src.rl.models.dqn import DeepQNetwork
+from src.rl.models.interface import action_idx_to_action
+from src.rl.models.interface import get_valid_action_mask
+from src.rl.policies import PolicyQMax
+from src.rl.reward import compute_reward
 
 
 # TODO: parametrize
@@ -199,9 +200,13 @@ def train(
     model_online.to(device)
     model_target.to(device)
 
+    # Initialize policy
+    policy = PolicyQMax(model_online, device)
+
     # Train
     step_global = 0
     for episode in range(num_episodes):
+        epsilon = epsilons[episode]
         loss, step_global = _play_episode(
             step_global,
             model_online,
@@ -209,38 +214,31 @@ def train(
             transfer_every,
             optimizer,
             replay_buffer,
-            epsilons[episode],
+            epsilon,
             batch_size,
             device,
             discount,
         )
         if (episode % log_every) == 0:
             writer.add_scalar("Loss", loss, episode)
-            writer.add_scalar("Epsilon", epsilons[episode], episode)
+            writer.add_scalar("Epsilon", epsilon, episode)
 
             # TODO: abstract this
             mean_final_hp = (
-                sum([evaluate_final_hp(model_online, device) for _ in range(num_eval)]) / num_eval
+                sum([evaluate_final_hp(policy, device) for _ in range(num_eval)]) / num_eval
             )
             mean_blunder = (
-                sum([evaluate_blunder(model_online, device) for _ in range(num_eval)]) / num_eval
+                sum([evaluate_blunder(policy, device) for _ in range(num_eval)]) / num_eval
             )
             mean_lethal = (
-                sum([evaluate_lethal(model_online, device) for _ in range(num_eval)]) / num_eval
+                sum([evaluate_lethal(policy, device) for _ in range(num_eval)]) / num_eval
             )
             mean_draw_first_w_backflip = (
-                sum(
-                    [evaluate_draw_first_w_backflip(model_online, device) for _ in range(num_eval)]
-                )
+                sum([evaluate_draw_first_w_backflip(policy, device) for _ in range(num_eval)])
                 / num_eval
             )
             mean_dagger_throw_vs_strike = (
-                sum(
-                    [
-                        evaluate_dagger_throw_vs_strike(model_online, device)
-                        for _ in range(num_eval)
-                    ]
-                )
+                sum([evaluate_dagger_throw_vs_strike(policy, device) for _ in range(num_eval)])
                 / num_eval
             )
 
@@ -261,7 +259,7 @@ def train(
 
 # TODO: fix path
 # TODO: parse values accordingly
-def _load_config(config_path: str = "src/agents/dqn/config.yml") -> dict:
+def _load_config(config_path: str) -> dict:
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
 
@@ -283,7 +281,8 @@ def _transfer_params(model_online: nn.Module, model_target: nn.Module) -> None:
 
 
 if __name__ == "__main__":
-    config = _load_config()
+    config_path = "src/rl/algorithms/dqn/config.yml"
+    config = _load_config(config_path)
     model_online = DeepQNetwork(config["model"]["dim_card"])
     model_target = deepcopy(model_online)
     optimizer = _init_optimizer(
@@ -292,7 +291,7 @@ if __name__ == "__main__":
 
     # Copy config
     os.makedirs(f"experiments/{config['exp_name']}")
-    shutil.copy("src/agents/dqn/config.yml", f"experiments/{config['exp_name']}/config.yml")
+    shutil.copy(config_path, f"experiments/{config['exp_name']}/config.yml")
 
     # Get epsilons TODO add other epsilon schedules
     epsilons = linear_decay(

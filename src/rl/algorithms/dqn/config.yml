@@ -1,4 +1,4 @@
-exp_name: dqn/jaw/newera-ohe-3
+exp_name: dqn/jaw/delete
 num_episodes: 1.0e+6
 buffer_size: 1.0e+5
 batch_size: 32
@@ -15,8 +15,6 @@ optimizer:
   name: Adam
   kwargs:
     lr: 1.0e-4
-    # nesterov: True
-    # momentum: 0.90
 
 # Explorer
 episode_elbow: 5.0e+4

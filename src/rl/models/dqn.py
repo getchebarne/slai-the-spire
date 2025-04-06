@@ -1,16 +1,12 @@
 import torch
 import torch.nn as nn
 
-from src.agents.dqn.encode import encode_combat_view
-from src.agents.dqn.encode import get_card_encoding_dim
-from src.agents.dqn.encode import get_character_encoding_dim
-from src.agents.dqn.encode import get_energy_encoding_dim
-from src.agents.dqn.encode import get_monster_encoding_dim
-from src.agents.models.mlp import MLP
-from src.game.combat.action import Action
-from src.game.combat.action import ActionType
 from src.game.combat.constant import MAX_HAND_SIZE
-from src.game.combat.view import CombatView
+from src.rl.encoding import get_card_encoding_dim
+from src.rl.encoding import get_character_encoding_dim
+from src.rl.encoding import get_energy_encoding_dim
+from src.rl.encoding import get_monster_encoding_dim
+from src.rl.models.mlp import MLP
 
 
 DIM_ENC_CARD = get_card_encoding_dim()
@@ -150,66 +146,3 @@ class DeepQNetwork(nn.Module):
             ],
             dim=1,
         )
-
-
-# TODO: must change when more monsters are added
-# TODO: make more readable
-def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
-    if any(card.is_active for card in combat_view.hand):
-        # Only valid action is to select the monster
-        return [False] * (2 * MAX_HAND_SIZE) + [True, False]
-
-    if combat_view.effect is not None:
-        # TODO: only contemplating EffectType.DISCARD for now
-        valid_action_mask = [False] * MAX_HAND_SIZE
-        valid_action_mask.extend([True] * len(combat_view.hand))
-        valid_action_mask.extend([False] * (MAX_HAND_SIZE - len(combat_view.hand)))
-        valid_action_mask.extend([False, False])
-
-        return valid_action_mask
-
-    # Undo hand sorting TODO: improve
-    valid_action_mask = [card.cost <= combat_view.energy.current for card in combat_view.hand]
-    valid_action_mask.extend([False] * (MAX_HAND_SIZE - len(combat_view.hand)))
-    valid_action_mask.extend([False] * MAX_HAND_SIZE)
-    valid_action_mask.extend([False, True])
-
-    return valid_action_mask
-
-
-# TODO: adapt for multiple monsters
-# TODO: adapt for discard
-def action_idx_to_action(action_idx: int, combat_view: CombatView) -> Action:
-    if action_idx < 2 * MAX_HAND_SIZE:
-        # Undo hand sorting TODO: improve
-        return Action(
-            ActionType.SELECT_ENTITY, combat_view.hand[action_idx % MAX_HAND_SIZE].entity_id
-        )
-
-    if action_idx == 2 * MAX_HAND_SIZE:
-        return Action(ActionType.SELECT_ENTITY, combat_view.monsters[0].entity_id)
-
-    if action_idx == 2 * MAX_HAND_SIZE + 1:
-        return Action(ActionType.END_TURN)
-
-    raise ValueError(f"Unsupported action index: {action_idx}")
-
-
-def select_action(
-    model: DeepQNetwork,
-    combat_view: CombatView,
-    device: torch.device = torch.device("cpu"),
-) -> tuple[Action, torch.Tensor]:
-    x_state = encode_combat_view(combat_view, device)
-    valid_action_mask_tensor = torch.tensor(
-        [get_valid_action_mask(combat_view)], dtype=torch.bool, device=device
-    )
-
-    with torch.no_grad():
-        q_values = model(x_state.unsqueeze(0))
-
-    q_values[~valid_action_mask_tensor] = float("-inf")
-    action_idx = torch.argmax(q_values).item()
-    action = action_idx_to_action(action_idx, combat_view)
-
-    return action, q_values

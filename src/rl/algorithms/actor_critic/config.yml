@@ -1,4 +1,4 @@
-exp_name: a2c/jaw/newera
+exp_name: a2c/jaw/delete
 num_episodes: 1.0e+6
 log_every: 100
 eval_every: 100
@@ -8,19 +8,12 @@ coef_entropy_max: 0.050
 coef_entropy_min: 0.010
 coef_entropy_elbow: 2.5e+5
 max_grad_norm: 0.500
+num_eval: 10
 
-model_actor:
+model:
   dim_card: 32
 
-model_critic:
-  dim_card: 32
-
-optimizer_actor:
+optimizer:
   name: Adam
   kwargs:
     lr: 2.5e-5
-
-optimizer_critic:
-  name: Adam
-  kwargs:
-    lr: 1.0e-4
