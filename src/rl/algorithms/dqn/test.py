@@ -3,9 +3,9 @@ from typing import Any
 import numpy as np
 import torch
 import yaml
-
 from src.agents.dqn.model import DeepQNetwork
 from src.agents.dqn.model import select_action
+
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat

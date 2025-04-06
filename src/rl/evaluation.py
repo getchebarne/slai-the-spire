@@ -2,8 +2,6 @@ import random
 
 import torch
 
-from src.agents.dqn.model import DeepQNetwork
-from src.agents.dqn.model import select_action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.entities import create_entity
@@ -15,23 +13,24 @@ from src.game.combat.main import start_combat
 from src.game.combat.main import step
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
+from src.rl.policies import PolicyBase
 
 
-def evaluate_final_hp(model: DeepQNetwork, device: torch.device) -> int:
+def evaluate_final_hp(policy: PolicyBase, device: torch.device) -> int:
     # Get new game
     cs = create_combat_state()
     start_combat(cs)
 
     while not is_game_over(cs.entity_manager):
         combat_view = view_combat(cs)
-        action, _ = select_action(model, combat_view, device=device)
+        action, _ = policy.select_action(combat_view)
         step(cs, action)
 
     # Return final health
     return view_combat(cs).character.health_current
 
 
-def evaluate_blunder(model: DeepQNetwork, device: torch.device) -> bool:
+def evaluate_blunder(policy: PolicyBase, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -50,7 +49,7 @@ def evaluate_blunder(model: DeepQNetwork, device: torch.device) -> bool:
     while not is_game_over(cs.entity_manager):
         combat_view = view_combat(cs)
 
-        action, _ = select_action(model, combat_view, device=device)
+        action, _ = policy.select_action(combat_view)
         if action.type == ActionType.END_TURN:
             return False
 
@@ -62,7 +61,7 @@ def evaluate_blunder(model: DeepQNetwork, device: torch.device) -> bool:
     return False
 
 
-def evaluate_lethal(model: DeepQNetwork, device: torch.device) -> bool:
+def evaluate_lethal(policy: PolicyBase, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -82,7 +81,7 @@ def evaluate_lethal(model: DeepQNetwork, device: torch.device) -> bool:
     while not is_game_over(cs.entity_manager):
         combat_view = view_combat(cs)
 
-        action, _ = select_action(model, combat_view, device=device)
+        action, _ = policy.select_action(combat_view)
         if action.type == ActionType.END_TURN:
             return False
 
@@ -94,7 +93,7 @@ def evaluate_lethal(model: DeepQNetwork, device: torch.device) -> bool:
     return False
 
 
-def evaluate_draw_first_w_backflip(model: DeepQNetwork, device: torch.device) -> bool:
+def evaluate_draw_first_w_backflip(policy: PolicyBase, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -111,7 +110,7 @@ def evaluate_draw_first_w_backflip(model: DeepQNetwork, device: torch.device) ->
     ]
 
     combat_view = view_combat(cs)
-    action, _ = select_action(model, combat_view, device=device)
+    action, _ = policy.select_action(combat_view)
 
     if action.type != ActionType.SELECT_ENTITY:
         return False
@@ -122,7 +121,7 @@ def evaluate_draw_first_w_backflip(model: DeepQNetwork, device: torch.device) ->
     return True
 
 
-def evaluate_dagger_throw_vs_strike(model: DeepQNetwork, device: torch.device) -> bool:
+def evaluate_dagger_throw_vs_strike(policy: PolicyBase, device: torch.device) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -139,7 +138,7 @@ def evaluate_dagger_throw_vs_strike(model: DeepQNetwork, device: torch.device) -
     ]
 
     combat_view = view_combat(cs)
-    action, _ = select_action(model, combat_view, device=device)
+    action, _ = policy.select_action(combat_view)
 
     if action.type != ActionType.SELECT_ENTITY:
         return False

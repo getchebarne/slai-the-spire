@@ -3,11 +3,11 @@ from typing import Any
 import numpy as np
 import torch
 import yaml
-
 from src.agents.a2c.encode import encode_combat_view
 from src.agents.a2c.models.actor import Actor
 from src.agents.a2c.models.actor import action_idx_to_action
 from src.agents.a2c.models.actor import get_valid_action_mask
+
 from src.game.combat.constant import MAX_HAND_SIZE
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat

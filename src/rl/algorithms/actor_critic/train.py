@@ -9,20 +9,23 @@ import torch.nn.functional as F
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
-from src.agents.a2c.encode import encode_combat_view
-from src.agents.a2c.evaluation import evaluate_blunder
-from src.agents.a2c.evaluation import evaluate_lethal
-from src.agents.a2c.models.actor import Actor
-from src.agents.a2c.models.actor import action_idx_to_action
-from src.agents.a2c.models.actor import get_valid_action_mask
-from src.agents.a2c.models.critic import Critic
-from src.agents.a2c.reward import compute_reward
 from src.game.combat.create import create_combat_state
 from src.game.combat.main import start_combat
 from src.game.combat.main import step
 from src.game.combat.state import CombatState
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
+from src.rl.encoding import encode_combat_view
+from src.rl.evaluation import evaluate_blunder
+from src.rl.evaluation import evaluate_dagger_throw_vs_strike
+from src.rl.evaluation import evaluate_draw_first_w_backflip
+from src.rl.evaluation import evaluate_final_hp
+from src.rl.evaluation import evaluate_lethal
+from src.rl.models.actor_critic import ActorCritic
+from src.rl.models.interface import action_idx_to_action
+from src.rl.models.interface import get_valid_action_mask
+from src.rl.policies import PolicySoftmax
+from src.rl.reward import compute_reward
 
 
 @dataclass
@@ -33,9 +36,7 @@ class EpisodeResult:
     entropies: list[torch.Tensor] = field(default_factory=list)
 
 
-def _play_episode(
-    model_actor: Actor, model_critic: Critic, device: torch.device
-) -> tuple[CombatState, EpisodeResult]:
+def _play_episode(model: ActorCritic, device: torch.device) -> tuple[CombatState, EpisodeResult]:
     # Get new game TODO: improve this
     cs = create_combat_state()
     start_combat(cs)
@@ -44,22 +45,21 @@ def _play_episode(
     while not is_game_over(cs.entity_manager):
         # Get combat view, encode it, and get valid action mask
         combat_view_t = view_combat(cs)
-        combat_view_t_encoded, index_mapping = encode_combat_view(combat_view_t, device)
+        combat_view_t_encoded = encode_combat_view(combat_view_t, device)
         valid_action_mask_t = get_valid_action_mask(combat_view_t)
 
         # Get action probabilities and state value
-        x_prob = model_actor(
+        x_prob, x_value = model(
             combat_view_t_encoded,
             torch.tensor(valid_action_mask_t, dtype=torch.bool, device=device),
         )
-        x_value = model_critic(combat_view_t_encoded)
 
         # Sample action from the action-selection distribution
         dist = torch.distributions.Categorical(x_prob)
         action_idx = dist.sample()
 
         # Game step
-        action = action_idx_to_action(action_idx.item(), combat_view_t, index_mapping)
+        action = action_idx_to_action(action_idx.item(), combat_view_t)
         step(cs, action)
 
         # Get new state, new valid actions, game over flag and instant reward
@@ -78,10 +78,8 @@ def _play_episode(
 
 def _update_model(
     episode_result: EpisodeResult,
-    model_actor: Actor,
-    model_critic: Critic,
-    optimizer_actor: torch.optim.Optimizer,
-    optimizer_critic: torch.optim.Optimizer,
+    model: ActorCritic,
+    optimizer: torch.optim.Optimizer,
     gamma: float,
     coef_entropy: float,
     max_grad_norm: float,
@@ -121,53 +119,20 @@ def _update_model(
     loss_policy = -1 * torch.mean(log_probs * advantages)
     loss_entropy = -1 * torch.mean(entropies)
     loss_value = F.mse_loss(values.squeeze(), td_targets)
+    loss_total = loss_policy + coef_entropy * loss_entropy + loss_value  # TODO: re-add coef_value
 
     # Calculate gradients
-    loss_policy_entropy = loss_policy + coef_entropy * loss_entropy
-
-    optimizer_actor.zero_grad()
-    optimizer_critic.zero_grad()
-
-    loss_policy_entropy.backward()
-    loss_value.backward()
+    optimizer.zero_grad()
+    loss_total.backward()
 
     # Apply clipping
-    nn.utils.clip_grad_norm_(model_actor.parameters(), max_grad_norm)
-    nn.utils.clip_grad_norm_(model_critic.parameters(), max_grad_norm)
+    nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
 
     # Take optimization step
-    optimizer_actor.step()
-    optimizer_critic.step()
+    optimizer.step()
 
     # Return losses for logging
     return loss_policy.item(), loss_value.item(), loss_entropy.item()
-
-
-def _evaluate_agent(model_actor: Actor, device: torch.device) -> int:
-    # Get new game TODO: improve this
-    cs = create_combat_state()
-    start_combat(cs)
-
-    while not is_game_over(cs.entity_manager):
-        # Get combat view
-        combat_view = view_combat(cs)
-        combat_view_encoded, index_mapping = encode_combat_view(combat_view, device)
-        valid_action_mask = get_valid_action_mask(combat_view)
-
-        # Get action from agent
-        x_prob = model_actor(
-            combat_view_encoded,
-            torch.tensor(valid_action_mask, dtype=torch.float32, device=device),
-        )
-
-        # Game step
-        action_idx = torch.argmax(x_prob).item()
-        action = action_idx_to_action(action_idx, combat_view, index_mapping)
-
-        step(cs, action)
-
-    # Return final health
-    return view_combat(cs).character.health_current
 
 
 def train(
@@ -176,75 +141,78 @@ def train(
     log_every: int,
     eval_every: int,
     save_every: int,
-    model_actor: Actor,
-    model_critic: Critic,
-    optimizer_actor: torch.optim.Optimizer,
-    optimizer_critic: torch.optim.Optimizer,
+    model: ActorCritic,
+    optimizer: torch.optim.Optimizer,
     device: torch.device,
     gamma: float,
     coefs_entropy: list[float],
     max_grad_norm: float,
+    num_eval: int,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
 
-    # Send models to device
-    model_actor.to(device)
-    model_critic.to(device)
+    # Send model to device
+    model.to(device)
+
+    # Initialize policy
+    policy = PolicySoftmax(model, device, greedy=True)
 
     # Train
-    for num_episode in range(num_episodes):
+    for episode in range(num_episodes):
         # Play episode, get trajectory
-        cs, episode_result = _play_episode(model_actor, model_critic, device)
+        cs, episode_result = _play_episode(model, device)
 
         # Fit the models
-        coef_entropy = coefs_entropy[num_episode]
+        coef_entropy = coefs_entropy[episode]
         loss_policy, loss_value, loss_entropy = _update_model(
-            episode_result,
-            model_actor,
-            model_critic,
-            optimizer_actor,
-            optimizer_critic,
-            gamma,
-            coef_entropy,
-            max_grad_norm,
-            device,
+            episode_result, model, optimizer, gamma, coef_entropy, max_grad_norm, device
         )
         combat_view_end = view_combat(cs)
 
-        if (num_episode % log_every) == 0:
-            writer.add_scalar("Loss/policy", loss_policy, num_episode)
-            writer.add_scalar("Loss/value", loss_value, num_episode)
-            writer.add_scalar(
-                "Training/Health", combat_view_end.character.health_current, num_episode
+        if (episode % log_every) == 0:
+            writer.add_scalar("Loss/policy", loss_policy, episode)
+            writer.add_scalar("Loss/value", loss_value, episode)
+            writer.add_scalar("Training/Health", combat_view_end.character.health_current, episode)
+            writer.add_scalar("Entropy/coef.", coef_entropy, episode)
+            writer.add_scalar("Entropy/value", -1 * loss_entropy, episode)
+
+            # TODO: abstract this
+            mean_final_hp = (
+                sum([evaluate_final_hp(policy, device) for _ in range(num_eval)]) / num_eval
             )
-            writer.add_scalar("Entropy/coef.", coef_entropy, num_episode)
-            writer.add_scalar("Entropy/value", -1 * loss_entropy, num_episode)
+            mean_blunder = (
+                sum([evaluate_blunder(policy, device) for _ in range(num_eval)]) / num_eval
+            )
+            mean_lethal = (
+                sum([evaluate_lethal(policy, device) for _ in range(num_eval)]) / num_eval
+            )
+            mean_draw_first_w_backflip = (
+                sum([evaluate_draw_first_w_backflip(policy, device) for _ in range(num_eval)])
+                / num_eval
+            )
+            mean_dagger_throw_vs_strike = (
+                sum([evaluate_dagger_throw_vs_strike(policy, device) for _ in range(num_eval)])
+                / num_eval
+            )
 
-        # Evaluate agent
-        if (num_episode % eval_every) == 0:
-            hp_final = _evaluate_agent(model_actor, device)
+            writer.add_scalar("Evaluation/Final health", mean_final_hp, episode)
+            writer.add_scalar("Evaluation/Blunder", mean_blunder, episode)
+            writer.add_scalar("Evaluation/Lethal", mean_lethal, episode)
+            writer.add_scalar(
+                "Evaluation/Draw first w/ Backflip", mean_draw_first_w_backflip, episode
+            )
+            writer.add_scalar(
+                "Evaluation/Use Dagger Throw vs. Strike", mean_dagger_throw_vs_strike, episode
+            )
 
-            # TODO: parametrize
-            num_eval = 10
-            blunder = []
-            lethal = []
-            for _ in range(num_eval):
-                blunder.append(evaluate_blunder(model_actor, device))
-                lethal.append(evaluate_lethal(model_actor, device))
-
-            writer.add_scalar("Evaluation/Health", hp_final, num_episode)
-            writer.add_scalar("Scenario/Blunder", sum(blunder) / len(blunder), num_episode)
-            writer.add_scalar("Scenario/Lethal", sum(lethal) / len(lethal), num_episode)
-
-        # Save models
-        if (num_episode % save_every) == 0:
-            torch.save(model_actor.state_dict(), f"experiments/{exp_name}/model_actor.pth")
-            torch.save(model_critic.state_dict(), f"experiments/{exp_name}/model_critic.pth")
+        # Save model
+        if (episode % save_every) == 0:
+            torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
 
 # TODO: fix path
 # TODO: parse values accordingly
-def _load_config(config_path: str = "src/agents/a2c/config.yml") -> dict:
+def _load_config(config_path: str) -> dict:
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
 
@@ -256,7 +224,7 @@ def _load_config(config_path: str = "src/agents/a2c/config.yml") -> dict:
 
 
 # TODO: use **kwargs, improve signature
-def _init_optimizer(name: str, model: Actor | Critic, **kwargs) -> torch.optim.Optimizer:
+def _init_optimizer(name: str, model: nn.Module, **kwargs) -> torch.optim.Optimizer:
     return getattr(torch.optim, name)(**kwargs, params=model.parameters())
 
 
@@ -276,23 +244,20 @@ def _get_coefs_entropy(num_episodes: int, elbow: int, max_: float, min_: float) 
 
 
 if __name__ == "__main__":
-    config = _load_config()
+    config_path = "src/rl/algorithms/actor_critic/config.yml"
+    config = _load_config(config_path)
 
     # Models
-    model_actor = Actor(config["model_actor"]["dim_card"])
-    model_critic = Critic(config["model_critic"]["dim_card"])
+    model = ActorCritic(config["model"]["dim_card"])
 
-    # Optimizers
-    optimizer_actor = _init_optimizer(
-        config["optimizer_actor"]["name"], model_actor, **config["optimizer_actor"]["kwargs"]
-    )
-    optimizer_critic = _init_optimizer(
-        config["optimizer_critic"]["name"], model_critic, **config["optimizer_critic"]["kwargs"]
+    # Optimizer
+    optimizer = _init_optimizer(
+        config["optimizer"]["name"], model, **config["optimizer"]["kwargs"]
     )
 
     # Copy config to experiment directory
     os.makedirs(f"experiments/{config['exp_name']}")
-    shutil.copy("src/agents/a2c/config.yml", f"experiments/{config['exp_name']}/config.yml")
+    shutil.copy(config_path, f"experiments/{config['exp_name']}/config.yml")
 
     # Get entropy coefficients
     coefs_entropy = _get_coefs_entropy(
@@ -310,12 +275,11 @@ if __name__ == "__main__":
         config["log_every"],
         config["eval_every"],
         config["save_every"],
-        model_actor,
-        model_critic,
-        optimizer_actor,
-        optimizer_critic,
+        model,
+        optimizer,
         torch.device("cpu"),
         config["gamma"],
         coefs_entropy,
         config["max_grad_norm"],
+        config["num_eval"],
     )

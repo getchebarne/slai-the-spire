@@ -1,9 +1,7 @@
 from typing import Callable
 
-from src.agents.pseudorandom import select_action
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
-from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
@@ -138,9 +136,9 @@ def start_combat(cs: CombatState) -> None:
 def main(cs: CombatState, select_action_fn: Callable[[CombatView], Action]) -> None:
     start_combat(cs)
 
-    while not is_game_over(combat_state.entity_manager):
+    while not is_game_over(cs.entity_manager):
         # Get combat view and draw it on the terminal
-        combat_view = view_combat(combat_state)
+        combat_view = view_combat(cs)
         draw_combat(combat_view)
 
         # Get action from agent
@@ -150,11 +148,3 @@ def main(cs: CombatState, select_action_fn: Callable[[CombatView], Action]) -> N
         step(cs, action)
 
     # TODO: combat end
-
-
-if __name__ == "__main__":
-    # Instance combat manager
-    combat_state = create_combat_state()
-
-    # Execute
-    main(combat_state, select_action)
