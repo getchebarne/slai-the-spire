@@ -29,12 +29,19 @@ EFFECT_TYPES = [
 ]
 
 
+def _one_hot_encode_(value: int, max_value: int, device: torch.device) -> torch.Tensor:
+    num_bins = max_value + 1
+    bin_idx = min(value, max_value)
+    return F.one_hot(torch.tensor(bin_idx, device=device), num_classes=num_bins).to(torch.float32)
+
+
 # TODO: in the future I'll need to add max-energy, it's always 3 for now
 def _encode_energy_view(energy_view: EnergyView, device: torch.device) -> torch.Tensor:
-    return torch.tensor([energy_view.current], device=device, dtype=torch.float32)
+    return _one_hot_encode_(energy_view.current, 3, device)
 
 
 def _encode_actor_modifiers(actor_view: ActorView) -> list[int]:
+    # Initialize as empty
     modifier_encodings = [0] * len(MODIFIER_VIEW_TYPES)
     for i, modifier_view_type in enumerate(MODIFIER_VIEW_TYPES):
         if modifier_view_type in actor_view.modifiers:
@@ -42,41 +49,47 @@ def _encode_actor_modifiers(actor_view: ActorView) -> list[int]:
             if stacks_current is None:
                 modifier_encodings[i] = 1
             else:
-                modifier_encodings[i] = stacks_current
+                modifier_encodings[i] = np.log(stacks_current + 1)
 
     return modifier_encodings
 
 
 def _encode_character_view(character_view: CharacterView, device: torch.device) -> torch.Tensor:
-    return torch.tensor(
+    return torch.cat(
         [
-            character_view.health_current,
-            character_view.block_current,
-            character_view.health_current + character_view.block_current,
-            *_encode_actor_modifiers(character_view),
+            _one_hot_encode_(character_view.health_current, 50, device),
+            _one_hot_encode_(character_view.block_current, 16, device),
+            _one_hot_encode_(
+                character_view.health_current + character_view.block_current, 66, device
+            ),
+            torch.tensor(
+                _encode_actor_modifiers(character_view), dtype=torch.float32, device=device
+            ),
         ],
-        dtype=torch.float32,
-        device=device,
     )
 
 
 # TODO: adapt to multiple monsters
 def _encode_monster_view(monster_view: MonsterView, device: torch.device) -> torch.Tensor:
-    return torch.tensor(
+    return torch.cat(
         [
-            monster_view.health_current,
-            monster_view.block_current,
-            monster_view.health_current + monster_view.block_current,
+            _one_hot_encode_(monster_view.health_current, 46, device),
+            _one_hot_encode_(monster_view.block_current, 9, device),
+            _one_hot_encode_(monster_view.health_current + monster_view.block_current, 55, device),
             # Intent
-            monster_view.intent.damage or 0,
-            monster_view.intent.instances or 0,
-            monster_view.intent.block,
-            monster_view.intent.buff,
-            # Modifiers
-            *_encode_actor_modifiers(monster_view),
+            torch.tensor(
+                [
+                    # monster_view.intent.instances or 0,
+                    np.log((monster_view.intent.damage or 0) + 1),
+                    monster_view.intent.block,
+                    monster_view.intent.buff,
+                    # Modifiers
+                    *_encode_actor_modifiers(monster_view),
+                ],
+                dtype=torch.float32,
+                device=device,
+            ),
         ],
-        dtype=torch.float32,
-        device=device,
     )
 
 
@@ -84,9 +97,9 @@ def _encode_monster_view(monster_view: MonsterView, device: torch.device) -> tor
 def _encode_card_view(card_view: CardView) -> list[int]:
     card_encoded = [0] * len(EFFECT_TYPES)
     for effect in card_view.effects:
-        card_encoded[EFFECT_TYPES.index(effect.type)] = effect.value
+        card_encoded[EFFECT_TYPES.index(effect.type)] = np.log(effect.value + 1)
 
-    return card_encoded + [card_view.cost]
+    return card_encoded + [np.log(card_view.cost + 1)]
 
 
 def _encode_card_views(card_views: list[CardView], device: torch.device) -> torch.Tensor:

@@ -7,12 +7,28 @@ from src.agents.dqn.model import select_action
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.entities import create_entity
+from src.game.combat.factories import create_backflip
+from src.game.combat.factories import create_dagger_throw
 from src.game.combat.factories import create_defend
 from src.game.combat.factories import create_strike
 from src.game.combat.main import start_combat
 from src.game.combat.main import step
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import view_combat
+
+
+def evaluate_final_hp(model: DeepQNetwork, device: torch.device) -> int:
+    # Get new game
+    cs = create_combat_state()
+    start_combat(cs)
+
+    while not is_game_over(cs.entity_manager):
+        combat_view = view_combat(cs)
+        action, _ = select_action(model, combat_view, device=device)
+        step(cs, action)
+
+    # Return final health
+    return view_combat(cs).character.health_current
 
 
 def evaluate_blunder(model: DeepQNetwork, device: torch.device) -> bool:
@@ -55,7 +71,7 @@ def evaluate_lethal(model: DeepQNetwork, device: torch.device) -> bool:
     monster.health_current = random.randint(13, 18)
 
     # Replace hand w/ 3 Strikes and filler Defends
-    cs.entity_manager.card_in_hand_ids = [
+    cs.entity_manager.id_cards_in_hand = [
         create_entity(cs.entity_manager, create_strike()),
         create_entity(cs.entity_manager, create_strike()),
         create_entity(cs.entity_manager, create_strike()),
@@ -78,57 +94,57 @@ def evaluate_lethal(model: DeepQNetwork, device: torch.device) -> bool:
     return False
 
 
-# def evaluate_draw_first(model: Actor, device: torch.device) -> bool:
-#     cs = create_combat_state()
-#     start_combat(cs)
+def evaluate_draw_first_w_backflip(model: DeepQNetwork, device: torch.device) -> bool:
+    cs = create_combat_state()
+    start_combat(cs)
 
-#     # Create a Backflip
-#     id_backflip = create_entity(cs.entity_manager, create_backflip())
+    # Create a Backflip
+    id_backflip = create_entity(cs.entity_manager, create_backflip())
 
-#     # Replace cards in the hand w/ Backflip and fillers
-#     cs.entity_manager.card_in_hand_ids = [
-#         create_entity(cs.entity_manager, create_strike()),
-#         create_entity(cs.entity_manager, create_strike()),
-#         create_entity(cs.entity_manager, create_defend()),
-#         create_entity(cs.entity_manager, create_defend()),
-#         id_backflip,
-#     ]
+    # Replace cards in the hand w/ Backflip and fillers
+    cs.entity_manager.id_cards_in_hand = [
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_defend()),
+        create_entity(cs.entity_manager, create_defend()),
+        id_backflip,
+    ]
 
-#     combat_view = view_combat(cs)
-#     action = select_action(model, combat_view, device=device)
+    combat_view = view_combat(cs)
+    action, _ = select_action(model, combat_view, device=device)
 
-#     if action.type != ActionType.SELECT_ENTITY:
-#         return False
+    if action.type != ActionType.SELECT_ENTITY:
+        return False
 
-#     if action.target_id != id_backflip:
-#         return False
+    if action.target_id != id_backflip:
+        return False
 
-#     return True
+    return True
 
 
-# def evaluate_dagger_throw_over_strike(model: Actor, device: torch.device) -> bool:
-#     cs = create_combat_state()
-#     start_combat(cs)
+def evaluate_dagger_throw_vs_strike(model: DeepQNetwork, device: torch.device) -> bool:
+    cs = create_combat_state()
+    start_combat(cs)
 
-#     # Create a Dagger Throw
-#     id_dagger_throw = create_entity(cs.entity_manager, create_dagger_throw())
+    # Create a Dagger Throw
+    id_dagger_throw = create_entity(cs.entity_manager, create_dagger_throw())
 
-#     # Replace cards in the hand w/ Backflip and Strikes
-#     cs.entity_manager.card_in_hand_ids = [
-#         create_entity(cs.entity_manager, create_strike()),
-#         create_entity(cs.entity_manager, create_strike()),
-#         create_entity(cs.entity_manager, create_strike()),
-#         create_entity(cs.entity_manager, create_strike()),
-#         id_dagger_throw,
-#     ]
+    # Replace cards in the hand w/ Backflip and Strikes
+    cs.entity_manager.id_cards_in_hand = [
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        create_entity(cs.entity_manager, create_strike()),
+        id_dagger_throw,
+    ]
 
-#     combat_view = view_combat(cs)
-#     action = select_action(model, combat_view, device=device)
+    combat_view = view_combat(cs)
+    action, _ = select_action(model, combat_view, device=device)
 
-#     if action.type != ActionType.SELECT_ENTITY:
-#         return False
+    if action.type != ActionType.SELECT_ENTITY:
+        return False
 
-#     if action.target_id != id_dagger_throw:
-#         return False
+    if action.target_id != id_dagger_throw:
+        return False
 
-#     return True
+    return True

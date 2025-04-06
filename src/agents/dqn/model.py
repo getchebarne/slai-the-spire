@@ -31,26 +31,33 @@ class DeepQNetwork(nn.Module):
         self._embedding_card_pad = nn.Parameter(torch.randn(DIM_ENC_CARD))
         self._embedding_card = nn.Linear(DIM_ENC_CARD, dim_card)
 
-        # Other state variables (i.e., character, monsters, energy)
-        self._embedding_other = MLP([DIM_ENC_OTHER, 3 * dim_card, 3 * dim_card])
+        # Character embedding
+        self._embedding_char = MLP([DIM_ENC_CHARACTER, DIM_ENC_CHARACTER, DIM_ENC_CHARACTER])
+
+        # Monster embedding
+        self._embedding_monster = MLP([DIM_ENC_MONSTER, DIM_ENC_MONSTER, DIM_ENC_MONSTER])
+
+        # Energy embedding
+        self._embedding_energy = MLP([DIM_ENC_ENERGY, DIM_ENC_ENERGY, DIM_ENC_ENERGY])
 
         # Layer normalization after concatenating other and cards
-        self._ln_global = nn.LayerNorm(6 * dim_card)
+        self._ln_global = nn.LayerNorm(DIM_ENC_OTHER + 3 * dim_card)
 
         # Two actions for every card (select/play card, discard card) for now
+        aux = DIM_ENC_OTHER + 4 * dim_card
         self._mlp_card = nn.Sequential(
-            MLP([7 * dim_card, 7 * dim_card, 7 * dim_card]),
-            nn.Linear(7 * dim_card, 2),
+            MLP([aux, aux, aux]),
+            nn.Linear(aux, 2),
         )
 
         # One action for every monster (only one monster for now) + 1 for end-of-turn
         self._mlp_monster = nn.Sequential(
-            MLP([7 * dim_card, 7 * dim_card]),
-            nn.Linear(7 * dim_card, 1),
+            MLP([aux, aux, aux]),
+            nn.Linear(aux, 1),
         )
         self._mlp_end_turn = nn.Sequential(
-            MLP([6 * dim_card, 6 * dim_card]),
-            nn.Linear(6 * dim_card, 1),
+            MLP([aux - dim_card, aux - dim_card, aux - dim_card]),
+            nn.Linear(aux - dim_card, 1),
         )
 
     def forward(self, x_state: torch.Tensor) -> torch.Tensor:
@@ -62,15 +69,14 @@ class DeepQNetwork(nn.Module):
         x_hand = x_state[
             :, 1 + MAX_HAND_SIZE : 1 + MAX_HAND_SIZE + DIM_ENC_CARD * MAX_HAND_SIZE
         ].view(batch_size, MAX_HAND_SIZE, DIM_ENC_CARD)
+        high = 1 + MAX_HAND_SIZE + DIM_ENC_CARD * MAX_HAND_SIZE
 
         # Other
-        x_other = x_state[
-            :,
-            1
-            + DIM_ENC_CARD * (MAX_HAND_SIZE + 1) : 1
-            + DIM_ENC_CARD * (MAX_HAND_SIZE + 1)
-            + DIM_ENC_OTHER,
-        ]
+        x_char = x_state[:, high : high + DIM_ENC_CHARACTER]
+        high += DIM_ENC_CHARACTER
+        x_monster = x_state[:, high : high + DIM_ENC_MONSTER]
+        high += DIM_ENC_MONSTER
+        x_energy = x_state[:, high:]
 
         # Pad hand
         mask_pad = torch.arange(MAX_HAND_SIZE).view(1, MAX_HAND_SIZE).expand(
@@ -86,8 +92,10 @@ class DeepQNetwork(nn.Module):
         # Encode hand
         x_card_hand = self._embedding_card(x_hand)
 
-        # Other
-        x_other = self._embedding_other(x_other)
+        # Other (monster, character, energy)
+        x_monster = self._embedding_monster(x_monster)
+        x_char = self._embedding_char(x_char)
+        x_energy = self._embedding_energy(x_energy)
 
         # Concatenate
         x_global = self._ln_global(
@@ -96,7 +104,9 @@ class DeepQNetwork(nn.Module):
                     torch.sum(x_card_hand, dim=1),
                     torch.mean(x_card_hand, dim=1),
                     torch.max(x_card_hand, dim=1)[0],
-                    x_other,
+                    x_monster,
+                    x_char,
+                    x_energy,
                 ],
                 dim=1,
             )
@@ -106,9 +116,7 @@ class DeepQNetwork(nn.Module):
         x_card = self._mlp_card(
             torch.cat(
                 [
-                    x_global.view(batch_size, 1, 6 * self._dim_card).expand(
-                        batch_size, MAX_HAND_SIZE, 6 * self._dim_card
-                    ),
+                    x_global.view(batch_size, 1, -1).expand(batch_size, MAX_HAND_SIZE, -1),
                     x_card_hand,
                 ],
                 dim=2,
