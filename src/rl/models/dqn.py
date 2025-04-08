@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-from src.game.combat.constant import MAX_HAND_SIZE
 from src.rl.encoding import get_card_encoding_dim
 from src.rl.encoding import get_character_encoding_dim
 from src.rl.encoding import get_energy_encoding_dim
@@ -10,9 +9,9 @@ from src.rl.models.mlp import MLP
 
 
 DIM_ENC_CARD = get_card_encoding_dim()
-DIM_ENC_CHARACTER = get_character_encoding_dim()[0]
-DIM_ENC_ENERGY = get_energy_encoding_dim()[0]
-DIM_ENC_MONSTER = get_monster_encoding_dim()[0]
+DIM_ENC_CHARACTER = get_character_encoding_dim()
+DIM_ENC_ENERGY = get_energy_encoding_dim()
+DIM_ENC_MONSTER = get_monster_encoding_dim()
 DIM_ENC_OTHER = DIM_ENC_CHARACTER + DIM_ENC_MONSTER + DIM_ENC_ENERGY
 
 
@@ -24,7 +23,6 @@ class DeepQNetwork(nn.Module):
         self._dim_card = dim_card
 
         # Card embedding
-        self._embedding_card_pad = nn.Parameter(torch.randn(DIM_ENC_CARD))
         self._embedding_card = nn.Linear(DIM_ENC_CARD, dim_card)
 
         # Character embedding
@@ -35,6 +33,9 @@ class DeepQNetwork(nn.Module):
 
         # Energy embedding
         self._embedding_energy = MLP([DIM_ENC_ENERGY, DIM_ENC_ENERGY, DIM_ENC_ENERGY])
+
+        # Other
+        self._mlp_other = MLP([DIM_ENC_OTHER, DIM_ENC_OTHER, DIM_ENC_OTHER])
 
         # Layer normalization after concatenating other and cards
         self._ln_global = nn.LayerNorm(DIM_ENC_OTHER + 3 * dim_card)
@@ -56,53 +57,84 @@ class DeepQNetwork(nn.Module):
             nn.Linear(aux - dim_card, 1),
         )
 
-    def forward(self, x_state: torch.Tensor) -> torch.Tensor:
-        batch_size = x_state.shape[0]
+    def forward(
+        self,
+        x_len_hand: torch.Tensor,
+        x_len_draw: torch.Tensor,
+        x_len_disc: torch.Tensor,
+        x_card_active_mask: torch.Tensor,
+        x_card_hand: torch.Tensor,
+        x_card_draw: torch.Tensor,
+        x_card_disc: torch.Tensor,
+        x_char: torch.Tensor,
+        x_monster: torch.Tensor,
+        x_energy: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size = x_len_hand.shape[0]
 
-        # Hand
-        x_hand_size = x_state[:, 0:1]
-        x_card_is_active = x_state[:, 1 : 1 + MAX_HAND_SIZE]
-        x_hand = x_state[
-            :, 1 + MAX_HAND_SIZE : 1 + MAX_HAND_SIZE + DIM_ENC_CARD * MAX_HAND_SIZE
-        ].view(batch_size, MAX_HAND_SIZE, DIM_ENC_CARD)
-        high = 1 + MAX_HAND_SIZE + DIM_ENC_CARD * MAX_HAND_SIZE
-
-        # Other
-        x_char = x_state[:, high : high + DIM_ENC_CHARACTER]
-        high += DIM_ENC_CHARACTER
-        x_monster = x_state[:, high : high + DIM_ENC_MONSTER]
-        high += DIM_ENC_MONSTER
-        x_energy = x_state[:, high:]
-
-        # Pad hand
-        mask_pad = torch.arange(MAX_HAND_SIZE).view(1, MAX_HAND_SIZE).expand(
-            batch_size, MAX_HAND_SIZE
-        ) >= x_hand_size.expand(batch_size, MAX_HAND_SIZE)
-        mask_pad = mask_pad.view(batch_size, MAX_HAND_SIZE, 1).expand(
-            batch_size, MAX_HAND_SIZE, DIM_ENC_CARD
-        )
-        x_hand[mask_pad] = self._embedding_card_pad.view(1, 1, DIM_ENC_CARD).expand(
-            batch_size, MAX_HAND_SIZE, DIM_ENC_CARD
-        )[mask_pad]
+        max_size_hand = x_card_hand.shape[1]
+        max_size_draw = x_card_draw.shape[1]
+        max_size_disc = x_card_disc.shape[1]
 
         # Encode hand
-        x_card_hand = self._embedding_card(x_hand)
+        x_card_hand = self._embedding_card(x_card_hand)
+        mask_hand = torch.arange(max_size_hand).view(1, max_size_hand).expand(
+            batch_size, max_size_hand
+        ) < x_len_hand.expand(batch_size, max_size_hand)
+        mask_hand = (
+            mask_hand.view(batch_size, max_size_hand, 1)
+            .expand(batch_size, max_size_hand, self._dim_card)
+            .to(torch.float32)
+        )
+        x_card_hand *= mask_hand
+
+        # Encode draw
+        x_card_draw = self._embedding_card(x_card_draw)
+        mask_draw = torch.arange(max_size_draw).view(1, max_size_draw).expand(
+            batch_size, max_size_draw
+        ) < x_len_draw.expand(batch_size, max_size_draw)
+        mask_draw = (
+            mask_draw.view(batch_size, max_size_draw, 1)
+            .expand(batch_size, max_size_draw, self._dim_card)
+            .to(torch.float32)
+        )
+        x_card_draw *= mask_draw
+
+        # Encode disc
+        x_card_disc = self._embedding_card(x_card_disc)
+        mask_disc = torch.arange(max_size_disc).view(1, max_size_disc).expand(
+            batch_size, max_size_disc
+        ) < x_len_disc.expand(batch_size, max_size_disc)
+        mask_disc = (
+            mask_disc.view(batch_size, max_size_disc, 1)
+            .expand(batch_size, max_size_disc, self._dim_card)
+            .to(torch.float32)
+        )
+        x_card_disc *= mask_disc
 
         # Other (monster, character, energy)
         x_monster = self._embedding_monster(x_monster)
         x_char = self._embedding_char(x_char)
         x_energy = self._embedding_energy(x_energy)
+        x_other = self._mlp_other(
+            torch.cat(
+                [
+                    x_monster,
+                    x_char,
+                    x_energy,
+                ],
+                dim=1,
+            )
+        )
 
         # Concatenate
         x_global = self._ln_global(
             torch.cat(
                 [
                     torch.sum(x_card_hand, dim=1),
-                    torch.mean(x_card_hand, dim=1),
-                    torch.max(x_card_hand, dim=1)[0],
-                    x_monster,
-                    x_char,
-                    x_energy,
+                    torch.sum(x_card_draw, dim=1),
+                    torch.sum(x_card_disc, dim=1),
+                    x_other,
                 ],
                 dim=1,
             )
@@ -112,7 +144,7 @@ class DeepQNetwork(nn.Module):
         x_card = self._mlp_card(
             torch.cat(
                 [
-                    x_global.view(batch_size, 1, -1).expand(batch_size, MAX_HAND_SIZE, -1),
+                    x_global.view(batch_size, 1, -1).expand(batch_size, max_size_hand, -1),
                     x_card_hand,
                 ],
                 dim=2,
@@ -120,8 +152,8 @@ class DeepQNetwork(nn.Module):
         )
         x_card_active = torch.sum(
             (
-                x_card_is_active.view(batch_size, MAX_HAND_SIZE, 1).expand(
-                    batch_size, MAX_HAND_SIZE, self._dim_card
+                x_card_active_mask.view(batch_size, max_size_hand, 1).expand(
+                    batch_size, max_size_hand, self._dim_card
                 )
                 * x_card_hand
             ),

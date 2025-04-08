@@ -3,8 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from src.game.combat.constant import MAX_HAND_SIZE
-from src.game.combat.constant import MAX_MONSTERS
+from src.game.combat.constant import MAX_SIZE_HAND
 
 
 @dataclass
@@ -39,7 +38,7 @@ class ReplayBuffer:
         self._actions = torch.zeros(size, dtype=torch.long)
         self._rewards = torch.zeros(size, dtype=torch.float32)
         self._valid_action_masks_next = torch.zeros(
-            (size, 2 * MAX_HAND_SIZE + MAX_MONSTERS + 1), dtype=torch.bool
+            (size, 2 * MAX_SIZE_HAND + 2), dtype=torch.bool
         )
         self._game_over_flags = torch.zeros(size, dtype=torch.float32)
 

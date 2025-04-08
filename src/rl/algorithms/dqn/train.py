@@ -4,7 +4,6 @@ import shutil
 from copy import deepcopy
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from torch.utils.tensorboard import SummaryWriter
@@ -19,6 +18,8 @@ from src.rl.algorithms.dqn.memory import Batch
 from src.rl.algorithms.dqn.memory import ReplayBuffer
 from src.rl.algorithms.dqn.memory import Sample
 from src.rl.encoding import encode_combat_view
+from src.rl.encoding import pack_combat_view_encoding
+from src.rl.encoding import unpack_combat_view_encoding
 from src.rl.evaluation import evaluate_blunder
 from src.rl.evaluation import evaluate_dagger_throw_vs_strike
 from src.rl.evaluation import evaluate_draw_first_w_backflip
@@ -38,21 +39,25 @@ TOLERANCE = 100
 # TODO: add discount to config
 def _train_on_batch(
     batch: Batch,
-    model_online: nn.Module,
-    model_target: nn.Module,
+    model_online: DeepQNetwork,
+    model_target: DeepQNetwork,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     discount: float,
 ) -> float:
     # Forward pass
-    q_values_all = model_online(batch.states.to(device))
+    q_values_all = model_online(*unpack_combat_view_encoding(batch.states.to(device)).as_tuple())
     q_values_taken = q_values_all.gather(1, batch.actions.view(-1, 1).to(device))
 
     # Predict next state's Q values with both the online and target models
     states_next_device = batch.states_next.to(device)
     with torch.no_grad():
-        q_values_next_online = model_online(states_next_device)
-        q_values_next_target = model_target(states_next_device)
+        q_values_next_online = model_online(
+            *unpack_combat_view_encoding(states_next_device).as_tuple()
+        )
+        q_values_next_target = model_target(
+            *unpack_combat_view_encoding(states_next_device).as_tuple()
+        )
 
     # Select the action with the highest Q value using the online model
     q_values_next_online[~batch.valid_action_masks_next.to(device)] = float("-inf")
@@ -81,8 +86,8 @@ def _train_on_batch(
 
 def _play_episode(
     step_global: int,
-    model_online: nn.Module,
-    model_target: nn.Module,
+    model_online: DeepQNetwork,
+    model_target: DeepQNetwork,
     transfer_every: int,
     optimizer: torch.optim.Optimizer,
     replay_buffer: ReplayBuffer,
@@ -97,7 +102,7 @@ def _play_episode(
 
     # Intialize variables
     combat_view = view_combat(cs)
-    combat_view_tensor = encode_combat_view(combat_view, device)
+    combat_view_encoding = encode_combat_view(combat_view, device)
     valid_action_mask = get_valid_action_mask(combat_view)
     valid_action_mask_tensor = torch.tensor([valid_action_mask], dtype=torch.bool, device=device)
     game_over_flag = False
@@ -117,7 +122,7 @@ def _play_episode(
         else:
             # Exploit
             with torch.no_grad():
-                q_values = model_online(combat_view_tensor.unsqueeze(0))
+                q_values = model_online(*combat_view_encoding.as_tuple())
 
             q_values[~valid_action_mask_tensor] = float("-inf")
             action_idx = torch.argmax(q_values).item()
@@ -128,7 +133,7 @@ def _play_episode(
 
         # Get new state, new valid actions, game over flag and instant reward
         combat_view_next = view_combat(cs)
-        combat_view_tensor_next = encode_combat_view(combat_view_next, device)
+        combat_view_encoding_next = encode_combat_view(combat_view_next, device)
         valid_action_mask_next = get_valid_action_mask(combat_view_next)
         valid_action_mask_tensor_next = torch.tensor(
             [valid_action_mask_next], dtype=torch.bool, device=device
@@ -139,8 +144,8 @@ def _play_episode(
         # Store transition in memory
         replay_buffer.store(
             Sample(
-                combat_view_tensor,
-                combat_view_tensor_next,
+                pack_combat_view_encoding(combat_view_encoding).squeeze(),
+                pack_combat_view_encoding(combat_view_encoding_next).squeeze(),
                 action_idx,
                 reward,
                 valid_action_mask_tensor_next,
@@ -150,7 +155,7 @@ def _play_episode(
 
         # Update state, valid actions, and game over flag
         combat_view = combat_view_next
-        combat_view_tensor = combat_view_tensor_next
+        combat_view_encoding = combat_view_encoding_next
         valid_action_mask = valid_action_mask_next
         valid_action_mask_tensor = valid_action_mask_tensor_next
         game_over_flag = game_over_flag_next
@@ -184,8 +189,8 @@ def train(
     log_every: int,
     save_every: int,
     transfer_every: int,
-    model_online: nn.Module,
-    model_target: nn.Module,
+    model_online: DeepQNetwork,
+    model_target: DeepQNetwork,
     optimizer: torch.optim.Optimizer,
     epsilons: list[float],
     discount: float,
@@ -271,11 +276,11 @@ def _load_config(config_path: str) -> dict:
 
 
 # TODO: use **kwargs, improve signature
-def _init_optimizer(name: str, model: nn.Module, **kwargs) -> torch.optim.Optimizer:
+def _init_optimizer(name: str, model: DeepQNetwork, **kwargs) -> torch.optim.Optimizer:
     return getattr(torch.optim, name)(**kwargs, params=model.parameters())
 
 
-def _transfer_params(model_online: nn.Module, model_target: nn.Module) -> None:
+def _transfer_params(model_online: DeepQNetwork, model_target: DeepQNetwork) -> None:
     for param_online, param_target in zip(model_online.parameters(), model_target.parameters()):
         param_target.data.copy_(param_online.data)
 

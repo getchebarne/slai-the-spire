@@ -51,13 +51,13 @@ class PolicyQMax(PolicyBase):
         self._model.to(self._device)
 
     def select_action(self, combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
-        x_state = encode_combat_view(combat_view, self._device)
+        combat_view_encoding = encode_combat_view(combat_view, self._device)
         valid_action_mask_tensor = torch.tensor(
             [get_valid_action_mask(combat_view)], dtype=torch.bool, device=self._device
         )
 
         with torch.no_grad():
-            q_values = self._model(x_state.unsqueeze(0))
+            q_values = self._model(*combat_view_encoding.as_tuple())
 
         q_values[~valid_action_mask_tensor] = float("-inf")
         action_idx = torch.argmax(q_values).item()

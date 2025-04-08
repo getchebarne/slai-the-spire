@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.game.combat.constant import MAX_HAND_SIZE
+from src.game.combat.constant import MAX_SIZE_HAND
 from src.rl.encoding import get_card_encoding_dim
 from src.rl.encoding import get_character_encoding_dim
 from src.rl.encoding import get_energy_encoding_dim
@@ -23,12 +23,12 @@ class ActorCritic(nn.Module):
 
         self._dim_card = dim_card
 
-        self._dummy_param = nn.Parameter(torch.randn(2 * MAX_HAND_SIZE + 2))
+        self._dummy_param = nn.Parameter(torch.randn(2 * MAX_SIZE_HAND + 2))
 
     def forward(
         self, x_state: torch.Tensor, x_valid_action_mask: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        probs = torch.randn((1, 2 * MAX_HAND_SIZE + 2), dtype=torch.float32) * self._dummy_param
+        probs = torch.randn((1, 2 * MAX_SIZE_HAND + 2), dtype=torch.float32) * self._dummy_param
         value = torch.randn((1, 1), dtype=torch.float32)
 
         probs[~x_valid_action_mask.view(1, -1)] = float("-inf")

@@ -8,7 +8,7 @@ from src.agents.a2c.models.actor import Actor
 from src.agents.a2c.models.actor import action_idx_to_action
 from src.agents.a2c.models.actor import get_valid_action_mask
 
-from src.game.combat.constant import MAX_HAND_SIZE
+from src.game.combat.constant import MAX_SIZE_HAND
 from src.game.combat.create import create_combat_state
 from src.game.combat.drawer import draw_combat
 from src.game.combat.main import start_combat
@@ -70,7 +70,7 @@ def run_simulation(
             prob_c = prob.clone()
             for idx_new, idx_old in index_mapping.items():
                 prob_c[idx_old] = prob[idx_new]
-                prob_c[idx_old + MAX_HAND_SIZE] = prob[idx_new + MAX_HAND_SIZE]
+                prob_c[idx_old + MAX_SIZE_HAND] = prob[idx_new + MAX_SIZE_HAND]
 
             combat_views.append((combat_view, prob_c, valid_action_mask))
 
@@ -89,12 +89,12 @@ def display_game(game: tuple[int, list]) -> None:
 
         if combat_view.effect is None:
             cards_prob = prob_array[: len(combat_view.hand)]
-            monster_prob = prob_array[2 * MAX_HAND_SIZE]
-            end_turn_prob = prob_array[2 * MAX_HAND_SIZE + 1]
+            monster_prob = prob_array[2 * MAX_SIZE_HAND]
+            end_turn_prob = prob_array[2 * MAX_SIZE_HAND + 1]
         else:
-            cards_prob = prob_array[MAX_HAND_SIZE : MAX_HAND_SIZE + len(combat_view.hand)]
-            monster_prob = prob_array[2 * MAX_HAND_SIZE]
-            end_turn_prob = prob_array[2 * MAX_HAND_SIZE + 1]
+            cards_prob = prob_array[MAX_SIZE_HAND : MAX_SIZE_HAND + len(combat_view.hand)]
+            monster_prob = prob_array[2 * MAX_SIZE_HAND]
+            end_turn_prob = prob_array[2 * MAX_SIZE_HAND + 1]
 
         print(
             f"CARDS:{format_probs(cards_prob)} / "
