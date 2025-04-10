@@ -10,6 +10,7 @@ from src.game.combat.entities import ModifierType
 from src.game.combat.entities import Monster
 from src.game.combat.entities import MonsterMove
 from src.game.combat.state import CombatState
+from src.game.combat.utils import does_card_require_target
 
 
 # Aliases
@@ -23,6 +24,7 @@ class CardView:
     effects: list[Effect]  # TODO: implement EffectView
     cost: int
     is_active: bool
+    requires_target: bool
     entity_id: int
 
 
@@ -74,7 +76,9 @@ class CombatView:
 
 
 def get_card_view(card: Card, is_active: bool, id_card: int) -> CardView:
-    return CardView(card.name, card.effects, card.cost, is_active, id_card)
+    requires_target = does_card_require_target(card)
+
+    return CardView(card.name, card.effects, card.cost, is_active, requires_target, id_card)
 
 
 def get_actor_view(actor: Actor) -> ActorView:

@@ -12,7 +12,7 @@ from src.game.combat.phase import get_end_of_turn_effects
 from src.game.combat.phase import get_start_of_combat_effects
 from src.game.combat.phase import get_start_of_turn_effects
 from src.game.combat.state import CombatState
-from src.game.combat.utils import card_requires_target
+from src.game.combat.utils import does_card_require_target
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
@@ -57,7 +57,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> list[SourcedEffect
     if cs.entity_manager.id_card_active is None and not cs.effect_queue:
         # Selected card
         card = cs.entity_manager.entities[id_target]
-        if card_requires_target(card):
+        if does_card_require_target(card):
             cs.entity_manager.id_card_active = id_target
             cs.entity_manager.id_selectables = cs.entity_manager.id_monsters
 

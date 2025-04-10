@@ -12,7 +12,7 @@ def is_game_over(entity_manager: EntityManager) -> bool:
     )
 
 
-def card_requires_target(card: Card) -> bool:
+def does_card_require_target(card: Card) -> bool:
     for effect in card.effects:
         if effect.target_type == EffectTargetType.CARD_TARGET:
             return True
