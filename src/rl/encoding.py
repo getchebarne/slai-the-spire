@@ -26,7 +26,7 @@ EFFECT_TYPES_MAX = {
     EffectType.DEAL_DAMAGE: 10,
     EffectType.GAIN_BLOCK: 11,
     EffectType.DISCARD: 1,
-    EffectType.GAIN_WEAK: 1,
+    EffectType.GAIN_WEAK: 2,
     EffectType.DRAW_CARD: 2,
 }
 MODIFIER_VIEW_TYPES_MAX = {
@@ -39,9 +39,9 @@ DAMAGE_MAX = 32
 
 @dataclass(frozen=True)
 class CombatViewEncoding:
-    x_len_hand: torch.Tensor
-    x_len_draw: torch.Tensor
-    x_len_disc: torch.Tensor
+    x_mask_hand: torch.Tensor
+    x_mask_draw: torch.Tensor
+    x_mask_disc: torch.Tensor
     x_card_active_mask: torch.Tensor
     x_card_hand: torch.Tensor
     x_card_draw: torch.Tensor
@@ -52,9 +52,9 @@ class CombatViewEncoding:
 
     def as_tuple(self) -> tuple[torch.Tensor, ...]:
         return (
-            self.x_len_hand,
-            self.x_len_draw,
-            self.x_len_disc,
+            self.x_mask_hand,
+            self.x_mask_draw,
+            self.x_mask_disc,
             self.x_card_active_mask,
             self.x_card_hand,
             self.x_card_draw,
@@ -105,17 +105,22 @@ def _encode_char_view(
     device: torch.device,
 ) -> torch.Tensor:
     block_min = 0
-    total_min = health_min + block_min
-    total_max = health_max + block_max
+    # total_min = health_min + block_min
+    # total_max = health_max + block_max
 
     return torch.cat(
         [
             _one_hot_encode(char_view.health_current, health_min, health_max, device),
             _one_hot_encode(char_view.block_current, block_min, block_max, device),
-            _one_hot_encode(
-                char_view.health_current + char_view.block_current, total_min, total_max, device
+            # _one_hot_encode(
+            #     char_view.health_current + char_view.block_current, total_min, total_max, device
+            # ),
+            # _encode_actor_view_modifiers(char_view.modifiers, device),
+            torch.tensor(
+                [char_view.health_current / health_max, char_view.block_current / block_max],
+                dtype=torch.float32,
+                device=device,
             ),
-            _encode_actor_view_modifiers(char_view.modifiers, device),
         ],
     )
 
@@ -142,22 +147,27 @@ def _encode_monster_view(
     device: torch.device,
 ) -> torch.Tensor:
     block_min = 0
-    total_min = health_min + block_min
-    total_max = health_max + block_max
+    # total_min = health_min + block_min
+    # total_max = health_max + block_max
 
     return torch.cat(
         [
             _one_hot_encode(monster_view.health_current, health_min, health_max, device),
             _one_hot_encode(monster_view.block_current, block_min, block_max, device),
-            _one_hot_encode(
-                monster_view.health_current + monster_view.block_current,
-                total_min,
-                total_max,
-                device,
-            ),
+            # _one_hot_encode(
+            #     monster_view.health_current + monster_view.block_current,
+            #     total_min,
+            #     total_max,
+            #     device,
+            # ),
             _encode_actor_view_modifiers(monster_view.modifiers, device),
             # Intent
             _encode_intent_view(monster_view.intent, device),
+            torch.tensor(
+                [monster_view.health_current / health_max, monster_view.block_current / block_max],
+                dtype=torch.float32,
+                device=device,
+            ),
         ],
     )
 
@@ -195,7 +205,7 @@ def _encode_card_views(
 
         if card_view_encodings is None:
             # Intialize all-zeros tensor to hold all encodings, now that we now the enc. dimension
-            card_view_encodings = torch.zeros(max_size, card_view_encoding.shape[0])
+            card_view_encodings = torch.zeros(max_size, card_view_encoding.shape[0], device=device)
 
         # Assign encoding
         card_view_encodings[idx] = card_view_encoding
@@ -218,7 +228,7 @@ def get_monster_encoding_dim() -> int:
 
 
 def get_card_encoding_dim() -> int:
-    card_view_dummy = CardView("Dummy", [], 0, False, 0)
+    card_view_dummy = CardView("Dummy", [], 0, False, False, 0)
     return _encode_card_view(card_view_dummy, torch.device("cpu")).shape[0]
 
 
@@ -229,9 +239,15 @@ def get_energy_encoding_dim() -> int:
 
 def encode_combat_view(combat_view: CombatView, device: torch.device) -> tuple[torch.Tensor, ...]:
     # Get number of cards in each collection
-    x_len_hand = torch.tensor([len(combat_view.hand)], dtype=torch.float32, device=device)
-    x_len_draw = torch.tensor([len(combat_view.draw_pile)], dtype=torch.float32, device=device)
-    x_len_disc = torch.tensor([len(combat_view.disc_pile)], dtype=torch.float32, device=device)
+    x_mask_hand = torch.arange(MAX_SIZE_HAND, dtype=torch.float32, device=device) < len(
+        combat_view.hand
+    )
+    x_mask_draw = torch.arange(MAX_SIZE_DRAW_PILE, dtype=torch.float32, device=device) < len(
+        combat_view.draw_pile
+    )
+    x_mask_disc = torch.arange(MAX_SIZE_DISC_PILE, dtype=torch.float32, device=device) < len(
+        combat_view.disc_pile
+    )
 
     # Encode cards in each collection
     x_card_hand, x_card_active_mask = _encode_card_views(combat_view.hand, MAX_SIZE_HAND, device)
@@ -260,9 +276,9 @@ def encode_combat_view(combat_view: CombatView, device: torch.device) -> tuple[t
     x_energy = _encode_energy_view(combat_view.energy, device)
 
     return CombatViewEncoding(
-        x_len_hand.view(1, 1),
-        x_len_draw.view(1, 1),
-        x_len_disc.view(1, 1),
+        x_mask_hand.view(1, MAX_SIZE_HAND),
+        x_mask_draw.view(1, MAX_SIZE_DRAW_PILE),
+        x_mask_disc.view(1, MAX_SIZE_DISC_PILE),
         x_card_active_mask.view(1, MAX_SIZE_HAND),
         x_card_hand.view(1, MAX_SIZE_HAND, -1),
         x_card_draw.view(1, MAX_SIZE_DRAW_PILE, -1),
@@ -276,9 +292,9 @@ def encode_combat_view(combat_view: CombatView, device: torch.device) -> tuple[t
 def pack_combat_view_encoding(combat_view_encoding: CombatViewEncoding) -> torch.Tensor:
     x_all = torch.cat(
         [
-            combat_view_encoding.x_len_hand,
-            combat_view_encoding.x_len_draw,
-            combat_view_encoding.x_len_disc,
+            combat_view_encoding.x_mask_hand,
+            combat_view_encoding.x_mask_draw,
+            combat_view_encoding.x_mask_disc,
             combat_view_encoding.x_card_active_mask,
             torch.flatten(combat_view_encoding.x_card_hand, start_dim=1),
             torch.flatten(combat_view_encoding.x_card_draw, start_dim=1),
@@ -314,13 +330,13 @@ def unpack_combat_view_encoding(
     batch_size = x.shape[0]
     idx = 0
 
-    # Card collection lengths
-    x_len_hand = x[:, idx : idx + 1]
-    idx += 1
-    x_len_draw = x[:, idx : idx + 1]
-    idx += 1
-    x_len_disc = x[:, idx : idx + 1]
-    idx += 1
+    # Card collection masks
+    x_mask_hand = x[:, idx : idx + MAX_SIZE_HAND]
+    idx += MAX_SIZE_HAND
+    x_mask_draw = x[:, idx : idx + MAX_SIZE_DRAW_PILE]
+    idx += MAX_SIZE_DRAW_PILE
+    x_mask_disc = x[:, idx : idx + MAX_SIZE_DISC_PILE]
+    idx += MAX_SIZE_DISC_PILE
 
     # Active card mask
     x_card_active_mask = x[:, idx : idx + MAX_SIZE_HAND]
@@ -354,9 +370,9 @@ def unpack_combat_view_encoding(
     idx += dim_enc_energy
 
     return CombatViewEncoding(
-        x_len_hand=x_len_hand,
-        x_len_draw=x_len_draw,
-        x_len_disc=x_len_disc,
+        x_mask_hand=x_mask_hand,
+        x_mask_draw=x_mask_draw,
+        x_mask_disc=x_mask_disc,
         x_card_active_mask=x_card_active_mask,
         x_card_hand=x_card_hand,
         x_card_draw=x_card_draw,

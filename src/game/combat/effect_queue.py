@@ -19,7 +19,7 @@ def add_to_bot(effect_queue: EffectQueue, *sourced_effects: SourcedEffect) -> No
 
 
 def add_to_top(effect_queue: EffectQueue, *sourced_effects: SourcedEffect) -> None:
-    for sourced_effect in sourced_effects:
+    for sourced_effect in reversed(sourced_effects):
         effect_queue.insert(0, sourced_effect)
 
 
@@ -45,18 +45,13 @@ def _resolve_effect_target_type(
     if effect_target_type == EffectTargetType.CARD_IN_HAND:
         return entity_manager.id_cards_in_hand.copy()
 
-    if effect_target_type == EffectTargetType.CARD_ACTIVE:
-        return [entity_manager.id_card_active]
-
     raise ValueError(f"Unsupported effect target type: {effect_target_type}")
 
 
-# TODO: think about having `id_effect_target` as an argument instead of `entity_manager`
 def _resolve_effect_selection_type(
     effect_selection_type: EffectSelectionType, id_queries: list[int], id_effect_target: int | None
 ) -> list[int]:
     if effect_selection_type == EffectSelectionType.RANDOM:
-        # TODO: add support for multiple random targets
         return [random.choice(id_queries)]
 
     if effect_selection_type == EffectSelectionType.INPUT:
@@ -76,9 +71,7 @@ def _resolve_effect_selection_type(
     raise ValueError(f"Unsupported effect selection type: {effect_selection_type}")
 
 
-def process_effect_queue(
-    entity_manager: EntityManager, effect_queue: EffectQueue
-) -> list[int] | None:
+def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueue) -> None:
     while effect_queue:
         sourced_effect = effect_queue.pop(0)
         effect = sourced_effect.effect
@@ -111,7 +104,7 @@ def process_effect_queue(
                         # into queue at position 0 and return id_queries to tag them as selectable
                         effect_queue.insert(0, sourced_effect)
 
-                        return id_queries
+                        return
 
         else:
             # TODO: could QueuedEffect have multiple target entities when created? think

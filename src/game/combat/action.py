@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class ActionType(Enum):
@@ -11,4 +10,4 @@ class ActionType(Enum):
 @dataclass
 class Action:
     type: ActionType
-    target_id: Optional[int] = None
+    target_id: int | None = None

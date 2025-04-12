@@ -10,12 +10,14 @@ from src.game.combat.entities import ModifierType
 from src.game.combat.entities import Monster
 from src.game.combat.entities import MonsterMove
 from src.game.combat.state import CombatState
+from src.game.combat.state import FSMState
 from src.game.combat.utils import does_card_require_target
 
 
 # Aliases
 ModifierViewType = ModifierType
 EffectView = Effect
+FSMStateView = FSMState
 
 
 @dataclass
@@ -73,6 +75,7 @@ class CombatView:
     disc_pile: list[CardView]
     energy: EnergyView
     effect: EffectView | None
+    state: FSMStateView
 
 
 def get_card_view(card: Card, is_active: bool, id_card: int) -> CardView:
@@ -199,6 +202,9 @@ def view_combat(cs: CombatState) -> CombatView:
     if cs.effect_queue:
         effect_view = cs.effect_queue[0]
 
+    # FSM state
+    state_view = cs.fsm_state
+
     return CombatView(
         character_view,
         monster_views,
@@ -207,4 +213,5 @@ def view_combat(cs: CombatState) -> CombatView:
         card_in_disc_pile_views,
         energy_view,
         effect_view,
+        state_view,
     )

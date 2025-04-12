@@ -5,7 +5,6 @@ from copy import deepcopy
 
 import torch
 import torch.nn.functional as F
-import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from src.game.combat.create import create_combat_state
@@ -16,7 +15,6 @@ from src.game.combat.view import view_combat
 from src.rl.algorithms.dqn.explorer import linear_decay
 from src.rl.algorithms.dqn.memory import Batch
 from src.rl.algorithms.dqn.memory import ReplayBuffer
-from src.rl.algorithms.dqn.memory import Sample
 from src.rl.encoding import encode_combat_view
 from src.rl.encoding import pack_combat_view_encoding
 from src.rl.encoding import unpack_combat_view_encoding
@@ -30,10 +28,8 @@ from src.rl.models.interface import action_idx_to_action
 from src.rl.models.interface import get_valid_action_mask
 from src.rl.policies import PolicyQMax
 from src.rl.reward import compute_reward
-
-
-# TODO: parametrize
-TOLERANCE = 100
+from src.rl.utils import init_optimizer
+from src.rl.utils import load_config
 
 
 # TODO: add discount to config
@@ -42,35 +38,30 @@ def _train_on_batch(
     model_online: DeepQNetwork,
     model_target: DeepQNetwork,
     optimizer: torch.optim.Optimizer,
-    device: torch.device,
     discount: float,
 ) -> float:
     # Forward pass
-    q_values_all = model_online(*unpack_combat_view_encoding(batch.states.to(device)).as_tuple())
-    q_values_taken = q_values_all.gather(1, batch.actions.view(-1, 1).to(device))
+    q_values_all = model_online(*unpack_combat_view_encoding(batch.states).as_tuple())
+    q_values_taken = q_values_all.gather(1, batch.actions)
 
     # Predict next state's Q values with both the online and target models
-    states_next_device = batch.states_next.to(device)
     with torch.no_grad():
         q_values_next_online = model_online(
-            *unpack_combat_view_encoding(states_next_device).as_tuple()
+            *unpack_combat_view_encoding(batch.states_next).as_tuple()
         )
         q_values_next_target = model_target(
-            *unpack_combat_view_encoding(states_next_device).as_tuple()
+            *unpack_combat_view_encoding(batch.states_next).as_tuple()
         )
 
     # Select the action with the highest Q value using the online model
-    q_values_next_online[~batch.valid_action_masks_next.to(device)] = float("-inf")
+    q_values_next_online[~batch.valid_action_masks_next] = float("-inf")
     best_action_next_idxs = torch.argmax(q_values_next_online, dim=1, keepdim=True)
 
     # Get the Q value of the selected best action from the target model
     q_values_next_target_max = q_values_next_target.gather(1, best_action_next_idxs)
 
     # Calculate TD target
-    q_targets = (
-        batch.rewards.view(-1, 1).to(device)
-        + discount * q_values_next_target_max * (1 - batch.game_over_flags.view(-1, 1).to(device))
-    ).view(-1, 1)
+    q_targets = batch.rewards + discount * q_values_next_target_max * (1 - batch.game_over_flags)
 
     # Backward pass
     optimizer.zero_grad()
@@ -81,7 +72,7 @@ def _train_on_batch(
     optimizer.step()
 
     # Return batch loss
-    return loss.item()
+    return loss
 
 
 def _play_episode(
@@ -93,9 +84,10 @@ def _play_episode(
     replay_buffer: ReplayBuffer,
     epsilon: float,
     batch_size: int,
-    device: torch.device,
+    min_samples_to_start_training: int,
     discount: float,
-) -> tuple[float, int]:
+    device: torch.device,
+) -> tuple[float | None, int]:
     # Get new game
     cs = create_combat_state()
     start_combat(cs)
@@ -106,7 +98,7 @@ def _play_episode(
     valid_action_mask = get_valid_action_mask(combat_view)
     valid_action_mask_tensor = torch.tensor([valid_action_mask], dtype=torch.bool, device=device)
     game_over_flag = False
-    loss_episode = 0
+    loss_episode = None
     num_moves = 0
 
     # Start playing
@@ -125,7 +117,7 @@ def _play_episode(
                 q_values = model_online(*combat_view_encoding.as_tuple())
 
             q_values[~valid_action_mask_tensor] = float("-inf")
-            action_idx = torch.argmax(q_values).item()
+            action_idx = torch.argmax(q_values, dim=1).item()
 
         # Game step
         action = action_idx_to_action(action_idx, combat_view)
@@ -143,14 +135,12 @@ def _play_episode(
 
         # Store transition in memory
         replay_buffer.store(
-            Sample(
-                pack_combat_view_encoding(combat_view_encoding).squeeze(),
-                pack_combat_view_encoding(combat_view_encoding_next).squeeze(),
-                action_idx,
-                reward,
-                valid_action_mask_tensor_next,
-                game_over_flag_next,
-            )
+            pack_combat_view_encoding(combat_view_encoding).squeeze(),
+            pack_combat_view_encoding(combat_view_encoding_next).squeeze(),
+            action_idx,
+            reward,
+            valid_action_mask_tensor_next,
+            game_over_flag_next,
         )
 
         # Update state, valid actions, and game over flag
@@ -160,17 +150,18 @@ def _play_episode(
         valid_action_mask_tensor = valid_action_mask_tensor_next
         game_over_flag = game_over_flag_next
 
-        # Check if there's enough sample to start fitting the network
-        if replay_buffer.num_samples < batch_size * TOLERANCE:
+        # Check if there's enough samples to start fitting the network
+        if replay_buffer.num_samples < min_samples_to_start_training:
             continue
 
         # Fit
         batch = replay_buffer.sample(batch_size)
-        loss_batch = _train_on_batch(
-            batch, model_online, model_target, optimizer, device, discount
-        )
+        loss_batch = _train_on_batch(batch, model_online, model_target, optimizer, discount)
 
         # Accumulate episode loss
+        if loss_episode is None:
+            loss_episode = torch.tensor(0.0, dtype=torch.float32, device=device)
+
         loss_episode += loss_batch
 
         # Increase global step counter and transfer parameters if needed
@@ -178,7 +169,10 @@ def _play_episode(
         if (step_global % transfer_every) == 0:
             _transfer_params(model_online, model_target)
 
-    return loss_episode / num_moves, step_global
+    # Episode end
+    loss_episode_mean = None if loss_episode is None else loss_episode.item() / num_moves
+
+    return loss_episode_mean, step_global
 
 
 def train(
@@ -193,13 +187,14 @@ def train(
     model_target: DeepQNetwork,
     optimizer: torch.optim.Optimizer,
     epsilons: list[float],
-    discount: float,
     num_eval: int,
+    min_samples_to_start_training: int,
+    discount: float,
     device: torch.device,
 ) -> None:
     # Initialize objects
     writer = SummaryWriter(f"experiments/{exp_name}")
-    replay_buffer = ReplayBuffer(buffer_size)
+    replay_buffer = ReplayBuffer(buffer_size, device)
 
     # Send models to device
     model_online.to(device)
@@ -221,11 +216,14 @@ def train(
             replay_buffer,
             epsilon,
             batch_size,
-            device,
+            min_samples_to_start_training,
             discount,
+            device,
         )
         if (episode % log_every) == 0:
-            writer.add_scalar("Loss", loss, episode)
+            if loss is not None:
+                writer.add_scalar("Loss", loss, episode)
+
             writer.add_scalar("Epsilon", epsilon, episode)
 
             # TODO: abstract this
@@ -262,24 +260,6 @@ def train(
             torch.save(model_online.state_dict(), f"experiments/{exp_name}/model.pth")
 
 
-# TODO: fix path
-# TODO: parse values accordingly
-def _load_config(config_path: str) -> dict:
-    with open(config_path, "r") as file:
-        config = yaml.safe_load(file)
-
-    # Parse integer values
-    config["num_episodes"] = int(config["num_episodes"])
-    config["buffer_size"] = int(config["buffer_size"])
-
-    return config
-
-
-# TODO: use **kwargs, improve signature
-def _init_optimizer(name: str, model: DeepQNetwork, **kwargs) -> torch.optim.Optimizer:
-    return getattr(torch.optim, name)(**kwargs, params=model.parameters())
-
-
 def _transfer_params(model_online: DeepQNetwork, model_target: DeepQNetwork) -> None:
     for param_online, param_target in zip(model_online.parameters(), model_target.parameters()):
         param_target.data.copy_(param_online.data)
@@ -287,16 +267,19 @@ def _transfer_params(model_online: DeepQNetwork, model_target: DeepQNetwork) -> 
 
 if __name__ == "__main__":
     config_path = "src/rl/algorithms/dqn/config.yml"
-    config = _load_config(config_path)
-    model_online = DeepQNetwork(config["model"]["dim_card"])
+    config = load_config(config_path)
+    model_online = DeepQNetwork(**config["model"])
     model_target = deepcopy(model_online)
-    optimizer = _init_optimizer(
+    optimizer = init_optimizer(
         config["optimizer"]["name"], model_online, **config["optimizer"]["kwargs"]
     )
 
-    # Copy config
+    # Copy config, and other important scripts to replicate results TODO: improve
     os.makedirs(f"experiments/{config['exp_name']}")
     shutil.copy(config_path, f"experiments/{config['exp_name']}/config.yml")
+    shutil.copy("src/rl/encoding.py", f"experiments/{config['exp_name']}/encoding.py")
+    shutil.copy("src/rl/reward.py", f"experiments/{config['exp_name']}/reward.py")
+    shutil.copy("src/rl/models/dqn.py", f"experiments/{config['exp_name']}/dqn.py")
 
     # Get epsilons TODO add other epsilon schedules
     epsilons = linear_decay(
@@ -315,7 +298,8 @@ if __name__ == "__main__":
         model_target,
         optimizer,
         epsilons,
-        config["discount"],
         config["num_eval"],
+        config["min_samples_to_start_training"],
+        config["discount"],
         torch.device("cpu"),
     )

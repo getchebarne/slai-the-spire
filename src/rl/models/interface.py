@@ -1,3 +1,5 @@
+import torch
+
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.constant import MAX_SIZE_HAND
@@ -30,7 +32,7 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
 
 # TODO: adapt for multiple monsters
 # TODO: adapt for multiple halted effects
-def action_idx_to_action(action_idx: int, combat_view: CombatView) -> Action:
+def action_idx_to_action(action_idx: int | torch.Tensor, combat_view: CombatView) -> Action:
     if action_idx < 2 * MAX_SIZE_HAND:
         return Action(
             ActionType.SELECT_ENTITY, combat_view.hand[action_idx % MAX_SIZE_HAND].entity_id

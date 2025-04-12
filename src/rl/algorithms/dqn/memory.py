@@ -16,31 +16,23 @@ class Batch:
     game_over_flags: torch.Tensor
 
 
-@dataclass
-class Sample:
-    state_t: torch.Tensor
-    state_tp1: torch.Tensor
-    action: int
-    reward: float
-    valid_action_mask_next: torch.Tensor
-    game_over_flag: bool
-
-
 class ReplayBuffer:
-    def __init__(self, size: int, seed: int = 42):
+    def __init__(self, size: int, device: torch.device, seed: int = 42):
         self._size = size
+        self._device = device
+        self._seed = seed
 
         # These are `None` initially because we don't know their dimensions yet
         self._states = None
         self._states_next = None
 
         # Preallocate tensors with fixed shapes for scalars
-        self._actions = torch.zeros(size, dtype=torch.long)
-        self._rewards = torch.zeros(size, dtype=torch.float32)
+        self._actions = torch.zeros((size, 1), dtype=torch.long, device=device)
+        self._rewards = torch.zeros((size, 1), dtype=torch.float32, device=device)
         self._valid_action_masks_next = torch.zeros(
-            (size, 2 * MAX_SIZE_HAND + 2), dtype=torch.bool
+            (size, 2 * MAX_SIZE_HAND + 2), dtype=torch.bool, device=device
         )
-        self._game_over_flags = torch.zeros(size, dtype=torch.float32)
+        self._game_over_flags = torch.zeros((size, 1), dtype=torch.float32, device=device)
 
         # Current write index
         self._index: int = 0
@@ -62,25 +54,35 @@ class ReplayBuffer:
 
         return self._index
 
-    def store(self, sample: Sample) -> None:
+    def store(
+        self,
+        state_tensor: torch.Tensor,
+        state_tensor_next: torch.Tensor,
+        action_idx: int,
+        reward: float,
+        valid_action_mask_tensor_next: torch.Tensor,
+        game_over_flag_next: bool,
+    ) -> None:
         # Initialize tensors for state if not already initialized
         if self._states is None:
-            state_shape = sample.state_t.shape
+            state_shape = state_tensor.shape
 
-            self._states = torch.zeros((self._size, *state_shape), dtype=sample.state_t.dtype)
+            self._states = torch.zeros(
+                (self._size, *state_shape), dtype=state_tensor.dtype, device=self._device
+            )
             self._states_next = torch.zeros(
-                (self._size, *state_shape), dtype=sample.state_tp1.dtype
+                (self._size, *state_shape), dtype=state_tensor_next.dtype, device=self._device
             )
             print(f"{self._states.shape=}")
             print(f"{self._states_next.shape=}")
 
         # Store the data in the appropriate location
-        self._states[self._index] = sample.state_t
-        self._states_next[self._index] = sample.state_tp1
-        self._actions[self._index] = sample.action
-        self._rewards[self._index] = sample.reward
-        self._valid_action_masks_next[self._index] = sample.valid_action_mask_next
-        self._game_over_flags[self._index] = sample.game_over_flag
+        self._states[self._index] = state_tensor
+        self._states_next[self._index] = state_tensor_next
+        self._actions[self._index] = action_idx
+        self._rewards[self._index] = reward
+        self._valid_action_masks_next[self._index] = valid_action_mask_tensor_next
+        self._game_over_flags[self._index] = game_over_flag_next
 
         # Increment index
         self._index = (self._index + 1) % self._size

@@ -48,4 +48,4 @@ def create_combat_state() -> CombatState:
     entity_manager.id_energy = id_energy
     entity_manager.id_cards_in_deck = id_cards_in_deck
 
-    return CombatState(entity_manager, [])
+    return CombatState(entity_manager, [], None)

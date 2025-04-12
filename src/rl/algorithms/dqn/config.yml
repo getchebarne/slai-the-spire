@@ -1,15 +1,19 @@
-exp_name: dqn/jaw/delete
+exp_name: dqn/jaw/ohe-transf-pile-II
 num_episodes: 1.0e+6
 buffer_size: 1.0e+5
 batch_size: 32
-log_every: 100
-save_every: 1000
+log_every: 500
+save_every: 500
 transfer_every: 10000
 discount: 0.99
-num_eval: 10
+num_eval: 100
+min_samples_to_start_training: 5000
 
 model: 
-  dim_card: 32
+  dim_card: 64
+  dim_char: 64
+  dim_monster: 64
+  dim_energy: 16
 
 optimizer:
   name: Adam
@@ -17,6 +21,6 @@ optimizer:
     lr: 1.0e-4
 
 # Explorer
-episode_elbow: 5.0e+4
-value_start: 1.00
-value_end: 0.10
+episode_elbow: 1.0e+5
+value_start: 1.0000
+value_end: 0.0250

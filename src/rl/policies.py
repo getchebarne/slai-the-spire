@@ -25,19 +25,22 @@ class PolicyBase(ABC):
 class PolicyRandom(PolicyBase):
     def select_action(self, combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
         if any([card.is_active for card in combat_view.hand]):
-            return Action(ActionType.SELECT_ENTITY, combat_view.monsters[0].entity_id)
+            return Action(ActionType.SELECT_ENTITY, combat_view.monsters[0].entity_id), {}
 
         if combat_view.effect is not None:
-            return Action(
-                ActionType.SELECT_ENTITY,
-                random.choice([card.entity_id for card in combat_view.hand]),
+            return (
+                Action(
+                    ActionType.SELECT_ENTITY,
+                    random.choice([card.entity_id for card in combat_view.hand]),
+                ),
+                {},
             )
 
         id_selectable_cards = [
             card.entity_id for card in combat_view.hand if card.cost <= combat_view.energy.current
         ]
         if id_selectable_cards:
-            return Action(ActionType.SELECT_ENTITY, random.choice(id_selectable_cards))
+            return Action(ActionType.SELECT_ENTITY, random.choice(id_selectable_cards)), {}
 
         return Action(ActionType.END_TURN), {}
 
@@ -60,7 +63,7 @@ class PolicyQMax(PolicyBase):
             q_values = self._model(*combat_view_encoding.as_tuple())
 
         q_values[~valid_action_mask_tensor] = float("-inf")
-        action_idx = torch.argmax(q_values).item()
+        action_idx = torch.argmax(q_values, dim=1).item()
         action = action_idx_to_action(action_idx, combat_view)
 
         return action, {"q_values": q_values}

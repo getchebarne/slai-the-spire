@@ -9,6 +9,8 @@ from src.game.combat.entities import EntityManager
 from src.game.combat.entities import ModifierType
 from src.game.combat.factories import create_modifier_strength
 from src.game.combat.factories import create_modifier_weak
+from src.game.combat.phase import get_end_of_turn_effects
+from src.game.combat.phase import get_start_of_turn_effects
 
 
 WEAK_FACTOR = 0.75
@@ -34,6 +36,9 @@ def apply_effect(
     if effect_type == EffectType.DRAW_CARD:
         return _apply_draw_card(entity_manager, effect_value)
 
+    if effect_type == EffectType.END_TURN:
+        return _apply_end_turn(entity_manager)
+
     if effect_type == EffectType.REFILL_ENERGY:
         return _apply_refill_energy(entity_manager)
 
@@ -52,6 +57,24 @@ def apply_effect(
     if effect_type == EffectType.MOD_TICK:
         return _apply_mod_tick(entity_manager, id_target)
 
+    if effect_type == EffectType.CARD_ACTIVE_SET:
+        return _apply_card_active_set(entity_manager, id_target)
+
+    if effect_type == EffectType.CARD_ACTIVE_CLEAR:
+        return _apply_card_active_clear(entity_manager)
+
+    if effect_type == EffectType.TARGET_EFFECT_SET:
+        return _apply_target_effect_set(entity_manager, id_target)
+
+    if effect_type == EffectType.TARGET_EFFECT_CLEAR:
+        return _apply_target_effect_clear(entity_manager)
+
+    if effect_type == EffectType.TARGET_CARD_SET:
+        return _apply_target_card_set(entity_manager, id_target)
+
+    if effect_type == EffectType.TARGET_CARD_CLEAR:
+        return _apply_target_card_clear(entity_manager)
+
     if effect_type == EffectType.SHUFFLE_DECK_INTO_DRAW_PILE:
         return _apply_shuffle_deck_into_draw_pile(entity_manager)
 
@@ -62,6 +85,84 @@ def apply_effect(
         return _apply_gain_strength(entity_manager, id_target, effect_value)
 
     raise ValueError(f"Unsupported effect type: {effect_type}")
+
+
+def _apply_end_turn(
+    entity_manager: EntityManager,
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    # Character's turn end
+    sourced_effects = get_end_of_turn_effects(entity_manager, entity_manager.id_character)
+
+    # Monsters
+    for id_monster in entity_manager.id_monsters:
+        monster = entity_manager.entities[id_monster]
+
+        # Turn start
+        sourced_effects += get_start_of_turn_effects(entity_manager, id_monster)
+
+        # Move's effects
+        sourced_effects += [
+            SourcedEffect(effect, id_monster) for effect in monster.move_current.effects
+        ]
+
+        # Update move
+        sourced_effects += [SourcedEffect(Effect(EffectType.UPDATE_MOVE), id_target=id_monster)]
+
+        # Turn end
+        sourced_effects += get_end_of_turn_effects(entity_manager, id_monster)
+
+    # Character's turn start
+    sourced_effects += get_start_of_turn_effects(entity_manager, entity_manager.id_character)
+
+    return sourced_effects, []
+
+
+def _apply_card_active_set(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    entity_manager.id_card_active = id_target
+
+    return [], []
+
+
+def _apply_card_active_clear(
+    entity_manager: EntityManager,
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    entity_manager.id_card_active = None
+
+    return [], []
+
+
+def _apply_target_effect_set(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    entity_manager.id_effect_target = id_target
+
+    return [], []
+
+
+def _apply_target_effect_clear(
+    entity_manager: EntityManager,
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    entity_manager.id_effect_target = None
+
+    return [], []
+
+
+def _apply_target_card_set(
+    entity_manager: EntityManager, id_target: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    entity_manager.id_card_target = id_target
+
+    return [], []
+
+
+def _apply_target_card_clear(
+    entity_manager: EntityManager,
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    entity_manager.id_card_target = None
+
+    return [], []
 
 
 def _apply_deal_damage(
@@ -109,13 +210,13 @@ def _apply_play_card(
     target = entity_manager.entities[id_target]
 
     return (
+        [],
         [
             # TODO; move to engine?
             SourcedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
             SourcedEffect(Effect(EffectType.DISCARD), id_target=id_target),
             *[SourcedEffect(effect, id_source=id_target) for effect in target.effects],
         ],
-        [],
     )
 
 
