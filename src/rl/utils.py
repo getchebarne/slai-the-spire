@@ -11,7 +11,9 @@ def load_config(config_path: str) -> dict[str, Any]:
 
     # Parse integer values
     config["num_episodes"] = int(config["num_episodes"])
-    config["buffer_size"] = int(config["buffer_size"])
+
+    if "buffer_size" in config:
+        config["buffer_size"] = int(config["buffer_size"])
 
     return config
 

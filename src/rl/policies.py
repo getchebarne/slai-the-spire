@@ -79,12 +79,16 @@ class PolicySoftmax(PolicyBase):
         self._model.to(self._device)
 
     def select_action(self, combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
-        encoding = encode_combat_view(combat_view, self._device)
-        valid_action_mask = get_valid_action_mask(combat_view)
-
-        probs, _ = self._model(
-            encoding, torch.tensor(valid_action_mask, dtype=torch.bool, device=self._device)
+        combat_view_encoding = encode_combat_view(combat_view, self._device)
+        valid_action_mask_tensor = torch.tensor(
+            [get_valid_action_mask(combat_view)], dtype=torch.bool, device=self._device
         )
+
+        with torch.no_grad():
+            probs, _ = self._model(
+                *combat_view_encoding.as_tuple(), x_valid_action_mask=valid_action_mask_tensor
+            )
+
         if self._greedy:
             action_idx = torch.argmax(probs)
         else:

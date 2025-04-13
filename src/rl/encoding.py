@@ -237,7 +237,7 @@ def get_energy_encoding_dim() -> int:
     return _encode_energy_view(energy_view_dummy, torch.device("cpu")).shape[0]
 
 
-def encode_combat_view(combat_view: CombatView, device: torch.device) -> tuple[torch.Tensor, ...]:
+def encode_combat_view(combat_view: CombatView, device: torch.device) -> CombatViewEncoding:
     # Get number of cards in each collection
     x_mask_hand = torch.arange(MAX_SIZE_HAND, dtype=torch.float32, device=device) < len(
         combat_view.hand

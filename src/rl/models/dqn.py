@@ -153,7 +153,6 @@ class DeepQNetwork(nn.Module):
             ),
         )
 
-    # TODO: shouldn't create tensors here
     def forward(
         self,
         x_mask_hand: torch.Tensor,

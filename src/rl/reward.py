@@ -1,9 +1,7 @@
 from src.game.combat.view import CombatView
 
 
-WEIGHT_CARDS_IN_HAND = 0.01
-WEIGHT_ENERGY = 0.01
-WEIGHT_HEALTH = 3 * (WEIGHT_CARDS_IN_HAND + WEIGHT_ENERGY)
+WEIGHT_HEALTH_CHAR = 0.0250
 
 
 def compute_reward(
@@ -19,14 +17,8 @@ def compute_reward(
             1 + combat_view_next.character.health_current / combat_view_next.character.health_max
         )
 
-    diff_cards_in_hand = len(combat_view_next.hand) - len(combat_view.hand)
-    diff_energy = combat_view_next.energy.current - combat_view.energy.current
     diff_health_char = (
         combat_view_next.character.health_current - combat_view.character.health_current
     )
 
-    return (
-        WEIGHT_CARDS_IN_HAND * diff_cards_in_hand
-        + WEIGHT_ENERGY * diff_energy
-        + WEIGHT_HEALTH * diff_health_char
-    )
+    return WEIGHT_HEALTH_CHAR * diff_health_char

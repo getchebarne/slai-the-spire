@@ -1,7 +1,5 @@
 import random
 
-import torch
-
 from src.game.combat.action import ActionType
 from src.game.combat.create import create_combat_state
 from src.game.combat.entities import create_entity
@@ -16,7 +14,17 @@ from src.game.combat.view import view_combat
 from src.rl.policies import PolicyBase
 
 
-def evaluate_final_hp(policy: PolicyBase, device: torch.device) -> int:
+def run_all_evals(policy: PolicyBase, num: int) -> dict[str, list[int] | list[bool]]:
+    return {
+        "final_hp": [_eval_final_hp(policy) for _ in range(num)],
+        "blunder": [_eval_blunder(policy) for _ in range(num)],
+        "lethal": [_eval_lethal(policy) for _ in range(num)],
+        "draw_first_w_backflip": [_eval_draw_first_w_backflip(policy) for _ in range(num)],
+        "dagger_throw_vs_strike": [_eval_dagger_throw_vs_strike(policy) for _ in range(num)],
+    }
+
+
+def _eval_final_hp(policy: PolicyBase) -> int:
     # Get new game
     cs = create_combat_state()
     start_combat(cs)
@@ -30,7 +38,7 @@ def evaluate_final_hp(policy: PolicyBase, device: torch.device) -> int:
     return view_combat(cs).character.health_current
 
 
-def evaluate_blunder(policy: PolicyBase, device: torch.device) -> bool:
+def _eval_blunder(policy: PolicyBase) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -61,7 +69,7 @@ def evaluate_blunder(policy: PolicyBase, device: torch.device) -> bool:
     return False
 
 
-def evaluate_lethal(policy: PolicyBase, device: torch.device) -> bool:
+def _eval_lethal(policy: PolicyBase) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -93,7 +101,7 @@ def evaluate_lethal(policy: PolicyBase, device: torch.device) -> bool:
     return False
 
 
-def evaluate_draw_first_w_backflip(policy: PolicyBase, device: torch.device) -> bool:
+def _eval_draw_first_w_backflip(policy: PolicyBase) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
@@ -121,7 +129,7 @@ def evaluate_draw_first_w_backflip(policy: PolicyBase, device: torch.device) -> 
     return True
 
 
-def evaluate_dagger_throw_vs_strike(policy: PolicyBase, device: torch.device) -> bool:
+def _eval_dagger_throw_vs_strike(policy: PolicyBase) -> bool:
     cs = create_combat_state()
     start_combat(cs)
 
