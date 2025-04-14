@@ -3,6 +3,7 @@ num_episodes: 1.0e+6
 log_every: 500
 save_every: 500
 gamma: 0.99
+lam: 0.95
 coef_value: 0.500
 coef_entropy_max: 0.020
 coef_entropy_min: 0.010

@@ -154,8 +154,38 @@ def _run_episodes(
     return trajectories
 
 
+def _compute_returns_and_advantages_gae(
+    trajectory: Trajectory, gamma: float, lam: float, device: torch.device
+) -> tuple[deque[torch.Tensor], deque[torch.Tensor]]:
+    # Use `deque` here so that appending to the beginning of the list is O(1)
+    returns = deque()
+    advantages = deque()
+
+    # Create dummy next-state value equal to zero because all trajectories are episodic, i.e, the
+    # last state is always terminal
+    values_next = trajectory.values[1:] + [
+        torch.tensor([[0.0]], dtype=torch.float32, device=device)
+    ]
+
+    # Initialize generalized advantage estimator to zero
+    gae = 0
+    for reward, value, value_next in zip(
+        reversed(trajectory.rewards), reversed(trajectory.values), reversed(values_next)
+    ):
+        td_error = reward + gamma * value_next.item() - value.item()
+        gae = td_error + gamma * lam * gae
+
+        returns.appendleft(gae + value.item())
+        advantages.appendleft(gae)
+
+    return returns, advantages
+
+
 def _create_batch(
-    trajectories: list[Trajectory], lam: float, gamma: float, device: torch.device
+    trajectories: list[Trajectory],
+    gamma: float,
+    lam: float,
+    device: torch.device,
 ) -> Batch:
     # Initialize lists to store all TODO: improve comment
     all_states = []
@@ -167,18 +197,7 @@ def _create_batch(
     all_advantages = []
 
     for trajectory in trajectories:
-        returns = deque()
-        advantages = deque()
-
-        # Set initial `return_disc` to zero since all trajectories are episodic (i.e., last state
-        # is terminal)
-        return_ = 0
-        for reward, value in zip(reversed(trajectory.rewards), reversed(trajectory.values)):
-            return_ = reward + gamma * return_
-            advantage = return_ - value.item()
-
-            returns.appendleft(return_)
-            advantages.appendleft(advantage)
+        returns, advantages = _compute_returns_and_advantages_gae(trajectory, gamma, lam, device)
 
         # Extend lists TODO: improve comment
         all_states.extend(trajectory.states)
@@ -201,6 +220,11 @@ def _create_batch(
         torch.tensor([all_advantages], dtype=torch.float32, device=device).view(-1, 1),
     )
 
+    # Normalize advantages
+    batch.advantages = (batch.advantages - batch.advantages.mean()) / (
+        batch.advantages.std() + 1e-8
+    )
+
     return batch
 
 
@@ -221,6 +245,7 @@ def _update_model_ppo(
     num_epochs: int,
     minibatch_size: int,
     gamma: float,
+    lam: float,
     clip_eps: float,
     clip_value_loss: bool,
     coef_value: float,
@@ -229,12 +254,7 @@ def _update_model_ppo(
     device: torch.device,
 ) -> None:
     # Create batch
-    batch = _create_batch(trajectories, gamma, device)
-
-    # Normalize advantages
-    batch.advantages = (batch.advantages - batch.advantages.mean()) / (
-        batch.advantages.std() + 1e-8
-    )
+    batch = _create_batch(trajectories, gamma, lam, device)
 
     # PPO Training loop
     total_loss_policy = torch.tensor([0.0], dtype=torch.float32, device=device)
@@ -330,6 +350,7 @@ def train(
     clip_eps: float,
     clip_value_loss: float,
     gamma: float,
+    lam: float,
     coef_value: float,
     coefs_entropy: list[float],
     max_grad_norm: float,
@@ -367,6 +388,7 @@ def train(
             num_epochs,
             minibatch_size,
             gamma,
+            lam,
             clip_eps,
             clip_value_loss,
             coef_value,
@@ -443,6 +465,7 @@ if __name__ == "__main__":
         config["clip_eps"],
         config["clip_value_loss"],
         config["gamma"],
+        config["lam"],
         config["coef_value"],
         coefs_entropy,
         config["max_grad_norm"],
