@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from src.game.combat.effect_queue import EffectQueue
-from src.game.combat.entities import EntityManager
+from src.game.entity.manager import EntityManager
 
 
 class FSMState(Enum):

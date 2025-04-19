@@ -4,14 +4,14 @@ from dataclasses import dataclass
 
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
-from src.game.combat.entities import Actor
-from src.game.combat.entities import Card
-from src.game.combat.entities import ModifierType
-from src.game.combat.entities import Monster
-from src.game.combat.entities import MonsterMove
 from src.game.combat.state import CombatState
 from src.game.combat.state import FSMState
 from src.game.combat.utils import does_card_require_target
+from src.game.entity.actor import EntityActor
+from src.game.entity.actor import ModifierType
+from src.game.entity.card import EntityCard
+from src.game.entity.character import EntityCharacter
+from src.game.entity.monster import EntityMonster
 
 
 # Aliases
@@ -38,7 +38,7 @@ class ActorView:
     block_current: int
 
     # Dictionary mapping modifier types to current stacks
-    modifiers: dict[ModifierViewType, int | None]
+    modifier_map: dict[ModifierViewType, int | None]
 
 
 @dataclass
@@ -78,13 +78,13 @@ class CombatView:
     state: FSMStateView
 
 
-def get_card_view(card: Card, is_active: bool, id_card: int) -> CardView:
+def get_card_view(card: EntityCard, is_active: bool, id_card: int) -> CardView:
     requires_target = does_card_require_target(card)
 
     return CardView(card.name, card.effects, card.cost, is_active, requires_target, id_card)
 
 
-def get_actor_view(actor: Actor) -> ActorView:
+def get_actor_view(actor: EntityActor) -> ActorView:
     return ActorView(
         actor.name,
         actor.health_current,
@@ -92,17 +92,17 @@ def get_actor_view(actor: Actor) -> ActorView:
         actor.block_current,
         {
             modifier_type: modifier.stacks_current
-            for modifier_type, modifier in actor.modifiers.items()
+            for modifier_type, modifier in actor.modifier_map.items()
         },
     )
 
 
-def _move_to_intent(move: MonsterMove) -> IntentView:
+def _move_to_intent(move_effects: list[Effect]) -> IntentView:
     # Initialze empty intent
     intent = IntentView(None, None, False, False)
 
     # Iterate over the move's effects
-    for effect in move.effects:
+    for effect in move_effects:
         if effect.type == EffectType.DEAL_DAMAGE:
             if intent.damage is None and intent.instances is None:
                 intent.damage = effect.value
@@ -125,29 +125,34 @@ def _move_to_intent(move: MonsterMove) -> IntentView:
     return intent
 
 
-def _correct_intent_damage(damage: int, monster_view: MonsterView) -> int:
-    if ModifierViewType.STRENGTH in monster_view.modifiers:
-        damage += monster_view.modifiers[ModifierViewType.STRENGTH].stacks_current
+def _correct_intent_damage(damage: int, monster: EntityMonster, character: EntityCharacter) -> int:
+    if ModifierType.STRENGTH in monster.modifier_map:
+        damage += monster.modifier_map[ModifierType.STRENGTH].stacks_current
 
-    if ModifierType.WEAK in monster_view.modifiers:
-        damage *= 0.75
+    if ModifierType.WEAK in monster.modifier_map:
+        damage *= 0.75  # TODO: same as processor
+
+    if ModifierType.VULNERABLE in character.modifier_map:
+        damage *= 1.50  # TODO: same as processor
 
     return int(damage)
 
 
-def get_monster_view(monster: Monster, id_monster: int) -> MonsterView:
+def get_monster_view(
+    monster: EntityMonster, character: EntityCharacter, id_monster: int
+) -> MonsterView:
     actor_view = get_actor_view(monster)
-    intent_view = _move_to_intent(monster.move_current)
+    intent_view = _move_to_intent(monster.move_map[monster.move_name_current])
 
     if intent_view.damage is not None:
-        intent_view.damage = _correct_intent_damage(intent_view.damage, monster)
+        intent_view.damage = _correct_intent_damage(intent_view.damage, monster, character)
 
     return MonsterView(
         actor_view.name,
         actor_view.health_current,
         actor_view.health_max,
         actor_view.block_current,
-        actor_view.modifiers,
+        actor_view.modifier_map,
         intent_view,
         id_monster,
     )
@@ -162,7 +167,7 @@ def view_combat(cs: CombatState) -> CombatView:
     monster_views = []
     for id_monster in cs.entity_manager.id_monsters:
         monster = cs.entity_manager.entities[id_monster]
-        monster_views.append(get_monster_view(monster, id_monster))
+        monster_views.append(get_monster_view(monster, character, id_monster))
 
     # Hand
     card_in_hand_views = []

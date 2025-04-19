@@ -2,8 +2,8 @@ from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import EffectType
 from src.game.combat.effect import SourcedEffect
-from src.game.combat.entities import Character
-from src.game.combat.entities import EntityManager
+from src.game.entity.character import EntityCharacter
+from src.game.entity.manager import EntityManager
 
 
 def get_start_of_combat_effects(entity_manager: EntityManager) -> list[SourcedEffect]:
@@ -24,24 +24,27 @@ def get_start_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> l
     sourced_effects = [SourcedEffect(Effect(EffectType.ZERO_BLOCK), id_target=id_actor)]
 
     # Character-specific effects
-    if isinstance(actor, Character):
+    if isinstance(actor, EntityCharacter):
         sourced_effects += [
             SourcedEffect(Effect(EffectType.DRAW_CARD, 5)),
             SourcedEffect(Effect(EffectType.REFILL_ENERGY)),
+            SourcedEffect(Effect(EffectType.MOD_TICK), id_target=id_actor),
+        ] + [
+            SourcedEffect(Effect(EffectType.MOD_TICK), id_target=id_monster)
+            for id_monster in entity_manager.id_monsters
         ]
 
     return sourced_effects
 
 
 # TODO: add modifier effects
-# TODO: add modifier duration tick (`EffectType.MOD_TICK`)
 def get_end_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> list[SourcedEffect]:
     actor = entity_manager.entities[id_actor]
 
-    sourced_effects = [SourcedEffect(Effect(EffectType.MOD_TICK), id_target=id_actor)]
+    sourced_effects = []
 
     # Character-specific effects
-    if isinstance(actor, Character):
+    if isinstance(actor, EntityCharacter):
         return sourced_effects + [
             SourcedEffect(Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_IN_HAND))
         ]

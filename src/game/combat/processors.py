@@ -1,19 +1,24 @@
 import random
+from dataclasses import replace
 
-from src.game.combat.ai import ais
+from src.game.ai.registry import AI_REGISTRY
+from src.game.combat.effect import EFFECT_VALUE_PLACEHOLDER_MODIFIER_DATA_CURRENT_STACKS
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
 from src.game.combat.effect import SourcedEffect
-from src.game.combat.entities import Card
-from src.game.combat.entities import EntityManager
-from src.game.combat.entities import ModifierType
-from src.game.combat.factories import create_modifier_strength
-from src.game.combat.factories import create_modifier_weak
 from src.game.combat.phase import get_end_of_turn_effects
 from src.game.combat.phase import get_start_of_turn_effects
+from src.game.entity.actor import ModifierType
+from src.game.entity.card import EntityCard
+from src.game.entity.manager import EntityManager
+from src.game.entity.monster import EntityMonster
+from src.game.factory.modifier.strength import create_modifier_data_strength
+from src.game.factory.modifier.vulnerable import create_modifier_data_vulnerable
+from src.game.factory.modifier.weak import create_modifier_data_weak
 
 
 WEAK_FACTOR = 0.75
+VULN_FACTOR = 1.50
 BLOCK_MAX = 999
 
 
@@ -26,6 +31,12 @@ def apply_effect(
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     if effect_type == EffectType.DEAL_DAMAGE:
         return _apply_deal_damage(entity_manager, id_source, id_target, effect_value)
+
+    if effect_type == EffectType.LOSE_HP:
+        return _apply_lose_hp(entity_manager, id_target, effect_value)
+
+    if effect_type == EffectType.GAIN_VULNERABLE:
+        return _apply_gain_vulnerable(entity_manager, id_target, effect_value)
 
     if effect_type == EffectType.GAIN_BLOCK:
         return _apply_gain_block(entity_manager, id_target, effect_value)
@@ -102,7 +113,8 @@ def _apply_end_turn(
 
         # Move's effects
         sourced_effects += [
-            SourcedEffect(effect, id_monster) for effect in monster.move_current.effects
+            SourcedEffect(effect, id_monster)
+            for effect in monster.move_map[monster.move_name_current]
         ]
 
         # Update move
@@ -171,26 +183,59 @@ def _apply_deal_damage(
     source = entity_manager.entities[id_source]
 
     # TODO: think if there's a better solution
-    if isinstance(source, Card):
+    if isinstance(source, EntityCard):
         source = entity_manager.entities[entity_manager.id_character]
 
     target = entity_manager.entities[id_target]
 
     # Apply strength
-    if ModifierType.STRENGTH in source.modifiers:
-        value += source.modifiers[ModifierType.STRENGTH].stacks_current
+    if ModifierType.STRENGTH in source.modifier_map:
+        value += source.modifier_map[ModifierType.STRENGTH].stacks_current
 
     # Apply weak
-    if ModifierType.WEAK in source.modifiers:
+    if ModifierType.WEAK in source.modifier_map:
         value *= WEAK_FACTOR
+
+    # Apply vulnerable
+    if ModifierType.VULNERABLE in target.modifier_map:
+        value *= VULN_FACTOR
 
     # Calculate damage over block
     value = int(value)
+
     damage_over_block = max(0, value - target.block_current)
 
-    # Apply changes
+    # Remove block
     target.block_current = max(0, target.block_current - value)
-    target.health_current = max(0, target.health_current - damage_over_block)
+
+    # Return a top effect to subtract the damage over block from the target's current health
+    return [], [
+        SourcedEffect(Effect(EffectType.LOSE_HP, value=damage_over_block), id_target=id_target)
+    ]
+
+
+def _apply_lose_hp(
+    entity_manager: EntityManager, id_target: int, value: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    target = entity_manager.entities[id_target]
+
+    if value >= target.health_current:
+        # Death
+        if isinstance(target, EntityMonster):
+            # TODO: delete instance from `entity_manager.entities`
+            entity_manager.id_monsters.remove(id_target)
+
+            sourced_effects_top = []
+            for _, modifier_data in target.modifier_map.items():
+                for effect_death in modifier_data.effects_death:
+                    if effect_death.value == EFFECT_VALUE_PLACEHOLDER_MODIFIER_DATA_CURRENT_STACKS:
+                        effect_death = replace(effect_death, value=modifier_data.stacks_current)
+
+                    sourced_effects_top.append(SourcedEffect(effect_death, id_source=id_target))
+
+            return [], sourced_effects_top
+
+    target.health_current = max(0, target.health_current - value)
 
     return [], []
 
@@ -269,12 +314,26 @@ def _apply_gain_weak(
     entity_manager: EntityManager, id_target: int, value: int
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
-    if ModifierType.WEAK in target.modifiers:
-        target.modifiers[ModifierType.WEAK].stacks_current += value
+    if ModifierType.WEAK in target.modifier_map:
+        target.modifier_map[ModifierType.WEAK].stacks_current += value
 
         return [], []
 
-    target.modifiers[ModifierType.WEAK] = create_modifier_weak(value)
+    target.modifier_map[ModifierType.WEAK] = create_modifier_data_weak(value)
+
+    return [], []
+
+
+def _apply_gain_vulnerable(
+    entity_manager: EntityManager, id_target: int, value: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    target = entity_manager.entities[id_target]
+    if ModifierType.VULNERABLE in target.modifier_map:
+        target.modifier_map[ModifierType.VULNERABLE].stacks_current += value
+
+        return [], []
+
+    target.modifier_map[ModifierType.VULNERABLE] = create_modifier_data_vulnerable(value)
 
     return [], []
 
@@ -283,12 +342,12 @@ def _apply_gain_strength(
     entity_manager: EntityManager, id_target: int, value: int
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
-    if ModifierType.STRENGTH in target.modifiers:
-        target.modifiers[ModifierType.STRENGTH].stacks_current += value
+    if ModifierType.STRENGTH in target.modifier_map:
+        target.modifier_map[ModifierType.STRENGTH].stacks_current += value
 
         return [], []
 
-    target.modifiers[ModifierType.STRENGTH] = create_modifier_strength(value)
+    target.modifier_map[ModifierType.STRENGTH] = create_modifier_data_strength(value)
 
     return [], []
 
@@ -298,12 +357,12 @@ def _apply_mod_tick(
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
-    for modifier_type, modifier in list(target.modifiers.items()):
-        if modifier.stacks_duration:
-            modifier.stacks_current -= 1
+    for modifier_type, modifier_data in list(target.modifier_map.items()):
+        if modifier_data.stacks_duration:
+            modifier_data.stacks_current -= 1
 
-            if modifier.stacks_current < modifier.stacks_min:
-                del target.modifiers[modifier_type]
+            if modifier_data.stacks_current < modifier_data.stacks_min:
+                del target.modifier_map[modifier_type]
 
     return [], []
 
@@ -341,8 +400,8 @@ def _apply_update_move(
 ) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
     target = entity_manager.entities[id_target]
 
-    move_new = ais[target.name](target.move_current, target.move_history)
-    target.move_current = move_new
-    target.move_history.append(move_new)
+    move_name_new = AI_REGISTRY[target.name](target)
+    target.move_name_current = move_name_new
+    target.move_name_history.append(move_name_new)
 
     return [], []

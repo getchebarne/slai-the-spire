@@ -49,7 +49,7 @@ def _actor_str(actor: ActorView, n_col: int = 0) -> str:
     modifier_strs = "\n".join(
         [
             f"{modifier_view_type.name}: {stacks_current}"
-            for modifier_view_type, stacks_current in actor.modifiers.items()
+            for modifier_view_type, stacks_current in actor.modifier_map.items()
         ]
     )
 
@@ -116,7 +116,7 @@ def draw_combat(combat_view: CombatView) -> str:
     # effect_str = _effect_str(view.effect)
 
     # Monsters
-    monster_strs = "\n".join([f"{_monster_str(monster)}" for monster in combat_view.monsters])
+    monster_strs = "\n\n".join([f"{_monster_str(monster)}" for monster in combat_view.monsters])
 
     # Character
     character_str = _actor_str(combat_view.character)

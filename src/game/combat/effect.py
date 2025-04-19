@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+EFFECT_VALUE_PLACEHOLDER_MODIFIER_DATA_CURRENT_STACKS = -1
+
+
 class EffectType(Enum):
     DEAL_DAMAGE = "DEAL_DAMAGE"
     DECREASE_ENERGY = "DECREASE_ENERGY"
@@ -17,8 +20,11 @@ class EffectType(Enum):
     SHUFFLE_DECK_INTO_DRAW_PILE = "SHUFFLE_DECK_INTO_DRAW_PILE"
     UPDATE_MOVE = "UPDATE_MOVE"
     ZERO_BLOCK = "ZERO_BLOCK"
+    LOSE_HP = "LOSE_HP"
+    DEATH = "DEATH"
+    GAIN_VULNERABLE = "GAIN_VULNERABLE"
 
-    # Targeting
+    # Target setting / clearing
     TARGET_EFFECT_SET = "TARGET_EFFECT_SET"
     TARGET_EFFECT_CLEAR = "TARGET_EFFECT_CLEAR"
     TARGET_CARD_SET = "TARGET_CARD_SET"

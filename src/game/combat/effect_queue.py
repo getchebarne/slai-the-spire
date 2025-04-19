@@ -6,8 +6,8 @@ from typing import TypeAlias
 from src.game.combat.effect import EffectSelectionType
 from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import SourcedEffect
-from src.game.combat.entities import EntityManager
 from src.game.combat.processors import apply_effect
+from src.game.entity.manager import EntityManager
 
 
 EffectQueue: TypeAlias = list[SourcedEffect]

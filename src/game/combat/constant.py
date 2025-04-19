@@ -1,6 +1,9 @@
 from src.game.combat.effect import EffectType
 
 
+# Maximum number of monsters
+MAX_MONSTERS = 2
+
 # Hand, draw pile, and discard pile maximum sizes
 MAX_SIZE_HAND = 7
 MAX_SIZE_DRAW_PILE = 16
