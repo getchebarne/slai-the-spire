@@ -2,6 +2,7 @@ from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import EffectType
 from src.game.combat.effect import SourcedEffect
+from src.game.entity.actor import ModifierType
 from src.game.entity.character import EntityCharacter
 from src.game.entity.manager import EntityManager
 
@@ -42,6 +43,15 @@ def get_end_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> lis
     actor = entity_manager.entities[id_actor]
 
     sourced_effects = []
+    for modifier_type, modifier_data in actor.modifier_map.items():
+        if modifier_type == ModifierType.RITUAL:
+            sourced_effects.append(
+                SourcedEffect(
+                    Effect(EffectType.GAIN_STRENGTH, modifier_data.stacks_current),
+                    id_source=id_actor,
+                    id_target=id_actor,
+                )
+            )
 
     # Character-specific effects
     if isinstance(actor, EntityCharacter):

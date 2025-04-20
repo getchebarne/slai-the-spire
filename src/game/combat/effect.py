@@ -8,9 +8,7 @@ class EffectType(Enum):
     DISCARD = "DISCARD"
     DRAW_CARD = "DRAW_CARD"
     END_TURN = "END_TURN"
-    GAIN_BLOCK = "GAIN_BLOCK"
-    GAIN_STRENGTH = "GAIN_STRENGTH"
-    GAIN_WEAK = "GAIN_WEAK"
+    GAIN_BLOCK = "GAIN_BLOCK"  # TODO: rename to just "BLOCK"
     MOD_TICK = "MOD_TICK"  # TODO: rename
     PLAY_CARD = "PLAY_CARD"
     REFILL_ENERGY = "REFILL_ENERGY"
@@ -20,6 +18,11 @@ class EffectType(Enum):
     LOSE_HP = "LOSE_HP"
     DEATH = "DEATH"
     GAIN_VULNERABLE = "GAIN_VULNERABLE"
+
+    # Modifier stack gain
+    GAIN_RITUAL = "GAIN_RITUAL"
+    GAIN_STRENGTH = "GAIN_STRENGTH"
+    GAIN_WEAK = "GAIN_WEAK"
 
     # Target setting / clearing
     TARGET_EFFECT_SET = "TARGET_EFFECT_SET"

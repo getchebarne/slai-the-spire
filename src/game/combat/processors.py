@@ -11,6 +11,7 @@ from src.game.entity.actor import ModifierType
 from src.game.entity.card import EntityCard
 from src.game.entity.manager import EntityManager
 from src.game.entity.monster import EntityMonster
+from src.game.factory.modifier.ritual import create_modifier_data_ritual
 from src.game.factory.modifier.strength import create_modifier_data_strength
 from src.game.factory.modifier.vulnerable import create_modifier_data_vulnerable
 from src.game.factory.modifier.weak import create_modifier_data_weak
@@ -36,6 +37,9 @@ def apply_effect(
 
     if effect_type == EffectType.GAIN_VULNERABLE:
         return _apply_gain_vulnerable(entity_manager, id_target, effect_value)
+
+    if effect_type == EffectType.GAIN_RITUAL:
+        return _apply_gain_ritual(entity_manager, id_target, effect_value)
 
     if effect_type == EffectType.GAIN_BLOCK:
         return _apply_gain_block(entity_manager, id_target, effect_value)
@@ -338,6 +342,20 @@ def _apply_gain_vulnerable(
         return [], []
 
     target.modifier_map[ModifierType.VULNERABLE] = create_modifier_data_vulnerable(value)
+
+    return [], []
+
+
+def _apply_gain_ritual(
+    entity_manager: EntityManager, id_target: int, value: int
+) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+    target = entity_manager.entities[id_target]
+    if ModifierType.RITUAL in target.modifier_map:
+        target.modifier_map[ModifierType.RITUAL].stacks_current += value
+
+        return [], []
+
+    target.modifier_map[ModifierType.RITUAL] = create_modifier_data_ritual(value)
 
     return [], []
 

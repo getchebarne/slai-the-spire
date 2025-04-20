@@ -9,6 +9,7 @@ class ModifierType(Enum):
     STRENGTH = "STRENGTH"
     SPORE_CLOUD = "SPORE_CLOUD"
     VULNERABLE = "VULNERABLE"
+    RITUAL = "RITUAL"
 
 
 @dataclass

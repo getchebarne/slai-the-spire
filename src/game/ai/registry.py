@@ -1,5 +1,6 @@
 from typing import Callable
 
+from src.game.ai.cultist import get_move_name_cultist
 from src.game.ai.dummy import get_move_name_dummy
 from src.game.ai.fungi_beast import get_move_name_fungi_beast
 from src.game.ai.jaw_worm import get_move_name_jaw_worm
@@ -10,4 +11,5 @@ AI_REGISTRY: dict[str, Callable[[EntityMonster], str]] = {
     "Dummy": get_move_name_dummy,
     "Jaw Worm": get_move_name_jaw_worm,
     "Fungi Beast": get_move_name_fungi_beast,
+    "Cultist": get_move_name_cultist,
 }
