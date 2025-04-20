@@ -2,9 +2,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-EFFECT_VALUE_PLACEHOLDER_MODIFIER_DATA_CURRENT_STACKS = -1
-
-
 class EffectType(Enum):
     DEAL_DAMAGE = "DEAL_DAMAGE"
     DECREASE_ENERGY = "DECREASE_ENERGY"

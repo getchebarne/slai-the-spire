@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
-from src.game.combat.effect import Effect
 from src.game.entity.base import EntityBase
 
 
@@ -18,9 +17,6 @@ class ModifierData:
     stacks_min: int | None = None
     stacks_max: int | None = None
     stacks_duration: bool = False
-    effects_turn_start: list[Effect] = field(default_factory=list)
-    effects_turn_end: list[Effect] = field(default_factory=list)
-    effects_death: list[Effect] = field(default_factory=list)
 
 
 @dataclass

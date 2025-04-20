@@ -1,9 +1,8 @@
 import random
-from dataclasses import replace
 
 from src.game.ai.registry import AI_REGISTRY
-from src.game.combat.effect import EFFECT_VALUE_PLACEHOLDER_MODIFIER_DATA_CURRENT_STACKS
 from src.game.combat.effect import Effect
+from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import EffectType
 from src.game.combat.effect import SourcedEffect
 from src.game.combat.phase import get_end_of_turn_effects
@@ -226,12 +225,17 @@ def _apply_lose_hp(
             entity_manager.id_monsters.remove(id_target)
 
             sourced_effects_top = []
-            for _, modifier_data in target.modifier_map.items():
-                for effect_death in modifier_data.effects_death:
-                    if effect_death.value == EFFECT_VALUE_PLACEHOLDER_MODIFIER_DATA_CURRENT_STACKS:
-                        effect_death = replace(effect_death, value=modifier_data.stacks_current)
-
-                    sourced_effects_top.append(SourcedEffect(effect_death, id_source=id_target))
+            for modifier_type, modifier_data in target.modifier_map.items():
+                if modifier_type == ModifierType.SPORE_CLOUD:
+                    sourced_effects_top.append(
+                        SourcedEffect(
+                            Effect(
+                                EffectType.GAIN_VULNERABLE,
+                                modifier_data.stacks_current,
+                                EffectTargetType.CHARACTER,
+                            )
+                        )
+                    )
 
             return [], sourced_effects_top
 
