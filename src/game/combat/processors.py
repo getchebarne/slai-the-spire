@@ -1,10 +1,10 @@
 import random
+from dataclasses import replace
 
 from src.game.ai.registry import AI_REGISTRY
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectTargetType
 from src.game.combat.effect import EffectType
-from src.game.combat.effect import SourcedEffect
 from src.game.combat.phase import get_end_of_turn_effects
 from src.game.combat.phase import get_start_of_turn_effects
 from src.game.entity.actor import ModifierType
@@ -28,7 +28,7 @@ def apply_effect(
     effect_value: int | None,
     id_source: int | None,
     id_target: int | None,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     if effect_type == EffectType.DEAL_DAMAGE:
         return _apply_deal_damage(entity_manager, id_source, id_target, effect_value)
 
@@ -103,38 +103,38 @@ def apply_effect(
 
 def _apply_end_turn(
     entity_manager: EntityManager,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     # Character's turn end
-    sourced_effects = get_end_of_turn_effects(entity_manager, entity_manager.id_character)
+    effects = get_end_of_turn_effects(entity_manager, entity_manager.id_character)
 
     # Monsters
     for id_monster in entity_manager.id_monsters:
         monster = entity_manager.entities[id_monster]
 
         # Turn start
-        sourced_effects += get_start_of_turn_effects(entity_manager, id_monster)
+        effects += get_start_of_turn_effects(entity_manager, id_monster)
 
         # Move's effects
-        sourced_effects += [
-            SourcedEffect(effect, id_monster)
+        effects += [
+            replace(effect, id_source=id_monster)
             for effect in monster.move_map[monster.move_name_current]
         ]
 
         # Update move
-        sourced_effects += [SourcedEffect(Effect(EffectType.UPDATE_MOVE), id_target=id_monster)]
+        effects += [Effect(EffectType.UPDATE_MOVE, id_target=id_monster)]
 
         # Turn end
-        sourced_effects += get_end_of_turn_effects(entity_manager, id_monster)
+        effects += get_end_of_turn_effects(entity_manager, id_monster)
 
     # Character's turn start
-    sourced_effects += get_start_of_turn_effects(entity_manager, entity_manager.id_character)
+    effects += get_start_of_turn_effects(entity_manager, entity_manager.id_character)
 
-    return sourced_effects, []
+    return effects, []
 
 
 def _apply_card_active_set(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_card_active = id_target
 
     return [], []
@@ -142,7 +142,7 @@ def _apply_card_active_set(
 
 def _apply_card_active_clear(
     entity_manager: EntityManager,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_card_active = None
 
     return [], []
@@ -150,7 +150,7 @@ def _apply_card_active_clear(
 
 def _apply_target_effect_set(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_effect_target = id_target
 
     return [], []
@@ -158,7 +158,7 @@ def _apply_target_effect_set(
 
 def _apply_target_effect_clear(
     entity_manager: EntityManager,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_effect_target = None
 
     return [], []
@@ -166,7 +166,7 @@ def _apply_target_effect_clear(
 
 def _apply_target_card_set(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_card_target = id_target
 
     return [], []
@@ -174,7 +174,7 @@ def _apply_target_card_set(
 
 def _apply_target_card_clear(
     entity_manager: EntityManager,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_card_target = None
 
     return [], []
@@ -182,7 +182,7 @@ def _apply_target_card_clear(
 
 def _apply_deal_damage(
     entity_manager: EntityManager, id_source: int, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     source = entity_manager.entities[id_source]
 
     # TODO: think if there's a better solution
@@ -205,21 +205,18 @@ def _apply_deal_damage(
 
     # Calculate damage over block
     value = int(value)
-
     damage_over_block = max(0, value - target.block_current)
 
     # Remove block
     target.block_current = max(0, target.block_current - value)
 
     # Return a top effect to subtract the damage over block from the target's current health
-    return [], [
-        SourcedEffect(Effect(EffectType.LOSE_HP, value=damage_over_block), id_target=id_target)
-    ]
+    return [], [Effect(EffectType.LOSE_HP, value=damage_over_block, id_target=id_target)]
 
 
 def _apply_lose_hp(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
 
     if value >= target.health_current:
@@ -228,11 +225,11 @@ def _apply_lose_hp(
             # TODO: delete instance from `entity_manager.entities`
             entity_manager.id_monsters.remove(id_target)
 
-            sourced_effects_top = []
+            effects_top = []
             for modifier_type, modifier_data in target.modifier_map.items():
                 if modifier_type == ModifierType.SPORE_CLOUD:
-                    sourced_effects_top.append(
-                        SourcedEffect(
+                    effects_top.append(
+                        Effect(
                             Effect(
                                 EffectType.GAIN_VULNERABLE,
                                 modifier_data.stacks_current,
@@ -241,7 +238,7 @@ def _apply_lose_hp(
                         )
                     )
 
-            return [], sourced_effects_top
+            return [], effects_top
 
     target.health_current = max(0, target.health_current - value)
 
@@ -250,7 +247,7 @@ def _apply_lose_hp(
 
 def _apply_gain_block(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
 
     target.block_current = min(target.block_current + value, BLOCK_MAX)
@@ -259,16 +256,16 @@ def _apply_gain_block(
 
 def _apply_play_card(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
 
     return (
         [],
         [
             # TODO; move to engine?
-            SourcedEffect(Effect(EffectType.DECREASE_ENERGY, value=target.cost)),
-            SourcedEffect(Effect(EffectType.DISCARD), id_target=id_target),
-            *[SourcedEffect(effect, id_source=id_target) for effect in target.effects],
+            Effect(EffectType.DECREASE_ENERGY, value=target.cost),
+            Effect(EffectType.DISCARD, id_target=id_target),
+            *[replace(effect, id_source=id_target) for effect in target.effects],
         ],
     )
 
@@ -276,7 +273,7 @@ def _apply_play_card(
 # TODO: handle infinite loop
 def _apply_draw_card(
     entity_manager: EntityManager, amount: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     id_cards_in_draw_pile = entity_manager.id_cards_in_draw_pile
     id_cards_in_hand = entity_manager.id_cards_in_hand
     id_cards_in_disc_pile = entity_manager.id_cards_in_disc_pile
@@ -298,7 +295,7 @@ def _apply_draw_card(
 
 def _apply_refill_energy(
     entity_manager: EntityManager,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     energy = entity_manager.entities[entity_manager.id_energy]
     energy.current = energy.max
 
@@ -307,7 +304,7 @@ def _apply_refill_energy(
 
 def _apply_decrease_energy(
     entity_manager: EntityManager, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     energy = entity_manager.entities[entity_manager.id_energy]
 
     if energy.current < value:
@@ -320,7 +317,7 @@ def _apply_decrease_energy(
 
 def _apply_gain_weak(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
     if ModifierType.WEAK in target.modifier_map:
         target.modifier_map[ModifierType.WEAK].stacks_current += value
@@ -334,7 +331,7 @@ def _apply_gain_weak(
 
 def _apply_gain_vulnerable(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
     if ModifierType.VULNERABLE in target.modifier_map:
         target.modifier_map[ModifierType.VULNERABLE].stacks_current += value
@@ -348,7 +345,7 @@ def _apply_gain_vulnerable(
 
 def _apply_gain_ritual(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
     if ModifierType.RITUAL in target.modifier_map:
         target.modifier_map[ModifierType.RITUAL].stacks_current += value
@@ -362,7 +359,7 @@ def _apply_gain_ritual(
 
 def _apply_gain_strength(
     entity_manager: EntityManager, id_target: int, value: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
     if ModifierType.STRENGTH in target.modifier_map:
         target.modifier_map[ModifierType.STRENGTH].stacks_current += value
@@ -376,7 +373,7 @@ def _apply_gain_strength(
 
 def _apply_mod_tick(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
 
     for modifier_type, modifier_data in list(target.modifier_map.items()):
@@ -391,7 +388,7 @@ def _apply_mod_tick(
 
 def _apply_discard(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_cards_in_hand.remove(id_target)
     entity_manager.id_cards_in_disc_pile.append(id_target)
 
@@ -400,7 +397,7 @@ def _apply_discard(
 
 def _apply_zero_block(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
 
     target.block_current = 0
@@ -410,7 +407,7 @@ def _apply_zero_block(
 
 def _apply_shuffle_deck_into_draw_pile(
     entity_manager: EntityManager,
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     entity_manager.id_cards_in_draw_pile = entity_manager.id_cards_in_deck.copy()
     random.shuffle(entity_manager.id_cards_in_draw_pile)
 
@@ -419,7 +416,7 @@ def _apply_shuffle_deck_into_draw_pile(
 
 def _apply_update_move(
     entity_manager: EntityManager, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+) -> tuple[list[Effect], list[Effect]]:
     target = entity_manager.entities[id_target]
 
     move_name_new = AI_REGISTRY[target.name](target)

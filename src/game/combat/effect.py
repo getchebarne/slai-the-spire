@@ -55,9 +55,5 @@ class Effect:
     target_type: EffectTargetType | None = None
     selection_type: EffectSelectionType | None = None
 
-
-@dataclass(frozen=True)
-class SourcedEffect:
-    effect: Effect
     id_source: int | None = None
     id_target: int | None = None

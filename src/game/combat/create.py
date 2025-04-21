@@ -1,3 +1,5 @@
+from collections import deque
+
 from src.game.combat.state import CombatState
 from src.game.entity.manager import EntityManager
 from src.game.entity.manager import create_entity
@@ -55,4 +57,4 @@ def create_combat_state() -> CombatState:
     entity_manager.id_energy = id_energy
     entity_manager.id_cards_in_deck = id_cards_in_deck
 
-    return CombatState(entity_manager, [], None)
+    return CombatState(entity_manager, deque(), None)

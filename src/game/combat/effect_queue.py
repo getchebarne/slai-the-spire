@@ -1,26 +1,27 @@
 from __future__ import annotations
 
 import random
+from collections import deque
 from typing import TypeAlias
 
+from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectSelectionType
 from src.game.combat.effect import EffectTargetType
-from src.game.combat.effect import SourcedEffect
 from src.game.combat.processors import apply_effect
 from src.game.entity.manager import EntityManager
 
 
-EffectQueue: TypeAlias = list[SourcedEffect]
+EffectQueue: TypeAlias = deque[Effect]
 
 
-def add_to_bot(effect_queue: EffectQueue, *sourced_effects: SourcedEffect) -> None:
-    for sourced_effect in sourced_effects:
-        effect_queue.append(sourced_effect)
+def add_to_bot(effect_queue: EffectQueue, *effects: Effect) -> None:
+    for effect in effects:
+        effect_queue.append(effect)
 
 
-def add_to_top(effect_queue: EffectQueue, *sourced_effects: SourcedEffect) -> None:
-    for sourced_effect in reversed(sourced_effects):
-        effect_queue.insert(0, sourced_effect)
+def add_to_top(effect_queue: EffectQueue, *effects: Effect) -> None:
+    for effect in reversed(effects):
+        effect_queue.appendleft(effect)
 
 
 class EffectNeedsInputTargets(Exception):
@@ -73,10 +74,9 @@ def _resolve_effect_selection_type(
 
 def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueue) -> None:
     while effect_queue:
-        sourced_effect = effect_queue.pop(0)
-        effect = sourced_effect.effect
-        id_source = sourced_effect.id_source
-        id_target = sourced_effect.id_target
+        effect = effect_queue.popleft()
+        id_source = effect.id_source
+        id_target = effect.id_target
 
         if id_target is None:
             if effect.target_type is None:
@@ -102,7 +102,7 @@ def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueu
                     except EffectNeedsInputTargets:
                         # Need to wait for player to select the effect's target. Put effect back
                         # into queue at position 0 and return id_queries to tag them as selectable
-                        effect_queue.insert(0, sourced_effect)
+                        add_to_top(effect_queue, effect)
 
                         return
 
@@ -112,10 +112,10 @@ def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueu
 
         for id_target in id_targets:
             # Process the effect & get new effects to add to the queue
-            sourced_effects_bot, sourced_effects_top = apply_effect(
+            effects_bot, effects_top = apply_effect(
                 entity_manager, effect.type, effect.value, id_source, id_target
             )
 
             # Add new effects to the queue
-            add_to_bot(effect_queue, *sourced_effects_bot)
-            add_to_top(effect_queue, *sourced_effects_top)
+            add_to_bot(effect_queue, *effects_bot)
+            add_to_top(effect_queue, *effects_top)

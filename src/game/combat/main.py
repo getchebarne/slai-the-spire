@@ -5,7 +5,6 @@ from src.game.combat.action import ActionType
 from src.game.combat.drawer import draw_combat
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectType
-from src.game.combat.effect import SourcedEffect
 from src.game.combat.effect_queue import add_to_bot
 from src.game.combat.effect_queue import add_to_top
 from src.game.combat.effect_queue import process_effect_queue
@@ -26,9 +25,7 @@ class InvalidStateError(Exception):
     pass
 
 
-def _handle_select_entity(
-    cs: CombatState, id_target: int
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect], list[Effect]]:
     if cs.fsm_state == FSMState.DEFAULT:
         if id_target not in cs.entity_manager.id_cards_in_hand:
             raise InvalidActionError("Can only select cards in hand while in default state")
@@ -44,7 +41,7 @@ def _handle_select_entity(
         # If the card requires targeting, set it as active and return
         if does_card_require_target(card):
             return (
-                [SourcedEffect(Effect(EffectType.CARD_ACTIVE_SET), id_target=id_target)],
+                [Effect(EffectType.CARD_ACTIVE_SET, id_target=id_target)],
                 [],
             )
 
@@ -52,7 +49,7 @@ def _handle_select_entity(
         # where cards that don't need a target are still set as active and await the player's
         # confirmation
         return (
-            [SourcedEffect(Effect(EffectType.PLAY_CARD), id_target=id_target)],
+            [Effect(EffectType.PLAY_CARD, id_target=id_target)],
             [],
         )
 
@@ -62,12 +59,10 @@ def _handle_select_entity(
         # finally the card's target is cleared
         return (
             [
-                SourcedEffect(Effect(EffectType.TARGET_CARD_SET), id_target=id_target),
-                SourcedEffect(Effect(EffectType.CARD_ACTIVE_CLEAR)),
-                SourcedEffect(
-                    Effect(EffectType.PLAY_CARD), id_target=cs.entity_manager.id_card_active
-                ),
-                SourcedEffect(Effect(EffectType.TARGET_CARD_CLEAR)),
+                Effect(EffectType.TARGET_CARD_SET, id_target=id_target),
+                Effect(EffectType.CARD_ACTIVE_CLEAR),
+                Effect(EffectType.PLAY_CARD, id_target=cs.entity_manager.id_card_active),
+                Effect(EffectType.TARGET_CARD_CLEAR),
             ],
             [],
         )
@@ -78,17 +73,15 @@ def _handle_select_entity(
         # an effect to clear the effect's target is added to the bottom of the queue, but TODO:
         # I think I can't escape adding the clear when the `id_effect_target` is consumed
         return (
-            [SourcedEffect(Effect(EffectType.TARGET_EFFECT_CLEAR), id_target=id_target)],
-            [SourcedEffect(Effect(EffectType.TARGET_EFFECT_SET), id_target=id_target)],
+            [Effect(EffectType.TARGET_EFFECT_CLEAR, id_target=id_target)],
+            [Effect(EffectType.TARGET_EFFECT_SET, id_target=id_target)],
         )
 
 
-def handle_action(
-    cs: CombatState, action: Action
-) -> tuple[list[SourcedEffect], list[SourcedEffect]]:
+def handle_action(cs: CombatState, action: Action) -> tuple[list[Effect], list[Effect]]:
     if action.type == ActionType.END_TURN:
         return (
-            [SourcedEffect(Effect(EffectType.END_TURN))],
+            [Effect(EffectType.END_TURN)],
             [],
         )
 
@@ -98,11 +91,11 @@ def handle_action(
 
 def step(cs: CombatState, action: Action) -> None:
     # Handle action
-    sourced_effects_bot, sourced_effects_top = handle_action(cs, action)
+    effects_bot, effects_top = handle_action(cs, action)
 
     # Add new effects to the queue
-    add_to_bot(cs.effect_queue, *sourced_effects_bot)
-    add_to_top(cs.effect_queue, *sourced_effects_top)
+    add_to_bot(cs.effect_queue, *effects_bot)
+    add_to_top(cs.effect_queue, *effects_top)
 
     # Process round
     process_effect_queue(cs.entity_manager, cs.effect_queue)
@@ -134,8 +127,8 @@ def _set_new_state(cs: CombatState) -> None:
 
 def start_combat(cs: CombatState) -> None:
     # Queue start of combat effects
-    sourced_effects = get_start_of_combat_effects(cs.entity_manager)
-    add_to_bot(cs.effect_queue, *sourced_effects)
+    effects = get_start_of_combat_effects(cs.entity_manager)
+    add_to_bot(cs.effect_queue, *effects)
 
     # Process them
     process_effect_queue(cs.entity_manager, cs.effect_queue)
