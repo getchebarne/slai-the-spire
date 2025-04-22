@@ -1,9 +1,9 @@
 from dataclasses import replace
 
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectType
 from src.game.combat.phase import get_end_of_turn_effects
 from src.game.combat.phase import get_start_of_turn_effects
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
 from src.game.entity.manager import EntityManager
 
 

@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass
 
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectType
-from src.game.combat.state import CombatState
-from src.game.combat.state import FSMState
 from src.game.combat.utils import does_card_require_target
+from src.game.core.combat_state import CombatState
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
+from src.game.engine.state import GameState
 from src.game.entity.actor import EntityActor
 from src.game.entity.actor import ModifierType
 from src.game.entity.card import EntityCard
@@ -17,7 +17,7 @@ from src.game.entity.monster import EntityMonster
 # Aliases
 ModifierViewType = ModifierType
 EffectView = Effect
-FSMStateView = FSMState
+CombatStateView = CombatState
 
 
 @dataclass
@@ -75,7 +75,7 @@ class CombatView:
     disc_pile: list[CardView]
     energy: EnergyView
     effect: EffectView | None
-    state: FSMStateView
+    state: CombatStateView
 
 
 def get_card_view(card: EntityCard, is_active: bool, id_card: int) -> CardView:
@@ -161,40 +161,40 @@ def get_monster_view(
     )
 
 
-def view_combat(cs: CombatState) -> CombatView:
+def view_combat(game_state: GameState) -> CombatView:
     # Character
-    character = cs.entity_manager.entities[cs.entity_manager.id_character]
+    character = game_state.entity_manager.entities[game_state.entity_manager.id_character]
     character_view = get_actor_view(character)
 
     # Monsters
     monster_views = []
-    for id_monster in cs.entity_manager.id_monsters:
-        monster = cs.entity_manager.entities[id_monster]
+    for id_monster in game_state.entity_manager.id_monsters:
+        monster = game_state.entity_manager.entities[id_monster]
         monster_views.append(get_monster_view(monster, character, id_monster))
 
     # Hand
     card_in_hand_views = []
-    for id_card in cs.entity_manager.id_cards_in_hand:
-        card = cs.entity_manager.entities[id_card]
-        is_active = id_card == cs.entity_manager.id_card_active
+    for id_card in game_state.entity_manager.id_cards_in_hand:
+        card = game_state.entity_manager.entities[id_card]
+        is_active = id_card == game_state.entity_manager.id_card_active
         card_in_hand_views.append(get_card_view(card, is_active, id_card))
 
     # Draw pile
     card_in_draw_pile_views = []
-    for id_card in cs.entity_manager.id_cards_in_draw_pile:
-        card = cs.entity_manager.entities[id_card]
+    for id_card in game_state.entity_manager.id_cards_in_draw_pile:
+        card = game_state.entity_manager.entities[id_card]
 
-        if id_card == cs.entity_manager.id_card_active:
+        if id_card == game_state.entity_manager.id_card_active:
             raise ValueError(f"Card {card} with id {id_card} is in the draw pile but it's active")
 
         card_in_draw_pile_views.append(get_card_view(card, False, id_card))
 
     # Draw pile
     card_in_disc_pile_views = []
-    for id_card in cs.entity_manager.id_cards_in_disc_pile:
-        card = cs.entity_manager.entities[id_card]
+    for id_card in game_state.entity_manager.id_cards_in_disc_pile:
+        card = game_state.entity_manager.entities[id_card]
 
-        if id_card == cs.entity_manager.id_card_active:
+        if id_card == game_state.entity_manager.id_card_active:
             raise ValueError(
                 f"Card {card} with id {id_card} is in the discard pile but it's active"
             )
@@ -202,16 +202,16 @@ def view_combat(cs: CombatState) -> CombatView:
         card_in_disc_pile_views.append(get_card_view(card, False, id_card))
 
     # Energy
-    energy = cs.entity_manager.entities[cs.entity_manager.id_energy]
+    energy = game_state.entity_manager.entities[game_state.entity_manager.id_energy]
     energy_view = EnergyView(energy.current, energy.max)
 
     # Effect
     effect_view = None
-    if cs.effect_queue:
-        effect_view = cs.effect_queue[0]
+    if game_state.effect_queue:
+        effect_view = game_state.effect_queue[0]
 
     # FSM state
-    state_view = cs.fsm_state
+    combat_state_view = game_state.combat_state
 
     return CombatView(
         character_view,
@@ -221,5 +221,5 @@ def view_combat(cs: CombatState) -> CombatView:
         card_in_disc_pile_views,
         energy_view,
         effect_view,
-        state_view,
+        combat_state_view,
     )

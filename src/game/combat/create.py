@@ -1,6 +1,6 @@
 from collections import deque
 
-from src.game.combat.state import CombatState
+from src.game.engine.state import GameState
 from src.game.entity.manager import EntityManager
 from src.game.entity.manager import create_entity
 from src.game.factory.card.backflip import create_card_backflip
@@ -21,7 +21,7 @@ from src.game.factory.monster.cultist import create_monster_cultist
 
 
 # TODO: parametrize deck, monster, etc.
-def create_combat_state() -> CombatState:
+def create_combat_state() -> GameState:
     # Create empty EntityManager
     entity_manager = EntityManager([])
 
@@ -57,4 +57,4 @@ def create_combat_state() -> CombatState:
     entity_manager.id_energy = id_energy
     entity_manager.id_cards_in_deck = id_cards_in_deck
 
-    return CombatState(entity_manager, deque(), None)
+    return GameState(entity_manager, deque(), None)

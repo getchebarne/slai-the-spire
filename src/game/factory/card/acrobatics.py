@@ -1,7 +1,7 @@
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectSelectionType
-from src.game.combat.effect import EffectTargetType
-from src.game.combat.effect import EffectType
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectSelectionType
+from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.entity.card import EntityCard
 
 

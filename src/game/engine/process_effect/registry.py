@@ -1,7 +1,7 @@
 from typing import Callable, TypeAlias
 
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectType
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
 from src.game.engine.process_effect.block_gain import process_effect_block_gain
 from src.game.engine.process_effect.block_reset import process_effect_block_reset
 from src.game.engine.process_effect.card_active_clear import process_effect_card_active_clear

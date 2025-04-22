@@ -1,18 +1,20 @@
-from __future__ import annotations
-
 import random
 from collections import deque
 from dataclasses import replace
 from typing import TypeAlias
 
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectSelectionType
-from src.game.combat.effect import EffectTargetType
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectSelectionType
+from src.game.core.effect import EffectTargetType
 from src.game.engine.process_effect.registry import REGISTRY_EFFECT_TYPE_PROCESS_EFFECT
 from src.game.entity.manager import EntityManager
 
 
 EffectQueue: TypeAlias = deque[Effect]
+
+
+class EffectNeedsInputTargets(Exception):
+    pass
 
 
 def add_to_bot(effect_queue: EffectQueue, *effects: Effect) -> None:
@@ -23,10 +25,6 @@ def add_to_bot(effect_queue: EffectQueue, *effects: Effect) -> None:
 def add_to_top(effect_queue: EffectQueue, *effects: Effect) -> None:
     for effect in reversed(effects):
         effect_queue.appendleft(effect)
-
-
-class EffectNeedsInputTargets(Exception):
-    pass
 
 
 def _resolve_effect_target_type(

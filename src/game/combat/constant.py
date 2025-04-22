@@ -1,4 +1,4 @@
-from src.game.combat.effect import EffectType
+from src.game.core.effect import EffectType
 
 
 # Maximum number of monsters

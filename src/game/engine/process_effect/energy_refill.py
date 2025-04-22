@@ -1,4 +1,4 @@
-from src.game.combat.effect import Effect
+from src.game.core.effect import Effect
 from src.game.entity.manager import EntityManager
 
 

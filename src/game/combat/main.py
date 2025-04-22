@@ -3,18 +3,18 @@ from typing import Callable
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.drawer import draw_combat
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectType
-from src.game.combat.effect_queue import add_to_bot
-from src.game.combat.effect_queue import add_to_top
-from src.game.combat.effect_queue import process_effect_queue
 from src.game.combat.phase import get_start_of_combat_effects
-from src.game.combat.state import CombatState
-from src.game.combat.state import FSMState
 from src.game.combat.utils import does_card_require_target
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
+from src.game.core.combat_state import CombatState
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectType
+from src.game.engine.effect_queue import add_to_bot
+from src.game.engine.effect_queue import add_to_top
+from src.game.engine.effect_queue import process_effect_queue
+from src.game.engine.state import GameState
 
 
 class InvalidActionError(Exception):
@@ -25,16 +25,20 @@ class InvalidStateError(Exception):
     pass
 
 
-def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect], list[Effect]]:
-    if cs.fsm_state == FSMState.DEFAULT:
-        if id_target not in cs.entity_manager.id_cards_in_hand:
+def _handle_select_entity(
+    game_state: GameState, id_target: int
+) -> tuple[list[Effect], list[Effect]]:
+    if game_state.combat_state == CombatState.DEFAULT:
+        if id_target not in game_state.entity_manager.id_cards_in_hand:
             raise InvalidActionError("Can only select cards in hand while in default state")
 
         # Get the selected card
-        card = cs.entity_manager.entities[id_target]
+        card = game_state.entity_manager.entities[id_target]
 
         # Check if there's enough energy to play it
-        energy_current = cs.entity_manager.entities[cs.entity_manager.id_energy].current
+        energy_current = game_state.entity_manager.entities[
+            game_state.entity_manager.id_energy
+        ].current
         if card.cost > energy_current:
             raise InvalidActionError(f"Can't select card {card} with {energy_current} energy")
 
@@ -53,7 +57,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect]
             [],
         )
 
-    if cs.fsm_state == FSMState.AWAIT_TARGET_CARD:
+    if game_state.combat_state == CombatState.AWAIT_TARGET_CARD:
         # Queue is empty in this state. First the card's target is set, then the active card is
         # cleared, then the card is played (it's effects are added to the top of the queue), and
         # finally the card's target is cleared
@@ -61,13 +65,13 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect]
             [
                 Effect(EffectType.TARGET_CARD_SET, id_target=id_target),
                 Effect(EffectType.CARD_ACTIVE_CLEAR),
-                Effect(EffectType.CARD_PLAY, id_target=cs.entity_manager.id_card_active),
+                Effect(EffectType.CARD_PLAY, id_target=game_state.entity_manager.id_card_active),
                 Effect(EffectType.TARGET_CARD_CLEAR),
             ],
             [],
         )
 
-    if cs.fsm_state == FSMState.AWAIT_TARGET_EFFECT:
+    if game_state.combat_state == CombatState.AWAIT_TARGET_EFFECT:
         # An effect is added at the top of the queue to set the effect's target. The effect that
         # comes inmediately after is going to use this variable to resolve its target. For now,
         # an effect to clear the effect's target is added to the bottom of the queue, but TODO:
@@ -78,7 +82,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect]
         )
 
 
-def handle_action(cs: CombatState, action: Action) -> tuple[list[Effect], list[Effect]]:
+def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], list[Effect]]:
     if action.type == ActionType.END_TURN:
         return (
             [Effect(EffectType.END_TURN)],
@@ -86,70 +90,70 @@ def handle_action(cs: CombatState, action: Action) -> tuple[list[Effect], list[E
         )
 
     elif action.type == ActionType.SELECT_ENTITY:
-        return _handle_select_entity(cs, action.target_id)
+        return _handle_select_entity(game_state, action.target_id)
 
 
-def step(cs: CombatState, action: Action) -> None:
+def step(game_state: GameState, action: Action) -> None:
     # Handle action
-    effects_bot, effects_top = handle_action(cs, action)
+    effects_bot, effects_top = handle_action(game_state, action)
 
     # Add new effects to the queue
-    add_to_bot(cs.effect_queue, *effects_bot)
-    add_to_top(cs.effect_queue, *effects_top)
+    add_to_bot(game_state.effect_queue, *effects_bot)
+    add_to_top(game_state.effect_queue, *effects_top)
 
     # Process round
-    process_effect_queue(cs.entity_manager, cs.effect_queue)
+    process_effect_queue(game_state.entity_manager, game_state.effect_queue)
 
     # Set new state
-    _set_new_state(cs)
+    _set_new_state(game_state)
 
 
-def _set_new_state(cs: CombatState) -> None:
-    if cs.entity_manager.id_card_active is not None:
-        if cs.effect_queue:
+def _set_new_state(game_state: GameState) -> None:
+    if game_state.entity_manager.id_card_active is not None:
+        if game_state.effect_queue:
             raise InvalidStateError(
-                f"Can't enter {FSMState.AWAIT_TARGET_CARD.name} state with non-empty effect queue"
+                f"Can't enter {CombatState.AWAIT_TARGET_CARD} state with non-empty effect queue"
             )
 
-        cs.fsm_state = FSMState.AWAIT_TARGET_CARD
+        game_state.combat_state = CombatState.AWAIT_TARGET_CARD
 
         return
 
-    if cs.effect_queue:
-        cs.fsm_state = FSMState.AWAIT_TARGET_EFFECT
+    if game_state.effect_queue:
+        game_state.combat_state = CombatState.AWAIT_TARGET_EFFECT
 
         return
 
-    cs.fsm_state = FSMState.DEFAULT
+    game_state.combat_state = CombatState.DEFAULT
 
     return
 
 
-def start_combat(cs: CombatState) -> None:
+def start_combat(game_state: GameState) -> None:
     # Queue start of combat effects
-    effects = get_start_of_combat_effects(cs.entity_manager)
-    add_to_bot(cs.effect_queue, *effects)
+    effects = get_start_of_combat_effects(game_state.entity_manager)
+    add_to_bot(game_state.effect_queue, *effects)
 
     # Process them
-    process_effect_queue(cs.entity_manager, cs.effect_queue)
+    process_effect_queue(game_state.entity_manager, game_state.effect_queue)
 
     # Set new state
-    _set_new_state(cs)
+    _set_new_state(game_state)
 
 
-def main(cs: CombatState, select_action_fn: Callable[[CombatView], Action]) -> None:
-    start_combat(cs)
+def main(game_state: GameState, select_action_fn: Callable[[CombatView], Action]) -> None:
+    start_combat(game_state)
 
-    while not is_game_over(cs.entity_manager):
+    while not is_game_over(game_state.entity_manager):
         # Get combat view and draw it on the terminal
-        combat_view = view_combat(cs)
+        combat_view = view_combat(game_state)
         draw_combat(combat_view)
 
         # Get action from agent
         action, _ = select_action_fn(combat_view)
 
         # Game step
-        step(cs, action)
+        step(game_state, action)
 
     # TODO: combat end
 
@@ -158,6 +162,6 @@ if __name__ == "__main__":
     from src.game.combat.create import create_combat_state
     from src.rl.policies import PolicyRandom
 
-    cs = create_combat_state()
+    game_state = create_combat_state()
 
-    main(cs, PolicyRandom().select_action)
+    main(game_state, PolicyRandom().select_action)

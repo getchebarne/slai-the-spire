@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from src.game.combat.effect import Effect
+from src.game.core.effect import Effect
 from src.game.entity.base import EntityBase
 
 

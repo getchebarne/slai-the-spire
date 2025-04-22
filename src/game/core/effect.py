@@ -66,5 +66,9 @@ class Effect:
     target_type: EffectTargetType | None = None
     selection_type: EffectSelectionType | None = None
 
+    # Can be `None`, some effects are not created by entities but by the engine itself
     id_source: int | None = None
+
+    # Effects can also be created with an `id_target`, in that case, the target type should be
+    # `None`, as it doesn't have to be resolved
     id_target: int | None = None

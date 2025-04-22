@@ -1,8 +1,8 @@
 import random
 
-from src.game.combat.effect import Effect
-from src.game.combat.effect import EffectTargetType
-from src.game.combat.effect import EffectType
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.monster import EntityMonster
