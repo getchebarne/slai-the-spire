@@ -3,7 +3,6 @@ from typing import Callable
 from src.game.combat.action import Action
 from src.game.combat.action import ActionType
 from src.game.combat.drawer import draw_combat
-from src.game.combat.phase import get_start_of_combat_effects
 from src.game.combat.utils import does_card_require_target
 from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
@@ -85,7 +84,7 @@ def _handle_select_entity(
 def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], list[Effect]]:
     if action.type == ActionType.END_TURN:
         return (
-            [Effect(EffectType.END_TURN)],
+            [Effect(EffectType.TURN_END, id_target=game_state.entity_manager.id_character)],
             [],
         )
 
@@ -131,7 +130,7 @@ def _set_new_state(game_state: GameState) -> None:
 
 def start_combat(game_state: GameState) -> None:
     # Queue start of combat effects
-    effects = get_start_of_combat_effects(game_state.entity_manager)
+    effects = [Effect(EffectType.COMBAT_START)]
     add_to_bot(game_state.effect_queue, *effects)
 
     # Process them

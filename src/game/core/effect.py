@@ -15,11 +15,11 @@ class EffectType(Enum):
     CARD_PLAY = "CARD_PLAY"
     CARD_SHUFFLE_DECK_INTO_DRAW_PILE = "CARD_SHUFFLE_DECK_INTO_DRAW_PILE"
 
+    # Combat start
+    COMBAT_START = "COMBAT_START"
+
     # Deal damage
     DAMAGE_DEAL = "DAMAGE_DEAL"
-
-    # Character's turn end
-    END_TURN = "END_TURN"
 
     # Energy manipulation
     ENERGY_GAIN = "ENERGY_GAIN"
@@ -44,6 +44,10 @@ class EffectType(Enum):
     TARGET_EFFECT_CLEAR = "TARGET_EFFECT_CLEAR"
     TARGET_CARD_SET = "TARGET_CARD_SET"
     TARGET_CARD_CLEAR = "TARGET_CARD_CLEAR"
+
+    # Turn end / start
+    TURN_END = "TURN_END"
+    TURN_START = "TURN_START"
 
 
 class EffectTargetType(Enum):

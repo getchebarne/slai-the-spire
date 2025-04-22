@@ -11,8 +11,8 @@ from src.game.engine.process_effect.card_draw import process_effect_card_draw
 from src.game.engine.process_effect.card_play import process_effect_card_play
 from src.game.engine.process_effect.card_shuffle_deck_into_draw_pile import \
     process_effect_shuffle_deck_into_draw_pile
+from src.game.engine.process_effect.combat_start import process_effect_combat_start
 from src.game.engine.process_effect.damage_deal import process_effect_damage_deal
-from src.game.engine.process_effect.end_turn import process_effect_end_turn
 from src.game.engine.process_effect.energy_gain import process_effect_energy_gain
 from src.game.engine.process_effect.energy_loss import process_effect_energy_loss
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
@@ -28,6 +28,8 @@ from src.game.engine.process_effect.target_card_clear import process_effect_targ
 from src.game.engine.process_effect.target_card_set import process_effect_target_card_set
 from src.game.engine.process_effect.target_effect_clear import process_effect_target_effect_clear
 from src.game.engine.process_effect.target_effect_set import process_effect_target_effect_set
+from src.game.engine.process_effect.turn_end import process_effect_turn_end
+from src.game.engine.process_effect.turn_start import process_effect_turn_start
 from src.game.entity.manager import EntityManager
 
 
@@ -46,8 +48,8 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.CARD_DRAW: process_effect_card_draw,
     EffectType.CARD_PLAY: process_effect_card_play,
     EffectType.CARD_SHUFFLE_DECK_INTO_DRAW_PILE: process_effect_shuffle_deck_into_draw_pile,
+    EffectType.COMBAT_START: process_effect_combat_start,
     EffectType.DAMAGE_DEAL: process_effect_damage_deal,
-    EffectType.END_TURN: process_effect_end_turn,
     EffectType.ENERGY_GAIN: process_effect_energy_gain,
     EffectType.ENERGY_LOSS: process_effect_energy_loss,
     EffectType.HEALTH_LOSS: process_effect_health_loss,
@@ -61,4 +63,6 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.TARGET_CARD_SET: process_effect_target_card_set,
     EffectType.TARGET_EFFECT_CLEAR: process_effect_target_effect_clear,
     EffectType.TARGET_EFFECT_SET: process_effect_target_effect_set,
+    EffectType.TURN_END: process_effect_turn_end,
+    EffectType.TURN_START: process_effect_turn_start,
 }

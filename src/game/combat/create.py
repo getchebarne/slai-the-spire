@@ -14,10 +14,8 @@ from src.game.factory.card.survivor import create_card_survivor
 from src.game.factory.character.silent import create_character_silent
 from src.game.factory.energy import create_energy
 from src.game.factory.monster.cultist import create_monster_cultist
-
-
-# from src.game.factory.monster.fungi_beast import create_monster_fungi_beast
-# from src.game.factory.monster.jaw_worm import create_monster_jaw_worm
+from src.game.factory.monster.fungi_beast import create_monster_fungi_beast
+from src.game.factory.monster.jaw_worm import create_monster_jaw_worm
 
 
 # TODO: parametrize deck, monster, etc.
@@ -28,8 +26,9 @@ def create_combat_state() -> GameState:
     # Create entities
     id_charater = create_entity(entity_manager, create_character_silent(15, 15))
     id_monsters = [
-        create_entity(entity_manager, create_monster_cultist()),
-        # create_entity(entity_manager, create_monster_fungi_beast()),
+        # create_entity(entity_manager, create_monster_cultist()),
+        create_entity(entity_manager, create_monster_fungi_beast()),
+        create_entity(entity_manager, create_monster_fungi_beast()),
     ]
     id_energy = create_entity(entity_manager, create_energy(3, 3))
     id_cards_in_deck = [

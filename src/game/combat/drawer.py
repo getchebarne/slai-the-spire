@@ -34,7 +34,7 @@ def _hand_str(hand: list[CardView]) -> str:
 
         card_strings.append(f"{_card_str(card_view)}")
 
-    return "HAND: " + " / ".join(card_strings)
+    return f"HAND: {' / '.join(card_strings)}"
 
 
 def _health_str(health_current: int, health_max: int) -> str:
