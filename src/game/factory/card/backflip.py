@@ -14,7 +14,7 @@ def create_card_backflip() -> EntityCard:
         "Backflip",
         COST,
         [
-            Effect(EffectType.GAIN_BLOCK, BLOCK, EffectTargetType.CHARACTER),
-            Effect(EffectType.DRAW_CARD, DRAW),
+            Effect(EffectType.BLOCK_GAIN, BLOCK, EffectTargetType.CHARACTER),
+            Effect(EffectType.CARD_DRAW, DRAW),
         ],
     )

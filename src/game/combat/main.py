@@ -49,7 +49,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect]
         # where cards that don't need a target are still set as active and await the player's
         # confirmation
         return (
-            [Effect(EffectType.PLAY_CARD, id_target=id_target)],
+            [Effect(EffectType.CARD_PLAY, id_target=id_target)],
             [],
         )
 
@@ -61,7 +61,7 @@ def _handle_select_entity(cs: CombatState, id_target: int) -> tuple[list[Effect]
             [
                 Effect(EffectType.TARGET_CARD_SET, id_target=id_target),
                 Effect(EffectType.CARD_ACTIVE_CLEAR),
-                Effect(EffectType.PLAY_CARD, id_target=cs.entity_manager.id_card_active),
+                Effect(EffectType.CARD_PLAY, id_target=cs.entity_manager.id_card_active),
                 Effect(EffectType.TARGET_CARD_CLEAR),
             ],
             [],

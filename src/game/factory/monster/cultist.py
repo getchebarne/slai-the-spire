@@ -9,17 +9,21 @@ from src.game.entity.monster import EntityMonster
 HEALTH_MAX_MIN = 42
 HEALTH_MAX_MAX = 42
 DARK_STRIKE_DAMAGE = 6
-INCANTATION_GAIN_RITUAL = 5
+INCANTATION_MODIFIER_RITUAL_GAIN = 5
 
 
 def _get_effects_incantation() -> list[Effect]:
     return [
-        Effect(EffectType.GAIN_RITUAL, INCANTATION_GAIN_RITUAL, EffectTargetType.SOURCE),
+        Effect(
+            EffectType.MODIFIER_RITUAL_GAIN,
+            INCANTATION_MODIFIER_RITUAL_GAIN,
+            EffectTargetType.SOURCE,
+        ),
     ]
 
 
 def _get_effects_dark_strike() -> list[Effect]:
-    return [Effect(EffectType.DEAL_DAMAGE, DARK_STRIKE_DAMAGE, EffectTargetType.CHARACTER)]
+    return [Effect(EffectType.DAMAGE_DEAL, DARK_STRIKE_DAMAGE, EffectTargetType.CHARACTER)]
 
 
 def create_monster_cultist() -> EntityMonster:

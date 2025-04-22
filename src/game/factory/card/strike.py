@@ -12,5 +12,5 @@ def create_card_strike() -> EntityCard:
     return EntityCard(
         "Strike",
         COST,
-        [Effect(EffectType.DEAL_DAMAGE, DAMAGE, EffectTargetType.CARD_TARGET)],
+        [Effect(EffectType.DAMAGE_DEAL, DAMAGE, EffectTargetType.CARD_TARGET)],
     )

@@ -7,7 +7,7 @@ from src.game.entity.card import EntityCard
 
 COST = 1
 DRAW = 3
-DISCARD = 1
+CARD_DISCARD = 1
 
 
 def create_card_acrobatics() -> EntityCard:
@@ -15,10 +15,10 @@ def create_card_acrobatics() -> EntityCard:
         "Acrobatics",
         COST,
         [
-            Effect(EffectType.DRAW_CARD, DRAW),
+            Effect(EffectType.CARD_DRAW, DRAW),
             Effect(
-                EffectType.DISCARD,
-                DISCARD,
+                EffectType.CARD_DISCARD,
+                CARD_DISCARD,
                 EffectTargetType.CARD_IN_HAND,
                 EffectSelectionType.INPUT,
             ),

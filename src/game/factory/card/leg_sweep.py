@@ -15,7 +15,7 @@ def create_card_leg_sweep() -> EntityCard:
         "Leg Sweep",
         COST,
         [
-            Effect(EffectType.GAIN_BLOCK, BLOCK, EffectTargetType.CHARACTER),
-            Effect(EffectType.GAIN_WEAK, WEAK, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.BLOCK_GAIN, BLOCK, EffectTargetType.CHARACTER),
+            Effect(EffectType.MODIFIER_WEAK_GAIN, WEAK, EffectTargetType.CARD_TARGET),
         ],
     )

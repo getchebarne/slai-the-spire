@@ -9,11 +9,11 @@ DEFEND_BLOCK = 12
 
 
 def _get_effects_attack() -> list[Effect]:
-    return [Effect(EffectType.DEAL_DAMAGE, ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
+    return [Effect(EffectType.DAMAGE_DEAL, ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
 
 
 def _get_effects_defend() -> list[Effect]:
-    return [Effect(EffectType.GAIN_BLOCK, DEFEND_BLOCK, EffectTargetType.SOURCE)]
+    return [Effect(EffectType.BLOCK_GAIN, DEFEND_BLOCK, EffectTargetType.SOURCE)]
 
 
 def create_monster_dummy(

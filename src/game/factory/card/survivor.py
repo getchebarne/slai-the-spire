@@ -7,7 +7,7 @@ from src.game.entity.card import EntityCard
 
 COST = 1
 BLOCK = 8
-DISCARD = 1
+CARD_DISCARD = 1
 
 
 def create_card_survivor() -> EntityCard:
@@ -15,10 +15,10 @@ def create_card_survivor() -> EntityCard:
         "Survivor",
         COST,
         [
-            Effect(EffectType.GAIN_BLOCK, BLOCK, EffectTargetType.CHARACTER),
+            Effect(EffectType.BLOCK_GAIN, BLOCK, EffectTargetType.CHARACTER),
             Effect(
-                EffectType.DISCARD,
-                DISCARD,  # TODO: this should be part of the selection type
+                EffectType.CARD_DISCARD,
+                CARD_DISCARD,  # TODO: this should be part of the selection type
                 EffectTargetType.CARD_IN_HAND,
                 EffectSelectionType.INPUT,
             ),

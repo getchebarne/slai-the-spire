@@ -8,9 +8,9 @@ from src.game.entity.manager import EntityManager
 
 def get_start_of_combat_effects(entity_manager: EntityManager) -> list[Effect]:
     return [
-        Effect(EffectType.SHUFFLE_DECK_INTO_DRAW_PILE),
+        Effect(EffectType.CARD_SHUFFLE_DECK_INTO_DRAW_PILE),
         *[
-            Effect(EffectType.UPDATE_MOVE, id_target=id_monster)
+            Effect(EffectType.MONSTER_MOVE_UPDATE, id_target=id_monster)
             for id_monster in entity_manager.id_monsters
         ],
     ] + get_start_of_turn_effects(entity_manager, entity_manager.id_character)
@@ -21,16 +21,18 @@ def get_start_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> l
     actor = entity_manager.entities[id_actor]
 
     # Common effects
-    effects = [Effect(EffectType.ZERO_BLOCK, id_target=id_actor)]
+    effects = [Effect(EffectType.BLOCK_RESET, id_target=id_actor)]
 
     # Character-specific effects
     if isinstance(actor, EntityCharacter):
+        energy = entity_manager.entities[entity_manager.id_energy]
+
         effects += [
-            Effect(EffectType.DRAW_CARD, 5),
-            Effect(EffectType.REFILL_ENERGY),
-            Effect(EffectType.MOD_TICK, id_target=id_actor),
+            Effect(EffectType.CARD_DRAW, 5),
+            Effect(EffectType.ENERGY_GAIN, energy.max - energy.current),
+            Effect(EffectType.MODIFIER_TICK, id_target=id_actor),
         ] + [
-            Effect(EffectType.MOD_TICK, id_target=id_monster)
+            Effect(EffectType.MODIFIER_TICK, id_target=id_monster)
             for id_monster in entity_manager.id_monsters
         ]
 
@@ -46,7 +48,7 @@ def get_end_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> lis
         if modifier_type == ModifierType.RITUAL:
             effects.append(
                 Effect(
-                    EffectType.GAIN_STRENGTH,
+                    EffectType.MODIFIER_STRENGTH_GAIN,
                     modifier_data.stacks_current,
                     id_source=id_actor,
                     id_target=id_actor,
@@ -55,6 +57,8 @@ def get_end_of_turn_effects(entity_manager: EntityManager, id_actor: int) -> lis
 
     # Character-specific effects
     if isinstance(actor, EntityCharacter):
-        return effects + [Effect(EffectType.DISCARD, target_type=EffectTargetType.CARD_IN_HAND)]
+        return effects + [
+            Effect(EffectType.CARD_DISCARD, target_type=EffectTargetType.CARD_IN_HAND)
+        ]
 
     return effects

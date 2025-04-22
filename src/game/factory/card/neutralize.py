@@ -14,7 +14,7 @@ def create_card_neutralize() -> EntityCard:
         "Neutralize",
         COST,
         [
-            Effect(EffectType.DEAL_DAMAGE, DAMAGE, EffectTargetType.CARD_TARGET),
-            Effect(EffectType.GAIN_WEAK, WEAK, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.DAMAGE_DEAL, DAMAGE, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.MODIFIER_WEAK_GAIN, WEAK, EffectTargetType.CARD_TARGET),
         ],
     )

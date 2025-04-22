@@ -103,7 +103,7 @@ def _move_to_intent(move_effects: list[Effect]) -> IntentView:
 
     # Iterate over the move's effects
     for effect in move_effects:
-        if effect.type == EffectType.DEAL_DAMAGE:
+        if effect.type == EffectType.DAMAGE_DEAL:
             if intent.damage is None and intent.instances is None:
                 intent.damage = effect.value
                 intent.instances = 1
@@ -115,12 +115,13 @@ def _move_to_intent(move_effects: list[Effect]) -> IntentView:
 
             intent.instances += 1
 
-        if not intent.block and effect.type == EffectType.GAIN_BLOCK:
+        if not intent.block and effect.type == EffectType.BLOCK_GAIN:
             intent.block = True
 
         # TODO: add support for other buffs
         if not intent.buff and (
-            effect.type == EffectType.GAIN_STRENGTH or effect.type == EffectType.GAIN_RITUAL
+            effect.type == EffectType.MODIFIER_STRENGTH_GAIN
+            or effect.type == EffectType.MODIFIER_RITUAL_GAIN
         ):
             intent.buff = True
 

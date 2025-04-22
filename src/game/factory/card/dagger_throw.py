@@ -8,7 +8,7 @@ from src.game.entity.card import EntityCard
 COST = 1
 DAMAGE = 9
 DRAW = 1
-DISCARD = 1
+CARD_DISCARD = 1
 
 
 def create_card_dagger_throw() -> EntityCard:
@@ -16,11 +16,11 @@ def create_card_dagger_throw() -> EntityCard:
         "Dagger Throw",
         COST,
         [
-            Effect(EffectType.DEAL_DAMAGE, DAMAGE, EffectTargetType.CARD_TARGET),
-            Effect(EffectType.DRAW_CARD, DRAW),
+            Effect(EffectType.DAMAGE_DEAL, DAMAGE, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.CARD_DRAW, DRAW),
             Effect(
-                EffectType.DISCARD,
-                DISCARD,
+                EffectType.CARD_DISCARD,
+                CARD_DISCARD,
                 EffectTargetType.CARD_IN_HAND,
                 EffectSelectionType.INPUT,
             ),

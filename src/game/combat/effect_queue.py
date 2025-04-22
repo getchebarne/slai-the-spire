@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import random
 from collections import deque
+from dataclasses import replace
 from typing import TypeAlias
 
 from src.game.combat.effect import Effect
 from src.game.combat.effect import EffectSelectionType
 from src.game.combat.effect import EffectTargetType
-from src.game.combat.processors import apply_effect
+from src.game.engine.process_effect.registry import REGISTRY_EFFECT_TYPE_PROCESS_EFFECT
 from src.game.entity.manager import EntityManager
 
 
@@ -60,7 +61,7 @@ def _resolve_effect_selection_type(
         if id_effect_target is None:
             # Verify if we need to prompt the player to select from query entities
             # or if no selection is needed
-            # TODO: this can depend on the number of entities to select (e.g., "Prepared")
+            # TODO: this can depend on the number of entities to select (e.g., "Prepared+")
             num_target = 1
             if len(id_queries) > num_target:
                 raise EffectNeedsInputTargets
@@ -112,8 +113,9 @@ def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueu
 
         for id_target in id_targets:
             # Process the effect & get new effects to add to the queue
-            effects_bot, effects_top = apply_effect(
-                entity_manager, effect.type, effect.value, id_source, id_target
+            effect = replace(effect, id_target=id_target)
+            effects_bot, effects_top = REGISTRY_EFFECT_TYPE_PROCESS_EFFECT[effect.type](
+                entity_manager, effect
             )
 
             # Add new effects to the queue

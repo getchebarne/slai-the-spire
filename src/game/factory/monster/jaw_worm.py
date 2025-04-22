@@ -16,20 +16,20 @@ THRASH_BLOCK = 5
 
 
 def _get_effects_chomp() -> list[Effect]:
-    return [Effect(EffectType.DEAL_DAMAGE, CHOMP_DAMAGE, EffectTargetType.CHARACTER)]
+    return [Effect(EffectType.DAMAGE_DEAL, CHOMP_DAMAGE, EffectTargetType.CHARACTER)]
 
 
 def _get_effects_bellow() -> list[Effect]:
     return [
-        Effect(EffectType.GAIN_STRENGTH, BELLOW_STRENGTH, EffectTargetType.SOURCE),
-        Effect(EffectType.GAIN_BLOCK, BELLOW_BLOCK, EffectTargetType.SOURCE),
+        Effect(EffectType.MODIFIER_STRENGTH_GAIN, BELLOW_STRENGTH, EffectTargetType.SOURCE),
+        Effect(EffectType.BLOCK_GAIN, BELLOW_BLOCK, EffectTargetType.SOURCE),
     ]
 
 
 def _get_effects_thrash() -> list[Effect]:
     return [
-        Effect(EffectType.DEAL_DAMAGE, THRASH_DAMAGE, EffectTargetType.CHARACTER),
-        Effect(EffectType.GAIN_BLOCK, THRASH_BLOCK, EffectTargetType.SOURCE),
+        Effect(EffectType.DAMAGE_DEAL, THRASH_DAMAGE, EffectTargetType.CHARACTER),
+        Effect(EffectType.BLOCK_GAIN, THRASH_BLOCK, EffectTargetType.SOURCE),
     ]
 
 

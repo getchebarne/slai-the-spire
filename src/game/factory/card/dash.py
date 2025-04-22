@@ -14,7 +14,7 @@ def create_card_dash() -> EntityCard:
         "Dash",
         COST,
         [
-            Effect(EffectType.GAIN_BLOCK, BLOCK, EffectTargetType.CHARACTER),
-            Effect(EffectType.DEAL_DAMAGE, DAMAGE, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.BLOCK_GAIN, BLOCK, EffectTargetType.CHARACTER),
+            Effect(EffectType.DAMAGE_DEAL, DAMAGE, EffectTargetType.CARD_TARGET),
         ],
     )

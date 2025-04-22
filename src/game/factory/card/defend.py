@@ -10,5 +10,5 @@ BLOCK = 5
 
 def create_card_defend() -> EntityCard:
     return EntityCard(
-        "Defend", COST, [Effect(EffectType.GAIN_BLOCK, BLOCK, EffectTargetType.CHARACTER)]
+        "Defend", COST, [Effect(EffectType.BLOCK_GAIN, BLOCK, EffectTargetType.CHARACTER)]
     )
