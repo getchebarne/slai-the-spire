@@ -1,0 +1,11 @@
+from enum import Enum
+
+
+class FSM(Enum):
+    # Combat
+    COMBAT_DEFAULT = "COMBAT_DEFAULT"
+    COMBAT_AWAIT_TARGET_CARD = "COMBAT_AWAIT_TARGET_CARD"
+    COMBAT_AWAIT_TARGET_EFFECT = "COMBAT_AWAIT_TARGET_EFFECT"
+
+    # Rest site
+    REST_SITE = "REST_SITE"

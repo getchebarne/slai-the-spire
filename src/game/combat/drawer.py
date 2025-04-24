@@ -4,6 +4,7 @@ from src.game.combat.view import ActorView
 from src.game.combat.view import CardView
 from src.game.combat.view import CombatView
 from src.game.combat.view import EnergyView
+from src.game.combat.view import FSMView
 from src.game.combat.view import IntentView
 from src.game.combat.view import MonsterView
 
@@ -111,7 +112,36 @@ def _monster_str(monster_view: MonsterView) -> str:
     return "\n".join(right_aligned_lines)
 
 
+def _print_centered(text: str) -> None:
+    for line in text.strip("\n").splitlines():
+        print(line.center(N_COL))
+
+
+def _rest_site_str() -> str:
+    return """
+(
+)
+(  (
+)
+( ) (
+) /\\
+( / | (`'(
+_ -.;_/ \\--._
+(_;-// | \\ \\-'.\\
+( `.__ _  ___,')
+`'(_ )_)(_)_)'
+"""
+
+
 def draw_combat(combat_view: CombatView) -> str:
+    # Separator
+    separator = "-" * N_COL
+
+    if combat_view.state == FSMView.REST_SITE:
+        _print_centered(_rest_site_str())
+        print(separator)
+        return
+
     # Effect
     # effect_str = _effect_str(view.effect)
 
@@ -126,9 +156,6 @@ def draw_combat(combat_view: CombatView) -> str:
 
     # Hand
     hand_str = _hand_str(combat_view.hand)
-
-    # Separator
-    separator = "-" * N_COL
 
     _str = (
         monster_strs

@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 
 from src.game.combat.utils import does_card_require_target
-from src.game.core.combat_state import CombatState
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
+from src.game.core.fsm import FSM
 from src.game.engine.state import GameState
 from src.game.entity.actor import EntityActor
 from src.game.entity.actor import ModifierType
@@ -17,7 +17,7 @@ from src.game.entity.monster import EntityMonster
 # Aliases
 ModifierViewType = ModifierType
 EffectView = Effect
-CombatStateView = CombatState
+FSMView = FSM
 
 
 @dataclass
@@ -70,12 +70,13 @@ class EnergyView:
 class CombatView:
     character: CharacterView
     monsters: list[MonsterView]
+    deck: list[CardView]
     hand: list[CardView]
     draw_pile: list[CardView]
     disc_pile: list[CardView]
     energy: EnergyView
     effect: EffectView | None
-    state: CombatStateView
+    state: FSMView
 
 
 def get_card_view(card: EntityCard, is_active: bool, id_card: int) -> CardView:
@@ -172,6 +173,14 @@ def view_combat(game_state: GameState) -> CombatView:
         monster = game_state.entity_manager.entities[id_monster]
         monster_views.append(get_monster_view(monster, character, id_monster))
 
+    # Deck
+    card_in_deck_views = []
+    for id_card in game_state.entity_manager.id_cards_in_deck:
+        card = game_state.entity_manager.entities[id_card]
+
+        # TODO: maybe remove `is_active` here
+        card_in_deck_views.append(get_card_view(card, False, id_card))
+
     # Hand
     card_in_hand_views = []
     for id_card in game_state.entity_manager.id_cards_in_hand:
@@ -211,15 +220,16 @@ def view_combat(game_state: GameState) -> CombatView:
         effect_view = game_state.effect_queue[0]
 
     # FSM state
-    combat_state_view = game_state.combat_state
+    fsm_view = game_state.fsm
 
     return CombatView(
         character_view,
         monster_views,
+        card_in_deck_views,
         card_in_hand_views,
         card_in_draw_pile_views,
         card_in_disc_pile_views,
         energy_view,
         effect_view,
-        combat_state_view,
+        fsm_view,
     )

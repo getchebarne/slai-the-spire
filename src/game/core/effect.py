@@ -14,9 +14,11 @@ class EffectType(Enum):
     CARD_DRAW = "CARD_DRAW"
     CARD_PLAY = "CARD_PLAY"
     CARD_SHUFFLE_DECK_INTO_DRAW_PILE = "CARD_SHUFFLE_DECK_INTO_DRAW_PILE"
+    CARD_UPGRADE = "CARD_UPGRADE"
 
-    # Combat start
+    # Combat end and start
     COMBAT_START = "COMBAT_START"
+    COMBAT_END = "COMBAT_END"
 
     # Deal damage
     DAMAGE_DEAL = "DAMAGE_DEAL"
@@ -73,6 +75,7 @@ class Effect:
     # Can be `None`, some effects are not created by entities but by the engine itself
     id_source: int | None = None
 
-    # Effects can also be created with an `id_target`, in that case, the target type should be
-    # `None`, as it doesn't have to be resolved
+    # Effects can also be created with an `id_target`, in that case, `target_type` should be
+    # `None`, as it doesn't have to be resolved. If `id_target` and `target_type` are both set,
+    # `target_type` will be ignored (see `src.game.engine.effect_queue.py`)
     id_target: int | None = None

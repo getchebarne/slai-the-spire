@@ -2,30 +2,34 @@ from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.monster import EntityMonster
+from src.game.factory.lib import register_factory
+from src.game.types import AscensionLevel
 
 
-ATTACK_DAMAGE = 12
-DEFEND_BLOCK = 12
+_NAME = "Dummy"
+_HEALTH_MAX = 50
+_ATTACK_DAMAGE = 12
+_DEFEND_BLOCK = 12
 
 
-def _get_effects_attack() -> list[Effect]:
-    return [Effect(EffectType.DAMAGE_DEAL, ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
+@register_factory(_NAME)
+def create_monster_dummy(ascension_level: AscensionLevel) -> EntityMonster:
+    health_current = _HEALTH_MAX
 
-
-def _get_effects_defend() -> list[Effect]:
-    return [Effect(EffectType.BLOCK_GAIN, DEFEND_BLOCK, EffectTargetType.SOURCE)]
-
-
-def create_monster_dummy(
-    health_current: int, health_max: int, move_name_current: str | None
-) -> EntityMonster:
     return EntityMonster(
-        "Dummy",
+        _NAME,
         health_current,
-        health_max,
+        _HEALTH_MAX,
         move_map={
             "Attack": _get_effects_attack(),
             "Defend": _get_effects_defend(),
         },
-        move_name_current=move_name_current,
     )
+
+
+def _get_effects_attack() -> list[Effect]:
+    return [Effect(EffectType.DAMAGE_DEAL, _ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
+
+
+def _get_effects_defend() -> list[Effect]:
+    return [Effect(EffectType.BLOCK_GAIN, _DEFEND_BLOCK, EffectTargetType.SOURCE)]

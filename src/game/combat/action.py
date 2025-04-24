@@ -3,8 +3,13 @@ from enum import Enum
 
 
 class ActionType(Enum):
-    SELECT_ENTITY = "SELECT_ENTITY"
-    END_TURN = "END_TURN"
+    # Combat
+    ENTITY_SELECT = "ENTITY_SELECT"
+    TURN_END = "TURN_END"
+
+    # Rest site TODO: dig, lift, etc.
+    REST_SITE_REST = "REST_SITE_REST"
+    REST_SITE_UPGRADE = "REST_SITE_UPGRADE"
 
 
 @dataclass
