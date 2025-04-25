@@ -5,7 +5,7 @@ from src.game.factory.card.neutralize import create_card_neutralize
 from src.game.factory.card.strike import create_card_strike
 from src.game.factory.card.survivor import create_card_survivor
 from src.game.factory.lib import register_factory
-from src.game.types import AscensionLevel
+from src.game.types_ import AscensionLevel
 
 
 _NAME = "Silent"

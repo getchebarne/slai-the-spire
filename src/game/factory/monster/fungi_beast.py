@@ -7,7 +7,7 @@ from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.monster import EntityMonster
 from src.game.factory.lib import register_factory
-from src.game.types import AscensionLevel
+from src.game.types_ import AscensionLevel
 
 
 _NAME = "Fungi Beast"

@@ -4,7 +4,7 @@ from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.card import EntityCard
 from src.game.factory.lib import register_factory
-from src.game.types import CardUpgraded
+from src.game.types_ import CardUpgraded
 
 
 _NAME = "Acrobatics"

@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from src.game.core.fsm import FSM
 from src.game.engine.effect_queue import EffectQueue
 from src.game.entity.manager import EntityManager
-from src.game.map import Map
-from src.game.types import AscensionLevel
+from src.game.types_ import AscensionLevel
+from src.game.types_ import RoomType
 
 
 @dataclass
@@ -13,4 +13,4 @@ class GameState:
     entity_manager: EntityManager
     effect_queue: EffectQueue
     fsm: FSM | None
-    map_: Map
+    map_: list[RoomType]

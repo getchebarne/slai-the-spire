@@ -23,8 +23,8 @@ from src.game.level.exordium.combat_fungi_beast_two import (
 )
 from src.game.level.exordium.combat_jaw_worm import set_level_exoridium_combat_jaw_worm
 from src.game.level.rest_site import set_level_rest_site
-from src.game.map import RoomType
-from src.game.types import CombatResult
+from src.game.types_ import CombatResult
+from src.game.types_ import RoomType
 from src.rl.policies import PolicyRandom
 from src.rl.policies import SelectActionMetadata
 
@@ -231,7 +231,7 @@ def main(
     game_state: GameState,
     select_action_fn: Callable[[CombatView], tuple[Action, SelectActionMetadata]],
 ) -> None:
-    for room_type in game_state.map_.room_types:
+    for room_type in game_state.map_:
         if room_type == RoomType.COMBAT_MONSTER:
             combat_result = _combat_loop(game_state, select_action_fn)
 

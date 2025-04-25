@@ -3,8 +3,8 @@ from typing import Callable, TypeAlias, TypeVar, get_args, get_origin, get_type_
 from src.game.entity.card import EntityCard
 from src.game.entity.character import EntityCharacter
 from src.game.entity.monster import EntityMonster
-from src.game.types import AscensionLevel
-from src.game.types import CardUpgraded
+from src.game.types_ import AscensionLevel
+from src.game.types_ import CardUpgraded
 
 
 # Type variable to maintain input/output types

@@ -3,7 +3,7 @@ from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.monster import EntityMonster
 from src.game.factory.lib import register_factory
-from src.game.types import AscensionLevel
+from src.game.types_ import AscensionLevel
 
 
 _NAME = "Dummy"
