@@ -8,15 +8,17 @@ from src.game.entity.monster import EntityMonster
 
 
 def process_effect_health_loss(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    target = entity_manager.entities[effect.id_target]
+    value = kwargs["value"]
+    id_target = kwargs["id_target"]
 
-    if effect.value >= target.health_current:
+    target = entity_manager.entities[id_target]
+    if value >= target.health_current:
         # Death TODO: improve
         if isinstance(target, EntityMonster):
             # TODO: delete instance from `entity_manager.entities`
-            entity_manager.id_monsters.remove(effect.id_target)
+            entity_manager.id_monsters.remove(id_target)
 
             if not entity_manager.id_monsters:
                 # Combat over
@@ -42,6 +44,6 @@ def process_effect_health_loss(
 
             return [], effects_top
 
-    target.health_current = max(0, target.health_current - effect.value)
+    target.health_current = max(0, target.health_current - value)
 
     return [], []

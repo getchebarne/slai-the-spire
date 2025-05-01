@@ -1,11 +1,11 @@
 from collections import deque
 
-from src.game.engine.state import GameState
 from src.game.entity.manager import EntityManager
 from src.game.entity.manager import create_entity
 from src.game.factory.energy import create_energy
 from src.game.factory.lib import FACTORY_LIB_CHARACTER
 from src.game.map_ import generate_map
+from src.game.state import GameState
 from src.game.types_ import AscensionLevel
 
 

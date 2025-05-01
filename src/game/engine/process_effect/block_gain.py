@@ -6,9 +6,12 @@ BLOCK_MAX = 999
 
 
 def process_effect_block_gain(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    target = entity_manager.entities[effect.id_target]
+    value = kwargs["value"]
+    id_target = kwargs["id_target"]
 
-    target.block_current = min(target.block_current + effect.value, BLOCK_MAX)
+    target = entity_manager.entities[id_target]
+    target.block_current = min(target.block_current + value, BLOCK_MAX)
+
     return [], []

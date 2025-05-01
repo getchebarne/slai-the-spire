@@ -6,9 +6,10 @@ from src.game.entity.manager import EntityManager
 
 
 def process_effect_card_play(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = effect.id_target
+    id_target = kwargs["id_target"]
+
     target = entity_manager.entities[id_target]
 
     return (

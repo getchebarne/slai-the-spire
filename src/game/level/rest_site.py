@@ -1,5 +1,5 @@
 from src.game.core.fsm import FSM
-from src.game.engine.state import GameState
+from src.game.state import GameState
 
 
 def set_level_rest_site(game_state: GameState) -> None:

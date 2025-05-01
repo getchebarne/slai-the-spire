@@ -17,8 +17,8 @@ from src.game.core.fsm import FSM
 from src.game.engine.effect_queue import add_to_bot
 from src.game.engine.effect_queue import add_to_top
 from src.game.engine.effect_queue import process_effect_queue
-from src.game.engine.state import GameState
 from src.game.map_ import RoomType
+from src.game.state import GameState
 from src.rl.policies import PolicyRandom
 from src.rl.policies import SelectActionMetadata
 
@@ -210,7 +210,7 @@ def step(game_state: GameState, action: Action) -> None:
     add_to_top(game_state.effect_queue, *effects_top)
 
     # Process round
-    process_effect_queue(game_state.entity_manager, game_state.effect_queue)
+    process_effect_queue(game_state)
 
     # Set new state
     game_state.fsm = _get_new_fsm(game_state)

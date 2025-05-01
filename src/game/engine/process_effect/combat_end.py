@@ -3,7 +3,7 @@ from src.game.entity.manager import EntityManager
 
 
 def process_effect_combat_end(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     # Clear hand, draw pile and discard pile
     entity_manager.id_cards_in_hand = []

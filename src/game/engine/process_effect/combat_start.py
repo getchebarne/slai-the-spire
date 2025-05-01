@@ -4,7 +4,7 @@ from src.game.entity.manager import EntityManager
 
 
 def process_effect_combat_start(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     return [], [
         Effect(EffectType.CARD_SHUFFLE_DECK_INTO_DRAW_PILE),

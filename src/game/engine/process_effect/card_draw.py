@@ -6,13 +6,15 @@ from src.game.entity.manager import EntityManager
 
 # TODO: handle infinite loop
 def process_effect_card_draw(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
+    value = kwargs["value"]
+
     id_cards_in_draw_pile = entity_manager.id_cards_in_draw_pile
     id_cards_in_hand = entity_manager.id_cards_in_hand
     id_cards_in_disc_pile = entity_manager.id_cards_in_disc_pile
 
-    for _ in range(effect.value):
+    for _ in range(value):
         if len(id_cards_in_draw_pile) == 0:
             # Shuffle discard pile into draw pile TODO: make effect
             id_cards_in_draw_pile.extend(id_cards_in_disc_pile)

@@ -1,16 +1,12 @@
 import random
-from collections import deque
-from dataclasses import replace
-from typing import TypeAlias
 
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
 from src.game.engine.process_effect.registry import REGISTRY_EFFECT_TYPE_PROCESS_EFFECT
 from src.game.entity.manager import EntityManager
-
-
-EffectQueue: TypeAlias = deque[Effect]
+from src.game.state import GameState
+from src.game.types_ import EffectQueue
 
 
 class EffectNeedsInputTargets(Exception):
@@ -82,7 +78,10 @@ def _resolve_effect_selection_type(
     raise ValueError(f"Unsupported effect selection type: {effect_selection_type}")
 
 
-def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueue) -> None:
+def process_effect_queue(game_state: GameState) -> None:
+    entity_manager = game_state.entity_manager
+    effect_queue = game_state.effect_queue
+
     while effect_queue:
         effect = effect_queue.popleft()
         id_source = effect.id_source
@@ -122,9 +121,12 @@ def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueu
 
         for id_target in id_targets:
             # Process the effect & get new effects to add to the queue
-            effect = replace(effect, id_target=id_target)
             effects_bot, effects_top = REGISTRY_EFFECT_TYPE_PROCESS_EFFECT[effect.type](
-                entity_manager, effect
+                entity_manager,
+                value=effect.value,
+                id_source=id_source,
+                id_target=id_target,
+                ascension_level=game_state.ascension_level,
             )
 
             # Add new effects to the queue

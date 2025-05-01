@@ -3,10 +3,11 @@ from src.game.entity.manager import EntityManager
 
 
 def process_effect_modifier_tick(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    target = entity_manager.entities[effect.id_target]
+    id_target = kwargs["id_target"]
 
+    target = entity_manager.entities[id_target]
     for modifier_type, modifier_data in list(target.modifier_map.items()):
         if modifier_data.stacks_duration:
             modifier_data.stacks_current -= 1

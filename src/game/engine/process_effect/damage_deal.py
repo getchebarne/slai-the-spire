@@ -10,17 +10,21 @@ FACTOR_VULN = 1.50
 
 
 def process_effect_damage_deal(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    source = entity_manager.entities[effect.id_source]
-    target = entity_manager.entities[effect.id_target]
+    value = kwargs["value"]
+    id_source = kwargs["id_source"]
+    id_target = kwargs["id_target"]
+
+    source = entity_manager.entities[id_source]
+    target = entity_manager.entities[id_target]
 
     # TODO: think if there's a better solution
     if isinstance(source, EntityCard):
         source = entity_manager.entities[entity_manager.id_character]
 
     # Apply strength
-    value = effect.value
+    value = value
     if ModifierType.STRENGTH in source.modifier_map:
         value += source.modifier_map[ModifierType.STRENGTH].stacks_current
 
@@ -41,8 +45,6 @@ def process_effect_damage_deal(
 
     if damage_over_block > 0:
         # Return a top effect to subtract the damage over block from the target's current health
-        return [], [
-            Effect(EffectType.HEALTH_LOSS, value=damage_over_block, id_target=effect.id_target)
-        ]
+        return [], [Effect(EffectType.HEALTH_LOSS, value=damage_over_block, id_target=id_target)]
 
     return [], []

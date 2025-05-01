@@ -5,12 +5,14 @@ from src.game.entity.manager import EntityManager
 
 
 def process_effect_turn_start(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    target = entity_manager.entities[effect.id_target]
+    id_target = kwargs["id_target"]
+
+    target = entity_manager.entities[id_target]
 
     # Common effects
-    effects = [Effect(EffectType.BLOCK_RESET, id_target=effect.id_target)]
+    effects = [Effect(EffectType.BLOCK_RESET, id_target=id_target)]
 
     # Character-specific effects
     if isinstance(target, EntityCharacter):
@@ -18,7 +20,7 @@ def process_effect_turn_start(
         effects += [
             Effect(EffectType.CARD_DRAW, 5),
             Effect(EffectType.ENERGY_GAIN, energy.max - energy.current),
-            Effect(EffectType.MODIFIER_TICK, id_target=effect.id_target),
+            Effect(EffectType.MODIFIER_TICK, id_target=id_target),
         ] + [
             Effect(EffectType.MODIFIER_TICK, id_target=id_monster)
             for id_monster in entity_manager.id_monsters

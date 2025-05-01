@@ -6,13 +6,13 @@ from src.game.combat.utils import does_card_require_target
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
 from src.game.core.fsm import FSM
-from src.game.engine.state import GameState
 from src.game.entity.actor import EntityActor
 from src.game.entity.actor import ModifierType
 from src.game.entity.card import EntityCard
 from src.game.entity.character import EntityCharacter
 from src.game.entity.manager import EntityManager
 from src.game.entity.monster import EntityMonster
+from src.game.state import GameState
 
 
 # Aliases

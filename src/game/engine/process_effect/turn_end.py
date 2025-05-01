@@ -27,12 +27,14 @@ def _get_end_of_turn_effects_common(entity_manager: EntityManager, id_actor: int
 
 
 def process_effect_turn_end(
-    entity_manager: EntityManager, effect: Effect
+    entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    target = entity_manager.entities[effect.id_target]
+    id_target = kwargs["id_target"]
+
+    target = entity_manager.entities[id_target]
 
     # Common effects (for both the Character and Monsters)
-    effects = _get_end_of_turn_effects_common(entity_manager, effect.id_target)
+    effects = _get_end_of_turn_effects_common(entity_manager, id_target)
 
     if isinstance(target, EntityMonster):
         # Return end of turn effects to be added to the top so they are processed right away
