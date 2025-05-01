@@ -87,11 +87,9 @@ def _handle_combat_card_in_hand_select(
             [],
         )
 
-    if game_state.fsm == FSM.COMBAT_AWAIT_TARGET_EFFECT:
-        # An effect is added at the top of the queue to set the effect's target. The effect that
-        # comes inmediately after is going to use this variable to resolve its target. For now,
-        # an effect to clear the effect's target is added to the bottom of the queue, but TODO:
-        # I think I can't escape adding the clear when the `id_effect_target` is consumed
+    if game_state.fsm == FSM.COMBAT_AWAIT_TARGET_DISCARD:
+        # In this state, the effect at the top of the queue is waiting for a target. We replace
+        # `id_target` in the effect and return no other effects
         game_state.effect_queue[0] = replace(game_state.effect_queue[0], id_target=id_card)
 
         return [], []
@@ -112,6 +110,7 @@ def _handle_rest_site_rest(game_state: GameState) -> tuple[list[Effect], list[Ef
             health_gain_value,
             id_target=game_state.entity_manager.id_character,
         ),
+        # Add an effect to select the next map node
         Effect(
             EffectType.MAP_NODE_ACTIVE_SET,
             target_type=EffectTargetType.MAP_NODE,
@@ -130,6 +129,7 @@ def _handle_rest_site_upgrade(
 
     return [
         Effect(EffectType.CARD_UPGRADE, id_target=id_card),
+        # Add an effect to select the next map node
         Effect(
             EffectType.MAP_NODE_ACTIVE_SET,
             target_type=EffectTargetType.MAP_NODE,
@@ -145,24 +145,31 @@ def _handle_map_node_select(
         raise InvalidActionError(f"Can't select a map node on state {game_state.fsm}")
 
     if game_state.entity_manager.id_map_node_active is None:
+        # Starting node
         y_next = 0
-        x_legal = list(game_state.entity_manager.id_map_nodes[0].keys())
+        x_valid = list(game_state.entity_manager.id_map_nodes[0].keys())
 
     else:
+        # Intermediate node
         map_node_active = game_state.entity_manager.entities[
             game_state.entity_manager.id_map_node_active
         ]
         y_next = map_node_active.y + 1
-        x_legal = map_node_active.x_next
+        x_valid = map_node_active.x_next
 
-    # Clear effect queue
+    if index not in x_valid:
+        raise InvalidActionError(
+            f"Can't select node on x = {index} on y = {y_next}. Valid options: {x_valid}"
+        )
+
+    # Clear effect queue before entering the room. This clears "ghost" effects that may remain in
+    # the queue after the combat is over (e.g., draw and discard effects after killing the last
+    # monster w/ "Dagger Throw")
     effect = game_state.effect_queue[0]
     game_state.effect_queue.clear()
 
-    # Get connected nodes in next level
-    if index not in x_legal:
-        raise InvalidActionError("TODO: add message")
-
+    # Get the id of the selected node, replace it in the top effect (saved before clearing the
+    # queue), and append it to the queue
     id_map_node = game_state.entity_manager.id_map_nodes[y_next][index]
     game_state.effect_queue.append(replace(effect, id_target=id_map_node))
 
@@ -191,7 +198,7 @@ def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], 
     if action.type == ActionType.MAP_NODE_SELECT:
         return _handle_map_node_select(game_state, action.index)
 
-    raise InvalidActionError("TODO: add message")
+    raise InvalidActionError(f"Unsupported action type: {action.type}")
 
 
 def step(game_state: GameState, action: Action) -> None:
@@ -206,56 +213,43 @@ def step(game_state: GameState, action: Action) -> None:
     process_effect_queue(game_state.entity_manager, game_state.effect_queue)
 
     # Set new state
-    _set_new_state(game_state)
+    game_state.fsm = _get_new_fsm(game_state)
 
 
-def _set_new_state(game_state: GameState) -> None:
-    if game_state.entity_manager.id_card_active is not None:
-        if game_state.effect_queue:
-            raise InvalidStateError(
-                f"Can't enter {FSM.COMBAT_AWAIT_TARGET_CARD} state with non-empty effect queue"
-            )
-
-        game_state.fsm = FSM.COMBAT_AWAIT_TARGET_CARD
-
-        return
-
+def _get_new_fsm(game_state: GameState) -> FSM:
     if game_state.effect_queue:
-        # TODO: stop using `FSM.COMBAT_AWAIT_TARGET_EFFECT`
-        if game_state.effect_queue[0].type == EffectType.CARD_DISCARD:
-            game_state.fsm = FSM.COMBAT_AWAIT_TARGET_EFFECT
-        else:
-            game_state.fsm = FSM.MAP
+        effect_top = game_state.effect_queue[0]
 
-        return
+        if effect_top.type == EffectType.CARD_DISCARD:
+            return FSM.COMBAT_AWAIT_TARGET_DISCARD
 
+        if effect_top.type == EffectType.MAP_NODE_ACTIVE_SET:
+            return FSM.MAP
+
+        raise ValueError(f"Unsupported pending effect type: {effect_top.type}")
+
+    if game_state.entity_manager.id_card_active is not None:
+        return FSM.COMBAT_AWAIT_TARGET_CARD
+
+    # At this point, the effect queue is clear and there's no active card. The state the game's in
+    # depends on the current room type
     map_node_active = game_state.entity_manager.entities[
         game_state.entity_manager.id_map_node_active
     ]
     if map_node_active.room_type == RoomType.REST_SITE:
-        game_state.fsm = FSM.REST_SITE
+        return FSM.REST_SITE
 
-        return
+    if map_node_active.room_type == RoomType.COMBAT_MONSTER:
+        return FSM.COMBAT_DEFAULT
 
-    game_state.fsm = FSM.COMBAT_DEFAULT
-
-    return
-
-
-def start_combat(game_state: GameState) -> None:
-    # Queue start of combat effect and process it
-    add_to_bot(game_state.effect_queue, Effect(EffectType.COMBAT_START))
-    process_effect_queue(game_state.entity_manager, game_state.effect_queue)
-
-    # Set new state
-    _set_new_state(game_state)
+    raise ValueError(f"Unsupported room type: {map_node_active.room_type}")
 
 
 def main(
     game_state: GameState,
     select_action_fn: Callable[[CombatView], tuple[Action, SelectActionMetadata]],
 ) -> None:
-    # TODO: improve
+    # Kick-off game with an effect to select the starting map node
     add_to_bot(
         game_state.effect_queue,
         Effect(
@@ -264,17 +258,15 @@ def main(
             selection_type=EffectSelectionType.INPUT,
         ),
     )
-    process_effect_queue(game_state.entity_manager, game_state.effect_queue)
 
     # Set new state
-    _set_new_state(game_state)
+    game_state.fsm = _get_new_fsm(game_state)
 
     # Loop
     while not is_character_dead(game_state.entity_manager):
         # Get combat view and draw it on the terminal
         combat_view = view_combat(game_state)
         draw_combat(combat_view)
-        print(combat_view.map_.y_current)
 
         # Get action from agent
         action, _ = select_action_fn(combat_view)
