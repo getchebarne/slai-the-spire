@@ -10,5 +10,5 @@ def process_effect_combat_end(
     entity_manager.id_cards_in_draw_pile = []
     entity_manager.id_cards_in_disc_pile = []
 
-    # TODO: will need to add end of turn triggers, such as "Blood Vial"
+    # TODO: will need to add end of combat triggers, such as "Blood Vial"
     return [], []

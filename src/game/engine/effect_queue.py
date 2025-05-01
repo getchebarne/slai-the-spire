@@ -30,8 +30,11 @@ def add_to_top(effect_queue: EffectQueue, *effects: Effect) -> None:
 def _resolve_effect_target_type(
     effect_target_type: EffectTargetType, entity_manager: EntityManager, id_source: int
 ) -> list[int]:
-    if effect_target_type == EffectTargetType.SOURCE:
-        return [id_source]
+    if effect_target_type == EffectTargetType.CARD_IN_HAND:
+        return entity_manager.id_cards_in_hand.copy()
+
+    if effect_target_type == EffectTargetType.CARD_TARGET:
+        return [entity_manager.id_card_target]
 
     if effect_target_type == EffectTargetType.CHARACTER:
         return [entity_manager.id_character]
@@ -39,11 +42,19 @@ def _resolve_effect_target_type(
     if effect_target_type == EffectTargetType.MONSTER:
         return entity_manager.id_monsters.copy()
 
-    if effect_target_type == EffectTargetType.CARD_TARGET:
-        return [entity_manager.id_card_target]
+    if effect_target_type == EffectTargetType.MAP_NODE:
+        # TODO: improve
+        if entity_manager.id_map_node_active is None:
+            return [entity_manager.id_map_nodes[0][x] for x in entity_manager.id_map_nodes[0]]
 
-    if effect_target_type == EffectTargetType.CARD_IN_HAND:
-        return entity_manager.id_cards_in_hand.copy()
+        map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+        y_next = map_node_active.y + 1
+        return [
+            entity_manager.id_map_nodes[y_next][x] for x in entity_manager.id_map_nodes[y_next]
+        ]
+
+    if effect_target_type == EffectTargetType.SOURCE:
+        return [id_source]
 
     raise ValueError(f"Unsupported effect target type: {effect_target_type}")
 

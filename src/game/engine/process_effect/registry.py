@@ -19,6 +19,7 @@ from src.game.engine.process_effect.energy_gain import process_effect_energy_gai
 from src.game.engine.process_effect.energy_loss import process_effect_energy_loss
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
+from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
 from src.game.engine.process_effect.modifier_strength_gain import \
     process_effect_modifier_strength_gain
@@ -27,6 +28,7 @@ from src.game.engine.process_effect.modifier_vulnerable_gain import \
     process_effect_modifier_vulnerable_gain
 from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
 from src.game.engine.process_effect.monster_move_update import process_effect_monster_move_update
+from src.game.engine.process_effect.room_enter import process_effect_room_enter
 from src.game.engine.process_effect.target_card_clear import process_effect_target_card_clear
 from src.game.engine.process_effect.target_card_set import process_effect_target_card_set
 from src.game.engine.process_effect.target_effect_clear import process_effect_target_effect_clear
@@ -59,12 +61,14 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.ENERGY_LOSS: process_effect_energy_loss,
     EffectType.HEALTH_GAIN: process_effect_health_gain,
     EffectType.HEALTH_LOSS: process_effect_health_loss,
+    EffectType.MAP_NODE_ACTIVE_SET: process_effect_map_node_active_set,
     EffectType.MODIFIER_TICK: process_effect_modifier_tick,
     EffectType.MONSTER_MOVE_UPDATE: process_effect_monster_move_update,
     EffectType.MODIFIER_RITUAL_GAIN: process_effect_modifier_ritual_gain,
     EffectType.MODIFIER_STRENGTH_GAIN: process_effect_modifier_strength_gain,
     EffectType.MODIFIER_VULNERABLE_GAIN: process_effect_modifier_vulnerable_gain,
     EffectType.MODIFIER_WEAK_GAIN: process_effect_modifier_weak_gain,
+    EffectType.ROOM_ENTER: process_effect_room_enter,
     EffectType.TARGET_CARD_CLEAR: process_effect_target_card_clear,
     EffectType.TARGET_CARD_SET: process_effect_target_card_set,
     EffectType.TARGET_EFFECT_CLEAR: process_effect_target_effect_clear,

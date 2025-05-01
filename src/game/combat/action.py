@@ -4,15 +4,22 @@ from enum import Enum
 
 class ActionType(Enum):
     # Combat
-    ENTITY_SELECT = "ENTITY_SELECT"
-    TURN_END = "TURN_END"
+    COMBAT_CARD_IN_HAND_SELECT = "COMBAT_CARD_IN_HAND_SELECT"
+    COMBAT_MONSTER_SELECT = "COMBAT_MONSTER_SELECT"
+    COMBAT_TURN_END = "COMBAT_TURN_END"
 
     # Rest site TODO: dig, lift, etc.
     REST_SITE_REST = "REST_SITE_REST"
     REST_SITE_UPGRADE = "REST_SITE_UPGRADE"
 
+    # Map
+    MAP_NODE_SELECT = "MAP_NODE_SELECT"
+
 
 @dataclass
 class Action:
     type: ActionType
-    target_id: int | None = None
+
+    # Used to optionally determine the index of an action, e.g., the position of the card in the
+    # hand to select, the monster to target, the map node to select, etc.
+    index: int | None = None

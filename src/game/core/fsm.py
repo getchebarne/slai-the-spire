@@ -9,3 +9,6 @@ class FSM(Enum):
 
     # Rest site
     REST_SITE = "REST_SITE"
+
+    # Map
+    MAP = "MAP"

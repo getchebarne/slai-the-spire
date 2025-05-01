@@ -11,6 +11,7 @@ from src.game.entity.actor import EntityActor
 from src.game.entity.actor import ModifierType
 from src.game.entity.card import EntityCard
 from src.game.entity.character import EntityCharacter
+from src.game.entity.manager import EntityManager
 from src.game.entity.monster import EntityMonster
 
 
@@ -67,6 +68,21 @@ class EnergyView:
 
 
 @dataclass
+class MapNodeView:
+    y: int
+    x: int
+    x_next: set[int]
+
+
+@dataclass
+class MapView:
+    nodes: dict[int, dict[int, MapNodeView]]
+
+    y_current: int
+    x_current: int
+
+
+@dataclass
 class CombatView:
     character: CharacterView
     monsters: list[MonsterView]
@@ -77,6 +93,7 @@ class CombatView:
     energy: EnergyView
     effect: EffectView | None
     state: FSMView
+    map_: MapView
 
 
 def get_card_view(card: EntityCard, is_active: bool, id_card: int) -> CardView:
@@ -162,6 +179,26 @@ def get_monster_view(
     )
 
 
+def get_map_view(entity_manager: EntityManager) -> MapView:
+    aux = {}
+
+    for y, x_id_map_node in entity_manager.id_map_nodes.items():
+        for x, id_map_node in x_id_map_node.items():
+            map_node = entity_manager.entities[id_map_node]
+            if y not in aux:
+                aux[y] = {x: MapNodeView(map_node.y, map_node.x, map_node.x_next)}
+
+            elif x not in aux[y]:
+                aux[y][x] = MapNodeView(map_node.y, map_node.x, map_node.x_next)
+
+    if entity_manager.id_map_node_active is None:
+        return MapView(aux, None, None)
+
+    map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+
+    return MapView(aux, map_node_active.y, map_node_active.x)
+
+
 def view_combat(game_state: GameState) -> CombatView:
     # Character
     character = game_state.entity_manager.entities[game_state.entity_manager.id_character]
@@ -232,4 +269,5 @@ def view_combat(game_state: GameState) -> CombatView:
         energy_view,
         effect_view,
         fsm_view,
+        get_map_view(game_state.entity_manager),
     )

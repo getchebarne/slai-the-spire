@@ -31,6 +31,9 @@ class EffectType(Enum):
     HEALTH_GAIN = "HEALTH_GAIN"
     HEALTH_LOSS = "HEALTH_LOSS"
 
+    # Map node selection
+    MAP_NODE_ACTIVE_SET = "MAP_NODE_ACTIVE_SET"
+
     # Everything related to manipulating modifiers
     MODIFIER_TICK = "MODIFIER_TICK"
     MODIFIER_RITUAL_GAIN = "MODIFIER_RITUAL_GAIN"
@@ -40,6 +43,9 @@ class EffectType(Enum):
 
     # Update monster's move
     MONSTER_MOVE_UPDATE = "MONSTER_MOVE_UPDATE"
+
+    # Room enter
+    ROOM_ENTER = "ROOM_ENTER"
 
     # Target setting / clearing
     TARGET_EFFECT_SET = "TARGET_EFFECT_SET"
@@ -56,6 +62,7 @@ class EffectTargetType(Enum):
     CARD_IN_HAND = "CARD_IN_HAND"
     CARD_TARGET = "CARD_TARGET"
     CHARACTER = "CHARACTER"
+    MAP_NODE = "MAP_NODE"
     MONSTER = "MONSTER"
     SOURCE = "SOURCE"
 

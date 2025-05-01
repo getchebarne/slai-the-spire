@@ -5,8 +5,8 @@ from src.game.entity.manager import EntityManager
 from src.game.entity.manager import create_entity
 from src.game.factory.energy import create_energy
 from src.game.factory.lib import FACTORY_LIB_CHARACTER
+from src.game.map_ import generate_map
 from src.game.types_ import AscensionLevel
-from src.game.types_ import RoomType
 
 
 # TODO: parametrize deck, monster, etc.
@@ -25,14 +25,16 @@ def create_game_state(ascension_level: AscensionLevel) -> GameState:
     ]
     entity_manager.id_energy = create_entity(entity_manager, energy)
 
-    # Create map
-    map_ = [
-        RoomType.COMBAT_MONSTER,
-        RoomType.REST_SITE,
-        RoomType.COMBAT_MONSTER,
-    ]
+    # Create map TODO: improve
+    map_ = generate_map()
+    for y, x_map_node in map_.items():
+        for x, map_node in x_map_node.items():
+            id_map_node = create_entity(entity_manager, map_node)
+            map_[y][x] = id_map_node
+
+    entity_manager.id_map_nodes = map_
 
     # Create effect queue
     effect_queue = deque()
 
-    return GameState(ascension_level, entity_manager, effect_queue, None, map_)
+    return GameState(ascension_level, entity_manager, effect_queue, None)

@@ -1,4 +1,5 @@
 from src.game.core.effect import Effect
+from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierType
@@ -12,10 +13,21 @@ def process_effect_health_loss(
     target = entity_manager.entities[effect.id_target]
 
     if effect.value >= target.health_current:
-        # Death
+        # Death TODO: improve
         if isinstance(target, EntityMonster):
             # TODO: delete instance from `entity_manager.entities`
             entity_manager.id_monsters.remove(effect.id_target)
+
+            if not entity_manager.id_monsters:
+                # Combat over
+                return [], [
+                    Effect(EffectType.COMBAT_END),
+                    Effect(
+                        EffectType.MAP_NODE_ACTIVE_SET,
+                        target_type=EffectTargetType.MAP_NODE,
+                        selection_type=EffectSelectionType.INPUT,
+                    ),
+                ]
 
             effects_top = []
             for modifier_type, modifier_data in target.modifier_map.items():
