@@ -1,4 +1,3 @@
-# TODO: improve efficiency of this entire code
 import random
 from typing import TypeAlias
 
@@ -6,7 +5,7 @@ from src.game.entity.map_node import EntityMapNode
 from src.game.entity.map_node import RoomType
 
 
-Map: TypeAlias = dict[int, dict[int, EntityMapNode | None]]
+Map: TypeAlias = dict[int, dict[int, EntityMapNode]]
 
 _MAP_HEIGHT = 15
 _MAP_WIDTH = 7
@@ -36,26 +35,25 @@ def generate_map(
             map_[y_source][x_source] = EntityMapNode(y_source, x_source)
 
         while y_source < map_height - 1:
-            # Get new edge
-            y_target, x_target = _generate_edge(y_source, x_source, map_, map_width, map_height)
+            # Create the node
+            y_target, x_target = _create_node(y_source, x_source, map_, map_height, map_width)
 
-            # Create node
+            # If the node hasn't been added to the map yet, do so
             if x_target not in map_[y_target]:
                 map_[y_target][x_target] = EntityMapNode(y_target, x_target)
 
+            # Add it to the source node's connected nodes
             map_[y_source][x_source].x_next.add(x_target)
 
-            #
+            # Overwrite the source node for the next iteration
             y_source = y_target
             x_source = x_target
 
     # Trim redunant edges sourcing from the first row
-    map_ = _trim_redundant_edges_first_to_second_row(map_)
+    map_ = _trim_redundant_edges_first_to_second_floor(map_)
 
     # Assign room types
     _assign_room_types(map_)
-
-    print_map(map_, map_width, map_height)
 
     return map_
 
@@ -65,8 +63,8 @@ def _initialize_map(map_height: int) -> Map:
 
 
 # TODO: add boss?
-def _generate_edge(
-    y_source: int, x_source: int, map_: Map, map_width: int, map_height: int
+def _create_node(
+    y_source: int, x_source: int, map_: Map, map_height: int, map_width: int
 ) -> tuple[int, int] | None:
     if y_source == map_height - 1:
         raise ValueError("Can't generate an edge for a node located at the map's upper limit")
@@ -84,10 +82,8 @@ def _generate_edge(
     y_target = y_source + 1
     x_target = x_source + offset_x
 
-    # Get target node's parents
+    # Get target node's parents and iterate over them
     target_parents = _get_node_parents(y_target, x_target, map_)
-
-    # Iterate
     for y_target_parent, x_target_parent in target_parents:
         if y_target_parent == y_source and x_target_parent == x_source:
             continue
@@ -111,7 +107,7 @@ def _generate_edge(
 
                 x_target = min(max(x_target, 0), map_width - 1)
 
-    # Trim to prevent path overlap (from left to right)
+    # Trim to prevent path overlap - from left to right)
     x_map_node_data = map_[y_source]
     if x_source > 0:
         x_source_left = x_source - 1
@@ -132,7 +128,6 @@ def _generate_edge(
     return y_target, x_target
 
 
-# TODO: make more efficient w/ sorting
 def _get_node_parents(y_query: int, x_query: int, map_: Map) -> list[tuple[int, int]]:
     if y_query == 0:
         return []
@@ -150,11 +145,11 @@ def _get_node_parents(y_query: int, x_query: int, map_: Map) -> list[tuple[int, 
 def _get_common_ancestor(
     y_1: int, x_1: int, y_2: int, x_2: int, map_: Map, ancestor_gap_max: int
 ) -> tuple[int, int] | None:
-    if x_1 == x_2 and y_1 == y_2:
-        raise ValueError("Can't get common ancestor two identical nodes")
-
     if y_1 != y_2:
         raise ValueError("Can't get common ancestor for nodes that aren't on the same y-level")
+
+    if x_1 == x_2:
+        raise ValueError("Can't get common ancestor two identical nodes")
 
     # Note: this should compare the y-coordinates of both nodes, but this is how it's implemented
     # in the official game's code. It seems to work anyway
@@ -189,7 +184,7 @@ def _get_common_ancestor(
         y_current -= 1
 
 
-def _trim_redundant_edges_first_to_second_row(map_: Map) -> Map:
+def _trim_redundant_edges_first_to_second_floor(map_: Map) -> Map:
     x_seen = set()
     x_remove = set()
     for x_source, map_node_data in map_[0].items():

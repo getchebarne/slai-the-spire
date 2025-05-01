@@ -31,8 +31,6 @@ from src.game.engine.process_effect.monster_move_update import process_effect_mo
 from src.game.engine.process_effect.room_enter import process_effect_room_enter
 from src.game.engine.process_effect.target_card_clear import process_effect_target_card_clear
 from src.game.engine.process_effect.target_card_set import process_effect_target_card_set
-from src.game.engine.process_effect.target_effect_clear import process_effect_target_effect_clear
-from src.game.engine.process_effect.target_effect_set import process_effect_target_effect_set
 from src.game.engine.process_effect.turn_end import process_effect_turn_end
 from src.game.engine.process_effect.turn_start import process_effect_turn_start
 from src.game.entity.manager import EntityManager
@@ -71,8 +69,6 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.ROOM_ENTER: process_effect_room_enter,
     EffectType.TARGET_CARD_CLEAR: process_effect_target_card_clear,
     EffectType.TARGET_CARD_SET: process_effect_target_card_set,
-    EffectType.TARGET_EFFECT_CLEAR: process_effect_target_effect_clear,
-    EffectType.TARGET_EFFECT_SET: process_effect_target_effect_set,
     EffectType.TURN_END: process_effect_turn_end,
     EffectType.TURN_START: process_effect_turn_start,
 }

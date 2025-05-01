@@ -22,6 +22,5 @@ class EntityMapNode(EntityBase):
     # Room type is initialized to `None` while the map layout is being created, filled after
     room_type: RoomType | None = None
 
-    # x-coordinates of target nodes in the next level. `None` is used to represent when the next
-    # level is a boss fight
+    # Set storing the x-coordinates of connected nodes in the next level
     x_next: set[int] = field(default_factory=set)

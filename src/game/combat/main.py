@@ -164,7 +164,7 @@ def _handle_map_node_select(
 
     # Clear effect queue before entering the room. This clears "ghost" effects that may remain in
     # the queue after the combat is over (e.g., draw and discard effects after killing the last
-    # monster w/ "Dagger Throw")
+    # monster w/ "Dagger Throw")§
     effect = game_state.effect_queue[0]
     game_state.effect_queue.clear()
 

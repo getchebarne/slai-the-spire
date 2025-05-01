@@ -47,9 +47,7 @@ class EffectType(Enum):
     # Room enter
     ROOM_ENTER = "ROOM_ENTER"
 
-    # Target setting / clearing
-    TARGET_EFFECT_SET = "TARGET_EFFECT_SET"
-    TARGET_EFFECT_CLEAR = "TARGET_EFFECT_CLEAR"
+    # Card target setting / clearing
     TARGET_CARD_SET = "TARGET_CARD_SET"
     TARGET_CARD_CLEAR = "TARGET_CARD_CLEAR"
 

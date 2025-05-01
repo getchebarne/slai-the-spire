@@ -106,7 +106,7 @@ def process_effect_queue(entity_manager: EntityManager, effect_queue: EffectQueu
                 else:
                     try:
                         id_targets = _resolve_effect_selection_type(
-                            effect.selection_type, id_queries, entity_manager.id_effect_target
+                            effect.selection_type, id_queries, effect.id_target
                         )
 
                     except EffectNeedsInputTargets:
