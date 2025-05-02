@@ -1,5 +1,6 @@
 from typing import Callable, TypeAlias, TypeVar, get_args, get_origin, get_type_hints
 
+from src.game.entity.card import CardRarity
 from src.game.entity.card import EntityCard
 from src.game.entity.character import EntityCharacter
 from src.game.entity.monster import EntityMonster
@@ -27,7 +28,7 @@ def register_factory(name: str) -> Callable[[F], F]:
             FACTORY_LIB_CARD[name] = func
 
         elif get_origin(return_type) is tuple and get_args(return_type) == (
-            (EntityCharacter, list[EntityCard])
+            (EntityCharacter, list[EntityCard])  # TODO: add starter relic
         ):
             FACTORY_LIB_CHARACTER[name] = func
 

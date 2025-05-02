@@ -1,11 +1,8 @@
 import random
-from typing import TypeAlias
 
 from src.game.entity.map_node import EntityMapNode
 from src.game.entity.map_node import RoomType
 
-
-Map: TypeAlias = dict[int, dict[int, EntityMapNode]]
 
 _MAP_HEIGHT = 15
 _MAP_WIDTH = 7
@@ -17,9 +14,9 @@ _FACTOR_NUM_REST_SITE = 0.25
 
 def generate_map(
     map_height: int = _MAP_HEIGHT, map_width: int = _MAP_WIDTH, path_density: int = _PATH_DENSITY
-) -> Map:
+) -> list[list[EntityMapNode | None]]:
     # Initialize empty map
-    map_ = _initialize_map(map_height)
+    nodes = _initialize_nodes(map_height, map_width)
 
     x_source_first = None
     for d in range(path_density):
@@ -31,41 +28,50 @@ def generate_map(
             x_source = random.randint(0, map_width - 1)
 
         y_source = 0
-        if x_source not in map_[y_source]:
-            map_[y_source][x_source] = EntityMapNode(y_source, x_source)
+        if nodes[y_source][x_source] is None:
+            nodes[y_source][x_source] = EntityMapNode(y_source, x_source)
 
-        while y_source < map_height - 1:
+        node_source = nodes[y_source][x_source]
+        while node_source.y < map_height - 1:
             # Create the node
-            y_target, x_target = _create_node(y_source, x_source, map_, map_height, map_width)
+            node_target = _create_node(node_source, nodes)
 
             # If the node hasn't been added to the map yet, do so
-            if x_target not in map_[y_target]:
-                map_[y_target][x_target] = EntityMapNode(y_target, x_target)
+            if nodes[node_target.y][node_target.x] is None:
+                nodes[node_target.y][node_target.x] = node_target
 
             # Add it to the source node's connected nodes
-            map_[y_source][x_source].x_next.add(x_target)
+            nodes[node_source.y][node_source.x].x_next.add(node_target.x)
 
             # Overwrite the source node for the next iteration
-            y_source = y_target
-            x_source = x_target
+            node_source = node_target
 
     # Trim redunant edges sourcing from the first row
-    map_ = _trim_redundant_edges_first_to_second_floor(map_)
+    nodes = _trim_redundant_edges_first_to_second_floor(nodes)
 
     # Assign room types
-    _assign_room_types(map_)
+    _assign_room_types(nodes)
 
-    return map_
+    return nodes
 
 
-def _initialize_map(map_height: int) -> Map:
-    return {y: {} for y in range(map_height)}
+def _initialize_nodes(map_height: int, map_width: int) -> list[list[EntityMapNode | None]]:
+    nodes = []
+    for _ in range(map_height):
+        nodes.append([None] * map_width)
+
+    return nodes
 
 
 # TODO: add boss?
 def _create_node(
-    y_source: int, x_source: int, map_: Map, map_height: int, map_width: int
-) -> tuple[int, int] | None:
+    node_source: EntityMapNode, nodes: list[list[EntityMapNode | None]]
+) -> EntityMapNode | None:
+    map_height = len(nodes)
+    map_width = len(nodes[0])
+    y_source = node_source.y
+    x_source = node_source.x
+
     if y_source == map_height - 1:
         raise ValueError("Can't generate an edge for a node located at the map's upper limit")
 
@@ -81,20 +87,20 @@ def _create_node(
     # Create target node candidate
     y_target = y_source + 1
     x_target = x_source + offset_x
+    node_target = EntityMapNode(y_target, x_target)
 
     # Get target node's parents and iterate over them
-    target_parents = _get_node_parents(y_target, x_target, map_)
-    for y_target_parent, x_target_parent in target_parents:
-        if y_target_parent == y_source and x_target_parent == x_source:
+    target_parents = _get_node_parents(node_target, nodes)
+    for node_target_parent in target_parents:
+        if node_target_parent.y == y_source and node_target_parent.x == x_source:
             continue
 
         # Get common ancestors
         node_ancestor = _get_common_ancestor(
-            y_target_parent, x_target_parent, y_source, x_source, map_, _ANCESTOR_GAP_MAX
+            node_target_parent, node_source, nodes, _ANCESTOR_GAP_MAX
         )
         if node_ancestor is not None:
-            y_ancestor, _ = node_ancestor
-            ancestor_gap = y_target - y_ancestor
+            ancestor_gap = y_target - node_ancestor.y
             if ancestor_gap < _ANCESTOR_GAP_MIN:
                 if x_target > x_source:
                     x_target = x_source + random.randint(-1, 0)
@@ -108,75 +114,80 @@ def _create_node(
                 x_target = min(max(x_target, 0), map_width - 1)
 
     # Trim to prevent path overlap - from left to right)
-    x_map_node_data = map_[y_source]
     if x_source > 0:
         x_source_left = x_source - 1
-        if x_source_left in x_map_node_data:
-            for x_target_left in x_map_node_data[x_source_left].x_next:
+        node_left = nodes[y_source][x_source_left]
+        if node_left is not None:
+            for x_target_left in node_left.x_next:
                 if x_target_left > x_target:
                     x_target = x_target_left
 
     # Right to left
     if x_source < map_width - 1:
         x_source_right = x_source + 1
-        if x_source_right in x_map_node_data:
-            for x_target_right in x_map_node_data[x_source_right].x_next:
+        node_right = nodes[y_source][x_source_right]
+        if node_right is not None:
+            for x_target_right in node_right.x_next:
                 if x_target_right < x_target:
                     x_target = x_target_right
 
-    # Return new edge
-    return y_target, x_target
+    # Return new node
+    return EntityMapNode(y_target, x_target)
 
 
-def _get_node_parents(y_query: int, x_query: int, map_: Map) -> list[tuple[int, int]]:
-    if y_query == 0:
+def _get_node_parents(
+    node_query: EntityMapNode, nodes: list[list[EntityMapNode | None]]
+) -> list[EntityMapNode]:
+    if node_query.y == 0:
         return []
 
     parents = []
-    y_parent = y_query - 1
-    x_map_node_data = map_[y_parent]
-    for x_other, map_node_data in x_map_node_data.items():
-        if x_query in map_node_data.x_next:
-            parents.append((y_parent, x_other))
+    y_parent = node_query.y - 1
+    for node_parent_candidate in nodes[y_parent]:
+        if node_parent_candidate is None:
+            continue
+
+        if node_query.x in node_parent_candidate.x_next:
+            parents.append(node_parent_candidate)
 
     return parents
 
 
 def _get_common_ancestor(
-    y_1: int, x_1: int, y_2: int, x_2: int, map_: Map, ancestor_gap_max: int
-) -> tuple[int, int] | None:
-    if y_1 != y_2:
+    # node_1.y: int, node_1.x: int, node_2.y: int, node_2.x: int, map_: Map, ancestor_gap_max: int
+    node_1: EntityMapNode,
+    node_2: EntityMapNode,
+    nodes: list[list[EntityMapNode | None]],
+    ancestor_gap_max: int,
+) -> EntityMapNode | None:
+    if node_1.y != node_2.y:
         raise ValueError("Can't get common ancestor for nodes that aren't on the same y-level")
 
-    if x_1 == x_2:
+    if node_1.x == node_2.x:
         raise ValueError("Can't get common ancestor two identical nodes")
 
     # Note: this should compare the y-coordinates of both nodes, but this is how it's implemented
     # in the official game's code. It seems to work anyway
-    if x_1 < y_2:
-        y_l = y_1
-        x_l = x_1
-        y_r = y_2
-        x_r = x_2
+    if node_1.x < node_2.y:
+        node_l = node_1
+        node_r = node_2
 
     else:
-        y_l = y_2
-        x_l = x_2
-        y_r = y_1
-        x_r = x_1
+        node_l = node_2
+        node_r = node_1
 
-    node_parents_left = _get_node_parents(y_l, x_l, map_)
+    node_parents_left = _get_node_parents(node_l, nodes)
     if not node_parents_left:
         return None
 
-    node_parents_right = _get_node_parents(y_r, x_r, map_)
+    node_parents_right = _get_node_parents(node_r, nodes)
     if not node_parents_right:
         return None
 
-    y_current = y_1
-    while (y_current >= 0) and (y_current >= y_1 - ancestor_gap_max):
-        node_left = max(node_parents_left, key=lambda node: node[1])
-        node_right = min(node_parents_right, key=lambda node: node[1])
+    y_current = node_1.y
+    while (y_current >= 0) and (y_current >= node_1.y - ancestor_gap_max):
+        node_left = max(node_parents_left, key=lambda node: node.x)
+        node_right = min(node_parents_right, key=lambda node: node.x)
 
         if node_left == node_right:
             return node_left
@@ -184,12 +195,17 @@ def _get_common_ancestor(
         y_current -= 1
 
 
-def _trim_redundant_edges_first_to_second_floor(map_: Map) -> Map:
+def _trim_redundant_edges_first_to_second_floor(
+    nodes: list[list[EntityMapNode | None]],
+) -> list[list[EntityMapNode | None]]:
     x_seen = set()
     x_remove = set()
-    for x_source, map_node_data in map_[0].items():
+    for x_source, node in enumerate(nodes[0]):
+        if node is None:
+            continue
+
         x_next_filtered = set()
-        for x_next in map_node_data.x_next:
+        for x_next in node.x_next:
             if x_next in x_seen:
                 continue
 
@@ -199,70 +215,24 @@ def _trim_redundant_edges_first_to_second_floor(map_: Map) -> Map:
         if not x_next_filtered:
             x_remove.add(x_source)
 
-        map_node_data.x_next = x_next_filtered
+        node.x_next = x_next_filtered
 
     # Remove nodes without targets
     for x_r in x_remove:
-        del map_[0][x_r]
+        nodes[0][x_r] = None
 
-    return map_
-
-
-def print_map(map_: Map, map_width: int, map_height: int) -> None:
-    grid_rows = map_height * 2
-    grid_cols = map_width * 3
-    grid = [[" " for _ in range(grid_cols)] for _ in range(grid_rows)]
-
-    # Place only active nodes
-    for y in range(map_height):
-        for x in range(map_width):
-            try:
-                # Place node
-                map_node_data = map_[y][x]
-                gx = x * 3 + 1  # center column
-                gy = y * 2  # top row of the 2-row cell
-                if map_node_data.room_type == RoomType.COMBAT_MONSTER:
-                    grid[gy][gx] = "M"
-                else:
-                    grid[gy][gx] = "R"
-
-                # Place edges
-                gx = x * 3 + 1
-                gy = y * 2
-                edge_row = gy + 1
-                for x_next in map_node_data.x_next:
-                    dx = x_next - x
-
-                    if dx == -1:
-                        grid[edge_row][gx - 1] = "\\"
-                    elif dx == 0:
-                        grid[edge_row][gx] = "|"
-                    elif dx == 1:
-                        grid[edge_row][gx + 1] = "/"
-
-            except KeyError:
-                continue
-
-    # Print the grid
-    for row in reversed(grid):
-        print("".join(row))
+    return nodes
 
 
 # TODO: this is placeholder logic
-def _assign_room_types(map_: Map) -> None:
-    map_node_data_flat = [
-        map_node_data
-        for _, x_map_node_data in map_.items()
-        for _, map_node_data in x_map_node_data.items()
-        if map_node_data is not None
-    ]
-    node_num = len(map_node_data_flat)
-    room_types = [None] * node_num
-    num_combat_monster = int((1 - _FACTOR_NUM_REST_SITE) * node_num)
-    num_rest_site = node_num - num_combat_monster
-    room_types[:num_combat_monster] = [RoomType.COMBAT_MONSTER] * num_combat_monster
-    room_types[num_combat_monster:] = [RoomType.REST_SITE] * num_rest_site
+def _assign_room_types(nodes: list[list[EntityMapNode | None]]) -> None:
+    nodes_flat = [node for row in nodes for node in row if node is not None]
+    num_nodes = len(nodes_flat)
+    room_types = [RoomType.COMBAT_MONSTER] * num_nodes
+    room_types[: int(_FACTOR_NUM_REST_SITE * num_nodes)] = [RoomType.REST_SITE] * int(
+        _FACTOR_NUM_REST_SITE * num_nodes
+    )
     random.shuffle(room_types)
 
-    for room_type, map_node_data in zip(room_types, map_node_data_flat):
-        map_node_data.room_type = room_type
+    for node, room_type in zip(nodes_flat, room_types):
+        node.room_type = room_type

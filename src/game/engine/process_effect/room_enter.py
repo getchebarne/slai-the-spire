@@ -5,9 +5,8 @@ from src.game.core.effect import EffectType
 from src.game.entity.manager import EntityManager
 from src.game.entity.map_node import RoomType
 from src.game.level.exordium.combat_cultist import set_level_exoridium_combat_cultist
-from src.game.level.exordium.combat_fungi_beast_two import (
-    set_level_exoridium_combat_fungi_beast_two,
-)
+from src.game.level.exordium.combat_fungi_beast_two import \
+    set_level_exoridium_combat_fungi_beast_two
 from src.game.level.exordium.combat_jaw_worm import set_level_exoridium_combat_jaw_worm
 
 

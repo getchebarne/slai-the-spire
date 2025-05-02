@@ -3,6 +3,10 @@ from enum import Enum
 
 
 class ActionType(Enum):
+    # Card reward
+    CARD_REWARD_SELECT = "CARD_REWARD_SELECT"
+    CARD_REWARD_SKIP = "CARD_REWARD_SKIP"
+
     # Combat
     COMBAT_CARD_IN_HAND_SELECT = "COMBAT_CARD_IN_HAND_SELECT"
     COMBAT_MONSTER_SELECT = "COMBAT_MONSTER_SELECT"

@@ -1,24 +1,24 @@
 from dataclasses import replace
 from typing import Callable
 
-from src.game.combat.action import Action
-from src.game.combat.action import ActionType
-from src.game.combat.create import create_game_state
-from src.game.combat.drawer import draw_combat
-from src.game.combat.utils import does_card_require_target
-from src.game.combat.utils import is_character_dead
-from src.game.combat.view import CombatView
-from src.game.combat.view import view_combat
+from src.game.action import Action
+from src.game.action import ActionType
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.core.fsm import FSM
+from src.game.create import create_game_state
+from src.game.draw import draw_view_game_state
 from src.game.engine.effect_queue import add_to_bot
 from src.game.engine.effect_queue import add_to_top
 from src.game.engine.effect_queue import process_effect_queue
 from src.game.map_ import RoomType
 from src.game.state import GameState
+from src.game.utils import does_card_require_target
+from src.game.utils import is_character_dead
+from src.game.view.state import ViewGameState
+from src.game.view.state import get_view_game_state
 from src.rl.policies import PolicyRandom
 from src.rl.policies import SelectActionMetadata
 
@@ -126,6 +126,9 @@ def _handle_rest_site_upgrade(
         raise InvalidActionError(f"Can't upgrade on state {game_state.fsm}")
 
     id_card = game_state.entity_manager.id_cards_in_deck[index]
+    card = game_state.entity_manager.entities[id_card]
+    if card.name.endswith("+"):
+        raise InvalidActionError("Can't upgrade an already-upgraded card")
 
     return [
         Effect(EffectType.CARD_UPGRADE, id_target=id_card),
@@ -147,7 +150,11 @@ def _handle_map_node_select(
     if game_state.entity_manager.id_map_node_active is None:
         # Starting node
         y_next = 0
-        x_valid = list(game_state.entity_manager.id_map_nodes[0].keys())
+        x_valid = [
+            x
+            for x, node in enumerate(game_state.entity_manager.id_map_nodes[0])
+            if node is not None
+        ]
 
     else:
         # Intermediate node
@@ -176,18 +183,46 @@ def _handle_map_node_select(
     return [], []
 
 
+def _handle_card_reward_select(
+    game_state: GameState, index: int
+) -> tuple[list[Effect], list[Effect]]:
+    if game_state.fsm != FSM.CARD_REWARD:
+        raise InvalidActionError("TODO: add message")
+
+    effect = game_state.effect_queue[0]
+    id_target = game_state.entity_manager.id_card_reward[index]
+    game_state.effect_queue[0] = replace(effect, id_target=id_target)
+
+    return [], []
+
+
+def _handle_card_reward_skip(game_state: GameState) -> tuple[list[Effect], list[Effect]]:
+    if game_state.fsm != FSM.CARD_REWARD:
+        raise InvalidActionError("TODO: add message")
+
+    game_state.effect_queue.popleft()
+
+    return [], []
+
+
 def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], list[Effect]]:
-    if action.type == ActionType.COMBAT_TURN_END:
-        return (
-            [Effect(EffectType.TURN_END, id_target=game_state.entity_manager.id_character)],
-            [],
-        )
+    if action.type == ActionType.CARD_REWARD_SELECT:
+        return _handle_card_reward_select(game_state, action.index)
+
+    if action.type == ActionType.CARD_REWARD_SKIP:
+        return _handle_card_reward_skip(game_state)
 
     if action.type == ActionType.COMBAT_CARD_IN_HAND_SELECT:
         return _handle_combat_card_in_hand_select(game_state, action.index)
 
     if action.type == ActionType.COMBAT_MONSTER_SELECT:
         return _handle_combat_monster_select(game_state, action.index)
+
+    if action.type == ActionType.COMBAT_TURN_END:
+        return (
+            [Effect(EffectType.TURN_END, id_target=game_state.entity_manager.id_character)],
+            [],
+        )
 
     if action.type == ActionType.REST_SITE_REST:
         return _handle_rest_site_rest(game_state)
@@ -226,6 +261,9 @@ def _get_new_fsm(game_state: GameState) -> FSM:
         if effect_top.type == EffectType.MAP_NODE_ACTIVE_SET:
             return FSM.MAP
 
+        if effect_top.type == EffectType.CARD_REWARD_SELECT:
+            return FSM.CARD_REWARD
+
         raise ValueError(f"Unsupported pending effect type: {effect_top.type}")
 
     if game_state.entity_manager.id_card_active is not None:
@@ -247,7 +285,7 @@ def _get_new_fsm(game_state: GameState) -> FSM:
 
 def main(
     game_state: GameState,
-    select_action_fn: Callable[[CombatView], tuple[Action, SelectActionMetadata]],
+    select_action_fn: Callable[[ViewGameState], tuple[Action, SelectActionMetadata]],
 ) -> None:
     # Kick-off game with an effect to select the starting map node
     add_to_bot(
@@ -264,19 +302,19 @@ def main(
 
     # Loop
     while not is_character_dead(game_state.entity_manager):
-        # Get combat view and draw it on the terminal
-        combat_view = view_combat(game_state)
-        draw_combat(combat_view)
+        # Get game state view and draw it on the terminal
+        game_state_view = get_view_game_state(game_state)
+        draw_view_game_state(game_state_view)
 
         # Get action from agent
-        action, _ = select_action_fn(combat_view)
+        action, _ = select_action_fn(game_state_view)
 
         # Game step
         step(game_state, action)
 
 
 if __name__ == "__main__":
-    ascension_level = 20
+    ascension_level = 1
     game_state = create_game_state(ascension_level)
 
     main(game_state, PolicyRandom().select_action)

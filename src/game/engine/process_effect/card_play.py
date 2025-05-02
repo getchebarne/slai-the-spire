@@ -12,12 +12,16 @@ def process_effect_card_play(
 
     target = entity_manager.entities[id_target]
 
-    return (
-        [],
-        [
-            # TODO; move to engine?
-            Effect(EffectType.ENERGY_LOSS, value=target.cost),
-            Effect(EffectType.CARD_DISCARD, id_target=id_target),
-            *[replace(effect, id_source=id_target) for effect in target.effects],
-        ],
-    )
+    # Energy loss
+    effects_top = [Effect(EffectType.ENERGY_LOSS, value=target.cost)]
+
+    # Exhaust vs. discard
+    if target.exhaust:
+        effects_top.append(Effect(EffectType.CARD_EXHAUST, id_target=id_target))
+    else:
+        effects_top.append(Effect(EffectType.CARD_DISCARD, id_target=id_target))
+
+    # Card's effects
+    effects_top.extend([replace(effect, id_source=id_target) for effect in target.effects])
+
+    return [], effects_top

@@ -9,19 +9,18 @@ from src.game.factory.lib import register_factory
 from src.game.types_ import CardUpgraded
 
 
-_NAME = "Leg Sweep"
+_NAME = "Die Die Die"
 _COLOR = CardColor.GREEN
-_COST = 2
-_BLOCK = 11
-_BLOCK_PLUS = 14
-_RARITY = CardRarity.UNCOMMON
-_TYPE = CardType.SKILL
-_WEAK = 2
-_WEAK_PLUS = 3
+_COST = 1
+_DAMAGE = 13
+_DAMAGE_PLUS = 17
+_EXHAUST = True
+_RARITY = CardRarity.RARE
+_TYPE = CardType.ATTACK
 
 
 @register_factory(_NAME)
-def create_card_leg_sweep(upgraded: CardUpgraded) -> EntityCard:
+def create_card_die_die_die(upgraded: CardUpgraded) -> EntityCard:
     if upgraded:
         return EntityCard(
             f"{_NAME}+",
@@ -29,10 +28,8 @@ def create_card_leg_sweep(upgraded: CardUpgraded) -> EntityCard:
             _TYPE,
             _COST,
             _RARITY,
-            [
-                Effect(EffectType.BLOCK_GAIN, _BLOCK_PLUS, EffectTargetType.CHARACTER),
-                Effect(EffectType.MODIFIER_WEAK_GAIN, _WEAK_PLUS, EffectTargetType.CARD_TARGET),
-            ],
+            [Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.MONSTER)],
+            _EXHAUST,
         )
 
     return EntityCard(
@@ -41,8 +38,6 @@ def create_card_leg_sweep(upgraded: CardUpgraded) -> EntityCard:
         _TYPE,
         _COST,
         _RARITY,
-        [
-            Effect(EffectType.BLOCK_GAIN, _BLOCK, EffectTargetType.CHARACTER),
-            Effect(EffectType.MODIFIER_WEAK_GAIN, _WEAK, EffectTargetType.CARD_TARGET),
-        ],
+        [Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.MONSTER)],
+        _EXHAUST,
     )

@@ -8,7 +8,6 @@ def process_effect_energy_loss(
     value = kwargs["value"]
 
     energy = entity_manager.entities[entity_manager.id_energy]
-
     if energy.current < value:
         raise ValueError(f"Can't dercrease current energy ({energy.current}) by {value}")
 

@@ -24,6 +24,12 @@ def process_effect_health_loss(
                 # Combat over
                 return [], [
                     Effect(EffectType.COMBAT_END),
+                    Effect(EffectType.CARD_REWARD_ROLL),
+                    Effect(
+                        EffectType.CARD_REWARD_SELECT,
+                        target_type=EffectTargetType.CARD_REWARD,
+                        selection_type=EffectSelectionType.INPUT,
+                    ),
                     Effect(
                         EffectType.MAP_NODE_ACTIVE_SET,
                         target_type=EffectTargetType.MAP_NODE,

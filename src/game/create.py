@@ -27,9 +27,12 @@ def create_game_state(ascension_level: AscensionLevel) -> GameState:
 
     # Create map TODO: improve
     map_ = generate_map()
-    for y, x_map_node in map_.items():
-        for x, map_node in x_map_node.items():
-            id_map_node = create_entity(entity_manager, map_node)
+    for y, row in enumerate(map_):
+        for x, node in enumerate(row):
+            if node is None:
+                continue
+
+            id_map_node = create_entity(entity_manager, node)
             map_[y][x] = id_map_node
 
     entity_manager.id_map_nodes = map_

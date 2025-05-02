@@ -29,6 +29,9 @@ def _resolve_effect_target_type(
     if effect_target_type == EffectTargetType.CARD_IN_HAND:
         return entity_manager.id_cards_in_hand.copy()
 
+    if effect_target_type == EffectTargetType.CARD_REWARD:
+        return entity_manager.id_card_reward.copy()
+
     if effect_target_type == EffectTargetType.CARD_TARGET:
         return [entity_manager.id_card_target]
 
@@ -40,14 +43,17 @@ def _resolve_effect_target_type(
 
     if effect_target_type == EffectTargetType.MAP_NODE:
         # TODO: improve
+        # TODO: fix end of map bug
         if entity_manager.id_map_node_active is None:
-            return [entity_manager.id_map_nodes[0][x] for x in entity_manager.id_map_nodes[0]]
+            return [
+                entity_manager.id_map_nodes[0][x]
+                for x, node in enumerate(entity_manager.id_map_nodes[0])
+                if node is not None
+            ]
 
         map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
         y_next = map_node_active.y + 1
-        return [
-            entity_manager.id_map_nodes[y_next][x] for x in entity_manager.id_map_nodes[y_next]
-        ]
+        return [entity_manager.id_map_nodes[y_next][x] for x in range(3)]
 
     if effect_target_type == EffectTargetType.SOURCE:
         return [id_source]

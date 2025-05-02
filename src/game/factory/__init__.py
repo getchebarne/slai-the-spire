@@ -1,10 +1,13 @@
 # flake8: noqa
 
 from src.game.factory.card import acrobatics
+from src.game.factory.card import adrenaline
+from src.game.factory.card import all_out_attack
 from src.game.factory.card import backflip
 from src.game.factory.card import dagger_throw
 from src.game.factory.card import dash
 from src.game.factory.card import defend
+from src.game.factory.card import die_die_die
 from src.game.factory.card import leg_sweep
 from src.game.factory.card import neutralize
 from src.game.factory.card import strike

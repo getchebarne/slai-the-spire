@@ -8,7 +8,10 @@ from src.game.engine.process_effect.card_active_clear import process_effect_card
 from src.game.engine.process_effect.card_active_set import process_effect_card_active_set
 from src.game.engine.process_effect.card_discard import process_effect_card_discard
 from src.game.engine.process_effect.card_draw import process_effect_card_draw
+from src.game.engine.process_effect.card_exhaust import process_effect_card_exhaust
 from src.game.engine.process_effect.card_play import process_effect_card_play
+from src.game.engine.process_effect.card_reward_roll import process_effect_card_reward_roll
+from src.game.engine.process_effect.card_reward_select import process_effect_card_reward_select
 from src.game.engine.process_effect.card_shuffle_deck_into_draw_pile import \
     process_effect_shuffle_deck_into_draw_pile
 from src.game.engine.process_effect.card_upgrade import process_effect_card_upgrade
@@ -48,8 +51,10 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.CARD_ACTIVE_SET: process_effect_card_active_set,
     EffectType.CARD_DISCARD: process_effect_card_discard,
     EffectType.CARD_DRAW: process_effect_card_draw,
-    EffectType.CARD_DRAW: process_effect_card_draw,
+    EffectType.CARD_EXHAUST: process_effect_card_exhaust,
     EffectType.CARD_PLAY: process_effect_card_play,
+    EffectType.CARD_REWARD_ROLL: process_effect_card_reward_roll,
+    EffectType.CARD_REWARD_SELECT: process_effect_card_reward_select,
     EffectType.CARD_SHUFFLE_DECK_INTO_DRAW_PILE: process_effect_shuffle_deck_into_draw_pile,
     EffectType.CARD_UPGRADE: process_effect_card_upgrade,
     EffectType.COMBAT_END: process_effect_combat_end,
