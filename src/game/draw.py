@@ -1,5 +1,8 @@
 import os
+import re
 
+from src.game.action import Action
+from src.game.action import ActionType
 from src.game.entity.map_node import RoomType
 from src.game.view.actor import ViewActor
 from src.game.view.card import ViewCard
@@ -11,12 +14,18 @@ from src.game.view.monster import ViewMonster
 from src.game.view.state import ViewGameState
 
 
+# Get the terminal width
 N_COL, _ = os.get_terminal_size()
-WHITE = "\033[37;1m"
+
+# For calculating the actual length of strings with ANSI escape characters
+ANSI_ESCAPE_RE = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
+
+# Colors
 RED = "\033[31;1m"
 CYAN = "\033[36;1m"
-SELECTED = "\033[32;1m"
+GREEN = "\033[32;1m"
 RESET = "\033[0m"
+WHITE = "\033[37;1m"
 
 
 def _energy_str(energy: ViewEnergy) -> str:
@@ -31,7 +40,7 @@ def _hand_str(hand: list[ViewCard]) -> str:
     card_strings = []
     for card_view in hand:
         if card_view.is_active:
-            card_strings.append(f"{SELECTED}{_card_str(card_view)}{RESET}")
+            card_strings.append(f"{GREEN}{_card_str(card_view)}{RESET}")
 
             continue
 
@@ -107,52 +116,61 @@ def _monster_str(monster_view: ViewMonster) -> str:
     return "\n".join(right_aligned_lines)
 
 
-def print_map(map_: ViewMap) -> None:
+# TODO: improve
+def _map_str(map_: ViewMap) -> None:
     map_height = len(map_.nodes)
     map_width = len(map_.nodes[0])
     grid_rows = map_height * 2
     grid_cols = map_width * 3
-    grid = [[" " for _ in range(grid_cols)] for _ in range(grid_rows)]
+    grid = [[" " for _ in range(grid_cols + 3)] for _ in range(grid_rows)]
 
     # Place only active nodes
     for y in range(map_height):
+        if y == map_.y_current:
+            grid[2 * y][0:3] = ">>>"
+
         for x in range(map_width):
-            try:
-                # Place node
-                map_node_data = map_.nodes[y][x]
-                if map_node_data is None:
-                    continue
-
-                gx = x * 3 + 1  # center column
-                gy = y * 2  # top row of the 2-row cell
-                if map_node_data.room_type == RoomType.COMBAT_MONSTER:
-                    grid[gy][gx] = "M"
-                else:
-                    grid[gy][gx] = "R"
-
-                # Place edges
-                gx = x * 3 + 1
-                gy = y * 2
-                edge_row = gy + 1
-                for x_next in map_node_data.x_next:
-                    dx = x_next - x
-
-                    if dx == -1:
-                        grid[edge_row][gx - 1] = "\\"
-                    elif dx == 0:
-                        grid[edge_row][gx] = "|"
-                    elif dx == 1:
-                        grid[edge_row][gx + 1] = "/"
-
-            except KeyError:
+            # Place node
+            map_node = map_.nodes[y][x]
+            if map_node is None:
                 continue
 
-    return list(reversed(grid))
+            gx = x * 3 + 4  # center column
+            gy = y * 2  # top row of the 2-row cell
+            if map_node.room_type == RoomType.COMBAT_MONSTER:
+                char = "M"
+            else:
+                char = "R"
+
+            if y == map_.y_current and x == map_.x_current:
+                char = f"{GREEN}{char}{RESET}"
+
+            grid[gy][gx] = char
+
+            # Place edges
+            edge_row = gy + 1
+            for x_next in map_node.x_next:
+                dx = x_next - x
+
+                if dx == -1:
+                    grid[edge_row][gx - 1] = "\\"
+                elif dx == 0:
+                    grid[edge_row][gx] = "|"
+                elif dx == 1:
+                    grid[edge_row][gx + 1] = "/"
+
+    return "\n".join(reversed(["".join(row) for row in grid]))
 
 
-def _print_centered(text: str) -> None:
-    for line in text.strip("\n").splitlines():
-        print(line.center(N_COL))
+def _get_visible_length(text: str) -> int:
+    return len(ANSI_ESCAPE_RE.sub("", text))
+
+
+def _center_text(text: str) -> str:
+    padding = (N_COL - _get_visible_length(text)) // 2
+    text = " " * max(padding, 0) + text
+
+    return text
 
 
 def _rest_site_str() -> str:
@@ -171,47 +189,91 @@ _ -.;_/ \\--._
 """
 
 
-def draw_view_game_state(view_game_state: ViewGameState) -> str:
-    # Separator
-    separator = "-" * N_COL
+def get_view_game_state_str(view_game_state: ViewGameState) -> str:
+    str_fsm = view_game_state.fsm.name.replace("_", " ")
+    str_fsm_underline = "¯" * len(str_fsm)
+    str_fsm = f"{_center_text(str_fsm)}\n{_center_text(str_fsm_underline)}"
 
     if view_game_state.fsm == ViewFSM.REST_SITE:
-        _print_centered(_rest_site_str())
-        print(separator)
-        return
+        str_ = "\n".join(_center_text(line) for line in _rest_site_str().split("\n"))
 
-    if view_game_state.fsm == ViewFSM.MAP:
-        grid_str = print_map(view_game_state.map)
-        for row in grid_str:
-            _print_centered("".join(row))
+    elif view_game_state.fsm == ViewFSM.MAP:
+        str_ = "\n".join(_center_text(line) for line in _map_str(view_game_state.map).split("\n"))
 
-        return
+    elif view_game_state.fsm == ViewFSM.CARD_REWARD:
+        str_ = "\n".join(
+            [_center_text(_card_str(view_card)) for view_card in view_game_state.reward_combat]
+        )
 
-    # Monsters
-    monster_strs = "\n\n".join(
-        [f"{_monster_str(monster)}" for monster in view_game_state.monsters]
-    )
+    else:
+        # Monsters
+        monster_strs = "\n\n".join(
+            [f"{_monster_str(monster)}" for monster in view_game_state.monsters]
+        )
 
-    # Character
-    character_str = _actor_str(view_game_state.character)
+        # Character
+        character_str = _actor_str(view_game_state.character)
 
-    # Energy
-    energy_str = _energy_str(view_game_state.energy)
+        # Energy
+        energy_str = _energy_str(view_game_state.energy)
 
-    # Hand
-    hand_str = _hand_str(view_game_state.hand)
+        # Hand
+        hand_str = _hand_str(view_game_state.hand)
 
-    _str = (
-        monster_strs
-        + "\n"
-        + character_str
-        + "\n"
-        + energy_str
-        + "\n"
-        + hand_str
-        + "\n"
-        + separator
-    )
+        # All
+        str_ = f"{monster_strs}\n{character_str}\n{energy_str}\n{hand_str}"
 
-    print(view_game_state.fsm)
-    print(_str)
+    str_ = f"{_center_text(str_fsm)}\n{str_}"
+
+    return str_
+
+
+def get_action_str(action: Action, view_game_state: ViewGameState) -> str:
+    if action.type == ActionType.CARD_REWARD_SELECT:
+        return f"> Add {view_game_state.reward_combat[action.index].name} to the Deck!"
+
+    if action.type == ActionType.CARD_REWARD_SKIP:
+        return "> Skip card rewards."
+
+    if action.type == ActionType.COMBAT_CARD_IN_HAND_SELECT:
+        card = view_game_state.hand[action.index]
+        if view_game_state.fsm == ViewFSM.COMBAT_DEFAULT:
+            if card.requires_target:
+                return f"> Select {card.name}."
+
+            return f"> Play {card.name}."
+
+        if view_game_state.fsm == ViewFSM.COMBAT_AWAIT_TARGET_DISCARD:
+            return f"> Discard {card.name}."
+
+        raise ValueError(f"Unsupported FSM state: {view_game_state.fsm}")
+
+    if action.type == ActionType.COMBAT_MONSTER_SELECT:
+        return (
+            f"> Select {view_game_state.monsters[action.index].name} at position {action.index}."
+        )
+
+    if action.type == ActionType.COMBAT_TURN_END:
+        return "> End turn."
+
+    if action.type == ActionType.MAP_NODE_SELECT:
+        if view_game_state.map.x_current is None:
+            return f"> Select map node at x = {action.index}."
+
+        dx = action.index - view_game_state.map.x_current
+        if dx == 1:
+            direction = "right"
+
+        elif dx == -1:
+            direction = "left"
+
+        else:
+            direction = "middle"
+
+        return f"> Select map node to the {direction}."
+
+    if action.type == ActionType.REST_SITE_REST:
+        return "> Rest."
+
+    if action.type == ActionType.REST_SITE_UPGRADE:
+        return f"> Upgrade {view_game_state.deck[action.index].name}."

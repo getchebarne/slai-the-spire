@@ -16,6 +16,7 @@ _CHANCE_RARE = 3
 _CHANCE_UNCOMMON = 40
 
 # Create a mapping of `CardRarity` to factories to use for rolling card rewards
+# TODO: improve?
 FACTORY_LIB_CARD_RARITY: dict[CardRarity, dict[str, FactoryCard]] = defaultdict(dict)
 for card_name, factory_card in FACTORY_LIB_CARD.items():
     card_rarity = factory_card(False).rarity

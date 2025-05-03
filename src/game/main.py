@@ -1,3 +1,4 @@
+import os
 from dataclasses import replace
 from typing import Callable
 
@@ -9,7 +10,8 @@ from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.core.fsm import FSM
 from src.game.create import create_game_state
-from src.game.draw import draw_view_game_state
+from src.game.draw import get_action_str
+from src.game.draw import get_view_game_state_str
 from src.game.engine.effect_queue import add_to_bot
 from src.game.engine.effect_queue import add_to_top
 from src.game.engine.effect_queue import process_effect_queue
@@ -24,6 +26,7 @@ from src.rl.policies import SelectActionMetadata
 
 
 _REST_SITE_REST_HEALTH_GAIN_FACTOR = 0.30
+_NCOL, _ = os.get_terminal_size()
 
 
 class InvalidActionError(Exception):
@@ -286,6 +289,7 @@ def _get_new_fsm(game_state: GameState) -> FSM:
 def main(
     game_state: GameState,
     select_action_fn: Callable[[ViewGameState], tuple[Action, SelectActionMetadata]],
+    draw: bool = False,
 ) -> None:
     # Kick-off game with an effect to select the starting map node
     add_to_bot(
@@ -304,7 +308,6 @@ def main(
     while not is_character_dead(game_state.entity_manager):
         # Get game state view and draw it on the terminal
         game_state_view = get_view_game_state(game_state)
-        draw_view_game_state(game_state_view)
 
         # Get action from agent
         action, _ = select_action_fn(game_state_view)
@@ -312,9 +315,18 @@ def main(
         # Game step
         step(game_state, action)
 
+        # Draw on terminal
+        if draw:
+            view_game_state_str = get_view_game_state_str(game_state_view)
+            action_str = get_action_str(action, game_state_view)
+            print(view_game_state_str)
+            print("-" * _NCOL)
+            print(action_str)
+            print("-" * _NCOL)
+
 
 if __name__ == "__main__":
     ascension_level = 1
     game_state = create_game_state(ascension_level)
 
-    main(game_state, PolicyRandom().select_action)
+    main(game_state, PolicyRandom().select_action, draw=True)
