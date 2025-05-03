@@ -3,6 +3,7 @@ import random
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.engine.process_effect.registry import REGISTRY_EFFECT_TYPE_PROCESS_EFFECT
 from src.game.entity.manager import EntityManager
 from src.game.state import GameState
@@ -124,6 +125,12 @@ def process_effect_queue(game_state: GameState) -> None:
         else:
             # TODO: could QueuedEffect have multiple target entities when created? think
             id_targets = [id_target]
+
+        if effect.type == EffectType.MAP_NODE_ACTIVE_SET:
+            # Clear effect queue before entering the room. This clears "ghost" effects that may
+            # remain in the queue after the combat is over (e.g., draw and discard effects after
+            # killing the last monster w/ "Dagger Throw")
+            game_state.effect_queue.clear()
 
         for id_target in id_targets:
             # Process the effect & get new effects to add to the queue

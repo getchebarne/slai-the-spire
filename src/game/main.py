@@ -172,16 +172,10 @@ def _handle_map_node_select(
             f"Can't select node on x = {index} on y = {y_next}. Valid options: {x_valid}"
         )
 
-    # Clear effect queue before entering the room. This clears "ghost" effects that may remain in
-    # the queue after the combat is over (e.g., draw and discard effects after killing the last
-    # monster w/ "Dagger Throw")§
-    effect = game_state.effect_queue[0]
-    game_state.effect_queue.clear()
-
     # Get the id of the selected node, replace it in the top effect (saved before clearing the
     # queue), and append it to the queue
     id_map_node = game_state.entity_manager.id_map_nodes[y_next][index]
-    game_state.effect_queue.append(replace(effect, id_target=id_map_node))
+    game_state.effect_queue[0] = replace(game_state.effect_queue[0], id_target=id_map_node)
 
     return [], []
 
