@@ -5,11 +5,13 @@ from src.game.entity.base import EntityBase
 
 
 class ModifierType(Enum):
-    WEAK = "WEAK"
-    STRENGTH = "STRENGTH"
-    SPORE_CLOUD = "SPORE_CLOUD"
-    VULNERABLE = "VULNERABLE"
+    MODE_SHIFT = "MODE_SHIFT"
     RITUAL = "RITUAL"
+    SHARP_HIDE = "SHARP_HIDE"
+    SPORE_CLOUD = "SPORE_CLOUD"
+    STRENGTH = "STRENGTH"
+    VULNERABLE = "VULNERABLE"
+    WEAK = "WEAK"
 
 
 @dataclass

@@ -31,7 +31,9 @@ def create_card_dash(upgraded: CardUpgraded) -> EntityCard:
             _RARITY,
             [
                 Effect(EffectType.BLOCK_GAIN, _BLOCK_PLUS, EffectTargetType.CHARACTER),
-                Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET),
+                Effect(
+                    EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET
+                ),
             ],
         )
 
@@ -43,6 +45,6 @@ def create_card_dash(upgraded: CardUpgraded) -> EntityCard:
         _RARITY,
         [
             Effect(EffectType.BLOCK_GAIN, _BLOCK, EffectTargetType.CHARACTER),
-            Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.CARD_TARGET),
         ],
     )

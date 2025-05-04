@@ -30,7 +30,7 @@ def create_card_all_out_attack(upgraded: CardUpgraded) -> EntityCard:
             _COST,
             _RARITY,
             [
-                Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.MONSTER),
+                Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.MONSTER),
                 Effect(
                     EffectType.CARD_DISCARD,
                     _DISCARD,
@@ -47,7 +47,7 @@ def create_card_all_out_attack(upgraded: CardUpgraded) -> EntityCard:
         _COST,
         _RARITY,
         [
-            Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.MONSTER),
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.MONSTER),
             Effect(
                 EffectType.CARD_DISCARD,
                 _DISCARD,

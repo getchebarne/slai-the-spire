@@ -25,10 +25,17 @@ class EffectType(Enum):
 
     # Deal damage
     DAMAGE_DEAL = "DAMAGE_DEAL"
+    DAMAGE_DEAL_PHYSICAL = "DAMAGE_DEAL_PHYSICAL"
+
+    # Death
+    DEATH = "DEATH"
 
     # Energy manipulation
     ENERGY_GAIN = "ENERGY_GAIN"
     ENERGY_LOSS = "ENERGY_LOSS"
+
+    # Game end - this effect is never processed, it's used to signal the game's end
+    GAME_END = "GAME_END"
 
     # Health manipulation
     HEALTH_GAIN = "HEALTH_GAIN"
@@ -38,8 +45,11 @@ class EffectType(Enum):
     MAP_NODE_ACTIVE_SET = "MAP_NODE_ACTIVE_SET"
 
     # Everything related to manipulating modifiers
+    MODIFIER_MODE_SHIFT_GAIN = "MODIFIER_MODE_SHIFT_GAIN"
     MODIFIER_TICK = "MODIFIER_TICK"
     MODIFIER_RITUAL_GAIN = "MODIFIER_RITUAL_GAIN"
+    MODIFIER_SHARP_HIDE_GAIN = "MODIFIER_SHARP_HIDE_GAIN"
+    MODIFIER_SHARP_HIDE_LOSS = "MODIFIER_SHARP_HIDE_LOSS"
     MODIFIER_STRENGTH_GAIN = "MODIFIER_STRENGTH_GAIN"
     MODIFIER_VULNERABLE_GAIN = "MODIFIER_VULNERABLE_GAIN"
     MODIFIER_WEAK_GAIN = "MODIFIER_WEAK_GAIN"

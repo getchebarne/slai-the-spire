@@ -66,7 +66,10 @@ def _resolve_effect_selection_type(
     effect_selection_type: EffectSelectionType, id_queries: list[int], id_effect_target: int | None
 ) -> list[int]:
     if effect_selection_type == EffectSelectionType.RANDOM:
-        return [random.choice(id_queries)]
+        if id_queries:
+            return [random.choice(id_queries)]
+
+        return []
 
     if effect_selection_type == EffectSelectionType.INPUT:
         # TODO: make more readable?
@@ -91,6 +94,10 @@ def process_effect_queue(game_state: GameState) -> None:
 
     while effect_queue:
         effect = effect_queue.popleft()
+        if effect.type == EffectType.GAME_END:
+            add_to_top(effect_queue, effect)
+            return
+
         id_source = effect.id_source
         id_target = effect.id_target
 
@@ -123,10 +130,10 @@ def process_effect_queue(game_state: GameState) -> None:
                         return
 
         else:
-            # TODO: could QueuedEffect have multiple target entities when created? think
+            # TODO: could Effect have multiple target entities when created? think
             id_targets = [id_target]
 
-        if effect.type == EffectType.MAP_NODE_ACTIVE_SET:
+        if effect.type == EffectType.COMBAT_END:
             # Clear effect queue before entering the room. This clears "ghost" effects that may
             # remain in the queue after the combat is over (e.g., draw and discard effects after
             # killing the last monster w/ "Dagger Throw")

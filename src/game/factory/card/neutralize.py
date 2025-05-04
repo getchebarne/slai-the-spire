@@ -30,7 +30,9 @@ def create_card_neutralize(upgraded: CardUpgraded) -> EntityCard:
             _COST,
             _RARITY,
             [
-                Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET),
+                Effect(
+                    EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET
+                ),
                 Effect(EffectType.MODIFIER_WEAK_GAIN, _WEAK_PLUS, EffectTargetType.CARD_TARGET),
             ],
         )
@@ -42,7 +44,7 @@ def create_card_neutralize(upgraded: CardUpgraded) -> EntityCard:
         _COST,
         _RARITY,
         [
-            Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.CARD_TARGET),
             Effect(EffectType.MODIFIER_WEAK_GAIN, _WEAK, EffectTargetType.CARD_TARGET),
         ],
     )

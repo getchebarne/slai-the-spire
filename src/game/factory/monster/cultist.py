@@ -68,4 +68,6 @@ def _get_effects_incantation(ascension_level: AscensionLevel) -> list[Effect]:
 
 
 def _get_effects_dark_strike() -> list[Effect]:
-    return [Effect(EffectType.DAMAGE_DEAL, _DARK_STRIKE_DAMAGE, EffectTargetType.CHARACTER)]
+    return [
+        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DARK_STRIKE_DAMAGE, EffectTargetType.CHARACTER)
+    ]

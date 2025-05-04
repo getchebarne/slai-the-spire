@@ -47,9 +47,11 @@ def create_monster_jaw_worm(ascension_level: AscensionLevel) -> EntityMonster:
 
 def _get_effects_chomp(ascension_level: AscensionLevel) -> list[Effect]:
     if ascension_level < 2:
-        return [Effect(EffectType.DAMAGE_DEAL, _CHOMP_DAMAGE, EffectTargetType.CHARACTER)]
+        return [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _CHOMP_DAMAGE, EffectTargetType.CHARACTER)]
 
-    return [Effect(EffectType.DAMAGE_DEAL, _CHOMP_DAMAGE_ASC_2, EffectTargetType.CHARACTER)]
+    return [
+        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _CHOMP_DAMAGE_ASC_2, EffectTargetType.CHARACTER)
+    ]
 
 
 def _get_effects_bellow(ascension_level: AscensionLevel) -> list[Effect]:
@@ -77,6 +79,6 @@ def _get_effects_bellow(ascension_level: AscensionLevel) -> list[Effect]:
 
 def _get_effects_thrash() -> list[Effect]:
     return [
-        Effect(EffectType.DAMAGE_DEAL, _THRASH_DAMAGE, EffectTargetType.CHARACTER),
+        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _THRASH_DAMAGE, EffectTargetType.CHARACTER),
         Effect(EffectType.BLOCK_GAIN, _THRASH_BLOCK, EffectTargetType.SOURCE),
     ]

@@ -53,7 +53,7 @@ def create_monster_fungi_beast(ascension_level: AscensionLevel) -> EntityMonster
 
 
 def _get_effects_bite() -> list[Effect]:
-    return [Effect(EffectType.DAMAGE_DEAL, _BITE_DAMAGE, EffectTargetType.CHARACTER)]
+    return [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _BITE_DAMAGE, EffectTargetType.CHARACTER)]
 
 
 def _get_effects_grow(ascension_level: AscensionLevel) -> list[Effect]:

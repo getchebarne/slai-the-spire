@@ -2,6 +2,9 @@ import random
 from collections import defaultdict
 
 from src.game.core.effect import Effect
+from src.game.core.effect import EffectSelectionType
+from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.entity.card import CardRarity
 from src.game.entity.character import _CARD_REWARD_ROLL_OFFSET_BASE
 from src.game.entity.manager import EntityManager
@@ -55,4 +58,10 @@ def process_effect_card_reward_roll(
         id_card = create_entity(entity_manager, card)
         entity_manager.id_card_reward.append(id_card)
 
-    return [], []
+    return [
+        Effect(
+            EffectType.CARD_REWARD_SELECT,
+            target_type=EffectTargetType.CARD_REWARD,
+            selection_type=EffectSelectionType.INPUT,
+        )
+    ], []

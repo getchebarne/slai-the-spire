@@ -18,12 +18,20 @@ from src.game.engine.process_effect.card_upgrade import process_effect_card_upgr
 from src.game.engine.process_effect.combat_end import process_effect_combat_end
 from src.game.engine.process_effect.combat_start import process_effect_combat_start
 from src.game.engine.process_effect.damage_deal import process_effect_damage_deal
+from src.game.engine.process_effect.damage_deal_physical import process_effect_damage_deal_physical
+from src.game.engine.process_effect.death import process_effect_death
 from src.game.engine.process_effect.energy_gain import process_effect_energy_gain
 from src.game.engine.process_effect.energy_loss import process_effect_energy_loss
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
+from src.game.engine.process_effect.modifier_mode_shift_gain import \
+    process_effect_modifier_mode_shift_gain
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
+from src.game.engine.process_effect.modifier_sharp_hide_gain import \
+    process_effect_modifier_sharp_hide_gain
+from src.game.engine.process_effect.modifier_sharp_hide_loss import \
+    process_effect_modifier_sharp_hide_loss
 from src.game.engine.process_effect.modifier_strength_gain import \
     process_effect_modifier_strength_gain
 from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
@@ -60,11 +68,16 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.COMBAT_END: process_effect_combat_end,
     EffectType.COMBAT_START: process_effect_combat_start,
     EffectType.DAMAGE_DEAL: process_effect_damage_deal,
+    EffectType.DAMAGE_DEAL_PHYSICAL: process_effect_damage_deal_physical,
+    EffectType.DEATH: process_effect_death,
     EffectType.ENERGY_GAIN: process_effect_energy_gain,
     EffectType.ENERGY_LOSS: process_effect_energy_loss,
     EffectType.HEALTH_GAIN: process_effect_health_gain,
     EffectType.HEALTH_LOSS: process_effect_health_loss,
     EffectType.MAP_NODE_ACTIVE_SET: process_effect_map_node_active_set,
+    EffectType.MODIFIER_MODE_SHIFT_GAIN: process_effect_modifier_mode_shift_gain,
+    EffectType.MODIFIER_SHARP_HIDE_GAIN: process_effect_modifier_sharp_hide_gain,
+    EffectType.MODIFIER_SHARP_HIDE_LOSS: process_effect_modifier_sharp_hide_loss,
     EffectType.MODIFIER_TICK: process_effect_modifier_tick,
     EffectType.MONSTER_MOVE_UPDATE: process_effect_monster_move_update,
     EffectType.MODIFIER_RITUAL_GAIN: process_effect_modifier_ritual_gain,

@@ -28,7 +28,7 @@ def create_monster_dummy(ascension_level: AscensionLevel) -> EntityMonster:
 
 
 def _get_effects_attack() -> list[Effect]:
-    return [Effect(EffectType.DAMAGE_DEAL, _ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
+    return [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
 
 
 def _get_effects_defend() -> list[Effect]:

@@ -31,7 +31,9 @@ def create_card_dagger_throw(upgraded: CardUpgraded) -> EntityCard:
             _COST,
             _RARITY,
             [
-                Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET),
+                Effect(
+                    EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET
+                ),
                 Effect(EffectType.CARD_DRAW, _DRAW),
                 Effect(
                     EffectType.CARD_DISCARD,
@@ -49,7 +51,7 @@ def create_card_dagger_throw(upgraded: CardUpgraded) -> EntityCard:
         _COST,
         _RARITY,
         [
-            Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.CARD_TARGET),
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.CARD_TARGET),
             Effect(EffectType.CARD_DRAW, _DRAW),
             Effect(
                 EffectType.CARD_DISCARD,

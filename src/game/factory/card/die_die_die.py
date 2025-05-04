@@ -28,7 +28,7 @@ def create_card_die_die_die(upgraded: CardUpgraded) -> EntityCard:
             _TYPE,
             _COST,
             _RARITY,
-            [Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.MONSTER)],
+            [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.MONSTER)],
             _EXHAUST,
         )
 
@@ -38,6 +38,6 @@ def create_card_die_die_die(upgraded: CardUpgraded) -> EntityCard:
         _TYPE,
         _COST,
         _RARITY,
-        [Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.MONSTER)],
+        [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.MONSTER)],
         _EXHAUST,
     )

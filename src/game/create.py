@@ -2,6 +2,8 @@ from collections import deque
 
 from src.game.entity.manager import EntityManager
 from src.game.entity.manager import create_entity
+from src.game.entity.map_node import EntityMapNode
+from src.game.entity.map_node import RoomType
 from src.game.factory.energy import create_energy
 from src.game.factory.lib import FACTORY_LIB_CHARACTER
 from src.game.map_ import generate_map
@@ -36,6 +38,9 @@ def create_game_state(ascension_level: AscensionLevel) -> GameState:
             map_[y][x] = id_map_node
 
     entity_manager.id_map_nodes = map_
+    entity_manager.id_map_node_boss = create_entity(
+        entity_manager, EntityMapNode(-1, -1, RoomType.COMBAT_BOSS)
+    )
 
     # Create effect queue
     effect_queue = deque()

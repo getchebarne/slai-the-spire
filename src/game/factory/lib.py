@@ -1,6 +1,5 @@
 from typing import Callable, TypeAlias, TypeVar, get_args, get_origin, get_type_hints
 
-from src.game.entity.card import CardRarity
 from src.game.entity.card import EntityCard
 from src.game.entity.character import EntityCharacter
 from src.game.entity.monster import EntityMonster

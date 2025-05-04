@@ -4,7 +4,7 @@ from src.game.entity.map_node import EntityMapNode
 from src.game.entity.map_node import RoomType
 
 
-_MAP_HEIGHT = 15
+_MAP_HEIGHT = 3
 _MAP_WIDTH = 7
 _PATH_DENSITY = 6
 _ANCESTOR_GAP_MIN = 3
@@ -63,7 +63,6 @@ def _initialize_nodes(map_height: int, map_width: int) -> list[list[EntityMapNod
     return nodes
 
 
-# TODO: add boss?
 def _create_node(
     node_source: EntityMapNode, nodes: list[list[EntityMapNode | None]]
 ) -> EntityMapNode | None:
@@ -154,7 +153,6 @@ def _get_node_parents(
 
 
 def _get_common_ancestor(
-    # node_1.y: int, node_1.x: int, node_2.y: int, node_2.x: int, map_: Map, ancestor_gap_max: int
     node_1: EntityMapNode,
     node_2: EntityMapNode,
     nodes: list[list[EntityMapNode | None]],
@@ -236,3 +234,10 @@ def _assign_room_types(nodes: list[list[EntityMapNode | None]]) -> None:
 
     for node, room_type in zip(nodes_flat, room_types):
         node.room_type = room_type
+
+    # Make sure last floor is all rest sites
+    for map_node in nodes[-1]:
+        if map_node is None:
+            continue
+
+        map_node.room_type = RoomType.REST_SITE

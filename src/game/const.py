@@ -11,7 +11,7 @@ MAX_SIZE_DISC_PILE = 16
 
 # Types of effects that appear in cards
 EFFECT_TYPE_CARD = [
-    EffectType.DAMAGE_DEAL,
+    EffectType.DAMAGE_DEAL_PHYSICAL,
     EffectType.BLOCK_GAIN,
     EffectType.CARD_DISCARD,
     EffectType.MODIFIER_WEAK_GAIN,

@@ -27,7 +27,7 @@ def create_card_strike(upgraded: CardUpgraded) -> EntityCard:
             _TYPE,
             _COST,
             _RARITY,
-            [Effect(EffectType.DAMAGE_DEAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET)],
+            [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET)],
         )
 
     return EntityCard(
@@ -36,5 +36,5 @@ def create_card_strike(upgraded: CardUpgraded) -> EntityCard:
         _TYPE,
         _COST,
         _RARITY,
-        [Effect(EffectType.DAMAGE_DEAL, _DAMAGE, EffectTargetType.CARD_TARGET)],
+        [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.CARD_TARGET)],
     )

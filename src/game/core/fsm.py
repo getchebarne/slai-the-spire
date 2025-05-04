@@ -10,6 +10,9 @@ class FSM(Enum):
     COMBAT_AWAIT_TARGET_CARD = "COMBAT_AWAIT_TARGET_CARD"
     COMBAT_AWAIT_TARGET_DISCARD = "COMBAT_AWAIT_TARGET_DISCARD"  # TODO: handle multiple targets
 
+    # Game over
+    GAME_OVER = "GAME_OVER"
+
     # Map
     MAP = "MAP"
 

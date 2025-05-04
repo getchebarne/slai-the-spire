@@ -21,6 +21,7 @@ class EntityManager:
     # Map
     id_map_nodes: list[list[int | None]] = field(default_factory=dict)
     id_map_node_active: int | None = None
+    id_map_node_boss: int | None = None
 
     id_card_target: int | None = None
 

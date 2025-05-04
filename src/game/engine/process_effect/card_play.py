@@ -2,6 +2,8 @@ from dataclasses import replace
 
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
+from src.game.entity.actor import ModifierType
+from src.game.entity.card import CardType
 from src.game.entity.manager import EntityManager
 
 
@@ -23,5 +25,19 @@ def process_effect_card_play(
 
     # Card's effects
     effects_top.extend([replace(effect, id_source=id_target) for effect in target.effects])
+
+    # Sharp hide
+    if entity_manager.id_card_target is not None:
+        target_card = entity_manager.entities[entity_manager.id_card_target]
+        if ModifierType.SHARP_HIDE in target_card.modifier_map and target.type == CardType.ATTACK:
+            modifier_data = target_card.modifier_map[ModifierType.SHARP_HIDE]
+            effects_top.append(
+                Effect(
+                    EffectType.DAMAGE_DEAL,
+                    value=modifier_data.stacks_current,
+                    id_source=entity_manager.id_card_target,
+                    id_target=entity_manager.id_character,
+                )
+            )
 
     return [], effects_top

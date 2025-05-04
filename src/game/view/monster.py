@@ -56,7 +56,7 @@ def _move_to_intent(move_effects: list[Effect]) -> Intent:
 
     # Iterate over the move's effects
     for effect in move_effects:
-        if effect.type == EffectType.DAMAGE_DEAL:
+        if effect.type == EffectType.DAMAGE_DEAL_PHYSICAL:
             if intent.damage is None and intent.instances is None:
                 intent = replace(intent, damage=effect.value, instances=1)
 

@@ -17,3 +17,4 @@ from src.game.factory.monster import cultist
 from src.game.factory.monster import dummy
 from src.game.factory.monster import fungi_beast
 from src.game.factory.monster import jaw_worm
+from src.game.factory.monster import the_guardian

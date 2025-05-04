@@ -18,7 +18,6 @@ from src.game.engine.effect_queue import process_effect_queue
 from src.game.map_ import RoomType
 from src.game.state import GameState
 from src.game.utils import does_card_require_target
-from src.game.utils import is_character_dead
 from src.game.view.state import ViewGameState
 from src.game.view.state import get_view_game_state
 from src.rl.policies import PolicyRandom
@@ -107,6 +106,23 @@ def _handle_rest_site_rest(game_state: GameState) -> tuple[list[Effect], list[Ef
     character = game_state.entity_manager.entities[game_state.entity_manager.id_character]
     health_gain_value = int(_REST_SITE_REST_HEALTH_GAIN_FACTOR * character.health_max)
 
+    map_node_active = game_state.entity_manager.entities[
+        game_state.entity_manager.id_map_node_active
+    ]
+    if map_node_active.y == len(game_state.entity_manager.id_map_nodes) - 1:
+        # Boss fight
+        return [
+            Effect(
+                EffectType.HEALTH_GAIN,
+                health_gain_value,
+                id_target=game_state.entity_manager.id_character,
+            ),
+            Effect(
+                EffectType.MAP_NODE_ACTIVE_SET,
+                id_target=game_state.entity_manager.id_map_node_boss,
+            ),
+        ], []
+
     return [
         Effect(
             EffectType.HEALTH_GAIN,
@@ -132,6 +148,19 @@ def _handle_rest_site_upgrade(
     card = game_state.entity_manager.entities[id_card]
     if card.name.endswith("+"):
         raise InvalidActionError("Can't upgrade an already-upgraded card")
+
+    map_node_active = game_state.entity_manager.entities[
+        game_state.entity_manager.id_map_node_active
+    ]
+    if map_node_active.y == len(game_state.entity_manager.id_map_nodes) - 1:
+        # Boss fight
+        return [
+            Effect(EffectType.CARD_UPGRADE, id_target=id_card),
+            Effect(
+                EffectType.MAP_NODE_ACTIVE_SET,
+                id_target=game_state.entity_manager.id_map_node_boss,
+            ),
+        ], []
 
     return [
         Effect(EffectType.CARD_UPGRADE, id_target=id_card),
@@ -190,7 +219,13 @@ def _handle_card_reward_select(
     id_target = game_state.entity_manager.id_card_reward[index]
     game_state.effect_queue[0] = replace(effect, id_target=id_target)
 
-    return [], []
+    return [
+        Effect(
+            EffectType.MAP_NODE_ACTIVE_SET,
+            target_type=EffectTargetType.MAP_NODE,
+            selection_type=EffectSelectionType.INPUT,
+        )
+    ], []
 
 
 def _handle_card_reward_skip(game_state: GameState) -> tuple[list[Effect], list[Effect]]:
@@ -199,7 +234,13 @@ def _handle_card_reward_skip(game_state: GameState) -> tuple[list[Effect], list[
 
     game_state.effect_queue.popleft()
 
-    return [], []
+    return [
+        Effect(
+            EffectType.MAP_NODE_ACTIVE_SET,
+            target_type=EffectTargetType.MAP_NODE,
+            selection_type=EffectSelectionType.INPUT,
+        )
+    ], []
 
 
 def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], list[Effect]]:
@@ -252,6 +293,9 @@ def _get_new_fsm(game_state: GameState) -> FSM:
     if game_state.effect_queue:
         effect_top = game_state.effect_queue[0]
 
+        if effect_top.type == EffectType.GAME_END:
+            return FSM.GAME_OVER
+
         if effect_top.type == EffectType.CARD_DISCARD:
             return FSM.COMBAT_AWAIT_TARGET_DISCARD
 
@@ -274,7 +318,10 @@ def _get_new_fsm(game_state: GameState) -> FSM:
     if map_node_active.room_type == RoomType.REST_SITE:
         return FSM.REST_SITE
 
-    if map_node_active.room_type == RoomType.COMBAT_MONSTER:
+    if (
+        map_node_active.room_type == RoomType.COMBAT_MONSTER
+        or map_node_active.room_type == RoomType.COMBAT_BOSS
+    ):
         return FSM.COMBAT_DEFAULT
 
     raise ValueError(f"Unsupported room type: {map_node_active.room_type}")
@@ -299,7 +346,7 @@ def main(
     game_state.fsm = _get_new_fsm(game_state)
 
     # Loop
-    while not is_character_dead(game_state.entity_manager):
+    while game_state.fsm != FSM.GAME_OVER:
         # Get game state view and draw it on the terminal
         game_state_view = get_view_game_state(game_state)
 

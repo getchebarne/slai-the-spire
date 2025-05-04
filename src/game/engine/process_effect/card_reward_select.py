@@ -1,4 +1,7 @@
 from src.game.core.effect import Effect
+from src.game.core.effect import EffectSelectionType
+from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.entity.manager import EntityManager
 
 
