@@ -4,6 +4,9 @@ from src.game.entity.actor import ModifierType
 from src.game.entity.manager import EntityManager
 
 
+_MODE_SHIFT_POP_BLOCK = 20
+
+
 def process_effect_health_loss(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
@@ -26,5 +29,8 @@ def process_effect_health_loss(
             del target.modifier_map[ModifierType.MODE_SHIFT]
 
             effects_top.append(Effect(EffectType.MONSTER_MOVE_UPDATE, id_target=id_target))
+            effects_top.append(
+                Effect(EffectType.BLOCK_GAIN, _MODE_SHIFT_POP_BLOCK, id_target=id_target)
+            )
 
     return [], effects_top
