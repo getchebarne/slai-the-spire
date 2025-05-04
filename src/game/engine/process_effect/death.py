@@ -18,7 +18,6 @@ def process_effect_death(
         return [], [Effect(EffectType.GAME_END)]
 
     if isinstance(target, EntityMonster):
-        # TODO: delete instance from `entity_manager.entities`
         entity_manager.id_monsters.remove(id_target)
 
         if entity_manager.id_monsters:

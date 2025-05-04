@@ -8,7 +8,7 @@ from src.game.core.effect import EffectType
 from src.game.entity.card import CardRarity
 from src.game.entity.character import _CARD_REWARD_ROLL_OFFSET_BASE
 from src.game.entity.manager import EntityManager
-from src.game.entity.manager import create_entity
+from src.game.entity.manager import add_entity
 from src.game.factory.lib import FACTORY_LIB_CARD
 from src.game.factory.lib import FactoryCard
 
@@ -32,6 +32,7 @@ def process_effect_card_reward_roll(
 ) -> list[tuple[Effect], tuple[Effect]]:
     character = entity_manager.entities[entity_manager.id_character]
 
+    # Initialize list to track rolled card names to make sure no duplicate cards are rolled
     card_name_rolled = []
     for _ in range(_CARDS_TO_ROLL):
         roll = random.randint(0, 98) + character.card_reward_roll_offset
@@ -54,8 +55,8 @@ def process_effect_card_reward_roll(
             card_name = random.choice(list(FACTORY_LIB_CARD_RARITY[card_rarity].keys()))
 
         card_name_rolled.append(card_name)
-        card = FACTORY_LIB_CARD_RARITY[card_rarity][card_name](False)
-        id_card = create_entity(entity_manager, card)
+        card = FACTORY_LIB_CARD_RARITY[card_rarity][card_name](upgraded=False)
+        id_card = add_entity(entity_manager, card)
         entity_manager.id_card_reward.append(id_card)
 
     return [

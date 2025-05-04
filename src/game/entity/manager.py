@@ -5,7 +5,7 @@ from src.game.entity.base import EntityBase
 
 @dataclass
 class EntityManager:
-    entities: list[EntityBase]
+    entities: dict[int, EntityBase]
 
     id_character: int | None = None
     id_monsters: list[int] = field(default_factory=list)
@@ -23,11 +23,26 @@ class EntityManager:
     id_map_node_active: int | None = None
     id_map_node_boss: int | None = None
 
+    # Card target
     id_card_target: int | None = None
 
 
-def create_entity(entity_manager: EntityManager, entity: EntityBase) -> int:
-    entity_manager.entities.append(entity)
+def add_entity(entity_manager: EntityManager, entity: EntityBase) -> int:
+    id_ = _get_first_free_id(entity_manager)
+    entity_manager.entities[id_] = entity
 
-    # Return the entity's index
-    return len(entity_manager.entities) - 1
+    return id_
+
+
+def delete_entity(entity_manager: EntityManager, id_: int) -> None:
+    entity_manager.entities.pop(id_)
+
+
+def _get_first_free_id(entity_manager: EntityManager) -> int:
+    id_used = set(entity_manager.entities.keys())
+
+    id_ = 0
+    while id_ in id_used:
+        id_ += 1
+
+    return id_

@@ -1,7 +1,9 @@
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
 from src.game.entity.manager import EntityManager
+from src.game.entity.manager import delete_entity
 from src.game.entity.map_node import RoomType
+from src.game.entity.monster import EntityMonster
 
 
 # TODO: will need to add end of combat triggers, such as "Blood Vial"
@@ -13,6 +15,16 @@ def process_effect_combat_end(
     entity_manager.id_cards_in_draw_pile = []
     entity_manager.id_cards_in_disc_pile = []
     entity_manager.id_cards_in_exhaust_pile = []
+    entity_manager.id_card_target = None
+
+    # Delete monster entities
+    id_delete = []
+    for id_, entity in entity_manager.entities.items():
+        if isinstance(entity, EntityMonster):
+            id_delete.append(id_)
+
+    if id_ in id_delete:
+        delete_entity(entity_manager, id_)
 
     # Clear character's modifiers
     character = entity_manager.entities[entity_manager.id_character]
