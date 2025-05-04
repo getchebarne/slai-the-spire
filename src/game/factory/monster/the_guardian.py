@@ -1,3 +1,5 @@
+from typing import Callable
+
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
@@ -33,7 +35,9 @@ _WHIRLWIND_INSTANCES = 4
 
 
 @register_factory(_NAME)
-def create_monster_the_guardian(ascension_level: AscensionLevel) -> EntityMonster:
+def create_monster_the_guardian(
+    ascension_level: AscensionLevel,
+) -> tuple[EntityMonster, Callable[[EntityMonster], str]]:
     if ascension_level < 9:
         health_max = _HEALTH_MAX
     else:
@@ -41,21 +45,60 @@ def create_monster_the_guardian(ascension_level: AscensionLevel) -> EntityMonste
 
     health_current = health_max
 
-    return EntityMonster(
-        _NAME,
-        health_current,
-        health_max,
-        move_map={
-            "Charging Up": _get_effects_charging_up(),
-            "Fierce Bash": _get_effects_fierce_bash(ascension_level),
-            "Vent Steam": _get_effects_vent_steam(),
-            "Whirlwind": _get_effects_whirlwind(),
-            "Defensive Mode": _get_effects_defensive_mode(ascension_level),
-            "Roll Attack": _get_effects_roll_attack(ascension_level),
-            "Twin Slam": _get_effects_twin_slam(),
-        },
-        modifier_map=_get_modifier_map(ascension_level),
+    return (
+        EntityMonster(
+            _NAME,
+            health_current,
+            health_max,
+            move_map={
+                "Charging Up": _get_effects_charging_up(),
+                "Fierce Bash": _get_effects_fierce_bash(ascension_level),
+                "Vent Steam": _get_effects_vent_steam(),
+                "Whirlwind": _get_effects_whirlwind(),
+                "Defensive Mode": _get_effects_defensive_mode(ascension_level),
+                "Roll Attack": _get_effects_roll_attack(ascension_level),
+                "Twin Slam": _get_effects_twin_slam(),
+            },
+            modifier_map=_get_modifier_map(ascension_level),
+        ),
+        _get_move_name_the_guardian,
     )
+
+
+def _get_move_name_the_guardian(monster: EntityMonster) -> str:
+    if monster.move_name_current is None:
+        return "Charging Up"
+
+    if ModifierType.MODE_SHIFT in monster.modifier_map:
+        # Offensive mode
+        if monster.move_name_history[-1] == "Charging Up":
+            return "Fierce Bash"
+
+        if monster.move_name_history[-1] == "Fierce Bash":
+            return "Vent Steam"
+
+        if monster.move_name_history[-1] == "Vent Steam":
+            return "Whirlwind"
+
+        if monster.move_name_history[-1] == "Whirlwind":
+            return "Charging Up"
+
+        if monster.move_name_history[-1] == "Twin Slam":
+            return "Whirlwind"
+
+        raise ValueError(f"Unsupported move name: {monster.move_name_history[-1]}")
+
+    # Defensive mode
+    if ModifierType.SHARP_HIDE in monster.modifier_map:
+        if monster.move_name_history[-1] == "Defensive Mode":
+            return "Roll Attack"
+
+        if monster.move_name_history[-1] == "Roll Attack":
+            return "Twin Slam"
+
+        raise ValueError(f"Unsupported move name: {monster.move_name_history[-1]}")
+
+    return "Defensive Mode"
 
 
 def _get_effects_charging_up() -> list[Effect]:

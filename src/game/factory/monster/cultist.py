@@ -1,4 +1,5 @@
 import random
+from typing import Callable
 
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
@@ -20,7 +21,9 @@ _INCANTATION_MODIFIER_RITUAL_GAIN_ASC_17 = 5
 
 
 @register_factory(_NAME)
-def create_monster_cultist(ascension_level: AscensionLevel) -> EntityMonster:
+def create_monster_cultist(
+    ascension_level: AscensionLevel,
+) -> tuple[EntityMonster, Callable[[EntityMonster], str]]:
     if ascension_level < 7:
         health_max = random.randint(_HEALTH_MAX_MIN, _HEALTH_MAX_MAX)
     else:
@@ -28,15 +31,25 @@ def create_monster_cultist(ascension_level: AscensionLevel) -> EntityMonster:
 
     health_current = health_max
 
-    return EntityMonster(
-        _NAME,
-        health_current,
-        health_max,
-        move_map={
-            "Incantation": _get_effects_incantation(ascension_level),
-            "Dark Strike": _get_effects_dark_strike(),
-        },
+    return (
+        EntityMonster(
+            _NAME,
+            health_current,
+            health_max,
+            move_map={
+                "Incantation": _get_effects_incantation(ascension_level),
+                "Dark Strike": _get_effects_dark_strike(),
+            },
+        ),
+        _get_move_name_cultist,
     )
+
+
+def _get_move_name_cultist(monster: EntityMonster) -> str:
+    if monster.move_name_current is None:
+        return "Incantation"
+
+    return "Dark Strike"
 
 
 def _get_effects_incantation(ascension_level: AscensionLevel) -> list[Effect]:

@@ -1,4 +1,5 @@
 import random
+from typing import Callable
 
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
@@ -25,7 +26,9 @@ _SPORE_CLOUD_STACKS_DURATION = False
 
 
 @register_factory(_NAME)
-def create_monster_fungi_beast(ascension_level: AscensionLevel) -> EntityMonster:
+def create_monster_fungi_beast(
+    ascension_level: AscensionLevel,
+) -> tuple[EntityMonster, Callable[[EntityMonster], str]]:
     if ascension_level < 7:
         health_max = random.randint(_HEALTH_MAX_MIN, _HEALTH_MAX_MAX)
     else:
@@ -33,23 +36,41 @@ def create_monster_fungi_beast(ascension_level: AscensionLevel) -> EntityMonster
 
     health_current = health_max
 
-    return EntityMonster(
-        _NAME,
-        health_current,
-        health_max,
-        move_map={
-            "Bite": _get_effects_bite(),
-            "Grow": _get_effects_grow(ascension_level),
-        },
-        modifier_map={
-            ModifierType.SPORE_CLOUD: ModifierData(
-                _SPORE_CLOUD_STACKS_CURRENT,
-                _SPORE_CLOUD_STACKS_MIN,
-                _SPORE_CLOUD_STACKS_MAX,
-                _SPORE_CLOUD_STACKS_DURATION,
-            )
-        },
+    return (
+        EntityMonster(
+            _NAME,
+            health_current,
+            health_max,
+            move_map={
+                "Bite": _get_effects_bite(),
+                "Grow": _get_effects_grow(ascension_level),
+            },
+            modifier_map={
+                ModifierType.SPORE_CLOUD: ModifierData(
+                    _SPORE_CLOUD_STACKS_CURRENT,
+                    _SPORE_CLOUD_STACKS_MIN,
+                    _SPORE_CLOUD_STACKS_MAX,
+                    _SPORE_CLOUD_STACKS_DURATION,
+                )
+            },
+        ),
+        _get_move_name_fungi_beast,
     )
+
+
+def _get_move_name_fungi_beast(monster: EntityMonster) -> str:
+    num = random.randint(0, 98)  # TODO: abstract
+
+    if num < 60:
+        if monster.move_name_history[-2:] == ["Bite", "Bite"]:
+            return "Grow"
+
+        return "Bite"
+
+    if monster.move_name_history and monster.move_name_history[-1] == "Grow":
+        return "Bite"
+
+    return "Grow"
 
 
 def _get_effects_bite() -> list[Effect]:

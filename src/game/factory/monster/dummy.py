@@ -1,3 +1,6 @@
+import random
+from typing import Callable
+
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
@@ -13,7 +16,9 @@ _DEFEND_BLOCK = 12
 
 
 @register_factory(_NAME)
-def create_monster_dummy(ascension_level: AscensionLevel) -> EntityMonster:
+def create_monster_dummy(
+    ascension_level: AscensionLevel,
+) -> tuple[EntityMonster, Callable[[EntityMonster], str]]:
     health_current = _HEALTH_MAX
 
     return EntityMonster(
@@ -25,6 +30,19 @@ def create_monster_dummy(ascension_level: AscensionLevel) -> EntityMonster:
             "Defend": _get_effects_defend(),
         },
     )
+
+
+def get_move_name_dummy(monster: EntityMonster) -> str:
+    if monster.move_name_current_current is None:
+        return random.choice(list(monster.move_map.keys()))
+
+    if monster.move_name_current == "Attack":
+        return "Defend"
+
+    if monster.move_name_current == "Defend":
+        return "Attack"
+
+    raise ValueError(f"Unsupported move name: {monster.move_name_current}")
 
 
 def _get_effects_attack() -> list[Effect]:

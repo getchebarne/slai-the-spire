@@ -8,7 +8,7 @@ def set_level_exoridium_combat_cultist(
     entity_manager: EntityManager, ascension_level: AscensionLevel
 ) -> None:
     entity_manager.id_monsters = [
-        create_entity(entity_manager, FACTORY_LIB_MONSTER["Cultist"](ascension_level))
+        create_entity(entity_manager, FACTORY_LIB_MONSTER["Cultist"](ascension_level)[0])
     ]
 
     return

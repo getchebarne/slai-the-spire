@@ -1,4 +1,5 @@
 import random
+from typing import Callable
 
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
@@ -25,7 +26,9 @@ _THRASH_BLOCK = 5
 
 
 @register_factory(_NAME)
-def create_monster_jaw_worm(ascension_level: AscensionLevel) -> EntityMonster:
+def create_monster_jaw_worm(
+    ascension_level: AscensionLevel,
+) -> tuple[EntityMonster, Callable[[EntityMonster], str]]:
     if ascension_level < 7:
         health_max = random.randint(_HEALTH_MAX_MIN, _HEALTH_MAX_MAX)
     else:
@@ -33,16 +36,51 @@ def create_monster_jaw_worm(ascension_level: AscensionLevel) -> EntityMonster:
 
     health_current = health_max
 
-    return EntityMonster(
-        _NAME,
-        health_current,
-        health_max,
-        move_map={
-            "Chomp": _get_effects_chomp(ascension_level),
-            "Bellow": _get_effects_bellow(ascension_level),
-            "Thrash": _get_effects_thrash(),
-        },
+    return (
+        EntityMonster(
+            _NAME,
+            health_current,
+            health_max,
+            move_map={
+                "Chomp": _get_effects_chomp(ascension_level),
+                "Bellow": _get_effects_bellow(ascension_level),
+                "Thrash": _get_effects_thrash(),
+            },
+        ),
+        _get_move_name_jaw_worm,
     )
+
+
+def _get_move_name_jaw_worm(monster: EntityMonster) -> str:
+    if monster.move_name_current is None:
+        return "Chomp"
+
+    num = random.randint(0, 98)  # TODO: abstract
+    if num < 25:
+        if monster.move_name_history[-1] == "Chomp":
+            if random.random() < 0.5625:  # 56.25% chance
+                return "Bellow"
+
+            return "Thrash"
+
+        return "Chomp"
+
+    elif num < 55:
+        if monster.move_name_history[-2:] == ["Thrash", "Thrash"]:
+            if random.random() < 0.357:  # 35.7% chance
+                return "Chomp"
+
+            return "Bellow"
+
+        return "Thrash"
+
+    if monster.move_name_history[-1] == "Bellow":
+        if random.random() < 0.416:  # 41.6% chance
+            return "Chomp"
+
+        return "Thrash"
+
+    return "Bellow"
 
 
 def _get_effects_chomp(ascension_level: AscensionLevel) -> list[Effect]:

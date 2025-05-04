@@ -11,7 +11,9 @@ from src.game.types_ import CardUpgraded
 F = TypeVar("F", bound=Callable)
 FactoryCard: TypeAlias = Callable[[CardUpgraded], EntityCard]
 FactoryCharacter: TypeAlias = Callable[[AscensionLevel], tuple[EntityCharacter, list[EntityCard]]]
-FactoryMonster: TypeAlias = Callable[[AscensionLevel], EntityMonster]
+FactoryMonster: TypeAlias = Callable[
+    [AscensionLevel], tuple[EntityMonster, Callable[[EntityMonster], str]]
+]
 
 FACTORY_LIB_CARD: dict[str, FactoryCard] = {}
 FACTORY_LIB_CHARACTER: dict[str, FactoryCharacter] = {}
@@ -31,7 +33,9 @@ def register_factory(name: str) -> Callable[[F], F]:
         ):
             FACTORY_LIB_CHARACTER[name] = func
 
-        elif return_type is EntityMonster:
+        elif get_origin(return_type) is tuple and get_args(return_type) == (
+            (EntityMonster, Callable[[EntityMonster], str])  # TODO: add starter relic
+        ):
             FACTORY_LIB_MONSTER[name] = func
 
         else:

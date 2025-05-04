@@ -1,15 +1,16 @@
-from src.game.ai.registry import AI_REGISTRY
 from src.game.core.effect import Effect
 from src.game.entity.manager import EntityManager
+from src.game.factory.lib import FACTORY_LIB_MONSTER
 
 
 def process_effect_monster_move_update(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     id_target = kwargs["id_target"]
+    ascension_level = kwargs["ascension_level"]
 
     target = entity_manager.entities[id_target]
-    move_name_new = AI_REGISTRY[target.name](target)
+    move_name_new = FACTORY_LIB_MONSTER[target.name](ascension_level)[1](target)
     target.move_name_current = move_name_new
     target.move_name_history.append(move_name_new)
 
