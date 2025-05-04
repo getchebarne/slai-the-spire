@@ -5,6 +5,8 @@ from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.monster import EntityMonster
+from src.game.entity.monster import Intent
+from src.game.entity.monster import MonsterMove
 from src.game.factory.lib import register_factory
 from src.game.types_ import AscensionLevel
 
@@ -25,16 +27,16 @@ def create_monster_dummy(
         _NAME,
         health_current,
         _HEALTH_MAX,
-        move_map={
-            "Attack": _get_effects_attack(),
-            "Defend": _get_effects_defend(),
+        moves={
+            "Attack": _get_move_attack(),
+            "Defend": _get_move_defend(),
         },
     )
 
 
 def get_move_name_dummy(monster: EntityMonster) -> str:
     if monster.move_name_current_current is None:
-        return random.choice(list(monster.move_map.keys()))
+        return random.choice(list(monster.moves.keys()))
 
     if monster.move_name_current == "Attack":
         return "Defend"
@@ -45,9 +47,15 @@ def get_move_name_dummy(monster: EntityMonster) -> str:
     raise ValueError(f"Unsupported move name: {monster.move_name_current}")
 
 
-def _get_effects_attack() -> list[Effect]:
-    return [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _ATTACK_DAMAGE, EffectTargetType.CHARACTER)]
+def _get_move_attack() -> MonsterMove:
+    return MonsterMove(
+        [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _ATTACK_DAMAGE, EffectTargetType.CHARACTER)],
+        Intent(damage=_ATTACK_DAMAGE),
+    )
 
 
-def _get_effects_defend() -> list[Effect]:
-    return [Effect(EffectType.BLOCK_GAIN, _DEFEND_BLOCK, EffectTargetType.SOURCE)]
+def _get_move_defend() -> MonsterMove:
+    return MonsterMove(
+        [Effect(EffectType.BLOCK_GAIN, _DEFEND_BLOCK, EffectTargetType.SOURCE)],
+        Intent(block=True),
+    )

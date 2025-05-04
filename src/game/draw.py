@@ -80,7 +80,11 @@ def _intent_str(intent: Intent | None) -> str:
         return str_
 
     if intent.damage is not None:
-        str_ = f"{str_}{intent.damage} x {intent.instances}"
+        if intent.instances is None:
+            str_ = f"{str_}{intent.damage}"
+
+        else:
+            str_ = f"{str_}{intent.damage} x {intent.instances}"
 
     if intent.block:
         if str_ != "":

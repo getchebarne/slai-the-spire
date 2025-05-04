@@ -5,6 +5,8 @@ from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.monster import EntityMonster
+from src.game.entity.monster import Intent
+from src.game.entity.monster import MonsterMove
 from src.game.factory.lib import register_factory
 from src.game.types_ import AscensionLevel
 
@@ -36,9 +38,9 @@ def create_monster_cultist(
             _NAME,
             health_current,
             health_max,
-            move_map={
-                "Incantation": _get_effects_incantation(ascension_level),
-                "Dark Strike": _get_effects_dark_strike(),
+            moves={
+                "Incantation": _get_move_incantation(ascension_level),
+                "Dark Strike": _get_move_dark_strike(),
             },
         ),
         _get_move_name_cultist,
@@ -52,35 +54,45 @@ def _get_move_name_cultist(monster: EntityMonster) -> str:
     return "Dark Strike"
 
 
-def _get_effects_incantation(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_incantation(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 2:
-        return [
-            Effect(
-                EffectType.MODIFIER_RITUAL_GAIN,
-                _INCANTATION_MODIFIER_RITUAL_GAIN,
-                EffectTargetType.SOURCE,
-            ),
-        ]
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.MODIFIER_RITUAL_GAIN,
+                    _INCANTATION_MODIFIER_RITUAL_GAIN,
+                    EffectTargetType.SOURCE,
+                ),
+            ],
+            Intent(buff=True),
+        )
 
     if ascension_level < 17:
-        return [
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.MODIFIER_RITUAL_GAIN,
+                    _INCANTATION_MODIFIER_RITUAL_GAIN_ASC_2,
+                    EffectTargetType.SOURCE,
+                ),
+            ],
+            Intent(buff=True),
+        )
+
+    return MonsterMove(
+        [
             Effect(
                 EffectType.MODIFIER_RITUAL_GAIN,
-                _INCANTATION_MODIFIER_RITUAL_GAIN_ASC_2,
+                _INCANTATION_MODIFIER_RITUAL_GAIN_ASC_17,
                 EffectTargetType.SOURCE,
             ),
-        ]
-
-    return [
-        Effect(
-            EffectType.MODIFIER_RITUAL_GAIN,
-            _INCANTATION_MODIFIER_RITUAL_GAIN_ASC_17,
-            EffectTargetType.SOURCE,
-        ),
-    ]
+        ],
+        Intent(buff=True),
+    )
 
 
-def _get_effects_dark_strike() -> list[Effect]:
-    return [
-        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DARK_STRIKE_DAMAGE, EffectTargetType.CHARACTER)
-    ]
+def _get_move_dark_strike() -> MonsterMove:
+    return MonsterMove(
+        [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DARK_STRIKE_DAMAGE, EffectTargetType.CHARACTER)],
+        Intent(damage=_DARK_STRIKE_DAMAGE),
+    )

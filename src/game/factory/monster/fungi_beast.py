@@ -7,6 +7,8 @@ from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.monster import EntityMonster
+from src.game.entity.monster import Intent
+from src.game.entity.monster import MonsterMove
 from src.game.factory.lib import register_factory
 from src.game.types_ import AscensionLevel
 
@@ -41,9 +43,9 @@ def create_monster_fungi_beast(
             _NAME,
             health_current,
             health_max,
-            move_map={
-                "Bite": _get_effects_bite(),
-                "Grow": _get_effects_grow(ascension_level),
+            moves={
+                "Bite": _get_move_bite(),
+                "Grow": _get_move_grow(ascension_level),
             },
             modifier_map={
                 ModifierType.SPORE_CLOUD: ModifierData(
@@ -73,23 +75,37 @@ def _get_move_name_fungi_beast(monster: EntityMonster) -> str:
     return "Grow"
 
 
-def _get_effects_bite() -> list[Effect]:
-    return [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _BITE_DAMAGE, EffectTargetType.CHARACTER)]
+def _get_move_bite() -> MonsterMove:
+    return MonsterMove(
+        [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _BITE_DAMAGE, EffectTargetType.CHARACTER)],
+        Intent(damage=_BITE_DAMAGE),
+    )
 
 
-def _get_effects_grow(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_grow(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 2:
-        return [
-            Effect(EffectType.MODIFIER_STRENGTH_GAIN, _GROW_STRENGTH, EffectTargetType.SOURCE),
-        ]
+        return MonsterMove(
+            [
+                Effect(EffectType.MODIFIER_STRENGTH_GAIN, _GROW_STRENGTH, EffectTargetType.SOURCE),
+            ],
+            Intent(buff=True),
+        )
 
     if ascension_level < 17:
-        return [
-            Effect(
-                EffectType.MODIFIER_STRENGTH_GAIN, _GROW_STRENGTH_ASC_2, EffectTargetType.SOURCE
-            ),
-        ]
+        return MonsterMove(
+            [
+                Effect(EffectType).MODIFIER_STRENGTH_GAIN,
+                _GROW_STRENGTH_ASC_2,
+                EffectTargetType.SOURCE,
+            ],
+            Intent(buff=True),
+        )
 
-    return [
-        Effect(EffectType.MODIFIER_STRENGTH_GAIN, _GROW_STRENGTH_ASC_17, EffectTargetType.SOURCE),
-    ]
+    return MonsterMove(
+        [
+            Effect(
+                EffectType.MODIFIER_STRENGTH_GAIN, _GROW_STRENGTH_ASC_17, EffectTargetType.SOURCE
+            ),
+        ],
+        Intent(buff=True),
+    )

@@ -6,6 +6,9 @@ from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.monster import EntityMonster
+from src.game.entity.monster import Intent
+from src.game.entity.monster import MonsterMove
+from src.game.entity.monster import MonsterType
 from src.game.factory.lib import register_factory
 from src.game.types_ import AscensionLevel
 
@@ -50,14 +53,15 @@ def create_monster_the_guardian(
             _NAME,
             health_current,
             health_max,
-            move_map={
-                "Charging Up": _get_effects_charging_up(),
-                "Fierce Bash": _get_effects_fierce_bash(ascension_level),
-                "Vent Steam": _get_effects_vent_steam(),
-                "Whirlwind": _get_effects_whirlwind(),
-                "Defensive Mode": _get_effects_defensive_mode(ascension_level),
-                "Roll Attack": _get_effects_roll_attack(ascension_level),
-                "Twin Slam": _get_effects_twin_slam(),
+            type=MonsterType.BOSS,
+            moves={
+                "Charging Up": _get_move_charging_up(),
+                "Fierce Bash": _get_move_fierce_bash(ascension_level),
+                "Vent Steam": _get_move_vent_steam(),
+                "Whirlwind": _get_move_whirlwind(),
+                "Defensive Mode": _get_move_defensive_mode(ascension_level),
+                "Roll Attack": _get_move_roll_attack(ascension_level),
+                "Twin Slam": _get_move_twin_slam(),
             },
             modifier_map=_get_modifier_map(ascension_level),
         ),
@@ -101,81 +105,122 @@ def _get_move_name_the_guardian(monster: EntityMonster) -> str:
     return "Defensive Mode"
 
 
-def _get_effects_charging_up() -> list[Effect]:
-    return [Effect(EffectType.BLOCK_GAIN, _CHARGING_UP_BLOCK, EffectTargetType.SOURCE)]
+def _get_move_charging_up() -> MonsterMove:
+    return MonsterMove(
+        [Effect(EffectType.BLOCK_GAIN, _CHARGING_UP_BLOCK, EffectTargetType.SOURCE)],
+        Intent(block=True),
+    )
 
 
-def _get_effects_fierce_bash(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_fierce_bash(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 4:
-        return [
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.DAMAGE_DEAL_PHYSICAL,
+                    _FIERCE_BASH_DAMAGE,
+                    EffectTargetType.CHARACTER,
+                ),
+            ],
+            Intent(damage=_FIERCE_BASH_DAMAGE),
+        )
+
+    return MonsterMove(
+        [
             Effect(
-                EffectType.DAMAGE_DEAL_PHYSICAL, _FIERCE_BASH_DAMAGE, EffectTargetType.CHARACTER
+                EffectType.DAMAGE_DEAL_PHYSICAL,
+                _FIERCE_BASH_DAMAGE_ASC_4,
+                EffectTargetType.CHARACTER,
             ),
-        ]
-
-    return [
-        Effect(
-            EffectType.DAMAGE_DEAL_PHYSICAL, _FIERCE_BASH_DAMAGE_ASC_4, EffectTargetType.CHARACTER
-        ),
-    ]
+        ],
+        Intent(_FIERCE_BASH_DAMAGE_ASC_4),
+    )
 
 
-def _get_effects_vent_steam() -> list[Effect]:
-    return [
-        Effect(EffectType.MODIFIER_WEAK_GAIN, _VENT_STEAM_WEAK, EffectTargetType.CHARACTER),
-        Effect(EffectType.MODIFIER_VULNERABLE_GAIN, _VENT_STEAM_VULN, EffectTargetType.CHARACTER),
-    ]
+def _get_move_vent_steam() -> MonsterMove:
+    return MonsterMove(
+        [
+            Effect(EffectType.MODIFIER_WEAK_GAIN, _VENT_STEAM_WEAK, EffectTargetType.CHARACTER),
+            Effect(
+                EffectType.MODIFIER_VULNERABLE_GAIN, _VENT_STEAM_VULN, EffectTargetType.CHARACTER
+            ),
+        ],
+        Intent(debuff_powerful=True),
+    )
 
 
-def _get_effects_whirlwind() -> list[Effect]:
-    return [
-        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _WHIRLWIND_DAMAGE, EffectTargetType.CHARACTER)
-        for _ in range(_WHIRLWIND_INSTANCES)
-    ]
+def _get_move_whirlwind() -> MonsterMove:
+    return MonsterMove(
+        [
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _WHIRLWIND_DAMAGE, EffectTargetType.CHARACTER)
+            for _ in range(_WHIRLWIND_INSTANCES)
+        ],
+        Intent(damage=_WHIRLWIND_DAMAGE, instances=_WHIRLWIND_INSTANCES),
+    )
 
 
-def _get_effects_defensive_mode(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_defensive_mode(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 19:
-        return [
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.MODIFIER_SHARP_HIDE_GAIN,
+                    _DEFENSIVE_MODE_SHARP_HIDE,
+                    EffectTargetType.SOURCE,
+                )
+            ],
+            Intent(buff=True),
+        )
+
+    return MonsterMove(
+        [
             Effect(
                 EffectType.MODIFIER_SHARP_HIDE_GAIN,
-                _DEFENSIVE_MODE_SHARP_HIDE,
+                _DEFENSIVE_MODE_SHARP_HIDE_ASC_19,
                 EffectTargetType.SOURCE,
             )
-        ]
-
-    return [
-        Effect(
-            EffectType.MODIFIER_SHARP_HIDE_GAIN,
-            _DEFENSIVE_MODE_SHARP_HIDE_ASC_19,
-            EffectTargetType.SOURCE,
-        )
-    ]
+        ],
+        Intent(buff=True),
+    )
 
 
-def _get_effects_roll_attack(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_roll_attack(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 4:
-        return [
-            Effect(
-                EffectType.DAMAGE_DEAL_PHYSICAL, _ROLL_ATTACK_DAMAGE, EffectTargetType.CHARACTER
-            )
-        ]
-
-    return [
-        Effect(
-            EffectType.DAMAGE_DEAL_PHYSICAL, _ROLL_ATTACK_DAMAGE_ASC_4, EffectTargetType.CHARACTER
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.DAMAGE_DEAL_PHYSICAL,
+                    _ROLL_ATTACK_DAMAGE,
+                    EffectTargetType.CHARACTER,
+                )
+            ],
+            Intent(damage=_ROLL_ATTACK_DAMAGE),
         )
-    ]
+
+    return MonsterMove(
+        [
+            Effect(
+                EffectType.DAMAGE_DEAL_PHYSICAL,
+                _ROLL_ATTACK_DAMAGE_ASC_4,
+                EffectTargetType.CHARACTER,
+            )
+        ],
+        Intent(damage=_ROLL_ATTACK_DAMAGE_ASC_4),
+    )
 
 
-def _get_effects_twin_slam() -> list[Effect]:
-    return [
-        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _TWIN_SLAM_DAMAGE, EffectTargetType.CHARACTER)
-        for _ in range(_TWIN_SLAM_INSTANCES)
-    ] + [
-        Effect(EffectType.MODIFIER_MODE_SHIFT_GAIN, target_type=EffectTargetType.SOURCE),
-        Effect(EffectType.MODIFIER_SHARP_HIDE_LOSS, target_type=EffectTargetType.SOURCE),
-    ]
+def _get_move_twin_slam() -> MonsterMove:
+    return MonsterMove(
+        [
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _TWIN_SLAM_DAMAGE, EffectTargetType.CHARACTER)
+            for _ in range(_TWIN_SLAM_INSTANCES)
+        ]
+        + [
+            Effect(EffectType.MODIFIER_MODE_SHIFT_GAIN, target_type=EffectTargetType.SOURCE),
+            Effect(EffectType.MODIFIER_SHARP_HIDE_LOSS, target_type=EffectTargetType.SOURCE),
+        ],
+        Intent(damage=_TWIN_SLAM_DAMAGE, instances=_TWIN_SLAM_INSTANCES, buff=True),
+    )
 
 
 def _get_modifier_map(ascension_level: AscensionLevel) -> dict[ModifierType, ModifierData]:

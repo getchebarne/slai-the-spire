@@ -53,7 +53,7 @@ def process_effect_turn_end(
         # Move's effects
         effects += [
             replace(effect, id_source=id_monster)
-            for effect in monster.move_map[monster.move_name_current]
+            for effect in monster.moves[monster.move_name_current].effects
         ]
 
         # Update move

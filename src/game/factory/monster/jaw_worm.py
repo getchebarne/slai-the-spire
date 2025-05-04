@@ -5,6 +5,8 @@ from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.monster import EntityMonster
+from src.game.entity.monster import Intent
+from src.game.entity.monster import MonsterMove
 from src.game.factory.lib import register_factory
 from src.game.types_ import AscensionLevel
 
@@ -41,10 +43,10 @@ def create_monster_jaw_worm(
             _NAME,
             health_current,
             health_max,
-            move_map={
-                "Chomp": _get_effects_chomp(ascension_level),
-                "Bellow": _get_effects_bellow(ascension_level),
-                "Thrash": _get_effects_thrash(),
+            moves={
+                "Chomp": _get_move_chomp(ascension_level),
+                "Bellow": _get_move_bellow(ascension_level),
+                "Thrash": _get_move_thrash(),
             },
         ),
         _get_move_name_jaw_worm,
@@ -83,40 +85,60 @@ def _get_move_name_jaw_worm(monster: EntityMonster) -> str:
     return "Bellow"
 
 
-def _get_effects_chomp(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_chomp(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 2:
-        return [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _CHOMP_DAMAGE, EffectTargetType.CHARACTER)]
+        return MonsterMove(
+            [Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _CHOMP_DAMAGE, EffectTargetType.CHARACTER)],
+            Intent(damage=_CHOMP_DAMAGE),
+        )
 
     return [
-        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _CHOMP_DAMAGE_ASC_2, EffectTargetType.CHARACTER)
+        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _CHOMP_DAMAGE_ASC_2, EffectTargetType.CHARACTER),
+        Intent(damage=_CHOMP_DAMAGE_ASC_2),
     ]
 
 
-def _get_effects_bellow(ascension_level: AscensionLevel) -> list[Effect]:
+def _get_move_bellow(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 2:
-        return [
-            Effect(EffectType.MODIFIER_STRENGTH_GAIN, _BELLOW_STRENGTH, EffectTargetType.SOURCE),
-            Effect(EffectType.BLOCK_GAIN, _BELLOW_BLOCK, EffectTargetType.SOURCE),
-        ]
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.MODIFIER_STRENGTH_GAIN, _BELLOW_STRENGTH, EffectTargetType.SOURCE
+                ),
+                Effect(EffectType.BLOCK_GAIN, _BELLOW_BLOCK, EffectTargetType.SOURCE),
+            ],
+            Intent(block=True, buff=True),
+        )
 
     if ascension_level < 17:
-        return [
+        return MonsterMove(
+            [
+                Effect(
+                    EffectType.MODIFIER_STRENGTH_GAIN,
+                    _BELLOW_STRENGTH_ASC_2,
+                    EffectTargetType.SOURCE,
+                ),
+                Effect(EffectType.BLOCK_GAIN, _BELLOW_BLOCK, EffectTargetType.SOURCE),
+            ],
+            Intent(block=True, buff=True),
+        )
+
+    return MonsterMove(
+        [
             Effect(
-                EffectType.MODIFIER_STRENGTH_GAIN, _BELLOW_STRENGTH_ASC_2, EffectTargetType.SOURCE
+                EffectType.MODIFIER_STRENGTH_GAIN, _BELLOW_STRENGTH_ASC_17, EffectTargetType.SOURCE
             ),
-            Effect(EffectType.BLOCK_GAIN, _BELLOW_BLOCK, EffectTargetType.SOURCE),
-        ]
-
-    return [
-        Effect(
-            EffectType.MODIFIER_STRENGTH_GAIN, _BELLOW_STRENGTH_ASC_17, EffectTargetType.SOURCE
-        ),
-        Effect(EffectType.BLOCK_GAIN, _BELLOW_BLOCK_ASC_17, EffectTargetType.SOURCE),
-    ]
+            Effect(EffectType.BLOCK_GAIN, _BELLOW_BLOCK_ASC_17, EffectTargetType.SOURCE),
+        ],
+        Intent(block=True, buff=True),
+    )
 
 
-def _get_effects_thrash() -> list[Effect]:
-    return [
-        Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _THRASH_DAMAGE, EffectTargetType.CHARACTER),
-        Effect(EffectType.BLOCK_GAIN, _THRASH_BLOCK, EffectTargetType.SOURCE),
-    ]
+def _get_move_thrash() -> MonsterMove:
+    return MonsterMove(
+        [
+            Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _THRASH_DAMAGE, EffectTargetType.CHARACTER),
+            Effect(EffectType.BLOCK_GAIN, _THRASH_BLOCK, EffectTargetType.SOURCE),
+        ],
+        Intent(damage=_THRASH_DAMAGE, block=True),
+    )
