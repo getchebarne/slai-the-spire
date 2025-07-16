@@ -3,13 +3,13 @@ import numpy as np
 import torch
 
 from src.game.combat.constant import MAX_SIZE_HAND
-from src.game.combat.create import create_combat_state
+from src.game.combat.create import create_game_state
 from src.game.combat.drawer import draw_combat
-from src.game.combat.main import start_combat
-from src.game.combat.main import step
-from src.game.combat.utils import is_game_over
 from src.game.combat.view import CombatView
 from src.game.combat.view import view_combat
+from src.game.main import start_combat
+from src.game.main import step
+from src.game.utils import is_game_over
 from src.rl.models.actor_critic import ActorCritic
 from src.rl.models.dqn import DeepQNetwork
 from src.rl.policies import PolicyBase
@@ -34,7 +34,7 @@ def run_simulation(
     games = []
     for _ in range(num_games):
         # Start combat
-        cs = create_combat_state()
+        cs = create_game_state()
         start_combat(cs)
 
         # Create a list to store combat views in each step

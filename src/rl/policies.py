@@ -5,12 +5,15 @@ from typing import Any, TypeAlias
 import torch
 import torch.nn as nn
 
-from src.game.combat.action import Action
-from src.game.combat.action import ActionType
-from src.game.combat.view import CombatView
-from src.rl.encoding import encode_combat_view
-from src.rl.models.interface import action_idx_to_action
-from src.rl.models.interface import get_valid_action_mask
+from src.game.action import Action
+from src.game.action import ActionType
+from src.game.view.fsm import ViewFSM
+from src.game.view.state import ViewGameState
+
+
+# from src.rl.encoding import encode_combat_view
+# from src.rl.models.interface import action_idx_to_action
+# from src.rl.models.interface import get_valid_action_mask
 
 
 SelectActionMetadata: TypeAlias = dict[str, Any]
@@ -18,31 +21,84 @@ SelectActionMetadata: TypeAlias = dict[str, Any]
 
 class PolicyBase(ABC):
     @abstractmethod
-    def select_action(combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
+    def select_action(view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
         raise NotImplementedError
 
 
 class PolicyRandom(PolicyBase):
-    def select_action(self, combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
-        if any([card.is_active for card in combat_view.hand]):
-            return Action(ActionType.SELECT_ENTITY, combat_view.monsters[0].entity_id), {}
+    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
+        if view_game_state.fsm == ViewFSM.CARD_REWARD:
+            num_cards = len(view_game_state.reward_combat)
+            roll = random.randint(0, num_cards)
+            if roll == num_cards:
+                return Action(ActionType.CARD_REWARD_SKIP), {}
 
-        if combat_view.effect is not None:
+            return Action(ActionType.CARD_REWARD_SELECT, roll), {}
+
+        if view_game_state.fsm == ViewFSM.MAP:
+            if view_game_state.map.y_current is None:
+                return (
+                    Action(
+                        ActionType.MAP_NODE_SELECT,
+                        random.choice(
+                            [
+                                x
+                                for x, node in enumerate(view_game_state.map.nodes[0])
+                                if node is not None
+                            ]
+                        ),
+                    ),
+                    {},
+                )
+
+            map_node = view_game_state.map.nodes[view_game_state.map.y_current][
+                view_game_state.map.x_current
+            ]
+            return Action(ActionType.MAP_NODE_SELECT, random.choice(list(map_node.x_next))), {}
+
+        if view_game_state.fsm == ViewFSM.REST_SITE:
+            action_type = random.choice([ActionType.REST_SITE_REST, ActionType.REST_SITE_UPGRADE])
+            if action_type == ActionType.REST_SITE_REST:
+                return Action(action_type), {}
+
+            index_upgradable = [
+                idx for idx, card in enumerate(view_game_state.deck) if not card.name.endswith("+")
+            ]
+            return (
+                Action(action_type, random.choice(index_upgradable)),
+                {},
+            )
+
+        if view_game_state.fsm == ViewFSM.COMBAT_AWAIT_TARGET_CARD:
             return (
                 Action(
-                    ActionType.SELECT_ENTITY,
-                    random.choice([card.entity_id for card in combat_view.hand]),
+                    ActionType.COMBAT_MONSTER_SELECT,
+                    random.choice(range(len(view_game_state.monsters))),
                 ),
                 {},
             )
 
-        id_selectable_cards = [
-            card.entity_id for card in combat_view.hand if card.cost <= combat_view.energy.current
-        ]
-        if id_selectable_cards:
-            return Action(ActionType.SELECT_ENTITY, random.choice(id_selectable_cards)), {}
+        if view_game_state.fsm == ViewFSM.COMBAT_AWAIT_TARGET_DISCARD is not None:
+            return (
+                Action(
+                    ActionType.COMBAT_CARD_IN_HAND_SELECT,
+                    random.choice(range(len(view_game_state.hand))),
+                ),
+                {},
+            )
 
-        return Action(ActionType.END_TURN), {}
+        card_selectable_pos = [
+            pos
+            for pos, card in enumerate(view_game_state.hand)
+            if card.cost <= view_game_state.energy.current
+        ]
+        if card_selectable_pos:
+            return (
+                Action(ActionType.COMBAT_CARD_IN_HAND_SELECT, random.choice(card_selectable_pos)),
+                {},
+            )
+
+        return Action(ActionType.COMBAT_TURN_END), {}
 
 
 class PolicyQMax(PolicyBase):
@@ -53,7 +109,7 @@ class PolicyQMax(PolicyBase):
         # Send model to device
         self._model.to(self._device)
 
-    def select_action(self, combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
+    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
         combat_view_encoding = encode_combat_view(combat_view, self._device)
         valid_action_mask_tensor = torch.tensor(
             [get_valid_action_mask(combat_view)], dtype=torch.bool, device=self._device
@@ -78,7 +134,7 @@ class PolicySoftmax(PolicyBase):
         # Send model to device
         self._model.to(self._device)
 
-    def select_action(self, combat_view: CombatView) -> tuple[Action, SelectActionMetadata]:
+    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
         combat_view_encoding = encode_combat_view(combat_view, self._device)
         valid_action_mask_tensor = torch.tensor(
             [get_valid_action_mask(combat_view)], dtype=torch.bool, device=self._device

@@ -10,7 +10,7 @@ def process_effect_energy_gain(
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
 
-    energy = entity_manager.entities[entity_manager.id_energy]
+    energy = entity_manager.energy
     energy.current = min(energy.current + value, ENERGY_MAX)
 
     return [], []

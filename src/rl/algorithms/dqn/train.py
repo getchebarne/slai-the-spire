@@ -7,11 +7,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.combat.create import create_combat_state
-from src.game.combat.main import start_combat
-from src.game.combat.main import step
-from src.game.combat.utils import is_game_over
+from src.game.combat.create import create_game_state
 from src.game.combat.view import view_combat
+from src.game.main import start_combat
+from src.game.main import step
+from src.game.utils import is_game_over
 from src.rl.algorithms.dqn.explorer import linear_decay
 from src.rl.algorithms.dqn.memory import Batch
 from src.rl.algorithms.dqn.memory import ReplayBuffer
@@ -89,7 +89,7 @@ def _play_episode(
     device: torch.device,
 ) -> tuple[float | None, int]:
     # Get new game
-    cs = create_combat_state()
+    cs = create_game_state()
     start_combat(cs)
 
     # Intialize variables

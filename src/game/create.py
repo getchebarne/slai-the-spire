@@ -1,5 +1,9 @@
 from collections import deque
 
+from src.game.core.effect import Effect
+from src.game.core.effect import EffectSelectionType
+from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.entity.manager import EntityManager
 from src.game.entity.manager import add_entity
 from src.game.entity.map_node import EntityMapNode
@@ -42,5 +46,12 @@ def create_game_state(ascension_level: AscensionLevel) -> GameState:
 
     # Create effect queue
     effect_queue = deque()
+    effect_queue.append(
+        Effect(
+            EffectType.MAP_NODE_ACTIVE_SET,
+            target_type=EffectTargetType.MAP_NODE,
+            selection_type=EffectSelectionType.INPUT,
+        ),
+    )
 
     return GameState(ascension_level, entity_manager, effect_queue, None)

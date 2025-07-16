@@ -16,7 +16,7 @@ def process_effect_room_enter(
 ) -> tuple[list[Effect], list[Effect]]:
     ascension_level = kwargs["ascension_level"]
 
-    map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+    map_node_active = entity_manager.map_node_active
 
     if map_node_active.room_type == RoomType.COMBAT_BOSS:
         set_level_exoridium_combat_the_guardian(entity_manager, ascension_level)
@@ -26,9 +26,9 @@ def process_effect_room_enter(
     if map_node_active.room_type == RoomType.COMBAT_MONSTER:
         set_level_fn = random.choice(
             [
-                set_level_exoridium_combat_cultist,
+                # set_level_exoridium_combat_cultist,
                 set_level_exoridium_combat_fungi_beast_two,
-                set_level_exoridium_combat_jaw_worm,
+                # set_level_exoridium_combat_jaw_worm,
             ]
         )
         set_level_fn(entity_manager, ascension_level)

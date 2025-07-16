@@ -17,7 +17,7 @@ def process_effect_turn_start(
 
     # Character-specific effects
     if isinstance(target, EntityCharacter):
-        energy = entity_manager.entities[entity_manager.id_energy]
+        energy = entity_manager.energy
         effects += [
             Effect(EffectType.CARD_DRAW, 5),
             Effect(EffectType.ENERGY_GAIN, energy.max - energy.current),

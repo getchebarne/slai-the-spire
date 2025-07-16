@@ -4,11 +4,11 @@ from multiprocessing.connection import Connection
 
 import torch
 
-from src.game.combat.create import create_combat_state
-from src.game.combat.main import start_combat
-from src.game.combat.main import step
-from src.game.combat.utils import is_game_over
+from src.game.combat.create import create_game_state
 from src.game.combat.view import view_combat
+from src.game.main import start_combat
+from src.game.main import step
+from src.game.utils import is_game_over
 from src.rl.encoding import encode_combat_view
 from src.rl.encoding import pack_combat_view_encoding
 from src.rl.models.interface import action_idx_to_action
@@ -41,7 +41,7 @@ def worker(remote: Connection, device: torch.device) -> None:
 
         if command == Command.RESET:
             # Reset combat
-            cs = create_combat_state()
+            cs = create_game_state()
             start_combat(cs)
 
             # Get combat view, encode it, valid action mask, and game over flag

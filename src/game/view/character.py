@@ -11,7 +11,7 @@ class ViewCharacter(ViewActor):
 
 
 def get_view_character(entity_manager: EntityManager) -> ViewCharacter:
-    character = entity_manager.entities[entity_manager.id_character]
+    character = entity_manager.character
 
     return ViewCharacter(
         character.name,

@@ -44,17 +44,16 @@ def _resolve_effect_target_type(
 
     if effect_target_type == EffectTargetType.MAP_NODE:
         # TODO: improve
-        # TODO: fix end of map bug
         if entity_manager.id_map_node_active is None:
             return [
-                entity_manager.id_map_nodes[0][x]
-                for x, node in enumerate(entity_manager.id_map_nodes[0])
-                if node is not None
+                id_node
+                for id_node in enumerate(entity_manager.id_map_nodes[0])
+                if id_node is not None
             ]
 
-        map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+        map_node_active = entity_manager.map_node_active
         y_next = map_node_active.y + 1
-        return [entity_manager.id_map_nodes[y_next][x] for x in range(3)]
+        return [entity_manager.id_map_nodes[y_next][x] for x in map_node_active.x_next]
 
     if effect_target_type == EffectTargetType.SOURCE:
         return [id_source]
@@ -63,7 +62,7 @@ def _resolve_effect_target_type(
 
 
 def _resolve_effect_selection_type(
-    effect_selection_type: EffectSelectionType, id_queries: list[int], id_effect_target: int | None
+    effect_selection_type: EffectSelectionType, id_queries: list[int], effect_id_target: int | None
 ) -> list[int]:
     if effect_selection_type == EffectSelectionType.RANDOM:
         if id_queries:
@@ -73,17 +72,15 @@ def _resolve_effect_selection_type(
 
     if effect_selection_type == EffectSelectionType.INPUT:
         # TODO: make more readable?
-        if id_effect_target is None:
+        if effect_id_target is None:
             # Verify if we need to prompt the player to select from query entities
             # or if no selection is needed
-            # TODO: this can depend on the number of entities to select (e.g., "Prepared+")
-            num_target = 1
-            if len(id_queries) > num_target:
+            if len(id_queries) > 1:
                 raise EffectNeedsInputTargets
 
             return id_queries
 
-        return [id_effect_target]
+        return [effect_id_target]
 
     raise ValueError(f"Unsupported effect selection type: {effect_selection_type}")
 

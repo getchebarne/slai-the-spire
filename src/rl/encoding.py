@@ -23,11 +23,11 @@ EFFECT_TYPE_CARD_POS = {
     effect_type_card: idx for idx, effect_type_card in enumerate(EFFECT_TYPE_CARD)
 }
 EFFECT_TYPES_MAX = {
-    EffectType.DEAL_DAMAGE: 10,
-    EffectType.GAIN_BLOCK: 11,
-    EffectType.DISCARD: 1,
-    EffectType.GAIN_WEAK: 2,
-    EffectType.DRAW_CARD: 2,
+    EffectType.DAMAGE_DEAL_PHYSICAL: 10,
+    EffectType.BLOCK_GAIN: 11,
+    EffectType.CARD_DISCARD: 1,
+    EffectType.MODIFIER_WEAK_GAIN: 2,
+    EffectType.CARD_DRAW: 2,
 }
 MODIFIER_VIEW_TYPES_MAX = {
     ModifierViewType.STRENGTH: 20,
@@ -160,7 +160,7 @@ def _encode_monster_view(
             #     total_max,
             #     device,
             # ),
-            _encode_actor_view_modifiers(monster_view.modifiers, device),
+            _encode_actor_view_modifiers(monster_view.modifier_map, device),
             # Intent
             _encode_intent_view(monster_view.intent, device),
             torch.tensor(

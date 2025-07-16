@@ -33,7 +33,7 @@ def get_view_map(entity_manager: EntityManager) -> ViewMap:
         return map_view
 
     # Get current node coordinates
-    map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+    map_node_active = entity_manager.map_node_active
     map_view = replace(map_view, y_current=map_node_active.y, x_current=map_node_active.x)
 
     return map_view

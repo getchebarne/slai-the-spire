@@ -74,10 +74,8 @@ def _actor_str(actor: ViewActor, n_col: int = 0) -> str:
     )
 
 
-def _intent_str(intent: Intent | None) -> str:
+def _intent_str(intent: Intent) -> str:
     str_ = ""
-    if intent is None:
-        return str_
 
     if intent.damage is not None:
         if intent.instances is None:
@@ -121,7 +119,7 @@ def _monster_str(monster_view: ViewMonster) -> str:
 
 
 # TODO: improve
-def _map_str(map_: ViewMap) -> None:
+def _map_str(map_: ViewMap, idx: int) -> None:
     map_height = len(map_.nodes)
     map_width = len(map_.nodes[0])
     grid_rows = map_height * 2
@@ -129,6 +127,7 @@ def _map_str(map_: ViewMap) -> None:
     grid = [[" " for _ in range(grid_cols + 3)] for _ in range(grid_rows)]
 
     # Place only active nodes
+    xs = [x for x, node in enumerate(map_.nodes[0]) if node is not None]
     for y in range(map_height):
         if y == map_.y_current:
             grid[2 * y][0:3] = ">>>"
@@ -148,6 +147,9 @@ def _map_str(map_: ViewMap) -> None:
 
             if y == map_.y_current and x == map_.x_current:
                 char = f"{GREEN}{char}{RESET}"
+
+            if x == xs[idx] and y == 0:
+                char = f"{RED}{char}{RESET}"
 
             grid[gy][gx] = char
 

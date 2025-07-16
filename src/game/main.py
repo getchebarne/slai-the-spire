@@ -15,6 +15,7 @@ from src.game.draw import get_view_game_state_str
 from src.game.engine.effect_queue import add_to_bot
 from src.game.engine.effect_queue import add_to_top
 from src.game.engine.effect_queue import process_effect_queue
+from src.game.entity.manager import get_entity
 from src.game.map_ import RoomType
 from src.game.state import GameState
 from src.game.utils import does_card_require_target
@@ -65,12 +66,10 @@ def _handle_combat_card_in_hand_select(
     id_card = game_state.entity_manager.id_cards_in_hand[index]
 
     if game_state.fsm == FSM.COMBAT_DEFAULT:
-        card = game_state.entity_manager.entities[id_card]
+        card = get_entity(game_state.entity_manager, id_card)
 
         # Check if there's enough energy to play it
-        energy_current = game_state.entity_manager.entities[
-            game_state.entity_manager.id_energy
-        ].current
+        energy_current = game_state.entity_manager.energy.current
         if card.cost > energy_current:
             raise InvalidActionError(f"Can't select card {card} with {energy_current} energy")
 
@@ -103,12 +102,11 @@ def _handle_rest_site_rest(game_state: GameState) -> tuple[list[Effect], list[Ef
     if game_state.fsm != FSM.REST_SITE:
         raise InvalidActionError(f"Can't rest on state {game_state.fsm}")
 
-    character = game_state.entity_manager.entities[game_state.entity_manager.id_character]
+    # character = get_character(game_state.entity_manager)
+    character = game_state.entity_manager.character
     health_gain_value = int(_REST_SITE_REST_HEALTH_GAIN_FACTOR * character.health_max)
 
-    map_node_active = game_state.entity_manager.entities[
-        game_state.entity_manager.id_map_node_active
-    ]
+    map_node_active = game_state.entity_manager.map_node_active
     if map_node_active.y == len(game_state.entity_manager.id_map_nodes) - 1:
         # Boss fight
         return [
@@ -145,13 +143,11 @@ def _handle_rest_site_upgrade(
         raise InvalidActionError(f"Can't upgrade on state {game_state.fsm}")
 
     id_card = game_state.entity_manager.id_cards_in_deck[index]
-    card = game_state.entity_manager.entities[id_card]
+    card = get_entity(game_state.entity_manager, id_card)
     if card.name.endswith("+"):
         raise InvalidActionError("Can't upgrade an already-upgraded card")
 
-    map_node_active = game_state.entity_manager.entities[
-        game_state.entity_manager.id_map_node_active
-    ]
+    map_node_active = game_state.entity_manager.map_node_active
     if map_node_active.y == len(game_state.entity_manager.id_map_nodes) - 1:
         # Boss fight
         return [
@@ -190,9 +186,7 @@ def _handle_map_node_select(
 
     else:
         # Intermediate node
-        map_node_active = game_state.entity_manager.entities[
-            game_state.entity_manager.id_map_node_active
-        ]
+        map_node_active = game_state.entity_manager.map_node_active
         y_next = map_node_active.y + 1
         x_valid = map_node_active.x_next
 
@@ -312,9 +306,7 @@ def _get_new_fsm(game_state: GameState) -> FSM:
 
     # At this point, the effect queue is clear and there's no active card. The state the game's in
     # depends on the current room type
-    map_node_active = game_state.entity_manager.entities[
-        game_state.entity_manager.id_map_node_active
-    ]
+    map_node_active = game_state.entity_manager.map_node_active
     if map_node_active.room_type == RoomType.REST_SITE:
         return FSM.REST_SITE
 
@@ -332,16 +324,6 @@ def main(
     select_action_fn: Callable[[ViewGameState], tuple[Action, SelectActionMetadata]],
     draw: bool = False,
 ) -> None:
-    # Kick-off game with an effect to select the starting map node
-    add_to_bot(
-        game_state.effect_queue,
-        Effect(
-            EffectType.MAP_NODE_ACTIVE_SET,
-            target_type=EffectTargetType.MAP_NODE,
-            selection_type=EffectSelectionType.INPUT,
-        ),
-    )
-
     # Set new state
     game_state.fsm = _get_new_fsm(game_state)
 
@@ -349,21 +331,20 @@ def main(
     while game_state.fsm != FSM.GAME_OVER:
         # Get game state view and draw it on the terminal
         game_state_view = get_view_game_state(game_state)
+        if draw:
+            view_game_state_str = get_view_game_state_str(game_state_view)
+            print(view_game_state_str)
+            print("-" * _NCOL)
 
         # Get action from agent
         action, _ = select_action_fn(game_state_view)
+        if draw:
+            action_str = get_action_str(action, game_state_view)
+            print(action_str)
+            print("-" * _NCOL)
 
         # Game step
         step(game_state, action)
-
-        # Draw on terminal
-        if draw:
-            view_game_state_str = get_view_game_state_str(game_state_view)
-            action_str = get_action_str(action, game_state_view)
-            print(view_game_state_str)
-            print("-" * _NCOL)
-            print(action_str)
-            print("-" * _NCOL)
 
 
 if __name__ == "__main__":

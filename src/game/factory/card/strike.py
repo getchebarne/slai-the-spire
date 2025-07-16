@@ -12,7 +12,7 @@ from src.game.types_ import CardUpgraded
 _NAME = "Strike"
 _COLOR = CardColor.GREEN
 _COST = 1
-_DAMAGE = 6
+_DAMAGE = 100
 _DAMAGE_PLUS = 9
 _RARITY = CardRarity.BASIC
 _TYPE = CardType.ATTACK

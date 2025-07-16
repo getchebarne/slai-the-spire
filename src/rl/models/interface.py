@@ -1,7 +1,7 @@
 import torch
 
-from src.game.combat.action import Action
-from src.game.combat.action import ActionType
+from src.game.action import Action
+from src.game.action import ActionType
 from src.game.combat.constant import MAX_SIZE_HAND
 from src.game.combat.view import CombatView
 
@@ -14,7 +14,7 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
         return [False] * (2 * MAX_SIZE_HAND) + [True, False]
 
     if combat_view.effect is not None:
-        # TODO: only contemplating EffectType.DISCARD for now
+        # TODO: only contemplating EffectType.CARD_DISCARD for now
         valid_action_mask = [False] * MAX_SIZE_HAND
         valid_action_mask.extend([True] * len(combat_view.hand))
         valid_action_mask.extend([False] * (MAX_SIZE_HAND - len(combat_view.hand)))
@@ -35,13 +35,13 @@ def get_valid_action_mask(combat_view: CombatView) -> list[bool]:
 def action_idx_to_action(action_idx: int | torch.Tensor, combat_view: CombatView) -> Action:
     if action_idx < 2 * MAX_SIZE_HAND:
         return Action(
-            ActionType.SELECT_ENTITY, combat_view.hand[action_idx % MAX_SIZE_HAND].entity_id
+            ActionType.ENTITY_SELECT, combat_view.hand[action_idx % MAX_SIZE_HAND].entity_id
         )
 
     if action_idx == 2 * MAX_SIZE_HAND:
-        return Action(ActionType.SELECT_ENTITY, combat_view.monsters[0].entity_id)
+        return Action(ActionType.ENTITY_SELECT, combat_view.monsters[0].entity_id)
 
     if action_idx == 2 * MAX_SIZE_HAND + 1:
-        return Action(ActionType.END_TURN)
+        return Action(ActionType.TURN_END)
 
     raise ValueError(f"Unsupported action index: {action_idx}")

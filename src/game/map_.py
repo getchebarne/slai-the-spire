@@ -4,7 +4,7 @@ from src.game.entity.map_node import EntityMapNode
 from src.game.entity.map_node import RoomType
 
 
-_MAP_HEIGHT = 3
+_MAP_HEIGHT = 15
 _MAP_WIDTH = 7
 _PATH_DENSITY = 6
 _ANCESTOR_GAP_MIN = 3

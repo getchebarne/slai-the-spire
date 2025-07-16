@@ -30,7 +30,7 @@ for card_name, factory_card in FACTORY_LIB_CARD.items():
 def process_effect_card_reward_roll(
     entity_manager: EntityManager, **kwargs
 ) -> list[tuple[Effect], tuple[Effect]]:
-    character = entity_manager.entities[entity_manager.id_character]
+    character = entity_manager.character
 
     # Initialize list to track rolled card names to make sure no duplicate cards are rolled
     card_name_rolled = []

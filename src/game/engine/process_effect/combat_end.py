@@ -27,11 +27,11 @@ def process_effect_combat_end(
         delete_entity(entity_manager, id_)
 
     # Clear character's modifiers
-    character = entity_manager.entities[entity_manager.id_character]
+    character = entity_manager.character
     character.modifier_map = dict()
 
     # Get current room type
-    map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+    map_node_active = entity_manager.map_node_active
     if map_node_active.room_type == RoomType.COMBAT_BOSS:
         # Game end
         return [], [Effect(EffectType.GAME_END)]

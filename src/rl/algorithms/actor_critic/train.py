@@ -9,11 +9,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.combat.create import create_combat_state
-from src.game.combat.main import start_combat
-from src.game.combat.main import step
-from src.game.combat.utils import is_game_over
+from src.game.combat.create import create_game_state
 from src.game.combat.view import view_combat
+from src.game.main import start_combat
+from src.game.main import step
+from src.game.utils import is_game_over
 from src.rl.encoding import encode_combat_view
 from src.rl.evaluation import run_all_evals
 from src.rl.models.actor_critic import ActorCritic
@@ -35,7 +35,7 @@ class EpisodeResult:
 
 def _play_episode(model: ActorCritic, device: torch.device) -> EpisodeResult:
     # Get new game TODO: improve this
-    cs = create_combat_state()
+    cs = create_game_state()
     start_combat(cs)
 
     episode_result = EpisodeResult()
