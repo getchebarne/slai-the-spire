@@ -21,19 +21,19 @@ class ViewMap:
 
 
 def get_view_map(entity_manager: EntityManager) -> ViewMap:
-    map_view = ViewMap(deepcopy(entity_manager.id_map_nodes))
+    view_map = ViewMap(deepcopy(entity_manager.id_map_nodes))
 
-    for y, row in enumerate(map_view.nodes):
+    for y, row in enumerate(view_map.nodes):
         for x, id_node in enumerate(row):
             if id_node is not None:
                 map_node = entity_manager.entities[id_node]
-                map_view.nodes[y][x] = ViewMapNode(map_node.room_type, map_node.x_next)
+                view_map.nodes[y][x] = ViewMapNode(map_node.room_type, map_node.x_next)
 
     if entity_manager.id_map_node_active is None:
-        return map_view
+        return view_map
 
     # Get current node coordinates
     map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
-    map_view = replace(map_view, y_current=map_node_active.y, x_current=map_node_active.x)
+    view_map = replace(view_map, y_current=map_node_active.y, x_current=map_node_active.x)
 
-    return map_view
+    return view_map

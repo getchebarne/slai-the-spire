@@ -4,16 +4,18 @@ from multiprocessing.connection import Connection
 
 import torch
 
-from src.game.combat.create import create_combat_state
-from src.game.combat.main import start_combat
-from src.game.combat.main import step
-from src.game.combat.utils import is_game_over
-from src.game.combat.view import view_combat
-from src.rl.encoding import encode_combat_view
-from src.rl.encoding import pack_combat_view_encoding
+from src.game.core.fsm import FSM
+from src.game.create import create_game_state
+from src.game.main import initialize_game_state
+from src.game.main import step
+from src.game.view.state import get_view_game_state
+from src.rl.encoding.state import encode_view_game_state
 from src.rl.models.interface import action_idx_to_action
 from src.rl.models.interface import get_valid_action_mask
 from src.rl.reward import compute_reward
+
+
+_ASCENSION_LEVEL = 1
 
 
 class Command(Enum):
@@ -23,17 +25,17 @@ class Command(Enum):
 
 @dataclass
 class WorkerData:
-    combat_view_encoding: torch.Tensor
-    valid_action_mask: list[bool]
+    encoding_game_state: tuple[torch.Tensor, ...]
+    valid_action_mask: torch.Tensor
     game_over_flag: bool
     reward: float | None = None
 
 
 def worker(remote: Connection, device: torch.device) -> None:
     # Intialize variables to `None`
-    cs = None
+    game_state = None
     game_over_flag = None
-    combat_view = None
+    view_game_state = None
 
     while True:
         # Receive data from the master
@@ -41,22 +43,22 @@ def worker(remote: Connection, device: torch.device) -> None:
 
         if command == Command.RESET:
             # Reset combat
-            cs = create_combat_state()
-            start_combat(cs)
+            game_state = create_game_state(_ASCENSION_LEVEL)
+            initialize_game_state(game_state)
 
             # Get combat view, encode it, valid action mask, and game over flag
-            combat_view = view_combat(cs)
-            combat_view_encoding = encode_combat_view(combat_view, device)
-            valid_action_mask = get_valid_action_mask(combat_view)
-            game_over_flag = is_game_over(cs.entity_manager)
+            view_game_state = get_view_game_state(game_state)
+            encoding_game_state = encode_view_game_state(view_game_state, device)
+            valid_action_mask = get_valid_action_mask(view_game_state)
+            game_over_flag = game_state.fsm == FSM.GAME_OVER
 
             if game_over_flag:
                 raise RuntimeError("Game started in game over state")
 
             remote.send(
                 WorkerData(
-                    pack_combat_view_encoding(combat_view_encoding),
-                    valid_action_mask,
+                    encoding_game_state,
+                    valid_action_mask.view(1, -1),
                     game_over_flag,
                 )
             )
@@ -64,26 +66,26 @@ def worker(remote: Connection, device: torch.device) -> None:
         if command == Command.STEP:
             # If the game's over, raise an error
             if game_over_flag:
-                raise RuntimeError("Attempted to take an action while the game's over.")
+                raise RuntimeError("Attempted to make an action while the game's over.")
 
             # Game step
-            action = action_idx_to_action(action_idx, combat_view)
-            step(cs, action)
+            action = action_idx_to_action(action_idx)
+            step(game_state, action)
 
             # Get next combat view, compute game over flag and reward
-            combat_view_next = view_combat(cs)
-            game_over_flag = is_game_over(cs.entity_manager)
-            reward = compute_reward(combat_view, combat_view_next, game_over_flag)
+            view_game_state_next = get_view_game_state(game_state)
+            game_over_flag = game_state.fsm == FSM.GAME_OVER
+            reward = compute_reward(view_game_state, view_game_state_next, game_over_flag)
 
             # Update current state and valid action mask
-            combat_view = combat_view_next
-            valid_action_mask = get_valid_action_mask(combat_view)
+            view_game_state = view_game_state_next
+            valid_action_mask = get_valid_action_mask(view_game_state)
 
             # Send transition data
             remote.send(
                 WorkerData(
-                    pack_combat_view_encoding(encode_combat_view(combat_view, device)),
-                    valid_action_mask,
+                    encode_view_game_state(view_game_state, device),
+                    valid_action_mask.view(1, -1),
                     game_over_flag,
                     reward,
                 )

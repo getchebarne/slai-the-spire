@@ -1,7 +1,7 @@
-exp_name: a2c/jaw/parallel-ppo
+exp_name: a2c/jaw/test-parallel-fix-II
 num_episodes: 1.0e+6
-log_every: 500
-save_every: 500
+log_every: 10
+save_every: 100
 gamma: 0.99
 lam: 0.95
 coef_value: 0.500
@@ -10,17 +10,18 @@ coef_entropy_min: 0.010
 coef_entropy_elbow: 5.0e+4
 max_grad_norm: 0.500
 num_eval: 100
-num_envs: 7
+num_envs: 8
 clip_eps: 0.20
 clip_value_loss: true
 minibatch_size: 64
 num_epochs: 4
 
 model: 
-  dim_card: 64
-  dim_char: 64
-  dim_monster: 64
-  dim_energy: 16
+  embedding_dim_card: 64
+  embedding_dim_char: 64
+  embedding_dim_monster: 64
+  embedding_dim_energy: 16
+  num_heads: 8
 
 optimizer:
   name: Adam

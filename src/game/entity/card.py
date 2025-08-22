@@ -28,6 +28,7 @@ class CardType(Enum):
     STATUS = "STATUS"
 
 
+# TODO: add `upgraded` field
 @dataclass
 class EntityCard(EntityBase):
     name: str

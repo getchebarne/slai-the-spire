@@ -327,11 +327,7 @@ def _get_new_fsm(game_state: GameState) -> FSM:
     raise ValueError(f"Unsupported room type: {map_node_active.room_type}")
 
 
-def main(
-    game_state: GameState,
-    select_action_fn: Callable[[ViewGameState], tuple[Action, SelectActionMetadata]],
-    draw: bool = False,
-) -> None:
+def initialize_game_state(game_state: GameState) -> None:
     # Kick-off game with an effect to select the starting map node
     add_to_bot(
         game_state.effect_queue,
@@ -344,6 +340,14 @@ def main(
 
     # Set new state
     game_state.fsm = _get_new_fsm(game_state)
+
+
+def main(
+    game_state: GameState,
+    select_action_fn: Callable[[ViewGameState], tuple[Action, SelectActionMetadata]],
+    draw: bool = False,
+) -> GameState:
+    initialize_game_state(game_state)
 
     # Loop
     while game_state.fsm != FSM.GAME_OVER:
@@ -364,6 +368,8 @@ def main(
             print("-" * _NCOL)
             print(action_str)
             print("-" * _NCOL)
+
+    return game_state
 
 
 if __name__ == "__main__":

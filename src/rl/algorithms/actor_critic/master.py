@@ -3,22 +3,22 @@ import random
 import shutil
 from collections import deque
 from dataclasses import dataclass, field
-from multiprocessing import Pipe
-from multiprocessing import Process
 from multiprocessing.connection import Connection
 from typing import Iterator
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.multiprocessing import Pipe
+from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
+from src.game.create import create_game_state
+from src.game.main import main
+from src.rl.algorithms.actor_critic.worker import _ASCENSION_LEVEL
 from src.rl.algorithms.actor_critic.worker import Command
 from src.rl.algorithms.actor_critic.worker import WorkerData
 from src.rl.algorithms.actor_critic.worker import worker
-from src.rl.encoding import unpack_combat_view_encoding
-from src.rl.evaluation import run_all_evals
 from src.rl.models.actor_critic import ActorCritic
 from src.rl.policies import PolicySoftmax
 from src.rl.utils import init_optimizer
@@ -27,7 +27,7 @@ from src.rl.utils import load_config
 
 @dataclass
 class Trajectory:
-    states: list[torch.Tensor] = field(default_factory=list)
+    states: list[tuple[torch.Tensor, ...]] = field(default_factory=list)
     valid_action_masks: list[torch.Tensor] = field(default_factory=list)
     action_idxs: list[torch.Tensor] = field(default_factory=list)
     log_probs: list[torch.Tensor] = field(default_factory=list)
@@ -46,21 +46,9 @@ class Batch:
     advantages: torch.Tensor
 
     def __post_init__(self):
-        # Assert all tensor are bidimensional (batch and data dimenson)
-        assert (
-            2
-            == self.states.ndim
-            == self.valid_action_masks.ndim
-            == self.action_idxs.ndim
-            == self.log_probs.ndim
-            == self.values.ndim
-            == self.returns.ndim
-            == self.advantages.ndim
-        )
-
         # Assert all tensors have the same number of samples
         assert (
-            self.states.shape[0]
+            self.states[0].shape[0]
             == self.valid_action_masks.shape[0]
             == self.action_idxs.shape[0]
             == self.log_probs.shape[0]
@@ -70,7 +58,7 @@ class Batch:
         )
 
     def __len__(self) -> int:
-        return self.states.shape[0]
+        return self.states[0].shape[0]
 
 
 def _run_episodes(
@@ -93,7 +81,7 @@ def _run_episodes(
 
     # Loop will break when all environments reach a terminal state
     while True:
-        combat_view_encodings = []
+        encoding_game_states = []
         valid_action_masks = []
         rewards = []
         idx_env_terminal = []
@@ -103,7 +91,7 @@ def _run_episodes(
 
                 continue
 
-            combat_view_encodings.append(worker_data.combat_view_encoding)
+            encoding_game_states.append(worker_data.encoding_game_state)
             valid_action_masks.append(worker_data.valid_action_mask)
             rewards.append(worker_data.reward)
 
@@ -115,14 +103,16 @@ def _run_episodes(
         if not idx_env_running:
             break
 
-        # Else, get action indexes for each running environment. Concatenate combat view encodings
+        # Else, get action indexes for each running environment. Concatenate game state encodings
         # and create valid action masks tensor
-        combat_view_encodings = torch.cat(combat_view_encodings, dim=0)
-        valid_action_masks = torch.tensor(valid_action_masks, dtype=torch.bool, device=device)
+        encoding_game_states = [
+            torch.cat(tensors, dim=0) for tensors in zip(*encoding_game_states)
+        ]
+        valid_action_masks = torch.cat(valid_action_masks, dim=0)
 
         # Forward pass
         x_probs, x_values = model(
-            *unpack_combat_view_encoding(combat_view_encodings).as_tuple(),
+            *encoding_game_states,
             x_valid_action_mask=valid_action_masks,
         )
 
@@ -132,7 +122,7 @@ def _run_episodes(
 
         # Send action indexes to their corresponding workers
         for idx_batch, idx_env in enumerate(idx_env_running):
-            conn_parents[idx_env].send((Command.STEP, action_idxs[idx_batch : idx_batch + 1]))
+            conn_parents[idx_env].send((Command.STEP, action_idxs[idx_batch].item()))
 
         # Overwrite previous `worker_datas` with new data from workers
         worker_datas: list[WorkerData] = [
@@ -144,7 +134,12 @@ def _run_episodes(
         for idx_batch, idx_env in enumerate(idx_env_running):
             trajectory = trajectories[idx_env]
 
-            trajectory.states.append(combat_view_encodings[idx_batch : idx_batch + 1])
+            # TODO: improve ugly code
+            xs = []
+            for x in encoding_game_states:
+                xs.append(x[idx_batch : idx_batch + 1])
+            trajectory.states.append(tuple(xs))
+
             trajectory.valid_action_masks.append(valid_action_masks[idx_batch : idx_batch + 1])
             trajectory.action_idxs.append(action_idxs[idx_batch : idx_batch + 1])
             trajectory.log_probs.append(log_probs[idx_batch : idx_batch + 1])
@@ -210,7 +205,7 @@ def _create_batch(
 
     # Create the batch
     batch = Batch(
-        torch.cat(all_states, dim=0),
+        [torch.cat(tensors, dim=0) for tensors in zip(*all_states)],
         torch.cat(all_valid_action_masks, dim=0),
         torch.cat(all_action_idxs, dim=0),
         torch.cat(all_log_probs, dim=0).detach(),
@@ -268,8 +263,11 @@ def _update_model_ppo(
         for minibatch_idxs in _dataloader(len(batch), minibatch_size):
             minibatch_num += 1
 
-            # Get minibatch
-            minibatch_states = batch.states[minibatch_idxs]
+            # Get minibatch TODO: improve ugly code
+            minibatch_states = []
+            for x in batch.states:
+                minibatch_states.append(x[minibatch_idxs])
+
             minibatch_valid_action_masks = batch.valid_action_masks[minibatch_idxs]
             minibatch_action_idxs = batch.action_idxs[minibatch_idxs]
             minibatch_log_probs = batch.log_probs[minibatch_idxs]
@@ -279,7 +277,7 @@ def _update_model_ppo(
 
             # Re-compute log probs and values with current policy
             x_probs, x_values = model(
-                *unpack_combat_view_encoding(minibatch_states).as_tuple(),
+                *minibatch_states,
                 x_valid_action_mask=minibatch_valid_action_masks,
             )
             dist = torch.distributions.Categorical(probs=x_probs)
@@ -377,6 +375,7 @@ def train(
         process.start()
 
     for num_episode in range(num_episodes):
+        print(f"{num_episode=}")
         coef_entropy = coefs_entropy[num_episode]
 
         # Run games, get trajectories
@@ -403,11 +402,29 @@ def train(
             writer.add_scalar("Entropy/coef.", coef_entropy, num_episode)
             writer.add_scalar("Entropy/value", -1 * loss_entropy, num_episode)
 
-            eval_results = run_all_evals(policy, num_eval)
-            for eval_name, eval_values in eval_results.items():
-                writer.add_scalar(
-                    f"Evaluation/{eval_name}", np.mean(eval_values).item(), num_episode
-                )
+            # Run
+            game_state = create_game_state(_ASCENSION_LEVEL)
+            game_state = main(game_state, policy.select_action)
+
+            writer.add_scalar(
+                "Floor",
+                game_state.entity_manager.entities[game_state.entity_manager.id_map_node_active].y,
+                num_episode,
+            )
+            writer.add_scalar(
+                "Health",
+                game_state.entity_manager.entities[
+                    game_state.entity_manager.id_character
+                ].health_current,
+                num_episode,
+            )
+            upgrades = sum(
+                [
+                    game_state.entity_manager.entities[id_card].name.endswith("+")
+                    for id_card in game_state.entity_manager.id_cards_in_deck
+                ]
+            )
+            writer.add_scalar("Upgrades", upgrades, num_episode)
 
         # Save model
         if (num_episode % save_every) == 0:
@@ -430,6 +447,10 @@ def _get_coefs_entropy(num_episodes: int, elbow: int, max_: float, min_: float) 
 
 
 if __name__ == "__main__":
+    import torch.multiprocessing as mp
+
+    mp.set_start_method("spawn")
+
     config_path = "src/rl/algorithms/actor_critic/config.yml"
     config = load_config(config_path)
 

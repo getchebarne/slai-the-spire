@@ -2,292 +2,338 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.game.combat.constant import MAX_SIZE_HAND
-from src.rl.encoding import get_card_encoding_dim
-from src.rl.encoding import get_character_encoding_dim
-from src.rl.encoding import get_energy_encoding_dim
-from src.rl.encoding import get_monster_encoding_dim
-from src.rl.models.mlp import MLP
+from src.game.const import CARD_REWARD_NUM
+from src.game.const import MAP_WIDTH
+from src.game.const import MAX_MONSTERS
+from src.game.const import MAX_SIZE_DECK
+from src.game.const import MAX_SIZE_DISC_PILE
+from src.game.const import MAX_SIZE_DRAW_PILE
+from src.game.const import MAX_SIZE_HAND
+from src.rl.encoding.card import get_encoding_card_dim
+from src.rl.encoding.character import get_encoding_character_dim
+from src.rl.encoding.energy import get_encoding_energy_dim
+from src.rl.encoding.map_ import get_encoding_map_dim
+from src.rl.encoding.monster import get_encoding_monster_dim
+from src.rl.models.encoder_map import EncoderMap
+from src.rl.models.transformer_entity import TransformerEntity
 
 
-DIM_ENC_CARD = get_card_encoding_dim()
-DIM_ENC_CHARACTER = get_character_encoding_dim()
-DIM_ENC_ENERGY = get_energy_encoding_dim()
-DIM_ENC_MONSTER = get_monster_encoding_dim()
-DIM_ENC_OTHER = DIM_ENC_CHARACTER + DIM_ENC_MONSTER + DIM_ENC_ENERGY
+_ENCODING_DIM_CARD = get_encoding_card_dim()
+_ENCODING_DIM_CHARACTER = get_encoding_character_dim()
+_ENCODING_DIM_ENERGY = get_encoding_energy_dim()
+_ENCODING_DIM_MAP = get_encoding_map_dim()
+_ENCODING_DIM_MONSTER = get_encoding_monster_dim()
 
 
-class CardTransformer(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, ff_dim: int):
-        super().__init__()
+def _calculate_masked_mean_pooling(
+    x: torch.Tensor, x_mask: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    batch_size, sequence_len = x_mask.shape
 
-        self._mha = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
-        self._ln_1 = nn.LayerNorm(embed_dim)
-        self._ln_2 = nn.LayerNorm(embed_dim)
-        self._ff = nn.Sequential(
-            nn.Linear(embed_dim, ff_dim), nn.ReLU(), nn.Linear(ff_dim, embed_dim)
-        )
+    # Zero out the padding tokens in the input tensor
+    x_masked = x * x_mask.view(batch_size, sequence_len, 1)
 
-    def _mha_with_fallback(self, x_card: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
-        # x_card: (B, MAX_HAND_SIZE, D)
-        # x_mask: (B, MAX_HAND_SIZE)
-        x_empty = torch.all(x_mask, dim=1)  # (B,)
+    # Sum the embeddings of the non-padded tokens
+    x_masked_sum = torch.sum(x_masked, dim=1)
 
-        if torch.all(x_empty):
-            # Batch full of empty hands. Should be very rare
-            return torch.zeros_like(x_card)
+    # Divide the sum by the actual sequence length to get the mean
+    x_len = torch.sum(x_mask, dim=1, keepdim=True, dtype=torch.float32)
+    x_masked_sum_pool = x_masked_sum / (x_len + 1e-9)
 
-        if not torch.any(x_empty):
-            # No empty hands in batch. Should be fairly common
-            return self._mha(x_card, x_card, x_card, key_padding_mask=x_mask, need_weights=False)[
-                0
-            ]
-
-        # Mix of empty and non-empty hands
-        x_non_empty = ~x_empty
-        x_card_non_empty = x_card[x_non_empty]
-        x_mask_non_empty = x_mask[x_non_empty]
-
-        # Process non-empty hands
-        x_out_non_empty, _ = self._mha(
-            x_card_non_empty,
-            x_card_non_empty,
-            x_card_non_empty,
-            key_padding_mask=x_mask_non_empty,
-            need_weights=False,
-        )
-
-        # Create empty (zeroed) output tensor and fill non-empty hands w/ MHA output
-        x_out = torch.zeros_like(x_card)
-        x_out[x_non_empty] = x_out_non_empty
-
-        # (B, MAX_HAND_SIZE, embed_dim)
-        return x_out
-
-    def forward(self, x_card: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
-        # Multi-head attention
-        x_mha = self._mha_with_fallback(x_card, x_mask)
-        x = self._ln_1(x_card + x_mha)
-
-        # Feedforward with residual connection
-        x_ff = self._ff(x)
-        x = self._ln_2(x + x_ff)
-
-        return x
+    return x_masked_sum_pool, x_len
 
 
 # TODO: parametrize dimensions better, so they are more readable
 class ActorCritic(nn.Module):
-    def __init__(self, dim_card: int, dim_char: int, dim_monster: int, dim_energy: int):
+    def __init__(
+        self,
+        embedding_dim_card: int,
+        embedding_dim_char: int,
+        embedding_dim_monster: int,
+        embedding_dim_energy: int,
+        num_heads: int,
+    ):
         super().__init__()
 
-        self._dim_card = dim_card
-        self._dim_char = dim_char
-        self._dim_monster = dim_monster
-        self._dim_energy = dim_energy
+        self._embedding_dim_card = embedding_dim_card
+        self._embedding_dim_char = embedding_dim_char
+        self._embedding_dim_monster = embedding_dim_monster
+        self._embedding_dim_energy = embedding_dim_energy
+        self._num_heads = num_heads
 
-        # Card embedding
-        self._embedding_card = nn.Linear(DIM_ENC_CARD, dim_card)
+        # Linear projections to map cards and monsters to a space w/ another dimension before
+        # inputting them to the transformer
+        self._projection_card = nn.Linear(_ENCODING_DIM_CARD, embedding_dim_card)
+        self._projection_monster = nn.Linear(_ENCODING_DIM_MONSTER, embedding_dim_monster)
 
-        # Character embedding
-        self._embedding_char = MLP([DIM_ENC_CHARACTER, dim_char, dim_char])
-
-        # Monster embedding
-        self._embedding_monster = MLP([DIM_ENC_MONSTER, dim_monster, dim_monster])
-
-        # Energy embedding
-        self._embedding_energy = MLP([DIM_ENC_ENERGY, dim_energy, dim_energy])
-
-        # Transformer
-        self._card_transformer_1 = CardTransformer(dim_card, 4, dim_card)
-        self._card_transformer_2 = CardTransformer(dim_card, 4, dim_card)
-
-        #
-        self._mlp_other = MLP(
-            [
-                dim_char + dim_monster + dim_energy,
-                dim_char + dim_monster + dim_energy,
-                dim_char + dim_monster + dim_energy,
-            ]
+        # Transformers
+        self._transformer_card = TransformerEntity(
+            embedding_dim_card, embedding_dim_card, num_heads
+        )
+        self._transformer_monster = TransformerEntity(
+            embedding_dim_monster, embedding_dim_monster, num_heads
         )
 
-        # Two actions for every card (select/play card, discard card) for now
-        self._mlp_card = nn.Sequential(
-            MLP(
-                [
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                ]
-            ),
-            nn.Linear(
-                dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                2,
-            ),
+        # MLPs
+        self._mlp_char = nn.Sequential(
+            nn.Linear(_ENCODING_DIM_CHARACTER, embedding_dim_char),
+            nn.ReLU(),
+            nn.Linear(embedding_dim_char, embedding_dim_char),
+            nn.ReLU(),
+        )
+        self._mlp_energy = nn.Sequential(
+            nn.Linear(_ENCODING_DIM_ENERGY, embedding_dim_energy),
+            nn.ReLU(),
+            nn.Linear(embedding_dim_energy, embedding_dim_energy),
+            nn.ReLU(),
         )
 
-        # One action for every monster (only one monster for now)
-        self._mlp_monster = nn.Sequential(
-            MLP(
-                [
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                ]
-            ),
-            nn.Linear(
-                dim_char + dim_monster + dim_energy + 3 + 4 * dim_card,
-                1,
-            ),
+        # EncoderMap
+        self._encoder_map = EncoderMap(
+            _ENCODING_DIM_MAP[0],
+            _ENCODING_DIM_MAP[1],
+            _ENCODING_DIM_MAP[2],
+            3,
         )
-        # One action for end-of-turn
-        self._mlp_end_turn = nn.Sequential(
-            MLP(
-                [
-                    dim_char + dim_monster + dim_energy + 3 + 3 * dim_card,
-                    dim_char + dim_monster + dim_energy + 3 + 3 * dim_card,
-                    dim_char + dim_monster + dim_energy + 3 + 3 * dim_card,
-                ]
-            ),
-            nn.Linear(
-                dim_char + dim_monster + dim_energy + 3 + 3 * dim_card,
-                1,
-            ),
+
+        # Final MLPs mapping to logits
+        self._mlp_reward_select = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
         )
-        # One value for the state's value
+        self._mlp_reward_skip = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+        self._mlp_card_select_or_discard = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 2),
+        )
+        self._mlp_monster_select = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+        self._mlp_turn_end = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+        self._mlp_map_select_rest_site_rest = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, MAP_WIDTH + 1),
+        )
+        self._mlp_rest_site_upgrade = nn.Sequential(
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+
+        # Critic
         self._mlp_critic = nn.Sequential(
-            MLP(
-                [
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card + 2 * MAX_SIZE_HAND + 2,
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card + 2 * MAX_SIZE_HAND + 2,
-                    dim_char + dim_monster + dim_energy + 3 + 4 * dim_card + 2 * MAX_SIZE_HAND + 2,
-                ]
-            ),
-            nn.Linear(
-                dim_char + dim_monster + dim_energy + 3 + 4 * dim_card + 2 * MAX_SIZE_HAND + 2,
-                1,
-            ),
+            nn.LazyLinear(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
         )
 
     def forward(
         self,
-        x_mask_hand: torch.Tensor,
-        x_mask_draw: torch.Tensor,
-        x_mask_disc: torch.Tensor,
-        x_card_active_mask: torch.Tensor,
-        x_card_hand: torch.Tensor,
-        x_card_draw: torch.Tensor,
-        x_card_disc: torch.Tensor,
+        x_hand: torch.Tensor,
+        x_hand_pad: torch.Tensor,
+        x_hand_active: torch.Tensor,
+        x_draw: torch.Tensor,
+        x_draw_pad: torch.Tensor,
+        x_disc: torch.Tensor,
+        x_disc_pad: torch.Tensor,
+        x_deck: torch.Tensor,
+        x_deck_pad: torch.Tensor,
+        x_reward: torch.Tensor,
         x_char: torch.Tensor,
         x_monster: torch.Tensor,
+        x_monster_pad: torch.Tensor,
         x_energy: torch.Tensor,
+        x_map: torch.Tensor,
         x_valid_action_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size = x_mask_hand.shape[0]
+        batch_size = x_hand.shape[0]
 
-        max_size_hand = x_card_hand.shape[1]
-        max_size_draw = x_card_draw.shape[1]
-        max_size_disc = x_card_disc.shape[1]
+        # Card encodings. Start with hand
+        x_hand_pad = x_hand_pad.to(torch.bool)
+        x_hand = self._projection_card(x_hand)
+        x_hand = self._transformer_card(x_hand, ~x_hand_pad)
 
-        # Encode hand
-        x_mask_hand_v = x_mask_hand.view(batch_size, max_size_hand, 1).expand(
-            batch_size, max_size_hand, self._dim_card
-        )
-        x_mask_hand = x_mask_hand.to(torch.bool)
-        x_card_hand = self._embedding_card(x_card_hand)
-        x_card_hand = self._card_transformer_1(x_card_hand, ~x_mask_hand)
-        x_card_hand = self._card_transformer_2(x_card_hand, ~x_mask_hand)
-        x_card_hand *= x_mask_hand_v
+        # Draw pile
+        x_draw_pad = x_draw_pad.to(torch.bool)
+        x_draw = self._projection_card(x_draw)
+        x_draw = self._transformer_card(x_draw, ~x_draw_pad)
 
-        # Encode draw
-        x_mask_draw_v = x_mask_draw.view(batch_size, max_size_draw, 1).expand(
-            batch_size, max_size_draw, self._dim_card
-        )
-        x_mask_draw = x_mask_draw.to(torch.bool)
-        x_card_draw = self._embedding_card(x_card_draw)
-        x_card_draw = self._card_transformer_1(x_card_draw, ~x_mask_draw)
-        x_card_draw = self._card_transformer_2(x_card_draw, ~x_mask_draw)
-        x_card_draw *= x_mask_draw_v
+        # Discard pile
+        x_disc_pad = x_disc_pad.to(torch.bool)
+        x_disc = self._projection_card(x_disc)
+        x_disc = self._transformer_card(x_disc, ~x_disc_pad)
 
-        # Encode discard
-        x_mask_disc_v = x_mask_disc.view(batch_size, max_size_disc, 1).expand(
-            batch_size, max_size_disc, self._dim_card
-        )
-        x_mask_disc = x_mask_disc.to(torch.bool)
-        x_card_disc = self._embedding_card(x_card_disc)
-        x_card_disc = self._card_transformer_1(x_card_disc, ~x_mask_disc)
-        x_card_disc = self._card_transformer_2(x_card_disc, ~x_mask_disc)
-        x_card_disc *= x_mask_disc_v
+        # Deck
+        x_deck_pad = x_deck_pad.to(torch.bool)
+        x_deck = self._projection_card(x_deck)
+        x_deck = self._transformer_card(x_deck, ~x_deck_pad)
 
-        # Other (monster, character, energy)
-        x_monster = self._embedding_monster(x_monster)
-        x_char = self._embedding_char(x_char)
-        x_energy = self._embedding_energy(x_energy)
-        x_other = self._mlp_other(
-            torch.cat(
-                [
-                    x_monster,
-                    x_char,
-                    x_energy,
-                ],
-                dim=1,
-            )
-        )
-        # Concatenate
-        x_len_hand = torch.sum(x_mask_hand, dim=1, keepdim=True, dtype=torch.float32)
-        x_len_hand_clamp = torch.clamp(x_len_hand, min=1.0)  # To avoid division by zero in mean
-        x_len_draw = torch.sum(x_mask_draw, dim=1, keepdim=True, dtype=torch.float32)
-        x_len_draw_clamp = torch.clamp(x_len_draw, min=1.0)  # To avoid division by zero in mean
-        x_len_disc = torch.sum(x_mask_disc, dim=1, keepdim=True, dtype=torch.float32)
-        x_len_disc_clamp = torch.clamp(x_len_disc, min=1.0)  # To avoid division by zero in mean
+        # Card rewards
+        x_reward_pad = torch.ones(batch_size, CARD_REWARD_NUM, dtype=torch.bool)
+        x_reward = self._projection_card(x_reward)
+        x_reward = self._transformer_card(x_reward, ~x_reward_pad)
 
-        x_global = torch.cat(
+        # Monsters
+        x_monster_pad = x_monster_pad.to(torch.bool)
+        x_monster = self._projection_monster(x_monster)
+        x_monster = self._transformer_monster(x_monster, ~x_monster_pad)
+
+        # Aggregate representations
+        x_hand_mean, x_hand_len = _calculate_masked_mean_pooling(x_hand, x_hand_pad)
+        x_draw_mean, x_draw_len = _calculate_masked_mean_pooling(x_draw, x_draw_pad)
+        x_disc_mean, x_disc_len = _calculate_masked_mean_pooling(x_disc, x_disc_pad)
+        x_deck_mean, x_deck_len = _calculate_masked_mean_pooling(x_deck, x_deck_pad)
+        x_reward_mean, _ = _calculate_masked_mean_pooling(x_reward, x_reward_pad)
+        x_hand_len /= MAX_SIZE_HAND
+        x_draw_len /= MAX_SIZE_DRAW_PILE
+        x_disc_len /= MAX_SIZE_DISC_PILE
+        x_deck_len /= MAX_SIZE_DECK
+
+        x_monster_mean, x_monster_len = _calculate_masked_mean_pooling(x_monster, x_monster_pad)
+        x_monster_len /= MAX_MONSTERS
+
+        # Map
+        x_map = self._encoder_map(x_map)
+
+        # Character
+        x_char = self._mlp_char(x_char)
+
+        # Energy
+        x_energy = self._mlp_energy(x_energy)
+
+        # Global aggregate representations
+        x_combat = torch.cat(
             [
-                torch.sum(x_card_hand, dim=1) / x_len_hand_clamp,  # Mean
-                torch.sum(x_card_draw, dim=1) / x_len_draw_clamp,  # Mean
-                torch.sum(x_card_disc, dim=1) / x_len_disc_clamp,  # Mean
-                x_len_hand / max_size_hand,
-                x_len_draw / max_size_draw,
-                x_len_disc / max_size_disc,
-                x_other,
+                x_hand_mean,
+                x_draw_mean,
+                x_disc_mean,
+                x_hand_len,
+                x_draw_len,
+                x_disc_len,
+                x_monster_mean,
+                x_monster_len,
+                x_char,
+                x_energy,
+                x_map,
+            ],
+            dim=1,
+        )
+        x_map_select_and_rest_site = torch.cat(
+            [
+                x_char,
+                x_map,
+                x_deck_mean,
+                x_deck_len,
+            ],
+            dim=1,
+        )
+        x_reward_select = torch.cat(
+            [
+                x_char,
+                x_map,
+                x_deck_mean,
+                x_deck_len,
+                x_reward_mean,
             ],
             dim=1,
         )
 
-        # Calculate actions
-        x_card = self._mlp_card(
-            torch.cat(
-                [
-                    x_global.view(batch_size, 1, -1).expand(batch_size, max_size_hand, -1),
-                    x_card_hand,
-                ],
-                dim=2,
-            )
+        # Calculate action logits. Start with reward selection
+        x_logit_reward_select = torch.cat(
+            [
+                x_reward,
+                x_reward_select.view(batch_size, 1, -1).expand(batch_size, CARD_REWARD_NUM, -1),
+            ],
+            dim=2,
         )
-        x_card_active = torch.sum(
+        x_logit_reward_skip = x_reward_select
+
+        # Combat
+        x_logit_card_select_or_discard = torch.cat(
+            [
+                x_hand,
+                x_combat.view(batch_size, 1, -1).expand(batch_size, MAX_SIZE_HAND, -1),
+            ],
+            dim=2,
+        )
+        x_hand_active = torch.sum(
             (
-                x_card_active_mask.view(batch_size, max_size_hand, 1).expand(
-                    batch_size, max_size_hand, self._dim_card
+                x_hand_active.view(batch_size, MAX_SIZE_HAND, 1).expand(
+                    batch_size, MAX_SIZE_HAND, self._embedding_dim_card
                 )
-                * x_card_hand
+                * x_hand
             ),
             dim=1,
         )
-        x_global_card_active = torch.cat(
+        x_logit_monster_select = torch.cat(
             [
-                x_global,
-                x_card_active,
+                x_monster,
+                x_hand_active.view(batch_size, 1, -1).expand(batch_size, MAX_MONSTERS, -1),
+                x_combat.view(batch_size, 1, -1).expand(batch_size, MAX_MONSTERS, -1),
             ],
-            dim=1,
+            dim=2,
         )
-        x_monster = self._mlp_monster(x_global_card_active)
-        x_end_turn = self._mlp_end_turn(x_global)
+        x_logit_turn_end = x_combat
 
+        # Rest site
+        x_logit_rest_site_upgrade = torch.cat(
+            [
+                x_deck,
+                x_map_select_and_rest_site.view(batch_size, 1, -1).expand(
+                    batch_size, MAX_SIZE_DECK, -1
+                ),
+            ],
+            dim=2,
+        )
+
+        # Calculate actions
+        x_logit_reward_select = self._mlp_reward_select(x_logit_reward_select)
+        x_logit_reward_skip = self._mlp_reward_skip(x_logit_reward_skip)
+        x_logit_card_select_or_discard = self._mlp_card_select_or_discard(
+            x_logit_card_select_or_discard
+        )
+        x_logit_monster_select = self._mlp_monster_select(x_logit_monster_select)
+        x_logit_turn_end = self._mlp_turn_end(x_logit_turn_end)
+        x_logit_map_select_rest_site_rest = self._mlp_map_select_rest_site_rest(
+            x_map_select_and_rest_site
+        )
+        x_logit_rest_site_upgrade = self._mlp_rest_site_upgrade(x_logit_rest_site_upgrade)
+
+        # Concatenate actions into a single 1D tensor
         x_logit_all = torch.cat(
             [
-                torch.flatten(x_card.permute(0, 2, 1), start_dim=1),
-                x_monster,
-                x_end_turn,
+                torch.flatten(x_logit_reward_select, start_dim=1),
+                x_logit_reward_skip,
+                torch.flatten(x_logit_card_select_or_discard.permute(0, 2, 1), start_dim=1),
+                torch.flatten(x_logit_monster_select, start_dim=1),
+                x_logit_turn_end,
+                x_logit_map_select_rest_site_rest,
+                torch.flatten(x_logit_rest_site_upgrade, start_dim=1),
             ],
             dim=1,
         )
@@ -299,8 +345,10 @@ class ActorCritic(nn.Module):
         # Critic
         x_critic = torch.cat(
             [
-                x_global_card_active,
-                x_valid_action_mask,  # TODO: improve this
+                x_combat,
+                x_deck_mean,
+                x_deck_len,
+                x_reward_mean,
             ],
             dim=1,
         )

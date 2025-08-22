@@ -87,18 +87,25 @@ def _intent_str(intent: Intent | None) -> str:
             str_ = f"{str_}{intent.damage} x {intent.instances}"
 
     if intent.block:
-        if str_ != "":
+        if str_:
             str_ = f"{str_} & Blocking"
 
         else:
             str_ = "Blocking"
 
     if intent.buff:
-        if str_ != "":
+        if str_:
             str_ = f"{str_} & Buffing"
 
         else:
             str_ = "Buffing"
+
+    if intent.debuff_powerful:
+        if str_:
+            str_ = f"{str_} & Debuffing (Powerful)"
+
+        else:
+            str_ = "Debuffing (Powerful)"
 
     return str_
 

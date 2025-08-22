@@ -25,6 +25,7 @@ def process_effect_health_loss(
         if modifier_data.stacks_current < modifier_data.stacks_min:
             del target.modifier_map[ModifierType.MODE_SHIFT]
 
+            # TODO: should add block here
             effects_top.append(Effect(EffectType.MONSTER_MOVE_UPDATE, id_target=id_target))
 
     return [], effects_top

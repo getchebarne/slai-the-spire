@@ -12,12 +12,12 @@ class ActionType(Enum):
     COMBAT_MONSTER_SELECT = "COMBAT_MONSTER_SELECT"
     COMBAT_TURN_END = "COMBAT_TURN_END"
 
+    # Map
+    MAP_NODE_SELECT = "MAP_NODE_SELECT"
+
     # Rest site TODO: dig, lift, etc.
     REST_SITE_REST = "REST_SITE_REST"
     REST_SITE_UPGRADE = "REST_SITE_UPGRADE"
-
-    # Map
-    MAP_NODE_SELECT = "MAP_NODE_SELECT"
 
 
 @dataclass
