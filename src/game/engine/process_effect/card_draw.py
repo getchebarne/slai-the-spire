@@ -5,6 +5,7 @@ from src.game.entity.manager import EntityManager
 
 
 # TODO: handle infinite loop
+# TODO: add max cards
 def process_effect_card_draw(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:

@@ -10,5 +10,8 @@ def process_effect_map_node_active_set(
 
     entity_manager.id_map_node_active = id_target
 
+    # Reset card rewards TODO: here?
+    entity_manager.id_card_reward = []
+
     # TODO: Maw Bank
     return [], [Effect(EffectType.ROOM_ENTER)]

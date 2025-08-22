@@ -1,11 +1,11 @@
 import random
 
+from src.game.const import MAP_HEIGHT
+from src.game.const import MAP_WIDTH
 from src.game.entity.map_node import EntityMapNode
 from src.game.entity.map_node import RoomType
 
 
-_MAP_HEIGHT = 3
-_MAP_WIDTH = 7
 _PATH_DENSITY = 6
 _ANCESTOR_GAP_MIN = 3
 _ANCESTOR_GAP_MAX = 5
@@ -13,7 +13,7 @@ _FACTOR_NUM_REST_SITE = 0.25
 
 
 def generate_map(
-    map_height: int = _MAP_HEIGHT, map_width: int = _MAP_WIDTH, path_density: int = _PATH_DENSITY
+    map_height: int = MAP_HEIGHT, map_width: int = MAP_WIDTH, path_density: int = _PATH_DENSITY
 ) -> list[list[EntityMapNode | None]]:
     # Initialize empty map
     nodes = _initialize_nodes(map_height, map_width)

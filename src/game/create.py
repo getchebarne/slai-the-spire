@@ -1,5 +1,6 @@
 from collections import deque
 
+from src.game.const import MAP_HEIGHT
 from src.game.entity.manager import EntityManager
 from src.game.entity.manager import create_entity
 from src.game.entity.map_node import EntityMapNode
@@ -39,7 +40,7 @@ def create_game_state(ascension_level: AscensionLevel) -> GameState:
 
     entity_manager.id_map_nodes = map_
     entity_manager.id_map_node_boss = create_entity(
-        entity_manager, EntityMapNode(-1, -1, RoomType.COMBAT_BOSS)
+        entity_manager, EntityMapNode(MAP_HEIGHT, -1, RoomType.COMBAT_BOSS)
     )
 
     # Create effect queue

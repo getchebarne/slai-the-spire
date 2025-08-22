@@ -6,12 +6,8 @@ from src.game.entity.base import EntityBase
 
 class RoomType(Enum):
     COMBAT_BOSS = "COMBAT_BOSS"
-    COMBAT_ELITE = "COMBAT_ELITE"
     COMBAT_MONSTER = "COMBAT_MONSTER"
-    QUESTION_MARK = "QUESTION_MARK"
     REST_SITE = "REST_SITE"
-    SHOP = "SHOP"
-    TREASURE = "TREASURE"
 
 
 @dataclass

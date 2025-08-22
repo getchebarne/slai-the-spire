@@ -1,6 +1,7 @@
 import random
 from collections import defaultdict
 
+from src.game.const import CARD_REWARD_NUM
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
@@ -13,7 +14,6 @@ from src.game.factory.lib import FACTORY_LIB_CARD
 from src.game.factory.lib import FactoryCard
 
 
-_CARDS_TO_ROLL = 3
 _CARD_REWARD_ROLL_OFFSET_MIN = -40
 _CHANCE_RARE = 3
 _CHANCE_UNCOMMON = 40
@@ -33,7 +33,7 @@ def process_effect_card_reward_roll(
     character = entity_manager.entities[entity_manager.id_character]
 
     card_name_rolled = []
-    for _ in range(_CARDS_TO_ROLL):
+    for _ in range(CARD_REWARD_NUM):
         roll = random.randint(0, 98) + character.card_reward_roll_offset
 
         if roll < _CHANCE_RARE:

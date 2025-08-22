@@ -19,6 +19,7 @@ from src.game.view.monster import ViewMonster
 from src.game.view.monster import get_view_monsters
 
 
+# TODO: maybe rename to `ViewState` for consistency (OCD)
 @dataclass(frozen=True)
 class ViewGameState:
     character: ViewCharacter
