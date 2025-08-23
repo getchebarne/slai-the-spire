@@ -51,3 +51,7 @@ def process_effect_turn_start(
         del target.modifier_map[ModifierType.NEXT_TURN_BLOCK]
 
     return [], effects
+
+
+def _get_turn_start_effects_character(entity_manager: EntityManager) -> list[Effect]:
+    pass

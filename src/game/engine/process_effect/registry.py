@@ -14,8 +14,6 @@ from src.game.engine.process_effect.card_play import process_effect_card_play
 from src.game.engine.process_effect.card_remove import process_effect_card_remove
 from src.game.engine.process_effect.card_reward_roll import process_effect_card_reward_roll
 from src.game.engine.process_effect.card_reward_select import process_effect_card_reward_select
-from src.game.engine.process_effect.card_shuffle_deck_into_draw_pile import \
-    process_effect_shuffle_deck_into_draw_pile
 from src.game.engine.process_effect.card_upgrade import process_effect_card_upgrade
 from src.game.engine.process_effect.combat_end import process_effect_combat_end
 from src.game.engine.process_effect.combat_start import process_effect_combat_start
@@ -27,24 +25,32 @@ from src.game.engine.process_effect.energy_loss import process_effect_energy_los
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
-from src.game.engine.process_effect.modifier_accuracy_gain import \
-    process_effect_modifier_accuracy_gain
-from src.game.engine.process_effect.modifier_mode_shift_gain import \
-    process_effect_modifier_mode_shift_gain
-from src.game.engine.process_effect.modifier_next_turn_block_gain import \
-    process_effect_modifier_next_turn_block_gain
-from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
-    process_effect_modifier_next_turn_energy_gain
+from src.game.engine.process_effect.modifier_accuracy_gain import (
+    process_effect_modifier_accuracy_gain,
+)
+from src.game.engine.process_effect.modifier_mode_shift_gain import (
+    process_effect_modifier_mode_shift_gain,
+)
+from src.game.engine.process_effect.modifier_next_turn_block_gain import (
+    process_effect_modifier_next_turn_block_gain,
+)
+from src.game.engine.process_effect.modifier_next_turn_energy_gain import (
+    process_effect_modifier_next_turn_energy_gain,
+)
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
-from src.game.engine.process_effect.modifier_sharp_hide_gain import \
-    process_effect_modifier_sharp_hide_gain
-from src.game.engine.process_effect.modifier_sharp_hide_loss import \
-    process_effect_modifier_sharp_hide_loss
-from src.game.engine.process_effect.modifier_strength_gain import \
-    process_effect_modifier_strength_gain
+from src.game.engine.process_effect.modifier_sharp_hide_gain import (
+    process_effect_modifier_sharp_hide_gain,
+)
+from src.game.engine.process_effect.modifier_sharp_hide_loss import (
+    process_effect_modifier_sharp_hide_loss,
+)
+from src.game.engine.process_effect.modifier_strength_gain import (
+    process_effect_modifier_strength_gain,
+)
 from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
-from src.game.engine.process_effect.modifier_vulnerable_gain import \
-    process_effect_modifier_vulnerable_gain
+from src.game.engine.process_effect.modifier_vulnerable_gain import (
+    process_effect_modifier_vulnerable_gain,
+)
 from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
 from src.game.engine.process_effect.monster_move_update import process_effect_monster_move_update
 from src.game.engine.process_effect.room_enter import process_effect_room_enter
@@ -73,7 +79,6 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.CARD_REMOVE: process_effect_card_remove,
     EffectType.CARD_REWARD_ROLL: process_effect_card_reward_roll,
     EffectType.CARD_REWARD_SELECT: process_effect_card_reward_select,
-    EffectType.CARD_SHUFFLE_DECK_INTO_DRAW_PILE: process_effect_shuffle_deck_into_draw_pile,
     EffectType.CARD_UPGRADE: process_effect_card_upgrade,
     EffectType.COMBAT_END: process_effect_combat_end,
     EffectType.COMBAT_START: process_effect_combat_start,
