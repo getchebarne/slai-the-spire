@@ -4,6 +4,7 @@ from src.game.factory.card.defend import create_card_defend
 from src.game.factory.card.neutralize import create_card_neutralize
 from src.game.factory.card.strike import create_card_strike
 from src.game.factory.card.survivor import create_card_survivor
+from src.game.factory.card.blur import create_card_blur
 from src.game.factory.lib import register_factory
 from src.game.types_ import AscensionLevel
 
@@ -52,8 +53,7 @@ def _create_starter_deck() -> list[EntityCard]:
         create_card_defend(upgraded=False),
         create_card_defend(upgraded=False),
         create_card_defend(upgraded=False),
-        create_card_defend(upgraded=False),
-        create_card_defend(upgraded=False),
+        create_card_blur(False),
         # Survivor
         create_card_survivor(upgraded=False),
         # Neutralize

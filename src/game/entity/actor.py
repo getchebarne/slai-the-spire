@@ -6,6 +6,7 @@ from src.game.entity.base import EntityBase
 
 class ModifierType(Enum):
     ACCURACY = "ACCURACY"
+    BLUR = "BLUR"
     MODE_SHIFT = "MODE_SHIFT"
     NEXT_TURN_BLOCK = "NEXT_TURN_BLOCK"
     NEXT_TURN_ENERGY = "NEXT_TURN_ENERGY"

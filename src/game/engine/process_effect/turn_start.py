@@ -15,7 +15,10 @@ def process_effect_turn_start(
     target = entity_manager.entities[id_target]
 
     # Common effects
-    effects = [Effect(EffectType.BLOCK_RESET, id_target=id_target)]
+    if ModifierType.BLUR in target.modifier_map:
+        effects = []
+    else:
+        effects = [Effect(EffectType.BLOCK_RESET, id_target=id_target)]
 
     # Character-specific effects
     if isinstance(target, EntityCharacter):
