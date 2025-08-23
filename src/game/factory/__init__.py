@@ -6,6 +6,8 @@ from src.game.factory.card import adrenaline
 from src.game.factory.card import all_out_attack
 from src.game.factory.card import backflip
 from src.game.factory.card import backstab
+from src.game.factory.card import blade_dance
+from src.game.factory.card import blur
 from src.game.factory.card import calculated_gamble
 from src.game.factory.card import cloak_and_dagger
 from src.game.factory.card import dagger_throw
@@ -15,6 +17,7 @@ from src.game.factory.card import deflect
 from src.game.factory.card import die_die_die
 from src.game.factory.card import dodge_and_roll
 from src.game.factory.card import flying_knee
+from src.game.factory.card import footwork
 from src.game.factory.card import leg_sweep
 from src.game.factory.card import neutralize
 from src.game.factory.card import outmaneuver

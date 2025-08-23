@@ -4,7 +4,7 @@ from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
 from src.game.engine.process_effect.add_to_hand_shiv import process_effect_add_to_hand_shiv
 from src.game.engine.process_effect.block_gain import process_effect_block_gain
-from src.game.engine.process_effect.block_reset import process_effect_block_reset
+from src.game.engine.process_effect.block_set import process_effect_block_set
 from src.game.engine.process_effect.calculated_gamble import process_effect_calculated_gamble
 from src.game.engine.process_effect.card_active_clear import process_effect_card_active_clear
 from src.game.engine.process_effect.card_active_set import process_effect_card_active_set
@@ -29,6 +29,8 @@ from src.game.engine.process_effect.map_node_active_set import process_effect_ma
 from src.game.engine.process_effect.modifier_accuracy_gain import \
     process_effect_modifier_accuracy_gain
 from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
+from src.game.engine.process_effect.modifier_dexterity_gain import \
+    process_effect_modifier_dexterity_gain
 from src.game.engine.process_effect.modifier_mode_shift_gain import \
     process_effect_modifier_mode_shift_gain
 from src.game.engine.process_effect.modifier_next_turn_block_gain import \
@@ -42,7 +44,10 @@ from src.game.engine.process_effect.modifier_sharp_hide_loss import \
     process_effect_modifier_sharp_hide_loss
 from src.game.engine.process_effect.modifier_strength_gain import \
     process_effect_modifier_strength_gain
-from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
+from src.game.engine.process_effect.modifier_tick_character import \
+    process_effect_modifier_tick_character
+from src.game.engine.process_effect.modifier_tick_monster import \
+    process_effect_modifier_tick_monster
 from src.game.engine.process_effect.modifier_vulnerable_gain import \
     process_effect_modifier_vulnerable_gain
 from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
@@ -63,7 +68,7 @@ ProcessEffect: TypeAlias = Callable[
 REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.ADD_TO_HAND_SHIV: process_effect_add_to_hand_shiv,
     EffectType.BLOCK_GAIN: process_effect_block_gain,
-    EffectType.BLOCK_RESET: process_effect_block_reset,
+    EffectType.BLOCK_SET: process_effect_block_set,
     EffectType.CALCULATED_GAMBLE: process_effect_calculated_gamble,
     EffectType.CARD_ACTIVE_CLEAR: process_effect_card_active_clear,
     EffectType.CARD_ACTIVE_SET: process_effect_card_active_set,
@@ -87,12 +92,14 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.MAP_NODE_ACTIVE_SET: process_effect_map_node_active_set,
     EffectType.MODIFIER_ACCURACY_GAIN: process_effect_modifier_accuracy_gain,
     EffectType.MODIFIER_BLUR_GAIN: process_effect_modifier_blur_gain,
+    EffectType.MODIFIER_DEXTERITY_GAIN: process_effect_modifier_dexterity_gain,
     EffectType.MODIFIER_MODE_SHIFT_GAIN: process_effect_modifier_mode_shift_gain,
     EffectType.MODIFIER_NEXT_TURN_BLOCK_GAIN: process_effect_modifier_next_turn_block_gain,
     EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN: process_effect_modifier_next_turn_energy_gain,
     EffectType.MODIFIER_SHARP_HIDE_GAIN: process_effect_modifier_sharp_hide_gain,
     EffectType.MODIFIER_SHARP_HIDE_LOSS: process_effect_modifier_sharp_hide_loss,
-    EffectType.MODIFIER_TICK: process_effect_modifier_tick,
+    EffectType.MODIFIER_TICK_CHARACTER: process_effect_modifier_tick_character,
+    EffectType.MODIFIER_TICK_MONSTER: process_effect_modifier_tick_monster,
     EffectType.MONSTER_MOVE_UPDATE: process_effect_monster_move_update,
     EffectType.MODIFIER_RITUAL_GAIN: process_effect_modifier_ritual_gain,
     EffectType.MODIFIER_STRENGTH_GAIN: process_effect_modifier_strength_gain,

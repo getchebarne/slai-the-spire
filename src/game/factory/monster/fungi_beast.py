@@ -21,6 +21,7 @@ _BITE_DAMAGE = 6
 _GROW_STRENGTH = 3
 _GROW_STRENGTH_ASC_2 = 4
 _GROW_STRENGTH_ASC_17 = 5
+_SPORE_CLOUD_IS_BUFF = True
 _SPORE_CLOUD_STACKS_CURRENT = 2
 _SPORE_CLOUD_STACKS_MIN = 1
 _SPORE_CLOUD_STACKS_MAX = 999
@@ -49,6 +50,8 @@ def create_monster_fungi_beast(
             },
             modifier_map={
                 ModifierType.SPORE_CLOUD: ModifierData(
+                    _SPORE_CLOUD_IS_BUFF,
+                    False,
                     _SPORE_CLOUD_STACKS_CURRENT,
                     _SPORE_CLOUD_STACKS_MIN,
                     _SPORE_CLOUD_STACKS_MAX,

@@ -2,14 +2,14 @@ from src.game.core.effect import Effect
 from src.game.entity.manager import EntityManager
 
 
-def process_effect_modifier_tick(
+def process_effect_modifier_tick_character(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     id_target = kwargs["id_target"]
 
     target = entity_manager.entities[id_target]
     for modifier_type, modifier_data in list(target.modifier_map.items()):
-        if modifier_data.stacks_duration:
+        if modifier_data.stacks_duration and modifier_data.created_by_character:
             modifier_data.stacks_current -= 1
 
             if modifier_data.stacks_current < modifier_data.stacks_min:

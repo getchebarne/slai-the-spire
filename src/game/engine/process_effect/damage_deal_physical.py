@@ -30,9 +30,8 @@ def process_effect_damage_deal_physical(
         ) and ModifierType.ACCURACY in character.modifier_map:
             value += character.modifier_map[ModifierType.ACCURACY].stacks_current
 
-        # Overwrite source with character to apply retaliation effects
+        # Overwrite source with character to apply modifiers
         source = entity_manager.entities[entity_manager.id_character]
-        id_source = entity_manager.id_character
 
     # Apply strength
     if ModifierType.STRENGTH in source.modifier_map:

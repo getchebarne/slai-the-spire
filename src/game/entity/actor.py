@@ -7,6 +7,7 @@ from src.game.entity.base import EntityBase
 class ModifierType(Enum):
     ACCURACY = "ACCURACY"
     BLUR = "BLUR"
+    DEXTERITY = "DEXTERITY"
     MODE_SHIFT = "MODE_SHIFT"
     NEXT_TURN_BLOCK = "NEXT_TURN_BLOCK"
     NEXT_TURN_ENERGY = "NEXT_TURN_ENERGY"
@@ -20,6 +21,8 @@ class ModifierType(Enum):
 
 @dataclass
 class ModifierData:
+    is_buff: bool
+    created_by_character: bool
     stacks_current: int | None = None
     stacks_min: int | None = None
     stacks_max: int | None = None

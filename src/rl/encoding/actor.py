@@ -15,6 +15,7 @@ _VIEW_MODIFIER_TYPE_STACKS_MAX = {
     ViewModifierType.NEXT_TURN_BLOCK: 10,  # TODO: fix
     ViewModifierType.NEXT_TURN_ENERGY: 10,  # TODO: fix
     ViewModifierType.BLUR: 10,  # TODO: fix
+    ViewModifierType.DEXTERITY: 10,  # TODO: fix
 }
 
 

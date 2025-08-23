@@ -11,17 +11,18 @@ STACKS_MAX = 999
 STACKS_DURATION = False
 
 
-def process_effect_modifier_next_turn_energy_gain(
+def process_effect_modifier_dexterity_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
+    id_target = kwargs["id_target"]
     id_source = kwargs["id_source"]
 
+    target = entity_manager.entities[id_target]
     source = entity_manager.entities[id_source]
-    character = entity_manager.entities[entity_manager.id_character]
 
-    if ModifierType.NEXT_TURN_ENERGY in character.modifier_map:
-        modifier_data = character.modifier_map[ModifierType.NEXT_TURN_ENERGY]
+    if ModifierType.DEXTERITY in target.modifier_map:
+        modifier_data = target.modifier_map[ModifierType.DEXTERITY]
         modifier_data.stacks_current = min(modifier_data.stacks_current + value, STACKS_MAX)
 
         return [], []
@@ -31,7 +32,7 @@ def process_effect_modifier_next_turn_energy_gain(
     else:
         created_by_character = False
 
-    character.modifier_map[ModifierType.NEXT_TURN_ENERGY] = ModifierData(
+    target.modifier_map[ModifierType.DEXTERITY] = ModifierData(
         IS_BUFF,
         created_by_character,
         min(value, STACKS_MAX),

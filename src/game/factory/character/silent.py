@@ -1,7 +1,6 @@
 from src.game.entity.card import EntityCard
 from src.game.entity.character import EntityCharacter
 from src.game.factory.card.blur import create_card_blur
-from src.game.factory.card.calculated_gamble import create_card_calculated_gamble
 from src.game.factory.card.defend import create_card_defend
 from src.game.factory.card.neutralize import create_card_neutralize
 from src.game.factory.card.strike import create_card_strike
@@ -59,8 +58,4 @@ def _create_starter_deck() -> list[EntityCard]:
         create_card_survivor(upgraded=False),
         # Neutralize
         create_card_neutralize(upgraded=False),
-        create_card_calculated_gamble(False),
-        create_card_calculated_gamble(False),
-        create_card_calculated_gamble(False),
-        create_card_calculated_gamble(False),
     ]
