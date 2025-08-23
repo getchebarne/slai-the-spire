@@ -23,6 +23,7 @@ from src.game.factory.card import infinite_blades
 from src.game.factory.card import leg_sweep
 from src.game.factory.card import neutralize
 from src.game.factory.card import outmaneuver
+from src.game.factory.card import phantasmal_killer
 from src.game.factory.card import shiv
 from src.game.factory.card import strike
 from src.game.factory.card import survivor

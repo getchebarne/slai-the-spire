@@ -33,6 +33,8 @@ from src.game.engine.process_effect.modifier_after_image_gain import \
 from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
 from src.game.engine.process_effect.modifier_dexterity_gain import \
     process_effect_modifier_dexterity_gain
+from src.game.engine.process_effect.modifier_double_damage_gain import \
+    process_effect_modifier_double_damage_gain
 from src.game.engine.process_effect.modifier_infinite_blades_gain import \
     process_effect_modifier_infinite_blades_gain
 from src.game.engine.process_effect.modifier_mode_shift_gain import \
@@ -41,6 +43,8 @@ from src.game.engine.process_effect.modifier_next_turn_block_gain import \
     process_effect_modifier_next_turn_block_gain
 from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
     process_effect_modifier_next_turn_energy_gain
+from src.game.engine.process_effect.modifier_phantasmal_gain import \
+    process_effect_modifier_phantasmal_gain
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
 from src.game.engine.process_effect.modifier_set_not_new import process_effect_modifier_set_not_new
 from src.game.engine.process_effect.modifier_sharp_hide_gain import \
@@ -96,6 +100,8 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.MODIFIER_AFTER_IMAGE_GAIN: process_effect_modifier_after_image_gain,
     EffectType.MODIFIER_BLUR_GAIN: process_effect_modifier_blur_gain,
     EffectType.MODIFIER_DEXTERITY_GAIN: process_effect_modifier_dexterity_gain,
+    EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN: process_effect_modifier_double_damage_gain,
+    EffectType.MODIFIER_PHANTASMAL_GAIN: process_effect_modifier_phantasmal_gain,
     EffectType.MODIFIER_INFINITE_BLADES_GAIN: process_effect_modifier_infinite_blades_gain,
     EffectType.MODIFIER_MODE_SHIFT_GAIN: process_effect_modifier_mode_shift_gain,
     EffectType.MODIFIER_NEXT_TURN_BLOCK_GAIN: process_effect_modifier_next_turn_block_gain,
