@@ -12,6 +12,8 @@ def process_effect_turn_start(
 
     target = entity_manager.entities[id_target]
 
+    effects = []
+
     # Common effects
     block = 0
     if ModifierType.BLUR in target.modifier_map:
@@ -25,7 +27,11 @@ def process_effect_turn_start(
         # Clear modifier
         del target.modifier_map[ModifierType.NEXT_TURN_BLOCK]
 
-    effects = [Effect(EffectType.BLOCK_SET, block, id_target=id_target)]
+    effects.append(Effect(EffectType.BLOCK_SET, block, id_target=id_target))
+
+    # Apply phantasmal
+    if ModifierType.PHANTASMAL in target.modifier_map:
+        effects.append(Effect(EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN, 1, id_target=id_target))
 
     # Character-specific effects
     if isinstance(target, EntityCharacter):

@@ -45,6 +45,10 @@ def process_effect_damage_deal_physical(
     if ModifierType.VULNERABLE in target.modifier_map:
         value *= FACTOR_VULN
 
+    # Apply double damage
+    if ModifierType.DOUBLE_DAMAGE in source.modifier_map:
+        value *= 2
+
     # Calculate damage
     value = int(value)
 
