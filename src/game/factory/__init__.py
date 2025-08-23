@@ -25,6 +25,7 @@ from src.game.factory.card import outmaneuver
 from src.game.factory.card import shiv
 from src.game.factory.card import strike
 from src.game.factory.card import survivor
+from src.game.factory.card import terror
 from src.game.factory.character import silent
 from src.game.factory.monster import cultist
 from src.game.factory.monster import dummy
