@@ -38,3 +38,4 @@ class EntityCard(EntityBase):
     rarity: CardRarity
     effects: list[Effect]
     exhaust: bool = False
+    innate: bool = False

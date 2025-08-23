@@ -130,8 +130,13 @@ def process_effect_queue(game_state: GameState) -> None:
                         return
 
         else:
-            # TODO: could Effect have multiple target entities when created? think
-            id_targets = [id_target]
+            # TODO: unify into list
+            if isinstance(id_target, int):
+                id_targets = [id_target]
+            elif isinstance(id_target, list):
+                id_targets = id_target
+            else:
+                raise ValueError(f"Unsupported Effect `id_target` type: {type(id_target)}")
 
         if effect.type == EffectType.COMBAT_END:
             # Clear effect queue before entering the room. This clears "ghost" effects that may
