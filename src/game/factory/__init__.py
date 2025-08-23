@@ -5,6 +5,8 @@ from src.game.factory.card import acrobatics
 from src.game.factory.card import adrenaline
 from src.game.factory.card import all_out_attack
 from src.game.factory.card import backflip
+from src.game.factory.card import backstab
+from src.game.factory.card import calculated_gamble
 from src.game.factory.card import cloak_and_dagger
 from src.game.factory.card import dagger_throw
 from src.game.factory.card import dash

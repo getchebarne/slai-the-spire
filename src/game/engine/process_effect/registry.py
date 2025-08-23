@@ -5,6 +5,7 @@ from src.game.core.effect import EffectType
 from src.game.engine.process_effect.add_to_hand_shiv import process_effect_add_to_hand_shiv
 from src.game.engine.process_effect.block_gain import process_effect_block_gain
 from src.game.engine.process_effect.block_reset import process_effect_block_reset
+from src.game.engine.process_effect.calculated_gamble import process_effect_calculated_gamble
 from src.game.engine.process_effect.card_active_clear import process_effect_card_active_clear
 from src.game.engine.process_effect.card_active_set import process_effect_card_active_set
 from src.game.engine.process_effect.card_discard import process_effect_card_discard
@@ -25,32 +26,25 @@ from src.game.engine.process_effect.energy_loss import process_effect_energy_los
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
-from src.game.engine.process_effect.modifier_accuracy_gain import (
-    process_effect_modifier_accuracy_gain,
-)
-from src.game.engine.process_effect.modifier_mode_shift_gain import (
-    process_effect_modifier_mode_shift_gain,
-)
-from src.game.engine.process_effect.modifier_next_turn_block_gain import (
-    process_effect_modifier_next_turn_block_gain,
-)
-from src.game.engine.process_effect.modifier_next_turn_energy_gain import (
-    process_effect_modifier_next_turn_energy_gain,
-)
+from src.game.engine.process_effect.modifier_accuracy_gain import \
+    process_effect_modifier_accuracy_gain
+from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
+from src.game.engine.process_effect.modifier_mode_shift_gain import \
+    process_effect_modifier_mode_shift_gain
+from src.game.engine.process_effect.modifier_next_turn_block_gain import \
+    process_effect_modifier_next_turn_block_gain
+from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
+    process_effect_modifier_next_turn_energy_gain
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
-from src.game.engine.process_effect.modifier_sharp_hide_gain import (
-    process_effect_modifier_sharp_hide_gain,
-)
-from src.game.engine.process_effect.modifier_sharp_hide_loss import (
-    process_effect_modifier_sharp_hide_loss,
-)
-from src.game.engine.process_effect.modifier_strength_gain import (
-    process_effect_modifier_strength_gain,
-)
+from src.game.engine.process_effect.modifier_sharp_hide_gain import \
+    process_effect_modifier_sharp_hide_gain
+from src.game.engine.process_effect.modifier_sharp_hide_loss import \
+    process_effect_modifier_sharp_hide_loss
+from src.game.engine.process_effect.modifier_strength_gain import \
+    process_effect_modifier_strength_gain
 from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
-from src.game.engine.process_effect.modifier_vulnerable_gain import (
-    process_effect_modifier_vulnerable_gain,
-)
+from src.game.engine.process_effect.modifier_vulnerable_gain import \
+    process_effect_modifier_vulnerable_gain
 from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
 from src.game.engine.process_effect.monster_move_update import process_effect_monster_move_update
 from src.game.engine.process_effect.room_enter import process_effect_room_enter
@@ -58,7 +52,6 @@ from src.game.engine.process_effect.target_card_clear import process_effect_targ
 from src.game.engine.process_effect.target_card_set import process_effect_target_card_set
 from src.game.engine.process_effect.turn_end import process_effect_turn_end
 from src.game.engine.process_effect.turn_start import process_effect_turn_start
-from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
 from src.game.entity.manager import EntityManager
 
 
@@ -71,6 +64,7 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.ADD_TO_HAND_SHIV: process_effect_add_to_hand_shiv,
     EffectType.BLOCK_GAIN: process_effect_block_gain,
     EffectType.BLOCK_RESET: process_effect_block_reset,
+    EffectType.CALCULATED_GAMBLE: process_effect_calculated_gamble,
     EffectType.CARD_ACTIVE_CLEAR: process_effect_card_active_clear,
     EffectType.CARD_ACTIVE_SET: process_effect_card_active_set,
     EffectType.CARD_DISCARD: process_effect_card_discard,
