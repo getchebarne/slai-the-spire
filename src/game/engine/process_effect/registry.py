@@ -2,6 +2,7 @@ from typing import Callable, TypeAlias
 
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectType
+from src.game.engine.process_effect.add_to_hand_shiv import process_effect_add_to_hand_shiv
 from src.game.engine.process_effect.block_gain import process_effect_block_gain
 from src.game.engine.process_effect.block_reset import process_effect_block_reset
 from src.game.engine.process_effect.card_active_clear import process_effect_card_active_clear
@@ -10,6 +11,7 @@ from src.game.engine.process_effect.card_discard import process_effect_card_disc
 from src.game.engine.process_effect.card_draw import process_effect_card_draw
 from src.game.engine.process_effect.card_exhaust import process_effect_card_exhaust
 from src.game.engine.process_effect.card_play import process_effect_card_play
+from src.game.engine.process_effect.card_remove import process_effect_card_remove
 from src.game.engine.process_effect.card_reward_roll import process_effect_card_reward_roll
 from src.game.engine.process_effect.card_reward_select import process_effect_card_reward_select
 from src.game.engine.process_effect.card_shuffle_deck_into_draw_pile import \
@@ -25,8 +27,14 @@ from src.game.engine.process_effect.energy_loss import process_effect_energy_los
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
+from src.game.engine.process_effect.modifier_accuracy_gain import \
+    process_effect_modifier_accuracy_gain
 from src.game.engine.process_effect.modifier_mode_shift_gain import \
     process_effect_modifier_mode_shift_gain
+from src.game.engine.process_effect.modifier_next_turn_block_gain import \
+    process_effect_modifier_next_turn_block_gain
+from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
+    process_effect_modifier_next_turn_energy_gain
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
 from src.game.engine.process_effect.modifier_sharp_hide_gain import \
     process_effect_modifier_sharp_hide_gain
@@ -53,6 +61,7 @@ ProcessEffect: TypeAlias = Callable[
 ]
 
 REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
+    EffectType.ADD_TO_HAND_SHIV: process_effect_add_to_hand_shiv,
     EffectType.BLOCK_GAIN: process_effect_block_gain,
     EffectType.BLOCK_RESET: process_effect_block_reset,
     EffectType.CARD_ACTIVE_CLEAR: process_effect_card_active_clear,
@@ -61,6 +70,7 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.CARD_DRAW: process_effect_card_draw,
     EffectType.CARD_EXHAUST: process_effect_card_exhaust,
     EffectType.CARD_PLAY: process_effect_card_play,
+    EffectType.CARD_REMOVE: process_effect_card_remove,
     EffectType.CARD_REWARD_ROLL: process_effect_card_reward_roll,
     EffectType.CARD_REWARD_SELECT: process_effect_card_reward_select,
     EffectType.CARD_SHUFFLE_DECK_INTO_DRAW_PILE: process_effect_shuffle_deck_into_draw_pile,
@@ -75,7 +85,10 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.HEALTH_GAIN: process_effect_health_gain,
     EffectType.HEALTH_LOSS: process_effect_health_loss,
     EffectType.MAP_NODE_ACTIVE_SET: process_effect_map_node_active_set,
+    EffectType.MODIFIER_ACCURACY_GAIN: process_effect_modifier_accuracy_gain,
     EffectType.MODIFIER_MODE_SHIFT_GAIN: process_effect_modifier_mode_shift_gain,
+    EffectType.MODIFIER_NEXT_TURN_BLOCK_GAIN: process_effect_modifier_next_turn_block_gain,
+    EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN: process_effect_modifier_next_turn_energy_gain,
     EffectType.MODIFIER_SHARP_HIDE_GAIN: process_effect_modifier_sharp_hide_gain,
     EffectType.MODIFIER_SHARP_HIDE_LOSS: process_effect_modifier_sharp_hide_loss,
     EffectType.MODIFIER_TICK: process_effect_modifier_tick,

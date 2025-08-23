@@ -14,12 +14,16 @@ from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
 from src.game.create import create_game_state
+from src.game.main import initialize_game_state
 from src.game.main import main
+from src.game.view.state import get_view_game_state
 from src.rl.algorithms.actor_critic.worker import _ASCENSION_LEVEL
 from src.rl.algorithms.actor_critic.worker import Command
 from src.rl.algorithms.actor_critic.worker import WorkerData
 from src.rl.algorithms.actor_critic.worker import worker
+from src.rl.encoding.state import encode_view_game_state
 from src.rl.models.actor_critic import ActorCritic
+from src.rl.models.interface import get_valid_action_mask
 from src.rl.policies import PolicySoftmax
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
@@ -62,13 +66,17 @@ class Batch:
 
 
 def _run_episodes(
-    model: ActorCritic, conn_parents: list[Connection], device: torch.device
+    model: ActorCritic,
+    conn_parents: list[Connection],
+    x_game_state_shared: list[list[torch.Tensor]],
+    x_valid_action_mask_shared: list[torch.Tensor],
+    x_action_idx_shared: list[torch.Tensor],
 ) -> list[Trajectory]:
     num_env = len(conn_parents)
 
     # Reset environments
     for conn_parent in conn_parents:
-        conn_parent.send((Command.RESET, None))
+        conn_parent.send((Command.RESET))
 
     # Get initial data from workers
     worker_datas: list[WorkerData] = [conn_parent.recv() for conn_parent in conn_parents]
@@ -91,8 +99,8 @@ def _run_episodes(
 
                 continue
 
-            encoding_game_states.append(worker_data.encoding_game_state)
-            valid_action_masks.append(worker_data.valid_action_mask)
+            encoding_game_states.append(x_game_state_shared[idx_env])
+            valid_action_masks.append(x_valid_action_mask_shared[idx_env])
             rewards.append(worker_data.reward)
 
         # Remove environments that have reached a terminal state
@@ -122,7 +130,8 @@ def _run_episodes(
 
         # Send action indexes to their corresponding workers
         for idx_batch, idx_env in enumerate(idx_env_running):
-            conn_parents[idx_env].send((Command.STEP, action_idxs[idx_batch].item()))
+            x_action_idx_shared[idx_env].copy_(action_idxs[idx_batch])
+            conn_parents[idx_env].send((Command.STEP))
 
         # Overwrite previous `worker_datas` with new data from workers
         worker_datas: list[WorkerData] = [
@@ -336,6 +345,17 @@ def _update_model_ppo(
     )
 
 
+def _get_shape_game_state_and_action_mask() -> tuple[tuple[torch.Size], torch.Size]:
+    game_state_dummy = create_game_state(_ASCENSION_LEVEL)
+    initialize_game_state(game_state_dummy)
+
+    view_game_state_dummy = get_view_game_state(game_state_dummy)
+    x_game_state_dummy = encode_view_game_state(view_game_state_dummy, torch.device("cpu"))
+    x_valid_action_mask_dummy = get_valid_action_mask(view_game_state_dummy)
+
+    return tuple(x.shape for x in x_game_state_dummy), x_valid_action_mask_dummy.shape
+
+
 def train(
     exp_name: str,
     num_episodes: int,
@@ -364,12 +384,42 @@ def train(
     # Initialize policy
     policy = PolicySoftmax(model, device, greedy=True)
 
+    # Create shared buffers for each environment
+    x_game_state_shared = []
+    x_valid_action_mask_shared = []
+    x_action_idx_shared = []
+    x_game_state_shapes, x_valid_action_mask_shape = _get_shape_game_state_and_action_mask()
+    for _ in range(num_envs):
+        # This is an example for a state composed of two tensors. Adapt as needed.
+        x_game_state = [
+            torch.zeros(shape, dtype=torch.float32, device=device).share_memory_()
+            for shape in x_game_state_shapes
+        ]
+        x_game_state_shared.append(x_game_state)
+
+        x_valid_action_mask = torch.zeros(
+            x_valid_action_mask_shape, dtype=torch.bool, device=device
+        ).share_memory_()
+        x_valid_action_mask_shared.append(x_valid_action_mask)
+
+        x_action_idx_shared.append(torch.zeros(1, dtype=torch.long, device=device).share_memory_())
+
     # Initialize connections
     conn_parents, conn_workers = zip(*[Pipe() for _ in range(num_envs)])
 
     # Start worker processes
     processes = [
-        Process(target=worker, args=(conn_worker, device)) for conn_worker in conn_workers
+        Process(
+            target=worker,
+            args=(
+                conn_worker,
+                x_game_state_shared[idx],
+                x_valid_action_mask_shared[idx],
+                x_action_idx_shared[idx],
+                device,
+            ),
+        )
+        for idx, conn_worker in enumerate(conn_workers)
     ]
     for process in processes:
         process.start()
@@ -379,7 +429,13 @@ def train(
         coef_entropy = coefs_entropy[num_episode]
 
         # Run games, get trajectories
-        trajectories = _run_episodes(model, conn_parents, device)
+        trajectories = _run_episodes(
+            model,
+            conn_parents,
+            x_game_state_shared,
+            x_valid_action_mask_shared,
+            x_action_idx_shared,
+        )
         loss_policy, loss_value, loss_entropy = _update_model_ppo(
             model,
             trajectories,

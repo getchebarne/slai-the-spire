@@ -27,6 +27,8 @@ def create_character_silent(
 def _create_character(ascension_level: AscensionLevel) -> EntityCharacter:
     health_max = _HEALTH_MAX
     health_current = health_max
+
+    # TODO: revisit this logic to make sure it's ok
     if ascension_level >= 6:
         if ascension_level >= 14:
             health_max -= _PENALTY_HEALTH_MAX_ASC_14
@@ -38,6 +40,7 @@ def _create_character(ascension_level: AscensionLevel) -> EntityCharacter:
 
 
 def _create_starter_deck() -> list[EntityCard]:
+    # TODO: Ascender's Bane
     return [
         # Strikes
         create_card_strike(upgraded=False),

@@ -17,9 +17,11 @@ def process_effect_card_play(
     # Energy loss
     effects_top = [Effect(EffectType.ENERGY_LOSS, value=target.cost)]
 
-    # Exhaust vs. discard
+    # Exhaust vs. power vs. discard
     if target.exhaust:
         effects_top.append(Effect(EffectType.CARD_EXHAUST, id_target=id_target))
+    elif target.type == CardType.POWER:
+        effects_top.append(Effect(EffectType.CARD_REMOVE, id_target=id_target))
     else:
         effects_top.append(Effect(EffectType.CARD_DISCARD, id_target=id_target))
 

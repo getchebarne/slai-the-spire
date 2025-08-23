@@ -7,6 +7,7 @@ from src.game.entity.manager import EntityManager
 
 FACTOR_WEAK = 0.75
 FACTOR_VULN = 1.50
+_SHIV_NAME = "Shiv"  # TODO: improve this crap
 
 
 def process_effect_damage_deal_physical(
@@ -21,10 +22,19 @@ def process_effect_damage_deal_physical(
 
     # TODO: think if there's a better solution
     if isinstance(source, EntityCard):
+        character = entity_manager.entities[entity_manager.id_character]
+
+        # Apply accuracy bonus damage
+        if (
+            source.name == _SHIV_NAME or source.name == f"{_SHIV_NAME}+"
+        ) and ModifierType.ACCURACY in character.modifier_map:
+            value += character.modifier_map[ModifierType.ACCURACY].stacks_current
+
+        # Overwrite source with character to apply retaliation effects
         source = entity_manager.entities[entity_manager.id_character]
+        id_source = entity_manager.id_character
 
     # Apply strength
-    value = value
     if ModifierType.STRENGTH in source.modifier_map:
         value += source.modifier_map[ModifierType.STRENGTH].stacks_current
 
@@ -40,7 +50,8 @@ def process_effect_damage_deal_physical(
     value = int(value)
 
     if value > 0:
-        # Return a top effect to subtract the damage over block from the target's current health
-        return [], [Effect(EffectType.DAMAGE_DEAL, value, id_target=id_target)]
+        return [], [
+            Effect(EffectType.DAMAGE_DEAL, value, id_target=id_target, id_source=id_source)
+        ]
 
     return [], []

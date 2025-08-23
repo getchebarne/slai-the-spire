@@ -1,4 +1,4 @@
-exp_name: a2c/jaw/test-parallel-fix-II
+exp_name: a2c/jaw/test-parallel-fix-IV
 num_episodes: 1.0e+6
 log_every: 10
 save_every: 100

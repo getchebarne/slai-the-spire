@@ -1,15 +1,22 @@
 # flake8: noqa
 
+from src.game.factory.card import accuracy
 from src.game.factory.card import acrobatics
 from src.game.factory.card import adrenaline
 from src.game.factory.card import all_out_attack
 from src.game.factory.card import backflip
+from src.game.factory.card import cloak_and_dagger
 from src.game.factory.card import dagger_throw
 from src.game.factory.card import dash
 from src.game.factory.card import defend
+from src.game.factory.card import deflect
 from src.game.factory.card import die_die_die
+from src.game.factory.card import dodge_and_roll
+from src.game.factory.card import flying_knee
 from src.game.factory.card import leg_sweep
 from src.game.factory.card import neutralize
+from src.game.factory.card import outmaneuver
+from src.game.factory.card import shiv
 from src.game.factory.card import strike
 from src.game.factory.card import survivor
 from src.game.factory.character import silent

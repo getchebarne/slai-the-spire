@@ -25,13 +25,17 @@ class Command(Enum):
 
 @dataclass
 class WorkerData:
-    encoding_game_state: tuple[torch.Tensor, ...]
-    valid_action_mask: torch.Tensor
     game_over_flag: bool
     reward: float | None = None
 
 
-def worker(remote: Connection, device: torch.device) -> None:
+def worker(
+    remote: Connection,
+    x_game_state_shared: list[torch.Tensor],
+    x_valid_action_mask_shared: torch.Tensor,
+    x_action_idx_shared: torch.Tensor,
+    device: torch.device,
+) -> None:
     # Intialize variables to `None`
     game_state = None
     game_over_flag = None
@@ -39,7 +43,7 @@ def worker(remote: Connection, device: torch.device) -> None:
 
     while True:
         # Receive data from the master
-        command, action_idx = remote.recv()
+        command = remote.recv()
 
         if command == Command.RESET:
             # Reset combat
@@ -48,20 +52,21 @@ def worker(remote: Connection, device: torch.device) -> None:
 
             # Get combat view, encode it, valid action mask, and game over flag
             view_game_state = get_view_game_state(game_state)
-            encoding_game_state = encode_view_game_state(view_game_state, device)
-            valid_action_mask = get_valid_action_mask(view_game_state)
+            x_game_state = encode_view_game_state(view_game_state, device)
+            x_valid_action_mask = get_valid_action_mask(view_game_state)
             game_over_flag = game_state.fsm == FSM.GAME_OVER
 
             if game_over_flag:
                 raise RuntimeError("Game started in game over state")
 
-            remote.send(
-                WorkerData(
-                    encoding_game_state,
-                    valid_action_mask.view(1, -1),
-                    game_over_flag,
-                )
-            )
+            # Write the data into the shared buffers
+            for idx, x in enumerate(x_game_state):
+                x_game_state_shared[idx].copy_(x)
+
+            x_valid_action_mask_shared.copy_(x_valid_action_mask)
+
+            # Send back worker data
+            remote.send(WorkerData(game_over_flag))
 
         if command == Command.STEP:
             # If the game's over, raise an error
@@ -69,7 +74,7 @@ def worker(remote: Connection, device: torch.device) -> None:
                 raise RuntimeError("Attempted to make an action while the game's over.")
 
             # Game step
-            action = action_idx_to_action(action_idx)
+            action = action_idx_to_action(x_action_idx_shared.item())
             step(game_state, action)
 
             # Get next combat view, compute game over flag and reward
@@ -79,14 +84,14 @@ def worker(remote: Connection, device: torch.device) -> None:
 
             # Update current state and valid action mask
             view_game_state = view_game_state_next
-            valid_action_mask = get_valid_action_mask(view_game_state)
+            x_game_state = encode_view_game_state(view_game_state, device)
+            x_valid_action_mask = get_valid_action_mask(view_game_state)
 
-            # Send transition data
-            remote.send(
-                WorkerData(
-                    encode_view_game_state(view_game_state, device),
-                    valid_action_mask.view(1, -1),
-                    game_over_flag,
-                    reward,
-                )
-            )
+            # Write the data into the shared buffers
+            for idx, x in enumerate(x_game_state):
+                x_game_state_shared[idx].copy_(x)
+
+            x_valid_action_mask_shared.copy_(x_valid_action_mask)
+
+            # Send back worker data
+            remote.send(WorkerData(game_over_flag, reward))
