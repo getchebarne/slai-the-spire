@@ -1,5 +1,6 @@
 from src.game.core.effect import Effect
 from src.game.entity.actor import ModifierType
+from src.game.entity.card import EntityCard
 from src.game.entity.manager import EntityManager
 
 
@@ -12,11 +13,13 @@ def process_effect_block_gain(
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
     id_target = kwargs["id_target"]
+    id_source = kwargs["id_source"]
 
     target = entity_manager.entities[id_target]
+    source = entity_manager.entities[id_source]
 
     # Apply dexterity
-    if ModifierType.DEXTERITY in target.modifier_map:
+    if ModifierType.DEXTERITY in target.modifier_map and isinstance(source, EntityCard):
         stacks_current = target.modifier_map[ModifierType.DEXTERITY].stacks_current
         value += stacks_current
 

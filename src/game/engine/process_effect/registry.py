@@ -28,6 +28,8 @@ from src.game.engine.process_effect.health_loss import process_effect_health_los
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
 from src.game.engine.process_effect.modifier_accuracy_gain import \
     process_effect_modifier_accuracy_gain
+from src.game.engine.process_effect.modifier_after_image_gain import \
+    process_effect_modifier_after_image_gain
 from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
 from src.game.engine.process_effect.modifier_dexterity_gain import \
     process_effect_modifier_dexterity_gain
@@ -91,6 +93,7 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.HEALTH_LOSS: process_effect_health_loss,
     EffectType.MAP_NODE_ACTIVE_SET: process_effect_map_node_active_set,
     EffectType.MODIFIER_ACCURACY_GAIN: process_effect_modifier_accuracy_gain,
+    EffectType.MODIFIER_AFTER_IMAGE_GAIN: process_effect_modifier_after_image_gain,
     EffectType.MODIFIER_BLUR_GAIN: process_effect_modifier_blur_gain,
     EffectType.MODIFIER_DEXTERITY_GAIN: process_effect_modifier_dexterity_gain,
     EffectType.MODIFIER_INFINITE_BLADES_GAIN: process_effect_modifier_infinite_blades_gain,

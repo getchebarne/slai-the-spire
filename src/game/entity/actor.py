@@ -6,6 +6,7 @@ from src.game.entity.base import EntityBase
 
 class ModifierType(Enum):
     ACCURACY = "ACCURACY"
+    AFTER_IMAGE = "AFTER_IMAGE"
     BLUR = "BLUR"
     DEXTERITY = "DEXTERITY"
     INFINITE_BLADES = "INFINITE_BLADES"
