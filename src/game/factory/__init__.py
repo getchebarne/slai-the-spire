@@ -3,6 +3,7 @@
 from src.game.factory.card import accuracy
 from src.game.factory.card import acrobatics
 from src.game.factory.card import adrenaline
+from src.game.factory.card import after_image
 from src.game.factory.card import all_out_attack
 from src.game.factory.card import backflip
 from src.game.factory.card import backstab

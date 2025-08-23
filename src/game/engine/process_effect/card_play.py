@@ -25,6 +25,19 @@ def process_effect_card_play(
     else:
         effects_top.append(Effect(EffectType.CARD_DISCARD, id_target=id_target))
 
+    # After image
+    character = entity_manager.entities[entity_manager.id_character]
+    if ModifierType.AFTER_IMAGE in character.modifier_map:
+        stacks_current = character.modifier_map[ModifierType.AFTER_IMAGE].stacks_current
+        effects_top.append(
+            Effect(
+                EffectType.BLOCK_GAIN,
+                stacks_current,
+                id_target=entity_manager.id_character,
+                id_source=entity_manager.id_character,
+            )
+        )
+
     # Card's effects
     effects_top.extend([replace(effect, id_source=id_target) for effect in target.effects])
 
