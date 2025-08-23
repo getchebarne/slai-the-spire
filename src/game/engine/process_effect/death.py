@@ -30,6 +30,7 @@ def process_effect_death(
                             EffectType.MODIFIER_VULNERABLE_GAIN,
                             modifier_data.stacks_current,
                             EffectTargetType.CHARACTER,
+                            id_source=id_target,
                         )
                     )
 

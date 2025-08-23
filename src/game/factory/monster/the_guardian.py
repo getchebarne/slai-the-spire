@@ -21,6 +21,7 @@ _FIERCE_BASH_DAMAGE = 32
 _FIERCE_BASH_DAMAGE_ASC_4 = 36
 _HEALTH_MAX = 240
 _HEALTH_MAX_ASC_9 = 250
+_MODE_SHIFT_IS_BUFF = True
 _MODE_SHIFT_STACKS_CURRENT = 30
 _MODE_SHIFT_STACKS_CURRENT_ASC_9 = 35
 _MODE_SHIFT_STACKS_CURRENT_ASC_19 = 40
@@ -235,6 +236,8 @@ def _get_modifier_map(ascension_level: AscensionLevel) -> dict[ModifierType, Mod
 
     return {
         ModifierType.MODE_SHIFT: ModifierData(
+            _MODE_SHIFT_IS_BUFF,
+            False,
             stacks_current,
             _MODE_SHIFT_STACKS_MIN,
             _MODE_SHIFT_STACKS_MAX,

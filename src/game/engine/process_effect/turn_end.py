@@ -12,7 +12,7 @@ def _get_end_of_turn_effects_common(entity_manager: EntityManager, id_actor: int
     actor = entity_manager.entities[id_actor]
 
     effects = []
-    for modifier_type, modifier_data in actor.modifier_map.items():
+    for modifier_type, modifier_data in actor.modifier_map.items():  # TODO: revisit
         if modifier_type == ModifierType.RITUAL:
             effects.append(
                 Effect(

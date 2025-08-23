@@ -15,10 +15,19 @@ def process_effect_turn_start(
     target = entity_manager.entities[id_target]
 
     # Common effects
+    block = 0
     if ModifierType.BLUR in target.modifier_map:
-        effects = []
-    else:
-        effects = [Effect(EffectType.BLOCK_RESET, id_target=id_target)]
+        block += target.block_current
+
+    # Apply next turn block modifier. Must be applied after block reset
+    if ModifierType.NEXT_TURN_BLOCK in target.modifier_map:
+        stacks_current = target.modifier_map[ModifierType.NEXT_TURN_BLOCK].stacks_current
+        block += stacks_current
+
+        # Clear modifier
+        del target.modifier_map[ModifierType.NEXT_TURN_BLOCK]
+
+    effects = [Effect(EffectType.BLOCK_SET, block, id_target=id_target)]
 
     # Character-specific effects
     if isinstance(target, EntityCharacter):
@@ -26,10 +35,13 @@ def process_effect_turn_start(
         effects += [
             Effect(EffectType.CARD_DRAW, 5),
             Effect(EffectType.ENERGY_GAIN, energy.max - energy.current),
-        ] + [
-            Effect(EffectType.MODIFIER_TICK, id_target=id_monster)
+            Effect(EffectType.MODIFIER_TICK_CHARACTER, id_target=entity_manager.id_character),
+        ]
+        effects += [
+            Effect(EffectType.MODIFIER_TICK_CHARACTER, id_target=id_monster)
             for id_monster in entity_manager.id_monsters
         ]
+
         # Apply next turn energy modifier
         if ModifierType.NEXT_TURN_ENERGY in target.modifier_map:
             stacks_current = target.modifier_map[ModifierType.NEXT_TURN_ENERGY].stacks_current
@@ -39,22 +51,9 @@ def process_effect_turn_start(
             del target.modifier_map[ModifierType.NEXT_TURN_ENERGY]
 
     elif isinstance(target, EntityMonster):
-        effects.append(Effect(EffectType.MODIFIER_TICK, id_target=entity_manager.id_character))
-
-    # Apply next turn block modifier. Must be applied after block reset
-    if ModifierType.NEXT_TURN_BLOCK in target.modifier_map:
-        stacks_current = target.modifier_map[ModifierType.NEXT_TURN_BLOCK].stacks_current
-        effects += [
-            Effect(
-                EffectType.BLOCK_GAIN, stacks_current, EffectTargetType.SOURCE, id_source=id_target
-            )
-        ]
-
-        # Clear modifier
-        del target.modifier_map[ModifierType.NEXT_TURN_BLOCK]
+        effects.append(Effect(EffectType.MODIFIER_TICK_MONSTER, id_target=id_target))
+        effects.append(
+            Effect(EffectType.MODIFIER_TICK_MONSTER, id_target=entity_manager.id_character)
+        )
 
     return [], effects
-
-
-def _get_turn_start_effects_character(entity_manager: EntityManager) -> list[Effect]:
-    pass

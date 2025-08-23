@@ -374,6 +374,6 @@ def main(
 
 if __name__ == "__main__":
     ascension_level = 1
-    game_state = create_game_state(ascension_level)
 
+    game_state = create_game_state(ascension_level)
     main(game_state, PolicyRandom().select_action, draw=True)
