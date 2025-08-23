@@ -40,16 +40,14 @@ from src.game.engine.process_effect.modifier_next_turn_block_gain import \
 from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
     process_effect_modifier_next_turn_energy_gain
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
+from src.game.engine.process_effect.modifier_set_not_new import process_effect_modifier_set_not_new
 from src.game.engine.process_effect.modifier_sharp_hide_gain import \
     process_effect_modifier_sharp_hide_gain
 from src.game.engine.process_effect.modifier_sharp_hide_loss import \
     process_effect_modifier_sharp_hide_loss
 from src.game.engine.process_effect.modifier_strength_gain import \
     process_effect_modifier_strength_gain
-from src.game.engine.process_effect.modifier_tick_character import \
-    process_effect_modifier_tick_character
-from src.game.engine.process_effect.modifier_tick_monster import \
-    process_effect_modifier_tick_monster
+from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
 from src.game.engine.process_effect.modifier_vulnerable_gain import \
     process_effect_modifier_vulnerable_gain
 from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
@@ -101,8 +99,8 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN: process_effect_modifier_next_turn_energy_gain,
     EffectType.MODIFIER_SHARP_HIDE_GAIN: process_effect_modifier_sharp_hide_gain,
     EffectType.MODIFIER_SHARP_HIDE_LOSS: process_effect_modifier_sharp_hide_loss,
-    EffectType.MODIFIER_TICK_CHARACTER: process_effect_modifier_tick_character,
-    EffectType.MODIFIER_TICK_MONSTER: process_effect_modifier_tick_monster,
+    EffectType.MODIFIER_TICK: process_effect_modifier_tick,
+    EffectType.MODIFIER_SET_NOT_NEW: process_effect_modifier_set_not_new,
     EffectType.MONSTER_MOVE_UPDATE: process_effect_monster_move_update,
     EffectType.MODIFIER_RITUAL_GAIN: process_effect_modifier_ritual_gain,
     EffectType.MODIFIER_STRENGTH_GAIN: process_effect_modifier_strength_gain,

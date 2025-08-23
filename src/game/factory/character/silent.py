@@ -53,7 +53,8 @@ def _create_starter_deck() -> list[EntityCard]:
         create_card_defend(upgraded=False),
         create_card_defend(upgraded=False),
         create_card_defend(upgraded=False),
-        create_card_blur(False),
+        create_card_defend(upgraded=False),
+        create_card_defend(upgraded=False),
         # Survivor
         create_card_survivor(upgraded=False),
         # Neutralize

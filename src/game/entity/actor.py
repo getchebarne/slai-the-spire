@@ -23,7 +23,7 @@ class ModifierType(Enum):
 @dataclass
 class ModifierData:
     is_buff: bool
-    created_by_character: bool
+    is_new: bool
     stacks_current: int | None = None
     stacks_min: int | None = None
     stacks_max: int | None = None
