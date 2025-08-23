@@ -63,6 +63,7 @@ def _encode_view_card(view_card: ViewCard, device: torch.device) -> torch.Tensor
         upgraded,
         view_card.requires_target,
         view_card.exhaust,
+        view_card.innate,
     ]
     for effect in view_card.effects:
         effect_key = _get_effect_key(effect)
@@ -80,7 +81,16 @@ def _encode_view_card(view_card: ViewCard, device: torch.device) -> torch.Tensor
 
 def _get_view_card_dummy() -> ViewCard:
     return ViewCard(
-        "Dummy", CardColor.GREEN, CardType.ATTACK, CardRarity.BASIC, 1, [], False, False, False
+        "Dummy",
+        CardColor.GREEN,
+        CardType.ATTACK,
+        CardRarity.BASIC,
+        1,
+        [],
+        False,
+        False,
+        False,
+        False,
     )
 
 
@@ -93,13 +103,9 @@ def get_encoding_card_dim() -> int:
 def encode_view_cards(
     view_cards: list[ViewCard], max_size: int, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    view_cards_len = len(view_cards)
-    if view_cards_len > max_size:
-        raise ValueError(
-            f"Length of card views ({view_cards_len}) exceeds maximum length ({max_size})"
-        )
+    view_cards = view_cards[:max_size]
 
-    mask_pad = torch.arange(max_size, dtype=torch.float32, device=device) < view_cards_len
+    mask_pad = torch.arange(max_size, dtype=torch.float32, device=device) < len(view_cards)
     mask_active = torch.zeros(max_size, dtype=torch.float32, device=device)
     if not view_cards:
         # Get card encoding dimension
