@@ -11,6 +11,9 @@ _VIEW_MODIFIER_TYPE_STACKS_MAX = {
     ViewModifierType.SHARP_HIDE: 3,
     ViewModifierType.SPORE_CLOUD: 2,
     ViewModifierType.VULNERABLE: 4,
+    ViewModifierType.ACCURACY: 10,  # TODO: fix
+    ViewModifierType.NEXT_TURN_BLOCK: 10,  # TODO: fix
+    ViewModifierType.NEXT_TURN_ENERGY: 10,  # TODO: fix
 }
 
 

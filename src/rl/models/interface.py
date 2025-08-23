@@ -85,7 +85,7 @@ def get_valid_action_mask(view_game_state: ViewGameState) -> torch.Tensor:
             values_rest_site_upgrade,
         ),
         axis=0,
-    )
+    ).view(1, -1)
 
 
 # TODO: try to make code prettier

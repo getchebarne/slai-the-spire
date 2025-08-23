@@ -5,7 +5,10 @@ from src.game.entity.base import EntityBase
 
 
 class ModifierType(Enum):
+    ACCURACY = "ACCURACY"
     MODE_SHIFT = "MODE_SHIFT"
+    NEXT_TURN_BLOCK = "NEXT_TURN_BLOCK"
+    NEXT_TURN_ENERGY = "NEXT_TURN_ENERGY"
     RITUAL = "RITUAL"
     SHARP_HIDE = "SHARP_HIDE"
     SPORE_CLOUD = "SPORE_CLOUD"
