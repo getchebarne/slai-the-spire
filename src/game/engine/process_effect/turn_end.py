@@ -13,7 +13,7 @@ def _get_end_of_turn_effects_common(entity_manager: EntityManager, id_actor: int
 
     effects = []
     for modifier_type, modifier_data in actor.modifier_map.items():  # TODO: revisit
-        if modifier_type == ModifierType.RITUAL:
+        if modifier_type == ModifierType.RITUAL and not modifier_data.is_new:
             effects.append(
                 Effect(
                     EffectType.MODIFIER_STRENGTH_GAIN,
