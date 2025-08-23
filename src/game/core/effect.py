@@ -10,6 +10,9 @@ class EffectType(Enum):
     BLOCK_GAIN = "BLOCK_GAIN"
     BLOCK_RESET = "BLOCK_RESET"
 
+    # Calculated gamble
+    CALCULATED_GAMBLE = "CALCULATED_GAMBLE"
+
     # Everything related to cards
     CARD_ACTIVE_SET = "CARD_ACTIVE_SET"
     CARD_ACTIVE_CLEAR = "CARD_ACTIVE_CLEAR"
