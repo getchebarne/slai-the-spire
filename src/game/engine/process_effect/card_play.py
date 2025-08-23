@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from src.game.core.effect import Effect
+from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierType
 from src.game.entity.card import CardType
@@ -34,6 +35,18 @@ def process_effect_card_play(
                 EffectType.BLOCK_GAIN,
                 stacks_current,
                 id_target=entity_manager.id_character,
+                id_source=entity_manager.id_character,
+            )
+        )
+
+    # Thousand cuts
+    if ModifierType.THOUSAND_CUTS in character.modifier_map:
+        stacks_current = character.modifier_map[ModifierType.THOUSAND_CUTS].stacks_current
+        effects_top.append(
+            Effect(
+                EffectType.DAMAGE_DEAL_PHYSICAL,
+                stacks_current,
+                target_type=EffectTargetType.MONSTER,
                 id_source=entity_manager.id_character,
             )
         )
