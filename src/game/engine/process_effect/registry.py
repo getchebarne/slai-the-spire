@@ -31,6 +31,8 @@ from src.game.engine.process_effect.modifier_accuracy_gain import \
 from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
 from src.game.engine.process_effect.modifier_dexterity_gain import \
     process_effect_modifier_dexterity_gain
+from src.game.engine.process_effect.modifier_infinite_blades_gain import \
+    process_effect_modifier_infinite_blades_gain
 from src.game.engine.process_effect.modifier_mode_shift_gain import \
     process_effect_modifier_mode_shift_gain
 from src.game.engine.process_effect.modifier_next_turn_block_gain import \
@@ -93,6 +95,7 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.MODIFIER_ACCURACY_GAIN: process_effect_modifier_accuracy_gain,
     EffectType.MODIFIER_BLUR_GAIN: process_effect_modifier_blur_gain,
     EffectType.MODIFIER_DEXTERITY_GAIN: process_effect_modifier_dexterity_gain,
+    EffectType.MODIFIER_INFINITE_BLADES_GAIN: process_effect_modifier_infinite_blades_gain,
     EffectType.MODIFIER_MODE_SHIFT_GAIN: process_effect_modifier_mode_shift_gain,
     EffectType.MODIFIER_NEXT_TURN_BLOCK_GAIN: process_effect_modifier_next_turn_block_gain,
     EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN: process_effect_modifier_next_turn_energy_gain,
