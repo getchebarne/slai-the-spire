@@ -1,5 +1,6 @@
 # flake8: noqa
 
+from src.game.factory.card import a_thousand_cuts
 from src.game.factory.card import accuracy
 from src.game.factory.card import acrobatics
 from src.game.factory.card import adrenaline
