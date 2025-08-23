@@ -18,6 +18,7 @@ from src.game.factory.card import die_die_die
 from src.game.factory.card import dodge_and_roll
 from src.game.factory.card import flying_knee
 from src.game.factory.card import footwork
+from src.game.factory.card import infinite_blades
 from src.game.factory.card import leg_sweep
 from src.game.factory.card import neutralize
 from src.game.factory.card import outmaneuver

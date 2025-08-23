@@ -1,5 +1,4 @@
 from src.game.core.effect import Effect
-from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierType
 from src.game.entity.character import EntityCharacter
@@ -49,6 +48,11 @@ def process_effect_turn_start(
 
             # Clear modifier
             del target.modifier_map[ModifierType.NEXT_TURN_ENERGY]
+
+        # Infinite blades
+        if ModifierType.INFINITE_BLADES in target.modifier_map:
+            stacks_current = target.modifier_map[ModifierType.INFINITE_BLADES].stacks_current
+            effects += [Effect(EffectType.ADD_TO_HAND_SHIV, stacks_current)]
 
     elif isinstance(target, EntityMonster):
         effects.append(Effect(EffectType.MODIFIER_TICK_MONSTER, id_target=id_target))
