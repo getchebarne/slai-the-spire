@@ -33,6 +33,8 @@ from src.game.engine.process_effect.modifier_after_image_gain import (
     process_effect_modifier_after_image_gain,
 )
 from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
+from src.game.engine.process_effect.modifier_burst_gain import process_effect_modifier_burst_gain
+from src.game.engine.process_effect.modifier_burst_loss import process_effect_modifier_burst_loss
 from src.game.engine.process_effect.modifier_dexterity_gain import (
     process_effect_modifier_dexterity_gain,
 )
@@ -115,6 +117,8 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.MODIFIER_ACCURACY_GAIN: process_effect_modifier_accuracy_gain,
     EffectType.MODIFIER_AFTER_IMAGE_GAIN: process_effect_modifier_after_image_gain,
     EffectType.MODIFIER_BLUR_GAIN: process_effect_modifier_blur_gain,
+    EffectType.MODIFIER_BURST_GAIN: process_effect_modifier_burst_gain,
+    EffectType.MODIFIER_BURST_LOSS: process_effect_modifier_burst_loss,
     EffectType.MODIFIER_DEXTERITY_GAIN: process_effect_modifier_dexterity_gain,
     EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN: process_effect_modifier_double_damage_gain,
     EffectType.MODIFIER_PHANTASMAL_GAIN: process_effect_modifier_phantasmal_gain,

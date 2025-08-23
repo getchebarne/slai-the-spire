@@ -68,6 +68,10 @@ def process_effect_turn_end(
     # Character's turn start
     effects += [Effect(EffectType.TURN_START, id_target=entity_manager.id_character)]
 
+    # Clear `ModifierType.BURST` TODO: here?
+    if ModifierType.BURST in target.modifier_map:
+        del target.modifier_map[ModifierType.BURST]
+
     # If the target is the Character, the queue should be empty at this point, so adding to the top
     # or to the bottom is the same
     return effects, []

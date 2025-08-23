@@ -10,6 +10,7 @@ from src.game.factory.card import backflip
 from src.game.factory.card import backstab
 from src.game.factory.card import blade_dance
 from src.game.factory.card import blur
+from src.game.factory.card import burst
 from src.game.factory.card import calculated_gamble
 from src.game.factory.card import cloak_and_dagger
 from src.game.factory.card import dagger_throw
