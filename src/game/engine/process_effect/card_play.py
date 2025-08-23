@@ -53,6 +53,11 @@ def process_effect_card_play(
 
     # Card's effects
     effects_top.extend([replace(effect, id_source=id_target) for effect in target.effects])
+    if ModifierType.BURST in character.modifier_map and target.type == CardType.SKILL:
+        effects_top.extend([replace(effect, id_source=id_target) for effect in target.effects])
+        effects_top.append(
+            Effect(EffectType.MODIFIER_BURST_LOSS, 1, id_target=entity_manager.id_character)
+        )
 
     # Sharp hide
     if entity_manager.id_card_target is not None:
