@@ -18,6 +18,7 @@ class ViewCard:
     cost: int
     effects: list[ViewEffect]
     exhaust: bool
+    innate: bool
     is_active: bool
     requires_target: bool
 
@@ -31,6 +32,7 @@ def _get_card_view(card: EntityCard, is_active: bool) -> ViewCard:
         card.cost,
         card.effects,
         card.exhaust,
+        card.innate,
         is_active,
         does_card_require_target(card),
     )
