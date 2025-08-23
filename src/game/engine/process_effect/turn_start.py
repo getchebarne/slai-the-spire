@@ -3,7 +3,6 @@ from src.game.core.effect import EffectType
 from src.game.entity.actor import ModifierType
 from src.game.entity.character import EntityCharacter
 from src.game.entity.manager import EntityManager
-from src.game.entity.monster import EntityMonster
 
 
 def process_effect_turn_start(
@@ -34,10 +33,10 @@ def process_effect_turn_start(
         effects += [
             Effect(EffectType.CARD_DRAW, 5),
             Effect(EffectType.ENERGY_GAIN, energy.max - energy.current),
-            Effect(EffectType.MODIFIER_TICK_CHARACTER, id_target=entity_manager.id_character),
+            Effect(EffectType.MODIFIER_TICK, id_target=entity_manager.id_character),
         ]
         effects += [
-            Effect(EffectType.MODIFIER_TICK_CHARACTER, id_target=id_monster)
+            Effect(EffectType.MODIFIER_TICK, id_target=id_monster)
             for id_monster in entity_manager.id_monsters
         ]
 
@@ -53,11 +52,5 @@ def process_effect_turn_start(
         if ModifierType.INFINITE_BLADES in target.modifier_map:
             stacks_current = target.modifier_map[ModifierType.INFINITE_BLADES].stacks_current
             effects += [Effect(EffectType.ADD_TO_HAND_SHIV, stacks_current)]
-
-    elif isinstance(target, EntityMonster):
-        effects.append(Effect(EffectType.MODIFIER_TICK_MONSTER, id_target=id_target))
-        effects.append(
-            Effect(EffectType.MODIFIER_TICK_MONSTER, id_target=entity_manager.id_character)
-        )
 
     return [], effects

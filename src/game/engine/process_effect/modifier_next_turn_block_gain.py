@@ -1,7 +1,6 @@
 from src.game.core.effect import Effect
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
-from src.game.entity.card import EntityCard
 from src.game.entity.manager import EntityManager
 
 
@@ -17,10 +16,8 @@ def process_effect_modifier_next_turn_block_gain(
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
     id_target = kwargs["id_target"]
-    id_source = kwargs["id_source"]
 
     target = entity_manager.entities[id_target]
-    source = entity_manager.entities[id_source]
 
     # Apply dexterity
     if ModifierType.DEXTERITY in target.modifier_map:
@@ -33,14 +30,9 @@ def process_effect_modifier_next_turn_block_gain(
 
         return [], []
 
-    if isinstance(source, EntityCard):
-        created_by_character = True
-    else:
-        created_by_character = False
-
     target.modifier_map[ModifierType.NEXT_TURN_BLOCK] = ModifierData(
         IS_BUFF,
-        created_by_character,
+        True,
         min(value, STACKS_MAX),
         STACKS_MIN,
         STACKS_MAX,

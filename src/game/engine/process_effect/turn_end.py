@@ -43,6 +43,9 @@ def process_effect_turn_end(
     # Discard all cards in the hand
     effects += [Effect(EffectType.CARD_DISCARD, target_type=EffectTargetType.CARD_IN_HAND)]
 
+    # Set all modifiers as not new (so they can be decreased by `EffectType.MODIFIER_TICK`)
+    effects.append(Effect(EffectType.MODIFIER_SET_NOT_NEW))
+
     # Queue effects for all monsters' turns
     for id_monster in entity_manager.id_monsters:
         monster = entity_manager.entities[id_monster]
