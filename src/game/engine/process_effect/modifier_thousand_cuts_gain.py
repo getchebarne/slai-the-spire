@@ -14,9 +14,7 @@ def process_effect_modifier_thousand_cuts_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_target = kwargs["id_target"]
-
-    target = entity_manager.entities[id_target]
+    target = kwargs["target"]
 
     if ModifierType.THOUSAND_CUTS in target.modifier_map:
         modifier_data = target.modifier_map[ModifierType.THOUSAND_CUTS]

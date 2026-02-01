@@ -10,6 +10,4 @@ class ViewEnergy:
 
 
 def get_view_energy(entity_manager: EntityManager) -> ViewEnergy:
-    energy = entity_manager.entities[entity_manager.id_energy]
-
-    return ViewEnergy(energy.current, energy.max)
+    return ViewEnergy(entity_manager.energy.current, entity_manager.energy.max)

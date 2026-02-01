@@ -14,9 +14,7 @@ def process_effect_modifier_sharp_hide_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_target = kwargs["id_target"]
-
-    target = entity_manager.entities[id_target]
+    target = kwargs["target"]
 
     if ModifierType.SHARP_HIDE in target.modifier_map:
         modifier_data = target.modifier_map[ModifierType.SHARP_HIDE]

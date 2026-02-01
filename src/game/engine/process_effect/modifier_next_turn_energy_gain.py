@@ -15,7 +15,7 @@ def process_effect_modifier_next_turn_energy_gain(
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
 
-    character = entity_manager.entities[entity_manager.id_character]
+    character = entity_manager.character
 
     if ModifierType.NEXT_TURN_ENERGY in character.modifier_map:
         modifier_data = character.modifier_map[ModifierType.NEXT_TURN_ENERGY]

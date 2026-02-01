@@ -7,10 +7,11 @@ def process_effect_energy_loss(
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
 
-    energy = entity_manager.entities[entity_manager.id_energy]
-    if energy.current < value:
-        raise ValueError(f"Can't dercrease current energy ({energy.current}) by {value}")
+    if entity_manager.energy.current < value:
+        raise ValueError(
+            f"Can't decrease current energy ({entity_manager.energy.current}) by {value}"
+        )
 
-    energy.current = energy.current - value
+    entity_manager.energy.current = entity_manager.energy.current - value
 
     return [], []

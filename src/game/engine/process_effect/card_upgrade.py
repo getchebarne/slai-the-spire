@@ -6,10 +6,15 @@ from src.game.factory.lib import FACTORY_LIB_CARD
 def process_effect_card_upgrade(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
+    target = kwargs["target"]
 
-    card = entity_manager.entities[id_target]
-    card = FACTORY_LIB_CARD[card.name](upgraded=True)
-    entity_manager.entities[id_target] = card
+    # Create upgraded version of the card
+    upgraded_card = FACTORY_LIB_CARD[target.name](upgraded=True)
+
+    # Find and replace in deck
+    for i, card in enumerate(entity_manager.deck):
+        if card is target:
+            entity_manager.deck[i] = upgraded_card
+            break
 
     return [], []

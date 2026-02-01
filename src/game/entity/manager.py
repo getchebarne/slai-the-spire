@@ -1,33 +1,37 @@
 from dataclasses import dataclass, field
 
-from src.game.entity.base import EntityBase
+from src.game.entity.card import EntityCard
+from src.game.entity.character import EntityCharacter
+from src.game.entity.energy import EntityEnergy
+from src.game.entity.map_node import EntityMapNode
+from src.game.entity.monster import EntityMonster
 
 
 @dataclass
 class EntityManager:
-    entities: list[EntityBase]
+    character: EntityCharacter | None = None
+    monsters: list[EntityMonster] = field(default_factory=list)
+    energy: EntityEnergy | None = None
 
-    id_character: int | None = None
-    id_monsters: list[int] = field(default_factory=list)
-    id_energy: int | None = None
-    id_cards_in_deck: list[int] = field(default_factory=list)
-    id_cards_in_draw_pile: list[int] = field(default_factory=list)
-    id_cards_in_hand: list[int] = field(default_factory=list)
-    id_cards_in_disc_pile: list[int] = field(default_factory=list)
-    id_cards_in_exhaust_pile: list[int] = field(default_factory=list)
-    id_card_reward: list[int] = field(default_factory=list)
-    id_card_active: int | None = None
+    # Permanent deck (persists across combats)
+    deck: list[EntityCard] = field(default_factory=list)
+
+    # Combat piles (transient, cleared after combat)
+    draw_pile: list[EntityCard] = field(default_factory=list)
+    hand: list[EntityCard] = field(default_factory=list)
+    disc_pile: list[EntityCard] = field(default_factory=list)
+    exhaust_pile: list[EntityCard] = field(default_factory=list)
+
+    # Card reward options after combat
+    card_reward: list[EntityCard] = field(default_factory=list)
+
+    # Currently selected card (for targeting)
+    card_active: EntityCard | None = None
+
+    # Target of the active card (monster being targeted)
+    card_target: EntityMonster | None = None
 
     # Map
-    id_map_nodes: list[list[int | None]] = field(default_factory=list)
-    id_map_node_active: int | None = None
-    id_map_node_boss: int | None = None
-
-    id_card_target: int | None = None
-
-
-def create_entity(entity_manager: EntityManager, entity: EntityBase) -> int:
-    entity_manager.entities.append(entity)
-
-    # Return the entity's index
-    return len(entity_manager.entities) - 1
+    map_nodes: list[list[EntityMapNode | None]] = field(default_factory=list)
+    map_node_active: EntityMapNode | None = None
+    map_node_boss: EntityMapNode | None = None

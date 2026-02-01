@@ -39,7 +39,7 @@ class InvalidStateError(Exception):
 def _handle_combat_monster_select(
     game_state: GameState, index: int
 ) -> tuple[list[Effect], list[Effect]]:
-    id_monster = game_state.entity_manager.id_monsters[index]
+    monster = game_state.entity_manager.monsters[index]
 
     if game_state.fsm == FSM.COMBAT_AWAIT_TARGET_CARD:
         # Queue is empty in this state. First the card's target is set, then the active card is
@@ -47,9 +47,9 @@ def _handle_combat_monster_select(
         # finally the card's target is cleared
         return (
             [
-                Effect(EffectType.TARGET_CARD_SET, id_target=id_monster),
+                Effect(EffectType.TARGET_CARD_SET, target=monster),
                 Effect(EffectType.CARD_ACTIVE_CLEAR),
-                Effect(EffectType.CARD_PLAY, id_target=game_state.entity_manager.id_card_active),
+                Effect(EffectType.CARD_PLAY, target=game_state.entity_manager.card_active),
                 Effect(EffectType.TARGET_CARD_CLEAR),
             ],
             [],
@@ -61,35 +61,31 @@ def _handle_combat_monster_select(
 def _handle_combat_card_in_hand_select(
     game_state: GameState, index: int, fast_mode: bool
 ) -> tuple[list[Effect], list[Effect]]:
-    # Get the selected card's id
-    id_card = game_state.entity_manager.id_cards_in_hand[index]
+    # Get the selected card
+    card = game_state.entity_manager.hand[index]
 
     if game_state.fsm == FSM.COMBAT_DEFAULT:
-        card = game_state.entity_manager.entities[id_card]
-
         # Check if there's enough energy to play it
-        energy_current = game_state.entity_manager.entities[
-            game_state.entity_manager.id_energy
-        ].current
+        energy_current = game_state.entity_manager.energy.current
         if card.cost > energy_current:
             raise InvalidActionError(f"Can't select card {card} with {energy_current} energy")
 
         # If the card requires targeting, set it as active and return
         if does_card_require_target(card):
-            id_monsters = game_state.entity_manager.id_monsters
-            if fast_mode and len(id_monsters) == 1:
+            monsters = game_state.entity_manager.monsters
+            if fast_mode and len(monsters) == 1:
                 return (
                     [
-                        Effect(EffectType.TARGET_CARD_SET, id_target=id_monsters[0]),
+                        Effect(EffectType.TARGET_CARD_SET, target=monsters[0]),
                         Effect(EffectType.CARD_ACTIVE_CLEAR),
-                        Effect(EffectType.CARD_PLAY, id_target=id_card),
+                        Effect(EffectType.CARD_PLAY, target=card),
                         Effect(EffectType.TARGET_CARD_CLEAR),
                     ],
                     [],
                 )
 
             return (
-                [Effect(EffectType.CARD_ACTIVE_SET, id_target=id_card)],
+                [Effect(EffectType.CARD_ACTIVE_SET, target=card)],
                 [],
             )
 
@@ -97,14 +93,14 @@ def _handle_combat_card_in_hand_select(
         # where cards that don't need a target are still set as active and await the player's
         # confirmation
         return (
-            [Effect(EffectType.CARD_PLAY, id_target=id_card)],
+            [Effect(EffectType.CARD_PLAY, target=card)],
             [],
         )
 
     if game_state.fsm == FSM.COMBAT_AWAIT_TARGET_DISCARD:
         # In this state, the effect at the top of the queue is waiting for a target. We replace
-        # `id_target` in the effect and return no other effects
-        game_state.effect_queue[0] = replace(game_state.effect_queue[0], id_target=id_card)
+        # `target` in the effect and return no other effects
+        game_state.effect_queue[0] = replace(game_state.effect_queue[0], target=card)
 
         return [], []
 
@@ -115,23 +111,21 @@ def _handle_rest_site_rest(game_state: GameState) -> tuple[list[Effect], list[Ef
     if game_state.fsm != FSM.REST_SITE:
         raise InvalidActionError(f"Can't rest on state {game_state.fsm}")
 
-    character = game_state.entity_manager.entities[game_state.entity_manager.id_character]
+    character = game_state.entity_manager.character
     health_gain_value = int(REST_SITE_REST_HEALTH_GAIN_FACTOR * character.health_max)
 
-    map_node_active = game_state.entity_manager.entities[
-        game_state.entity_manager.id_map_node_active
-    ]
-    if map_node_active.y == len(game_state.entity_manager.id_map_nodes) - 1:
+    map_node_active = game_state.entity_manager.map_node_active
+    if map_node_active.y == len(game_state.entity_manager.map_nodes) - 1:
         # Boss fight
         return [
             Effect(
                 EffectType.HEALTH_GAIN,
                 health_gain_value,
-                id_target=game_state.entity_manager.id_character,
+                target=character,
             ),
             Effect(
                 EffectType.MAP_NODE_ACTIVE_SET,
-                id_target=game_state.entity_manager.id_map_node_boss,
+                target=game_state.entity_manager.map_node_boss,
             ),
         ], []
 
@@ -139,7 +133,7 @@ def _handle_rest_site_rest(game_state: GameState) -> tuple[list[Effect], list[Ef
         Effect(
             EffectType.HEALTH_GAIN,
             health_gain_value,
-            id_target=game_state.entity_manager.id_character,
+            target=character,
         ),
         # Add an effect to select the next map node
         Effect(
@@ -156,26 +150,23 @@ def _handle_rest_site_upgrade(
     if game_state.fsm != FSM.REST_SITE:
         raise InvalidActionError(f"Can't upgrade on state {game_state.fsm}")
 
-    id_card = game_state.entity_manager.id_cards_in_deck[index]
-    card = game_state.entity_manager.entities[id_card]
+    card = game_state.entity_manager.deck[index]
     if card.name.endswith("+"):
         raise InvalidActionError("Can't upgrade an already-upgraded card")
 
-    map_node_active = game_state.entity_manager.entities[
-        game_state.entity_manager.id_map_node_active
-    ]
-    if map_node_active.y == len(game_state.entity_manager.id_map_nodes) - 1:
+    map_node_active = game_state.entity_manager.map_node_active
+    if map_node_active.y == len(game_state.entity_manager.map_nodes) - 1:
         # Boss fight
         return [
-            Effect(EffectType.CARD_UPGRADE, id_target=id_card),
+            Effect(EffectType.CARD_UPGRADE, target=card),
             Effect(
                 EffectType.MAP_NODE_ACTIVE_SET,
-                id_target=game_state.entity_manager.id_map_node_boss,
+                target=game_state.entity_manager.map_node_boss,
             ),
         ], []
 
     return [
-        Effect(EffectType.CARD_UPGRADE, id_target=id_card),
+        Effect(EffectType.CARD_UPGRADE, target=card),
         # Add an effect to select the next map node
         Effect(
             EffectType.MAP_NODE_ACTIVE_SET,
@@ -191,20 +182,16 @@ def _handle_map_node_select(
     if game_state.fsm != FSM.MAP:
         raise InvalidActionError(f"Can't select a map node on state {game_state.fsm}")
 
-    if game_state.entity_manager.id_map_node_active is None:
+    if game_state.entity_manager.map_node_active is None:
         # Starting node
         y_next = 0
         x_valid = [
-            x
-            for x, node in enumerate(game_state.entity_manager.id_map_nodes[0])
-            if node is not None
+            x for x, node in enumerate(game_state.entity_manager.map_nodes[0]) if node is not None
         ]
 
     else:
         # Intermediate node
-        map_node_active = game_state.entity_manager.entities[
-            game_state.entity_manager.id_map_node_active
-        ]
+        map_node_active = game_state.entity_manager.map_node_active
         y_next = map_node_active.y + 1
         x_valid = map_node_active.x_next
 
@@ -213,10 +200,9 @@ def _handle_map_node_select(
             f"Can't select node on x = {index} on y = {y_next}. Valid options: {x_valid}"
         )
 
-    # Get the id of the selected node, replace it in the top effect (saved before clearing the
-    # queue), and append it to the queue
-    id_map_node = game_state.entity_manager.id_map_nodes[y_next][index]
-    game_state.effect_queue[0] = replace(game_state.effect_queue[0], id_target=id_map_node)
+    # Get the selected node, replace it in the top effect
+    map_node = game_state.entity_manager.map_nodes[y_next][index]
+    game_state.effect_queue[0] = replace(game_state.effect_queue[0], target=map_node)
 
     return [], []
 
@@ -228,8 +214,8 @@ def _handle_card_reward_select(
         raise InvalidActionError("TODO: add message")
 
     effect = game_state.effect_queue[0]
-    id_target = game_state.entity_manager.id_card_reward[index]
-    game_state.effect_queue[0] = replace(effect, id_target=id_target)
+    target = game_state.entity_manager.card_reward[index]
+    game_state.effect_queue[0] = replace(effect, target=target)
 
     return [
         Effect(
@@ -272,7 +258,7 @@ def handle_action(
 
     if action.type == ActionType.COMBAT_TURN_END:
         return (
-            [Effect(EffectType.TURN_END, id_target=game_state.entity_manager.id_character)],
+            [Effect(EffectType.TURN_END, target=game_state.entity_manager.character)],
             [],
         )
 
@@ -321,14 +307,12 @@ def _get_new_fsm(game_state: GameState) -> FSM:
 
         raise ValueError(f"Unsupported pending effect type: {effect_top.type}")
 
-    if game_state.entity_manager.id_card_active is not None:
+    if game_state.entity_manager.card_active is not None:
         return FSM.COMBAT_AWAIT_TARGET_CARD
 
     # At this point, the effect queue is clear and there's no active card. The state the game's in
     # depends on the current room type
-    map_node_active = game_state.entity_manager.entities[
-        game_state.entity_manager.id_map_node_active
-    ]
+    map_node_active = game_state.entity_manager.map_node_active
     if map_node_active.room_type == RoomType.REST_SITE:
         return FSM.REST_SITE
 

@@ -8,9 +8,7 @@ from src.game.entity.manager import EntityManager
 def process_effect_turn_start(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
-
-    target = entity_manager.entities[id_target]
+    target = kwargs["target"]
 
     effects = []
 
@@ -27,23 +25,22 @@ def process_effect_turn_start(
         # Clear modifier
         del target.modifier_map[ModifierType.NEXT_TURN_BLOCK]
 
-    effects.append(Effect(EffectType.BLOCK_SET, block, id_target=id_target))
+    effects.append(Effect(EffectType.BLOCK_SET, block, target=target))
 
     # Apply phantasmal
     if ModifierType.PHANTASMAL in target.modifier_map:
-        effects.append(Effect(EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN, 1, id_target=id_target))
+        effects.append(Effect(EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN, 1, target=target))
 
     # Character-specific effects
     if isinstance(target, EntityCharacter):
-        energy = entity_manager.entities[entity_manager.id_energy]
         effects += [
             Effect(EffectType.CARD_DRAW, 5),
-            Effect(EffectType.ENERGY_GAIN, energy.max - energy.current),
-            Effect(EffectType.MODIFIER_TICK, id_target=entity_manager.id_character),
+            Effect(EffectType.ENERGY_GAIN, entity_manager.energy.max - entity_manager.energy.current),
+            Effect(EffectType.MODIFIER_TICK, target=entity_manager.character),
         ]
         effects += [
-            Effect(EffectType.MODIFIER_TICK, id_target=id_monster)
-            for id_monster in entity_manager.id_monsters
+            Effect(EffectType.MODIFIER_TICK, target=monster)
+            for monster in entity_manager.monsters
         ]
 
         # Apply next turn energy modifier

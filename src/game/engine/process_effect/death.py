@@ -5,27 +5,24 @@ from src.game.entity.actor import ModifierType
 from src.game.entity.character import EntityCharacter
 from src.game.entity.manager import EntityManager
 from src.game.entity.monster import EntityMonster
+from src.game.utils import remove_by_identity
 
 
 def process_effect_death(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
+    target = kwargs["target"]
 
-    target = entity_manager.entities[id_target]
     if isinstance(target, EntityCharacter):
         # Game's over
         return [], [Effect(EffectType.GAME_END)]
 
     if isinstance(target, EntityMonster):
-        # TODO: delete instance from `entity_manager.entities`
-        try:
-            entity_manager.id_monsters.remove(id_target)
-        except ValueError:
+        if not remove_by_identity(entity_manager.monsters, target):
             # Already dead TODO: fix
             return [], []
 
-        if entity_manager.id_monsters:
+        if entity_manager.monsters:
             effects_top = []
             for modifier_type, modifier_data in target.modifier_map.items():
                 if modifier_type == ModifierType.SPORE_CLOUD:
@@ -34,7 +31,7 @@ def process_effect_death(
                             EffectType.MODIFIER_VULNERABLE_GAIN,
                             modifier_data.stacks_current,
                             EffectTargetType.CHARACTER,
-                            id_source=id_target,
+                            source=target,
                         )
                     )
 

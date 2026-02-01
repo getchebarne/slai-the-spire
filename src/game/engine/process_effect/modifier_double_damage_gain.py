@@ -14,9 +14,7 @@ def process_effect_modifier_double_damage_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_target = kwargs["id_target"]
-
-    target = entity_manager.entities[id_target]
+    target = kwargs["target"]
 
     if ModifierType.DOUBLE_DAMAGE in target.modifier_map:
         modifier_data = target.modifier_map[ModifierType.DOUBLE_DAMAGE]

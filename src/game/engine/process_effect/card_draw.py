@@ -11,27 +11,31 @@ def process_effect_card_draw(
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
 
-    id_cards_in_draw_pile = entity_manager.id_cards_in_draw_pile
-    id_cards_in_hand = entity_manager.id_cards_in_hand
-    id_cards_in_disc_pile = entity_manager.id_cards_in_disc_pile
+    draw_pile = entity_manager.draw_pile
+    hand = entity_manager.hand
+    disc_pile = entity_manager.disc_pile
 
     for _ in range(value):
-        if len(id_cards_in_draw_pile) == 0:
+        if len(draw_pile) == 0:
             # Shuffle discard pile into draw pile TODO: make effect
-            id_cards_in_draw_pile.extend(id_cards_in_disc_pile)
-            random.shuffle(id_cards_in_draw_pile)
+            draw_pile.extend(disc_pile)
+            random.shuffle(draw_pile)
 
             # Clear the discard pile
-            id_cards_in_disc_pile.clear()
+            disc_pile.clear()
+
+        if len(draw_pile) == 0:
+            # Both piles are empty, can't draw
+            break
 
         # Remove the top card from the draw pile
-        id_card = id_cards_in_draw_pile.pop(0)
+        card = draw_pile.pop(0)
 
-        if len(id_cards_in_hand) < MAX_SIZE_HAND:
+        if len(hand) < MAX_SIZE_HAND:
             # Add to hand
-            id_cards_in_hand.append(id_card)
+            hand.append(card)
         else:
             # Add to discard pile
-            id_cards_in_disc_pile.append(id_card)
+            disc_pile.append(card)
 
     return [], []

@@ -15,9 +15,7 @@ def process_effect_modifier_next_turn_block_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_target = kwargs["id_target"]
-
-    target = entity_manager.entities[id_target]
+    target = kwargs["target"]
 
     # Apply dexterity
     if ModifierType.DEXTERITY in target.modifier_map:

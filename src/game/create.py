@@ -2,7 +2,6 @@ from collections import deque
 
 from src.game.const import MAP_HEIGHT
 from src.game.entity.manager import EntityManager
-from src.game.entity.manager import create_entity
 from src.game.entity.map_node import EntityMapNode
 from src.game.entity.map_node import RoomType
 from src.game.factory.energy import create_energy
@@ -15,33 +14,20 @@ from src.game.types_ import AscensionLevel
 # TODO: parametrize deck, monster, etc.
 def create_game_state(ascension_level: AscensionLevel) -> GameState:
     # Create empty EntityManager
-    entity_manager = EntityManager([])
+    entity_manager = EntityManager()
 
     # Create entities
     character, deck_starter = FACTORY_LIB_CHARACTER["Silent"](ascension_level)
     energy = create_energy(3, 3)
 
-    # Assign corresponding ids
-    entity_manager.id_character = create_entity(entity_manager, character)
-    entity_manager.id_cards_in_deck = [
-        create_entity(entity_manager, card) for card in deck_starter
-    ]
-    entity_manager.id_energy = create_entity(entity_manager, energy)
+    # Assign directly
+    entity_manager.character = character
+    entity_manager.deck = deck_starter
+    entity_manager.energy = energy
 
     # Create map TODO: improve
-    map_ = generate_map()
-    for y, row in enumerate(map_):
-        for x, node in enumerate(row):
-            if node is None:
-                continue
-
-            id_map_node = create_entity(entity_manager, node)
-            map_[y][x] = id_map_node
-
-    entity_manager.id_map_nodes = map_
-    entity_manager.id_map_node_boss = create_entity(
-        entity_manager, EntityMapNode(MAP_HEIGHT, -1, RoomType.COMBAT_BOSS)
-    )
+    entity_manager.map_nodes = generate_map()
+    entity_manager.map_node_boss = EntityMapNode(MAP_HEIGHT, -1, RoomType.COMBAT_BOSS)
 
     # Create effect queue
     effect_queue = deque()
