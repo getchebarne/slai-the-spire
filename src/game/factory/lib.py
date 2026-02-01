@@ -12,7 +12,7 @@ F = TypeVar("F", bound=Callable)
 FactoryCard: TypeAlias = Callable[[CardUpgraded], EntityCard]
 FactoryCharacter: TypeAlias = Callable[[AscensionLevel], tuple[EntityCharacter, list[EntityCard]]]
 FactoryMonster: TypeAlias = Callable[
-    [AscensionLevel], tuple[EntityMonster, Callable[[EntityMonster], str]]
+    [AscensionLevel], tuple[EntityMonster, Callable[[EntityMonster, AscensionLevel], str]]
 ]
 
 FACTORY_LIB_CARD: dict[str, FactoryCard] = {}

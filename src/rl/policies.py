@@ -1,72 +1,110 @@
+"""
+Policy implementations for action selection.
+
+Available policies:
+- PolicyBase: Abstract base class for all policies
+- PolicyRandom: Random action selection (useful for baselines and exploration)
+
+Note: The PolicySoftmax class requires the new hierarchical ActorCritic model.
+For model-based action selection, use ActorCritic.get_action() directly.
+"""
+
 import random
 from abc import ABC, abstractmethod
 from typing import Any, TypeAlias
-
-import torch
-import torch.nn as nn
 
 from src.game.action import Action
 from src.game.action import ActionType
 from src.game.view.fsm import ViewFSM
 from src.game.view.state import ViewGameState
-from src.rl.encoding.state import encode_view_game_state
-from src.rl.models.interface import action_idx_to_action
-from src.rl.models.interface import get_valid_action_mask
 
 
 SelectActionMetadata: TypeAlias = dict[str, Any]
 
 
 class PolicyBase(ABC):
+    """Abstract base class for all policies."""
+
     @abstractmethod
-    def select_action(view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
+    def select_action(
+        self, view_game_state: ViewGameState
+    ) -> tuple[Action, SelectActionMetadata]:
+        """
+        Select an action given the current game state.
+
+        Args:
+            view_game_state: Current game state view
+
+        Returns:
+            Tuple of (Action to take, metadata dict for logging/debugging)
+        """
         raise NotImplementedError
 
 
 class PolicyRandom(PolicyBase):
-    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
+    """
+    Random policy that selects valid actions uniformly at random.
+
+    Useful for:
+    - Establishing baseline performance
+    - Exploration during training
+    - Testing game mechanics
+    """
+
+    def select_action(
+        self, view_game_state: ViewGameState
+    ) -> tuple[Action, SelectActionMetadata]:
+        """Select a random valid action."""
+
+        # Card Reward screen
         if view_game_state.fsm == ViewFSM.CARD_REWARD:
             num_cards = len(view_game_state.reward_combat)
             roll = random.randint(0, num_cards)
             if roll == num_cards:
                 return Action(ActionType.CARD_REWARD_SKIP), {}
-
             return Action(ActionType.CARD_REWARD_SELECT, roll), {}
 
+        # Map screen
         if view_game_state.fsm == ViewFSM.MAP:
             if view_game_state.map.y_current is None:
-                return (
-                    Action(
-                        ActionType.MAP_NODE_SELECT,
-                        random.choice(
-                            [
-                                x
-                                for x, node in enumerate(view_game_state.map.nodes[0])
-                                if node is not None
-                            ]
-                        ),
-                    ),
-                    {},
-                )
+                # First floor - select from starting nodes
+                valid_x = [
+                    x
+                    for x, node in enumerate(view_game_state.map.nodes[0])
+                    if node is not None
+                ]
+                return Action(ActionType.MAP_NODE_SELECT, random.choice(valid_x)), {}
 
+            # Subsequent floors - select from connected nodes
             map_node = view_game_state.map.nodes[view_game_state.map.y_current][
                 view_game_state.map.x_current
             ]
-            return Action(ActionType.MAP_NODE_SELECT, random.choice(list(map_node.x_next))), {}
-
-        if view_game_state.fsm == ViewFSM.REST_SITE:
-            action_type = random.choice([ActionType.REST_SITE_REST, ActionType.REST_SITE_UPGRADE])
-            if action_type == ActionType.REST_SITE_REST:
-                return Action(action_type), {}
-
-            index_upgradable = [
-                idx for idx, card in enumerate(view_game_state.deck) if not card.name.endswith("+")
-            ]
             return (
-                Action(action_type, random.choice(index_upgradable)),
+                Action(ActionType.MAP_NODE_SELECT, random.choice(list(map_node.x_next))),
                 {},
             )
 
+        # Rest site
+        if view_game_state.fsm == ViewFSM.REST_SITE:
+            action_type = random.choice(
+                [ActionType.REST_SITE_REST, ActionType.REST_SITE_UPGRADE]
+            )
+            if action_type == ActionType.REST_SITE_REST:
+                return Action(action_type), {}
+
+            # Find upgradable cards
+            index_upgradable = [
+                idx
+                for idx, card in enumerate(view_game_state.deck)
+                if not card.name.endswith("+")
+            ]
+            if not index_upgradable:
+                # No upgradable cards, rest instead
+                return Action(ActionType.REST_SITE_REST), {}
+
+            return Action(action_type, random.choice(index_upgradable)), {}
+
+        # Combat - awaiting monster target
         if view_game_state.fsm == ViewFSM.COMBAT_AWAIT_TARGET_CARD:
             return (
                 Action(
@@ -76,7 +114,8 @@ class PolicyRandom(PolicyBase):
                 {},
             )
 
-        if view_game_state.fsm == ViewFSM.COMBAT_AWAIT_TARGET_DISCARD is not None:
+        # Combat - awaiting discard target
+        if view_game_state.fsm == ViewFSM.COMBAT_AWAIT_TARGET_DISCARD:
             return (
                 Action(
                     ActionType.COMBAT_CARD_IN_HAND_SELECT,
@@ -85,6 +124,7 @@ class PolicyRandom(PolicyBase):
                 {},
             )
 
+        # Combat - default (play card or end turn)
         card_selectable_pos = [
             pos
             for pos, card in enumerate(view_game_state.hand)
@@ -92,59 +132,11 @@ class PolicyRandom(PolicyBase):
         ]
         if card_selectable_pos:
             return (
-                Action(ActionType.COMBAT_CARD_IN_HAND_SELECT, random.choice(card_selectable_pos)),
+                Action(
+                    ActionType.COMBAT_CARD_IN_HAND_SELECT,
+                    random.choice(card_selectable_pos),
+                ),
                 {},
             )
 
         return Action(ActionType.COMBAT_TURN_END), {}
-
-
-# class PolicyQMax(PolicyBase):
-#     def __init__(self, model: nn.Module, device: torch.device):
-#         self._model = model
-#         self._device = device
-
-#         # Send model to device
-#         self._model.to(self._device)
-
-#     def select_action(self, view_game_state: CombatView) -> tuple[Action, SelectActionMetadata]:
-#         view_game_state_encoding = encode_view_game_state(view_game_state, self._device)
-#         valid_action_mask_tensor = torch.tensor(
-#             [get_valid_action_mask(view_game_state)], dtype=torch.bool, device=self._device
-#         )
-
-#         with torch.no_grad():
-#             q_values = self._model(*view_game_state_encoding.as_tuple())
-
-#         q_values[~valid_action_mask_tensor] = float("-inf")
-#         action_idx = torch.argmax(q_values, dim=1).item()
-#         action = action_idx_to_action(action_idx, view_game_state)
-
-#         return action, {"q_values": q_values}
-
-
-class PolicySoftmax(PolicyBase):
-    def __init__(self, model: nn.Module, device: torch.device, greedy: bool = True):
-        self._model = model
-        self._device = device
-        self._greedy = greedy
-
-        # Send model to device
-        self._model.to(self._device)
-
-    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
-        encoding_game_state_t = encode_view_game_state(view_game_state, self._device)
-        valid_action_mask_t = get_valid_action_mask(view_game_state)
-
-        with torch.no_grad():
-            x_prob, _ = self._model(*encoding_game_state_t, valid_action_mask_t)
-
-        if self._greedy:
-            action_idx = torch.argmax(x_prob)
-        else:
-            dist = torch.distributions.Categorical(x_prob)
-            action_idx = dist.sample()
-
-        action = action_idx_to_action(action_idx.item())
-
-        return action, {"x_prob": x_prob}

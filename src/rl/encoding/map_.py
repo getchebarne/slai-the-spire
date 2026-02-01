@@ -8,6 +8,7 @@ from src.game.view.map_ import ViewMap
 
 _ROOM_TYPE_CHANNEL = {room_type: channel for channel, room_type in enumerate(RoomType)}
 _ROOM_TYPE_NUM = len(RoomType)
+_NUM_CHANNELS = _ROOM_TYPE_NUM + MAP_WIDTH + 1
 
 
 def _get_view_map_dummy() -> ViewMap:
@@ -15,45 +16,47 @@ def _get_view_map_dummy() -> ViewMap:
 
 
 def get_encoding_map_dim() -> tuple[int, int, int]:
-    view_map_dummy = _get_view_map_dummy()
-    encoding_map_dummy = encode_view_map(view_map_dummy, torch.device("cpu"))
-    return tuple(encoding_map_dummy.shape)
+    return (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
 
 
-def encode_view_map(view_map: ViewMap, device: torch.device) -> torch.Tensor:
-    map_height = len(view_map.nodes)
-    map_width = len(view_map.nodes[0])
+def _encode_view_map(view_map: ViewMap) -> list[list[list[float]]]:
+    # Initialize a 3D list of zeros: height x width x channels
+    encoding = [
+        [[0.0 for _ in range(_NUM_CHANNELS)] for _ in range(MAP_WIDTH)] for _ in range(MAP_HEIGHT)
+    ]
 
-    # Calculate total channels and initialize the encoding tensor
-    num_channels = _ROOM_TYPE_NUM + map_width + 1
-    encoding = torch.zeros(
-        (map_height, map_width, num_channels), dtype=torch.float32, device=device
-    )
-
-    # Populate each channel
+    # Populate room type and edge channels
     for y, row in enumerate(view_map.nodes):
         for x, node in enumerate(row):
             if node is None:
-                # The feature vector remains all zeros
                 continue
 
-            # RoomType
+            # One-hot encode the room type
             idx_room_type = _ROOM_TYPE_CHANNEL[node.room_type]
-            encoding[y, x, idx_room_type] = 1.0
+            encoding[y][x][idx_room_type] = 1.0
 
-            # Edges
+            # Multi-hot encode the outgoing edges/paths
             if node.x_next is not None:
                 for x_next in node.x_next:
                     idx_edge = _ROOM_TYPE_NUM + x_next
-                    encoding[y, x, idx_edge] = 1.0
+                    encoding[y][x][idx_edge] = 1.0
 
-    # Current position
+    # Populate the current position channel
     if (
         view_map.y_current is not None
         and view_map.x_current is not None
-        and view_map.y_current < MAP_HEIGHT  # TODO: improve this garbage
+        and view_map.y_current < MAP_HEIGHT
     ):
-        idx_current_pos = num_channels - 1
-        encoding[view_map.y_current, view_map.x_current, idx_current_pos] = 1.0
+        y_curr, x_curr = view_map.y_current, view_map.x_current
+        idx_current_pos = _NUM_CHANNELS - 1
+        encoding[y_curr][x_curr][idx_current_pos] = 1.0
 
     return encoding
+
+
+def encode_batch_view_map(batch_view_map: list[ViewMap], device: torch.device) -> torch.Tensor:
+    # Generate a list of encodings, one for each map in the batch
+    batch_encodings_list = [_encode_view_map(view_map) for view_map in batch_view_map]
+
+    # Convert the list of 3D lists into a single 4D PyTorch tensor
+    return torch.tensor(batch_encodings_list, dtype=torch.float32, device=device)

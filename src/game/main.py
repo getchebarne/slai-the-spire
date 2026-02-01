@@ -4,6 +4,7 @@ from typing import Callable
 
 from src.game.action import Action
 from src.game.action import ActionType
+from src.game.const import REST_SITE_REST_HEALTH_GAIN_FACTOR
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
@@ -24,7 +25,6 @@ from src.rl.policies import PolicyRandom
 from src.rl.policies import SelectActionMetadata
 
 
-_REST_SITE_REST_HEALTH_GAIN_FACTOR = 0.30
 _NCOL, _ = os.get_terminal_size()
 
 
@@ -59,7 +59,7 @@ def _handle_combat_monster_select(
 
 
 def _handle_combat_card_in_hand_select(
-    game_state: GameState, index: int
+    game_state: GameState, index: int, fast_mode: bool
 ) -> tuple[list[Effect], list[Effect]]:
     # Get the selected card's id
     id_card = game_state.entity_manager.id_cards_in_hand[index]
@@ -76,6 +76,18 @@ def _handle_combat_card_in_hand_select(
 
         # If the card requires targeting, set it as active and return
         if does_card_require_target(card):
+            id_monsters = game_state.entity_manager.id_monsters
+            if fast_mode and len(id_monsters) == 1:
+                return (
+                    [
+                        Effect(EffectType.TARGET_CARD_SET, id_target=id_monsters[0]),
+                        Effect(EffectType.CARD_ACTIVE_CLEAR),
+                        Effect(EffectType.CARD_PLAY, id_target=id_card),
+                        Effect(EffectType.TARGET_CARD_CLEAR),
+                    ],
+                    [],
+                )
+
             return (
                 [Effect(EffectType.CARD_ACTIVE_SET, id_target=id_card)],
                 [],
@@ -104,7 +116,7 @@ def _handle_rest_site_rest(game_state: GameState) -> tuple[list[Effect], list[Ef
         raise InvalidActionError(f"Can't rest on state {game_state.fsm}")
 
     character = game_state.entity_manager.entities[game_state.entity_manager.id_character]
-    health_gain_value = int(_REST_SITE_REST_HEALTH_GAIN_FACTOR * character.health_max)
+    health_gain_value = int(REST_SITE_REST_HEALTH_GAIN_FACTOR * character.health_max)
 
     map_node_active = game_state.entity_manager.entities[
         game_state.entity_manager.id_map_node_active
@@ -243,7 +255,9 @@ def _handle_card_reward_skip(game_state: GameState) -> tuple[list[Effect], list[
     ], []
 
 
-def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], list[Effect]]:
+def handle_action(
+    game_state: GameState, action: Action, fast_mode: bool
+) -> tuple[list[Effect], list[Effect]]:
     if action.type == ActionType.CARD_REWARD_SELECT:
         return _handle_card_reward_select(game_state, action.index)
 
@@ -251,7 +265,7 @@ def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], 
         return _handle_card_reward_skip(game_state)
 
     if action.type == ActionType.COMBAT_CARD_IN_HAND_SELECT:
-        return _handle_combat_card_in_hand_select(game_state, action.index)
+        return _handle_combat_card_in_hand_select(game_state, action.index, fast_mode)
 
     if action.type == ActionType.COMBAT_MONSTER_SELECT:
         return _handle_combat_monster_select(game_state, action.index)
@@ -274,9 +288,9 @@ def handle_action(game_state: GameState, action: Action) -> tuple[list[Effect], 
     raise InvalidActionError(f"Unsupported action type: {action.type}")
 
 
-def step(game_state: GameState, action: Action) -> None:
+def step(game_state: GameState, action: Action, fast_mode: bool) -> None:
     # Handle action
-    effects_bot, effects_top = handle_action(game_state, action)
+    effects_bot, effects_top = handle_action(game_state, action, fast_mode)
 
     # Add new effects to the queue
     add_to_bot(game_state.effect_queue, *effects_bot)
@@ -346,6 +360,7 @@ def main(
     game_state: GameState,
     select_action_fn: Callable[[ViewGameState], tuple[Action, SelectActionMetadata]],
     draw: bool = False,
+    fast_mode: bool = True,
 ) -> GameState:
     initialize_game_state(game_state)
 
@@ -358,12 +373,12 @@ def main(
         action, _ = select_action_fn(game_state_view)
 
         # Game step
-        step(game_state, action)
+        step(game_state, action, fast_mode)
 
         # Draw on terminal
         if draw:
             view_game_state_str = get_view_game_state_str(game_state_view)
-            action_str = get_action_str(action, game_state_view)
+            action_str = get_action_str(action, game_state_view, fast_mode)
             print(view_game_state_str)
             print("-" * _NCOL)
             print(action_str)

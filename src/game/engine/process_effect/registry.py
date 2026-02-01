@@ -26,54 +26,40 @@ from src.game.engine.process_effect.energy_loss import process_effect_energy_los
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
-from src.game.engine.process_effect.modifier_accuracy_gain import (
-    process_effect_modifier_accuracy_gain,
-)
-from src.game.engine.process_effect.modifier_after_image_gain import (
-    process_effect_modifier_after_image_gain,
-)
+from src.game.engine.process_effect.modifier_accuracy_gain import \
+    process_effect_modifier_accuracy_gain
+from src.game.engine.process_effect.modifier_after_image_gain import \
+    process_effect_modifier_after_image_gain
 from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
 from src.game.engine.process_effect.modifier_burst_gain import process_effect_modifier_burst_gain
 from src.game.engine.process_effect.modifier_burst_loss import process_effect_modifier_burst_loss
-from src.game.engine.process_effect.modifier_dexterity_gain import (
-    process_effect_modifier_dexterity_gain,
-)
-from src.game.engine.process_effect.modifier_double_damage_gain import (
-    process_effect_modifier_double_damage_gain,
-)
-from src.game.engine.process_effect.modifier_infinite_blades_gain import (
-    process_effect_modifier_infinite_blades_gain,
-)
-from src.game.engine.process_effect.modifier_mode_shift_gain import (
-    process_effect_modifier_mode_shift_gain,
-)
-from src.game.engine.process_effect.modifier_next_turn_block_gain import (
-    process_effect_modifier_next_turn_block_gain,
-)
-from src.game.engine.process_effect.modifier_next_turn_energy_gain import (
-    process_effect_modifier_next_turn_energy_gain,
-)
-from src.game.engine.process_effect.modifier_phantasmal_gain import (
-    process_effect_modifier_phantasmal_gain,
-)
+from src.game.engine.process_effect.modifier_dexterity_gain import \
+    process_effect_modifier_dexterity_gain
+from src.game.engine.process_effect.modifier_double_damage_gain import \
+    process_effect_modifier_double_damage_gain
+from src.game.engine.process_effect.modifier_infinite_blades_gain import \
+    process_effect_modifier_infinite_blades_gain
+from src.game.engine.process_effect.modifier_mode_shift_gain import \
+    process_effect_modifier_mode_shift_gain
+from src.game.engine.process_effect.modifier_next_turn_block_gain import \
+    process_effect_modifier_next_turn_block_gain
+from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
+    process_effect_modifier_next_turn_energy_gain
+from src.game.engine.process_effect.modifier_phantasmal_gain import \
+    process_effect_modifier_phantasmal_gain
 from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
 from src.game.engine.process_effect.modifier_set_not_new import process_effect_modifier_set_not_new
-from src.game.engine.process_effect.modifier_sharp_hide_gain import (
-    process_effect_modifier_sharp_hide_gain,
-)
-from src.game.engine.process_effect.modifier_sharp_hide_loss import (
-    process_effect_modifier_sharp_hide_loss,
-)
-from src.game.engine.process_effect.modifier_strength_gain import (
-    process_effect_modifier_strength_gain,
-)
-from src.game.engine.process_effect.modifier_thousand_cuts_gain import (
-    process_effect_modifier_thousand_cuts_gain,
-)
+from src.game.engine.process_effect.modifier_sharp_hide_gain import \
+    process_effect_modifier_sharp_hide_gain
+from src.game.engine.process_effect.modifier_sharp_hide_loss import \
+    process_effect_modifier_sharp_hide_loss
+from src.game.engine.process_effect.modifier_strength_gain import \
+    process_effect_modifier_strength_gain
+from src.game.engine.process_effect.modifier_thousand_cuts_gain import \
+    process_effect_modifier_thousand_cuts_gain
 from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
-from src.game.engine.process_effect.modifier_vulnerable_gain import (
-    process_effect_modifier_vulnerable_gain,
-)
+from src.game.engine.process_effect.modifier_vulnerable_gain import \
+    process_effect_modifier_vulnerable_gain
 from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
 from src.game.engine.process_effect.monster_move_update import process_effect_monster_move_update
 from src.game.engine.process_effect.room_enter import process_effect_room_enter

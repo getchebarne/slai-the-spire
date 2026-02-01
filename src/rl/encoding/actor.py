@@ -1,5 +1,3 @@
-import torch
-
 from src.game.view.actor import ViewModifierType
 
 
@@ -11,20 +9,25 @@ _VIEW_MODIFIER_TYPE_STACKS_MAX = {
     ViewModifierType.SHARP_HIDE: 3,
     ViewModifierType.SPORE_CLOUD: 2,
     ViewModifierType.VULNERABLE: 4,
-    ViewModifierType.ACCURACY: 10,  # TODO: fix
-    ViewModifierType.NEXT_TURN_BLOCK: 10,  # TODO: fix
-    ViewModifierType.NEXT_TURN_ENERGY: 10,  # TODO: fix
-    ViewModifierType.BLUR: 10,  # TODO: fix
-    ViewModifierType.DEXTERITY: 10,  # TODO: fix
-    ViewModifierType.INFINITE_BLADES: 10,  # TODO: fix
+    ViewModifierType.ACCURACY: 16,
+    ViewModifierType.NEXT_TURN_BLOCK: 20,
+    ViewModifierType.NEXT_TURN_ENERGY: 5,
+    ViewModifierType.BLUR: 5,
+    ViewModifierType.DEXTERITY: 12,
+    ViewModifierType.INFINITE_BLADES: 5,
+    ViewModifierType.AFTER_IMAGE: 3,
+    ViewModifierType.PHANTASMAL: 2,
+    ViewModifierType.DOUBLE_DAMAGE: 1,
+    ViewModifierType.THOUSAND_CUTS: 4,
+    ViewModifierType.BURST: 4,
 }
 
 
 def encode_view_actor_modifiers(
-    view_actor_modifiers: dict[ViewModifierType, int | None], device: torch.device
-) -> torch.Tensor:
-    encoding = []
-    for view_modifier_type in ViewModifierType:
+    view_actor_modifiers: dict[ViewModifierType, int | None],
+) -> list[float]:
+    encoding = [0] * len(ViewModifierType)
+    for idx, view_modifier_type in enumerate(ViewModifierType):
         # Get current stacks, fallback to 0
         stacks_current = view_actor_modifiers.get(view_modifier_type, 0)
 
@@ -32,8 +35,10 @@ def encode_view_actor_modifiers(
         if stacks_current is None:
             stacks_current = 1
 
-        # Normalize and append to list
+        # Normalize and append to list TODO: revisit clamp
+        stacks_max = _VIEW_MODIFIER_TYPE_STACKS_MAX[view_modifier_type]
+        stacks_current = min(stacks_max, stacks_current)
         stacks_current /= _VIEW_MODIFIER_TYPE_STACKS_MAX[view_modifier_type]
-        encoding.append(stacks_current)
+        encoding[idx] = stacks_current
 
-    return torch.tensor(encoding, dtype=torch.float32, device=device)
+    return encoding

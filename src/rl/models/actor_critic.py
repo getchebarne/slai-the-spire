@@ -1,357 +1,454 @@
+"""
+Actor-Critic model with hierarchical action heads.
+
+Architecture:
+1. Core encoder processes game state → entity embeddings + global context
+2. Primary head (action type) selects high-level action type
+3. Secondary heads select specific indices (card, monster, map node)
+4. Value head estimates state value
+"""
+
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from src.game.const import CARD_REWARD_NUM
+from src.game.action import Action
+from src.game.action import ActionType
 from src.game.const import MAP_WIDTH
-from src.game.const import MAX_MONSTERS
-from src.game.const import MAX_SIZE_DECK
-from src.game.const import MAX_SIZE_DISC_PILE
-from src.game.const import MAX_SIZE_DRAW_PILE
-from src.game.const import MAX_SIZE_HAND
-from src.rl.encoding.card import get_encoding_card_dim
-from src.rl.encoding.character import get_encoding_character_dim
-from src.rl.encoding.energy import get_encoding_energy_dim
-from src.rl.encoding.map_ import get_encoding_map_dim
-from src.rl.encoding.monster import get_encoding_monster_dim
-from src.rl.models.encoder_map import EncoderMap
-from src.rl.models.transformer_entity import TransformerEntity
+from src.game.core.fsm import FSM
+from src.rl.action_space.cascade import ActionRoute
+from src.rl.action_space.cascade import FSM_ROUTING
+from src.rl.action_space.cascade import get_secondary_head_type
+from src.rl.action_space.types import HeadType
+from src.rl.encoding.state import XGameState
+from src.rl.models.core import Core
+from src.rl.models.core import CoreOutput
+from src.rl.models.heads import HeadActionType
+from src.rl.models.heads import HeadCardDiscard
+from src.rl.models.heads import HeadCardPlay
+from src.rl.models.heads import HeadCardRewardSelect
+from src.rl.models.heads import HeadCardUpgrade
+from src.rl.models.heads import HeadMapSelect
+from src.rl.models.heads import HeadMonsterSelect
+from src.rl.models.heads import HeadOutput
+from src.rl.models.heads import HeadValue
 
 
-_ENCODING_DIM_CARD = get_encoding_card_dim()
-_ENCODING_DIM_CHARACTER = get_encoding_character_dim()
-_ENCODING_DIM_ENERGY = get_encoding_energy_dim()
-_ENCODING_DIM_MAP = get_encoding_map_dim()
-_ENCODING_DIM_MONSTER = get_encoding_monster_dim()
+# Maximum number of action types in any FSM state (for action type head output size)
+_MAX_ACTION_TYPES = max(len(route.action_types) for route in FSM_ROUTING.values())
 
 
-def _calculate_masked_mean_pooling(
-    x: torch.Tensor, x_mask: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    batch_size, sequence_len = x_mask.shape
+@dataclass
+class ActorOutput:
+    """Output from the actor (policy) - single sample."""
 
-    # Zero out the padding tokens in the input tensor
-    x_masked = x * x_mask.view(batch_size, sequence_len, 1)
+    action_type: ActionType
+    action_type_log_prob: torch.Tensor | None  # None if forced (single valid action type)
+    secondary_index: int | None  # None if terminal action (no secondary head)
+    secondary_log_prob: torch.Tensor | None  # None if terminal action
 
-    # Sum the embeddings of the non-padded tokens
-    x_masked_sum = torch.sum(x_masked, dim=1)
+    def to_action(self) -> Action:
+        """Convert to game Action."""
+        return Action(type=self.action_type, index=self.secondary_index)
 
-    # Divide the sum by the actual sequence length to get the mean
-    x_len = torch.sum(x_mask, dim=1, keepdim=True, dtype=torch.float32)
-    x_masked_sum_pool = x_masked_sum / (x_len + 1e-9)
+    @property
+    def total_log_prob(self) -> torch.Tensor:
+        """Combined log probability of the full action."""
+        log_probs = []
+        if self.action_type_log_prob is not None:
+            log_probs.append(self.action_type_log_prob)
+        if self.secondary_log_prob is not None:
+            log_probs.append(self.secondary_log_prob)
 
-    return x_masked_sum_pool, x_len
+        if not log_probs:
+            # Fully deterministic action
+            return torch.tensor(0.0)
+
+        return torch.sum(torch.stack(log_probs))
 
 
-# TODO: parametrize dimensions better, so they are more readable
+@dataclass
+class BatchedActorOutput:
+    """Output from the actor (policy) - batched version for parallel environments."""
+
+    # The route determines how to map action_type_indices to ActionType
+    route: ActionRoute
+    fsm: FSM
+    batch_size: int
+
+    # Action type selection (None if forced)
+    action_type_indices: torch.Tensor | None  # (B,) indices into route.action_types
+    action_type_log_probs: torch.Tensor | None  # (B,) log probs
+
+    # Secondary selection - per sample (None means terminal action for that sample)
+    # These tensors have values for ALL samples, but only valid where secondary head was used
+    secondary_indices: torch.Tensor | None  # (B,) selected indices
+    secondary_log_probs: torch.Tensor | None  # (B,) log probs
+
+    def get_action_type(self, batch_idx: int) -> ActionType:
+        """Get action type for a specific sample in the batch."""
+        if self.route.is_forced:
+            return self.route.forced_action_type
+        return self.route.action_types[self.action_type_indices[batch_idx].item()]
+
+    def get_secondary_index(self, batch_idx: int) -> int | None:
+        """Get secondary index for a specific sample in the batch."""
+        action_type = self.get_action_type(batch_idx)
+        secondary_head_type = get_secondary_head_type(self.fsm, action_type)
+
+        # Terminal action - no secondary index
+        if secondary_head_type is None:
+            return None
+
+        if self.secondary_indices is None:
+            return None
+
+        return self.secondary_indices[batch_idx].item()
+
+    def get_action_type_log_prob(self, batch_idx: int) -> torch.Tensor | None:
+        """Get action type log prob for a specific sample."""
+        if self.action_type_log_probs is None:
+            return None
+        return self.action_type_log_probs[batch_idx]
+
+    def get_secondary_log_prob(self, batch_idx: int) -> torch.Tensor | None:
+        """Get secondary log prob for a specific sample."""
+        action_type = self.get_action_type(batch_idx)
+        secondary_head_type = get_secondary_head_type(self.fsm, action_type)
+
+        # Terminal action - no secondary log prob
+        if secondary_head_type is None:
+            return None
+
+        if self.secondary_log_probs is None:
+            return None
+
+        return self.secondary_log_probs[batch_idx]
+
+    def to_actor_output(self, batch_idx: int) -> ActorOutput:
+        """Extract ActorOutput for a specific sample in the batch."""
+        return ActorOutput(
+            action_type=self.get_action_type(batch_idx),
+            action_type_log_prob=self.get_action_type_log_prob(batch_idx),
+            secondary_index=self.get_secondary_index(batch_idx),
+            secondary_log_prob=self.get_secondary_log_prob(batch_idx),
+        )
+
+    def to_action(self, batch_idx: int) -> Action:
+        """Convert to game Action for a specific sample."""
+        return Action(
+            type=self.get_action_type(batch_idx),
+            index=self.get_secondary_index(batch_idx),
+        )
+
+
+@dataclass
+class ActorCriticOutput:
+    """Full output from actor-critic forward pass - single sample."""
+
+    actor: ActorOutput
+    value: torch.Tensor  # (1,) for single sample
+
+
+@dataclass
+class BatchedActorCriticOutput:
+    """Full output from actor-critic forward pass - batched version."""
+
+    actor: BatchedActorOutput
+    value: torch.Tensor  # (B, 1) for batch
+
+
+def _slice_core_output(core_out: CoreOutput, indices: torch.Tensor) -> CoreOutput:
+    """Slice a CoreOutput to only include specified batch indices."""
+    return CoreOutput(
+        x_hand=core_out.x_hand[indices],
+        x_draw=core_out.x_draw[indices],
+        x_disc=core_out.x_disc[indices],
+        x_deck=core_out.x_deck[indices],
+        x_combat_reward=core_out.x_combat_reward[indices],
+        x_monsters=core_out.x_monsters[indices],
+        x_character=core_out.x_character[indices],
+        x_energy=core_out.x_energy[indices],
+        x_entity=core_out.x_entity[indices],
+        x_entity_mask=core_out.x_entity_mask[indices],
+        x_map=core_out.x_map[indices],
+        x_global=core_out.x_global[indices],
+    )
+
+
 class ActorCritic(nn.Module):
+    """
+    Actor-Critic model with hierarchical action heads.
+
+    The action space is hierarchical:
+    1. Action type head selects the type of action (play card, end turn, etc.)
+    2. Secondary heads select specific indices based on action type
+    """
+
     def __init__(
         self,
-        embedding_dim_card: int,
-        embedding_dim_char: int,
-        embedding_dim_monster: int,
-        embedding_dim_energy: int,
-        num_heads: int,
+        # Core params
+        dim_entity: int = 128,
+        transformer_dim_ff: int = 256,
+        transformer_num_heads: int = 4,
+        transformer_num_blocks: int = 2,
+        map_encoder_kernel_size: int = 3,
+        map_encoder_dim: int = 32,
+        # Head params
+        dim_ff_action_type: int = 128,
+        dim_ff_card: int = 128,
+        dim_ff_monster: int = 128,
+        dim_ff_map: int = 128,
+        dim_ff_value: int = 128,
     ):
         super().__init__()
 
-        self._embedding_dim_card = embedding_dim_card
-        self._embedding_dim_char = embedding_dim_char
-        self._embedding_dim_monster = embedding_dim_monster
-        self._embedding_dim_energy = embedding_dim_energy
-        self._num_heads = num_heads
-
-        # Linear projections to map cards and monsters to a space w/ another dimension before
-        # inputting them to the transformer
-        self._projection_card = nn.Linear(_ENCODING_DIM_CARD, embedding_dim_card)
-        self._projection_monster = nn.Linear(_ENCODING_DIM_MONSTER, embedding_dim_monster)
-
-        # Transformers
-        self._transformer_card = TransformerEntity(
-            embedding_dim_card, embedding_dim_card, num_heads
-        )
-        self._transformer_monster = TransformerEntity(
-            embedding_dim_monster, embedding_dim_monster, num_heads
+        # Core encoder
+        self.core = Core(
+            dim_entity=dim_entity,
+            transformer_dim_ff=transformer_dim_ff,
+            transformer_num_heads=transformer_num_heads,
+            transformer_num_blocks=transformer_num_blocks,
+            map_encoder_kernel_size=map_encoder_kernel_size,
+            map_encoder_dim=map_encoder_dim,
         )
 
-        # MLPs
-        self._mlp_char = nn.Sequential(
-            nn.Linear(_ENCODING_DIM_CHARACTER, embedding_dim_char),
-            nn.ReLU(),
-            nn.Linear(embedding_dim_char, embedding_dim_char),
-            nn.ReLU(),
-        )
-        self._mlp_energy = nn.Sequential(
-            nn.Linear(_ENCODING_DIM_ENERGY, embedding_dim_energy),
-            nn.ReLU(),
-            nn.Linear(embedding_dim_energy, embedding_dim_energy),
-            nn.ReLU(),
+        dim_global = self.core.dim_global
+        dim_map = self.core.dim_map
+
+        # Primary head: action type selection
+        self.head_action_type = HeadActionType(
+            dim_global=dim_global,
+            dim_ff=dim_ff_action_type,
+            max_action_types=_MAX_ACTION_TYPES,
         )
 
-        # EncoderMap
-        self._encoder_map = EncoderMap(
-            _ENCODING_DIM_MAP[0],
-            _ENCODING_DIM_MAP[1],
-            _ENCODING_DIM_MAP[2],
-            3,
+        # Card heads (each with separate weights)
+        self.head_card_play = HeadCardPlay(
+            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
+        )
+        self.head_card_discard = HeadCardDiscard(
+            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
+        )
+        self.head_card_reward = HeadCardRewardSelect(
+            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
+        )
+        self.head_card_upgrade = HeadCardUpgrade(
+            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
         )
 
-        # Final MLPs mapping to logits
-        self._mlp_reward_select = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
+        # Other secondary heads
+        self.head_monster_select = HeadMonsterSelect(
+            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_monster
         )
-        self._mlp_reward_skip = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-        )
-        self._mlp_card_select_or_discard = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 2),
-        )
-        self._mlp_monster_select = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-        )
-        self._mlp_turn_end = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-        )
-        self._mlp_map_select_rest_site_rest = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, MAP_WIDTH + 1),
-        )
-        self._mlp_rest_site_upgrade = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
+        self.head_map_select = HeadMapSelect(
+            dim_map=dim_map,
+            dim_global=dim_global,
+            dim_ff=dim_ff_map,
+            num_columns=MAP_WIDTH,
         )
 
-        # Critic
-        self._mlp_critic = nn.Sequential(
-            nn.LazyLinear(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
+        # Value head (critic)
+        self.head_value = HeadValue(dim_global=dim_global, dim_ff=dim_ff_value)
+
+        # Head registry for dispatch
+        self._secondary_heads: dict[HeadType, nn.Module] = {
+            HeadType.CARD_PLAY: self.head_card_play,
+            HeadType.CARD_DISCARD: self.head_card_discard,
+            HeadType.CARD_REWARD_SELECT: self.head_card_reward,
+            HeadType.CARD_UPGRADE: self.head_card_upgrade,
+            HeadType.MONSTER_SELECT: self.head_monster_select,
+            HeadType.MAP_SELECT: self.head_map_select,
+        }
+
+    def _get_entities_for_head(
+        self,
+        head_type: HeadType,
+        core_out: CoreOutput,
+    ) -> torch.Tensor:
+        """Get the entity tensor for the given head type."""
+        match head_type:
+            case HeadType.CARD_PLAY | HeadType.CARD_DISCARD:
+                return core_out.x_hand
+            case HeadType.CARD_REWARD_SELECT:
+                return core_out.x_combat_reward
+            case HeadType.CARD_UPGRADE:
+                return core_out.x_deck
+            case HeadType.MONSTER_SELECT:
+                return core_out.x_monsters
+            case _:
+                raise ValueError(f"No entity tensor for head type: {head_type}")
+
+    def _invoke_secondary_head(
+        self,
+        head_type: HeadType,
+        core_out: CoreOutput,
+        mask: torch.Tensor,
+        sample: bool,
+    ) -> HeadOutput:
+        """Invoke the appropriate secondary head."""
+        if head_type == HeadType.MAP_SELECT:
+            # Map head has different signature
+            return self.head_map_select(core_out.x_map, core_out.x_global, mask, sample)
+
+        # Entity selection heads
+        head = self._secondary_heads[head_type]
+        x_entities = self._get_entities_for_head(head_type, core_out)
+        return head(x_entities, core_out.x_global, mask, sample)
+
+    def forward_batch(
+        self,
+        x_game_state: XGameState,
+        fsm: FSM,
+        masks: dict[HeadType, torch.Tensor],
+        sample: bool = True,
+    ) -> BatchedActorCriticOutput:
+        """
+        Batched forward pass through the actor-critic.
+
+        All samples in the batch must have the same FSM state.
+        Different samples may select different action types, and this method
+        properly handles running different secondary heads for each sub-group.
+
+        Args:
+            x_game_state: Encoded game state (batched)
+            fsm: Current FSM state (same for all samples)
+            masks: Pre-computed valid action masks for each head type
+            sample: Whether to sample actions (True) or just compute logits (False)
+
+        Returns:
+            BatchedActorCriticOutput with per-sample actor outputs and values
+        """
+        # 1. Encode game state
+        core_out = self.core(x_game_state)
+        batch_size = core_out.x_global.shape[0]
+        device = core_out.x_global.device
+
+        # 2. Get routing for this FSM state
+        route = FSM_ROUTING[fsm]
+
+        # 3. Action type selection (or bypass if forced)
+        if route.is_forced:
+            # Single valid action type - skip the action type head
+            # All samples get the same action type
+            action_type_indices = None
+            action_type_log_probs = None
+            # Create a tensor of the single action type index for grouping
+            per_sample_action_type_idx = torch.zeros(batch_size, dtype=torch.long, device=device)
+        else:
+            # Multiple valid action types - run the action type head
+            action_type_out = self.head_action_type(
+                core_out.x_global, masks[HeadType.ACTION_TYPE], sample
+            )
+            if sample:
+                action_type_indices = action_type_out.indices  # (B,)
+                action_type_log_probs = action_type_out.log_probs  # (B,)
+                per_sample_action_type_idx = action_type_indices
+            else:
+                action_type_indices = None
+                action_type_log_probs = None
+                per_sample_action_type_idx = None
+
+        # 4. Secondary heads - handle different action types per sample
+        # Initialize output tensors (will be filled in per-group)
+        secondary_indices = torch.zeros(batch_size, dtype=torch.long, device=device)
+        secondary_log_probs = torch.zeros(batch_size, device=device)
+        has_any_secondary = False
+
+        if sample and per_sample_action_type_idx is not None:
+            # Group samples by their selected action type
+            unique_action_type_idxs = torch.unique(per_sample_action_type_idx)
+
+            for action_type_idx in unique_action_type_idxs:
+                action_type_idx_item = action_type_idx.item()
+                action_type = route.action_types[action_type_idx_item]
+
+                # Find which samples chose this action type
+                sample_mask = per_sample_action_type_idx == action_type_idx
+                sample_indices = torch.where(sample_mask)[0]
+
+                # Get secondary head type for this action type
+                secondary_head_type = get_secondary_head_type(fsm, action_type)
+
+                if secondary_head_type is None:
+                    # Terminal action - no secondary head needed for these samples
+                    continue
+
+                has_any_secondary = True
+
+                # Slice core output and masks for this subset
+                subset_core_out = _slice_core_output(core_out, sample_indices)
+                subset_mask = masks[secondary_head_type][sample_indices]
+
+                # Run secondary head on subset
+                subset_out = self._invoke_secondary_head(
+                    secondary_head_type, subset_core_out, subset_mask, sample=True
+                )
+
+                # Scatter results back to original positions
+                secondary_indices[sample_indices] = subset_out.indices
+                secondary_log_probs[sample_indices] = subset_out.log_probs
+
+        # Convert to None if no secondary heads were used
+        if not has_any_secondary:
+            secondary_indices = None
+            secondary_log_probs = None
+
+        # 5. Value estimate
+        value = self.head_value(core_out.x_global)
+
+        actor_output = BatchedActorOutput(
+            route=route,
+            fsm=fsm,
+            batch_size=batch_size,
+            action_type_indices=action_type_indices,
+            action_type_log_probs=action_type_log_probs,
+            secondary_indices=secondary_indices,
+            secondary_log_probs=secondary_log_probs,
         )
+
+        return BatchedActorCriticOutput(actor=actor_output, value=value)
 
     def forward(
         self,
-        x_hand: torch.Tensor,
-        x_hand_pad: torch.Tensor,
-        x_hand_active: torch.Tensor,
-        x_draw: torch.Tensor,
-        x_draw_pad: torch.Tensor,
-        x_disc: torch.Tensor,
-        x_disc_pad: torch.Tensor,
-        x_deck: torch.Tensor,
-        x_deck_pad: torch.Tensor,
-        x_reward: torch.Tensor,
-        x_char: torch.Tensor,
-        x_monster: torch.Tensor,
-        x_monster_pad: torch.Tensor,
-        x_energy: torch.Tensor,
-        x_map: torch.Tensor,
-        x_valid_action_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size = x_hand.shape[0]
+        x_game_state: XGameState,
+        fsm: FSM,
+        masks: dict[HeadType, torch.Tensor],
+        sample: bool = True,
+    ) -> ActorCriticOutput:
+        """
+        Forward pass for a single sample.
 
-        # Card encodings. Start with hand
-        x_hand_pad = x_hand_pad.to(torch.bool)
-        x_hand = self._projection_card(x_hand)
-        x_hand = self._transformer_card(x_hand, ~x_hand_pad)
+        Args:
+            x_game_state: Encoded game state (batch size 1)
+            fsm: Current FSM state
+            masks: Pre-computed valid action masks for each head type
+            sample: Whether to sample actions (True) or just compute logits (False)
 
-        # Draw pile
-        x_draw_pad = x_draw_pad.to(torch.bool)
-        x_draw = self._projection_card(x_draw)
-        x_draw = self._transformer_card(x_draw, ~x_draw_pad)
+        Returns:
+            ActorCriticOutput with actor output and value estimate
+        """
+        batched_output = self.forward_batch(x_game_state, fsm, masks, sample)
 
-        # Discard pile
-        x_disc_pad = x_disc_pad.to(torch.bool)
-        x_disc = self._projection_card(x_disc)
-        x_disc = self._transformer_card(x_disc, ~x_disc_pad)
+        # Extract single sample result
+        actor_output = batched_output.actor.to_actor_output(0)
+        value = batched_output.value[0] if batched_output.value.dim() > 1 else batched_output.value
 
-        # Deck
-        x_deck_pad = x_deck_pad.to(torch.bool)
-        x_deck = self._projection_card(x_deck)
-        x_deck = self._transformer_card(x_deck, ~x_deck_pad)
+        return ActorCriticOutput(actor=actor_output, value=value)
 
-        # Card rewards
-        x_reward_pad = torch.ones(batch_size, CARD_REWARD_NUM, dtype=torch.bool)
-        x_reward = self._projection_card(x_reward)
-        x_reward = self._transformer_card(x_reward, ~x_reward_pad)
+    def get_action(
+        self,
+        x_game_state: XGameState,
+        fsm: FSM,
+        masks: dict[HeadType, torch.Tensor],
+    ) -> tuple[Action, ActorOutput, torch.Tensor]:
+        """
+        Convenience method to get an action for a single game state.
 
-        # Monsters
-        x_monster_pad = x_monster_pad.to(torch.bool)
-        x_monster = self._projection_monster(x_monster)
-        x_monster = self._transformer_monster(x_monster, ~x_monster_pad)
-
-        # Aggregate representations
-        x_hand_mean, x_hand_len = _calculate_masked_mean_pooling(x_hand, x_hand_pad)
-        x_draw_mean, x_draw_len = _calculate_masked_mean_pooling(x_draw, x_draw_pad)
-        x_disc_mean, x_disc_len = _calculate_masked_mean_pooling(x_disc, x_disc_pad)
-        x_deck_mean, x_deck_len = _calculate_masked_mean_pooling(x_deck, x_deck_pad)
-        x_reward_mean, _ = _calculate_masked_mean_pooling(x_reward, x_reward_pad)
-        x_hand_len /= MAX_SIZE_HAND
-        x_draw_len /= MAX_SIZE_DRAW_PILE
-        x_disc_len /= MAX_SIZE_DISC_PILE
-        x_deck_len /= MAX_SIZE_DECK
-
-        x_monster_mean, x_monster_len = _calculate_masked_mean_pooling(x_monster, x_monster_pad)
-        x_monster_len /= MAX_MONSTERS
-
-        # Map
-        x_map = self._encoder_map(x_map)
-
-        # Character
-        x_char = self._mlp_char(x_char)
-
-        # Energy
-        x_energy = self._mlp_energy(x_energy)
-
-        # Global aggregate representations
-        x_combat = torch.cat(
-            [
-                x_hand_mean,
-                x_draw_mean,
-                x_disc_mean,
-                x_hand_len,
-                x_draw_len,
-                x_disc_len,
-                x_monster_mean,
-                x_monster_len,
-                x_char,
-                x_energy,
-                x_map,
-            ],
-            dim=1,
-        )
-        x_map_select_and_rest_site = torch.cat(
-            [
-                x_char,
-                x_map,
-                x_deck_mean,
-                x_deck_len,
-            ],
-            dim=1,
-        )
-        x_reward_select = torch.cat(
-            [
-                x_char,
-                x_map,
-                x_deck_mean,
-                x_deck_len,
-                x_reward_mean,
-            ],
-            dim=1,
-        )
-
-        # Calculate action logits. Start with reward selection
-        x_logit_reward_select = torch.cat(
-            [
-                x_reward,
-                x_reward_select.view(batch_size, 1, -1).expand(batch_size, CARD_REWARD_NUM, -1),
-            ],
-            dim=2,
-        )
-        x_logit_reward_skip = x_reward_select
-
-        # Combat
-        x_logit_card_select_or_discard = torch.cat(
-            [
-                x_hand,
-                x_combat.view(batch_size, 1, -1).expand(batch_size, MAX_SIZE_HAND, -1),
-            ],
-            dim=2,
-        )
-        x_hand_active = torch.sum(
-            (
-                x_hand_active.view(batch_size, MAX_SIZE_HAND, 1).expand(
-                    batch_size, MAX_SIZE_HAND, self._embedding_dim_card
-                )
-                * x_hand
-            ),
-            dim=1,
-        )
-        x_logit_monster_select = torch.cat(
-            [
-                x_monster,
-                x_hand_active.view(batch_size, 1, -1).expand(batch_size, MAX_MONSTERS, -1),
-                x_combat.view(batch_size, 1, -1).expand(batch_size, MAX_MONSTERS, -1),
-            ],
-            dim=2,
-        )
-        x_logit_turn_end = x_combat
-
-        # Rest site
-        x_logit_rest_site_upgrade = torch.cat(
-            [
-                x_deck,
-                x_map_select_and_rest_site.view(batch_size, 1, -1).expand(
-                    batch_size, MAX_SIZE_DECK, -1
-                ),
-            ],
-            dim=2,
-        )
-
-        # Calculate actions
-        x_logit_reward_select = self._mlp_reward_select(x_logit_reward_select)
-        x_logit_reward_skip = self._mlp_reward_skip(x_logit_reward_skip)
-        x_logit_card_select_or_discard = self._mlp_card_select_or_discard(
-            x_logit_card_select_or_discard
-        )
-        x_logit_monster_select = self._mlp_monster_select(x_logit_monster_select)
-        x_logit_turn_end = self._mlp_turn_end(x_logit_turn_end)
-        x_logit_map_select_rest_site_rest = self._mlp_map_select_rest_site_rest(
-            x_map_select_and_rest_site
-        )
-        x_logit_rest_site_upgrade = self._mlp_rest_site_upgrade(x_logit_rest_site_upgrade)
-
-        # Concatenate actions into a single 1D tensor
-        x_logit_all = torch.cat(
-            [
-                torch.flatten(x_logit_reward_select, start_dim=1),
-                x_logit_reward_skip,
-                torch.flatten(x_logit_card_select_or_discard.permute(0, 2, 1), start_dim=1),
-                torch.flatten(x_logit_monster_select, start_dim=1),
-                x_logit_turn_end,
-                x_logit_map_select_rest_site_rest,
-                torch.flatten(x_logit_rest_site_upgrade, start_dim=1),
-            ],
-            dim=1,
-        )
-
-        # Apply valid action mask and get action probabilities w/ softmax
-        x_logit_all_mask = x_logit_all.masked_fill(x_valid_action_mask == 0, float("-inf"))
-        x_actor = F.softmax(x_logit_all_mask, dim=-1)
-
-        # Critic
-        x_critic = torch.cat(
-            [
-                x_combat,
-                x_deck_mean,
-                x_deck_len,
-                x_reward_mean,
-            ],
-            dim=1,
-        )
-        x_critic = self._mlp_critic(x_critic)
-
-        return x_actor, x_critic
+        Returns:
+            Tuple of (Action, ActorOutput, value)
+        """
+        output = self.forward(x_game_state, fsm, masks, sample=True)
+        action = output.actor.to_action()
+        return action, output.actor, output.value

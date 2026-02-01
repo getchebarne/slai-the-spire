@@ -1,7 +1,13 @@
+from enum import Enum
 from typing import TypeAlias
 
 import torch
 
+from src.game.const import MAX_SIZE_COMBAT_CARD_REWARD
+from src.game.const import MAX_SIZE_DECK
+from src.game.const import MAX_SIZE_DISC_PILE
+from src.game.const import MAX_SIZE_DRAW_PILE
+from src.game.const import MAX_SIZE_HAND
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
@@ -15,6 +21,24 @@ from src.game.view.card import ViewCard
 
 EffectKey: TypeAlias = tuple[EffectType, EffectTargetType, EffectSelectionType]
 CardMetadata: TypeAlias = tuple[int, dict[EffectKey, int], dict[EffectKey, int]]
+
+
+# TODO: put somewhere else?
+class CardPile(Enum):
+    HAND = "HAND"
+    DRAW = "DRAW"
+    DISC = "DISC"
+    DECK = "DECK"
+    COMBAT_REWARD = "COMBAT_REWARD"
+
+
+_CARD_PILE_TO_MAX_SIZE = {
+    CardPile.HAND: MAX_SIZE_HAND,
+    CardPile.DRAW: MAX_SIZE_DRAW_PILE,
+    CardPile.DISC: MAX_SIZE_DISC_PILE,
+    CardPile.DECK: MAX_SIZE_DECK,
+    CardPile.COMBAT_REWARD: MAX_SIZE_COMBAT_CARD_REWARD,
+}
 
 
 def _get_effect_key(effect: Effect) -> EffectKey:
@@ -56,15 +80,22 @@ def _get_card_metadata() -> CardMetadata:
 _COST_MAX, _EFFECT_KEY_MAX, _EFFECT_KEY_POS = _get_card_metadata()
 
 
-def _encode_view_card(view_card: ViewCard, device: torch.device) -> torch.Tensor:
+def _encode_view_card(view_card: ViewCard, card_pile: CardPile) -> list[float]:
     upgraded = view_card.name.endswith("+")  # TODO: add `upgraded` field
     encoding = [0] * len(_EFFECT_KEY_MAX) + [
         view_card.cost / _COST_MAX,
-        upgraded,
-        view_card.requires_target,
-        view_card.exhaust,
-        view_card.innate,
+        float(upgraded),
+        float(view_card.requires_target),
+        float(view_card.requires_discard),
+        float(view_card.exhaust),
+        float(view_card.innate),
+        float(card_pile == CardPile.HAND),
+        float(card_pile == CardPile.DRAW),
+        float(card_pile == CardPile.DISC),
+        float(card_pile == CardPile.DECK),
+        float(card_pile == CardPile.COMBAT_REWARD),
     ]
+
     for effect in view_card.effects:
         effect_key = _get_effect_key(effect)
         effect_key_pos = _EFFECT_KEY_POS[effect_key]
@@ -76,11 +107,11 @@ def _encode_view_card(view_card: ViewCard, device: torch.device) -> torch.Tensor
 
         encoding[effect_key_pos] = effect_value / _EFFECT_KEY_MAX[effect_key]
 
-    return torch.tensor(encoding, dtype=torch.float32, device=device)
+    return encoding
 
 
-def _get_view_card_dummy() -> ViewCard:
-    return ViewCard(
+def get_encoding_dim_card() -> int:
+    view_card_dummy = ViewCard(
         "Dummy",
         CardColor.GREEN,
         CardType.ATTACK,
@@ -91,52 +122,46 @@ def _get_view_card_dummy() -> ViewCard:
         False,
         False,
         False,
+        False,
     )
 
-
-def get_encoding_card_dim() -> int:
-    view_card_dummy = _get_view_card_dummy()
-    encoding_card_dummy = _encode_view_card(view_card_dummy, torch.device("cpu"))
-    return encoding_card_dummy.shape[0]
+    encoding_card_dummy = _encode_view_card(view_card_dummy, CardPile.HAND)
+    return len(encoding_card_dummy)
 
 
-def encode_view_cards(
-    view_cards: list[ViewCard], max_size: int, device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    view_cards = view_cards[:max_size]
+# TODO: handle these constants better
+_ENCODING_CARD_PAD = [0.0] * get_encoding_dim_card()
 
-    mask_pad = torch.arange(max_size, dtype=torch.float32, device=device) < len(view_cards)
-    mask_active = torch.zeros(max_size, dtype=torch.float32, device=device)
-    if not view_cards:
-        # Get card encoding dimension
-        encoding_card_dim = get_encoding_card_dim()
 
-        # Return all-zeros tensor of shape (`max_size`, `card_encoding_dim`) and all-zeros mask_active
-        return (
-            torch.zeros(max_size, encoding_card_dim, dtype=torch.float32, device=device),
-            mask_pad,
-            mask_active,
-        )
+def encode_batch_view_cards(
+    batch_view_cards: list[list[ViewCard]], card_pile: CardPile, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # Get pile max size
+    max_size = _CARD_PILE_TO_MAX_SIZE[card_pile]
 
-    encoding_cards = None
-    for idx, view_card in enumerate(view_cards):
-        # Get encoding
-        encoding_card = _encode_view_card(view_card, device)
+    # Initialize empty lists to store encodings for each batch
+    x_out = []
+    x_mask_pad = []
 
-        if encoding_cards is None:
-            # Intialize all-zeros tensor to hold all encodings, now that we now the enc. dimension
-            encoding_cards = torch.zeros(
-                max_size, encoding_card.shape[0], dtype=torch.float32, device=device
-            )
+    # Iterate over batches
+    for view_cards in batch_view_cards:
+        # Truncate to max size TODO: add log
+        view_cards = view_cards[:max_size]
 
-        # Assign encoding
-        encoding_cards[idx] = encoding_card
+        encoding_cards = []
+        for view_card in view_cards:
+            encoding_card = _encode_view_card(view_card, card_pile)
+            encoding_cards.append(encoding_card)
 
-        # Set active mask index
-        if view_card.is_active:
-            if torch.sum(mask_active) > 1e-10:
-                raise ValueError("Received more than one active `ViewCard`")
+        # Pad to `max_size`
+        num_pad = max_size - len(view_cards)
+        encoding_cards += [_ENCODING_CARD_PAD] * num_pad
 
-            mask_active[idx] = 1.0
+        # Append batch encodings and padding mask
+        x_out.append(encoding_cards)
+        x_mask_pad.append([True] * len(view_cards) + [False] * num_pad)
 
-    return encoding_cards, mask_pad, mask_active
+    return (
+        torch.tensor(x_out, dtype=torch.float32, device=device),
+        torch.tensor(x_mask_pad, dtype=torch.bool, device=device),
+    )
