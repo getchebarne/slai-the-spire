@@ -1,5 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from src.game.entity.base import EntityBase
 
 
 class EffectType(Enum):
@@ -110,10 +115,9 @@ class Effect:
     target_type: EffectTargetType | None = None
     selection_type: EffectSelectionType | None = None
 
-    # Can be `None`, some effects are not created by entities but by the engine itself
-    id_source: int | None = None
+    # The entity that created this effect (can be None for engine-generated effects)
+    source: "EntityBase | None" = None
 
-    # Effects can also be created with an `id_target`, in that case, `target_type` should be
-    # `None`, as it doesn't have to be resolved. If `id_target` and `target_type` are both set,
-    # `target_type` will be ignored (see `src.game.engine.effect_queue.py`)
-    id_target: int | None = None
+    # The target entity. If set, target_type is ignored during resolution.
+    # If None and target_type is set, targets will be resolved from EntityManager.
+    target: "EntityBase | None" = None

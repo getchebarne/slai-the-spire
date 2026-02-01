@@ -12,11 +12,8 @@ def process_effect_block_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_target = kwargs["id_target"]
-    id_source = kwargs["id_source"]
-
-    target = entity_manager.entities[id_target]
-    source = entity_manager.entities[id_source]
+    target = kwargs["target"]
+    source = kwargs["source"]
 
     # Apply dexterity
     if ModifierType.DEXTERITY in target.modifier_map and isinstance(source, EntityCard):

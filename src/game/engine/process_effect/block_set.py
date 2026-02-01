@@ -6,9 +6,8 @@ def process_effect_block_set(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_target = kwargs["id_target"]
+    target = kwargs["target"]
 
-    target = entity_manager.entities[id_target]
     target.block_current = value
 
     return [], []

@@ -1,13 +1,14 @@
 from src.game.core.effect import Effect
 from src.game.entity.manager import EntityManager
+from src.game.utils import remove_by_identity
 
 
 def process_effect_card_discard(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
+    target = kwargs["target"]
 
-    entity_manager.id_cards_in_hand.remove(id_target)
-    entity_manager.id_cards_in_disc_pile.append(id_target)
+    remove_by_identity(entity_manager.hand, target)
+    entity_manager.disc_pile.append(target)
 
     return [], []

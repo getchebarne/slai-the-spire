@@ -1,4 +1,3 @@
-from copy import deepcopy
 from dataclasses import dataclass, replace
 
 from src.game.entity.manager import EntityManager
@@ -21,19 +20,24 @@ class ViewMap:
 
 
 def get_view_map(entity_manager: EntityManager) -> ViewMap:
-    view_map = ViewMap(deepcopy(entity_manager.id_map_nodes))
+    # Build view nodes from entity map nodes
+    view_nodes = []
+    for row in entity_manager.map_nodes:
+        view_row = []
+        for node in row:
+            if node is not None:
+                view_row.append(ViewMapNode(node.room_type, node.x_next))
+            else:
+                view_row.append(None)
+        view_nodes.append(view_row)
 
-    for y, row in enumerate(view_map.nodes):
-        for x, id_node in enumerate(row):
-            if id_node is not None:
-                map_node = entity_manager.entities[id_node]
-                view_map.nodes[y][x] = ViewMapNode(map_node.room_type, map_node.x_next)
+    view_map = ViewMap(view_nodes)
 
-    if entity_manager.id_map_node_active is None:
+    if entity_manager.map_node_active is None:
         return view_map
 
     # Get current node coordinates
-    map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
+    map_node_active = entity_manager.map_node_active
     view_map = replace(view_map, y_current=map_node_active.y, x_current=map_node_active.x)
 
     return view_map

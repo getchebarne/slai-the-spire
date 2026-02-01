@@ -1,12 +1,13 @@
 from src.game.core.effect import Effect
 from src.game.entity.manager import EntityManager
+from src.game.utils import remove_by_identity
 
 
 def process_effect_card_remove(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
+    target = kwargs["target"]
 
-    entity_manager.id_cards_in_hand.remove(id_target)
+    remove_by_identity(entity_manager.hand, target)
 
     return [], []

@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
@@ -5,14 +7,24 @@ from src.game.entity.card import EntityCard
 from src.game.entity.manager import EntityManager
 
 
-def is_character_dead(entity_manager: EntityManager) -> bool:
-    character = entity_manager.entities[entity_manager.id_character]
+T = TypeVar("T")
 
-    return character.health_current <= 0
+
+def remove_by_identity(lst: list[T], item: T) -> bool:
+    for i, x in enumerate(lst):
+        if x is item:
+            lst.pop(i)
+            return True
+
+    return False
+
+
+def is_character_dead(entity_manager: EntityManager) -> bool:
+    return entity_manager.character.health_current <= 0
 
 
 def is_combat_over(entity_manager: EntityManager) -> bool:
-    return is_character_dead(entity_manager) or (not entity_manager.id_monsters)
+    return is_character_dead(entity_manager) or (not entity_manager.monsters)
 
 
 def does_card_require_target(card: EntityCard) -> bool:

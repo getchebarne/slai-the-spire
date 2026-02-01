@@ -18,11 +18,10 @@ class ViewMonster(ViewActor):
 
 
 def get_view_monsters(entity_manager: EntityManager) -> list[ViewMonster]:
-    character = entity_manager.entities[entity_manager.id_character]
+    character = entity_manager.character
 
     monster_views = []
-    for id_monster in entity_manager.id_monsters:
-        monster = entity_manager.entities[id_monster]
+    for monster in entity_manager.monsters:
         monster_views.append(_get_monster_view(monster, character))
 
     return monster_views

@@ -3,14 +3,13 @@ from dataclasses import replace
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
+from src.game.entity.actor import EntityActor
 from src.game.entity.actor import ModifierType
 from src.game.entity.manager import EntityManager
 from src.game.entity.monster import EntityMonster
 
 
-def _get_end_of_turn_effects_common(entity_manager: EntityManager, id_actor: int) -> list[Effect]:
-    actor = entity_manager.entities[id_actor]
-
+def _get_end_of_turn_effects_common(actor: EntityActor) -> list[Effect]:
     effects = []
     for modifier_type, modifier_data in actor.modifier_map.items():  # TODO: revisit
         if modifier_type == ModifierType.RITUAL and not modifier_data.is_new:
@@ -18,8 +17,8 @@ def _get_end_of_turn_effects_common(entity_manager: EntityManager, id_actor: int
                 Effect(
                     EffectType.MODIFIER_STRENGTH_GAIN,
                     modifier_data.stacks_current,
-                    id_source=id_actor,
-                    id_target=id_actor,
+                    source=actor,
+                    target=actor,
                 )
             )
 
@@ -29,12 +28,10 @@ def _get_end_of_turn_effects_common(entity_manager: EntityManager, id_actor: int
 def process_effect_turn_end(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
-
-    target = entity_manager.entities[id_target]
+    target = kwargs["target"]
 
     # Common effects (for both the Character and Monsters)
-    effects = _get_end_of_turn_effects_common(entity_manager, id_target)
+    effects = _get_end_of_turn_effects_common(target)
 
     if isinstance(target, EntityMonster):
         # Return end of turn effects to be added to the top so they are processed right away
@@ -47,26 +44,24 @@ def process_effect_turn_end(
     effects.append(Effect(EffectType.MODIFIER_SET_NOT_NEW))
 
     # Queue effects for all monsters' turns
-    for id_monster in entity_manager.id_monsters:
-        monster = entity_manager.entities[id_monster]
-
+    for monster in entity_manager.monsters:
         # Turn start
-        effects += [Effect(EffectType.TURN_START, id_target=id_monster)]
+        effects += [Effect(EffectType.TURN_START, target=monster)]
 
         # Move's effects
         effects += [
-            replace(effect, id_source=id_monster)
+            replace(effect, source=monster)
             for effect in monster.moves[monster.move_name_current].effects
         ]
 
         # Update move
-        effects += [Effect(EffectType.MONSTER_MOVE_UPDATE, id_target=id_monster)]
+        effects += [Effect(EffectType.MONSTER_MOVE_UPDATE, target=monster)]
 
         # Turn end
-        effects += [Effect(EffectType.TURN_END, id_target=id_monster)]
+        effects += [Effect(EffectType.TURN_END, target=monster)]
 
     # Character's turn start
-    effects += [Effect(EffectType.TURN_START, id_target=entity_manager.id_character)]
+    effects += [Effect(EffectType.TURN_START, target=entity_manager.character)]
 
     # Clear `ModifierType.BURST` TODO: here?
     if ModifierType.BURST in target.modifier_map:

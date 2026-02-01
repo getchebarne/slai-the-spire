@@ -43,9 +43,8 @@ def _get_card_view(card: EntityCard, is_active: bool) -> ViewCard:
 
 def get_view_hand(entity_manager: EntityManager) -> list[ViewCard]:
     card_views = []
-    for id_card in entity_manager.id_cards_in_hand:
-        card = entity_manager.entities[id_card]
-        is_active = id_card == entity_manager.id_card_active
+    for card in entity_manager.hand:
+        is_active = card is entity_manager.card_active
         card_views.append(_get_card_view(card, is_active))
 
     return card_views
@@ -53,11 +52,10 @@ def get_view_hand(entity_manager: EntityManager) -> list[ViewCard]:
 
 def get_view_pile_draw(entity_manager: EntityManager) -> list[ViewCard]:
     card_views = []
-    for id_card in entity_manager.id_cards_in_draw_pile:
-        if id_card == entity_manager.id_card_active:
-            raise ValueError(f"Card with id {id_card} is in the draw pile but it's active")
+    for card in entity_manager.draw_pile:
+        if card is entity_manager.card_active:
+            raise ValueError(f"Card {card.name} is in the draw pile but it's active")
 
-        card = entity_manager.entities[id_card]
         card_views.append(_get_card_view(card, False))
 
     return card_views
@@ -65,11 +63,10 @@ def get_view_pile_draw(entity_manager: EntityManager) -> list[ViewCard]:
 
 def get_view_pile_disc(entity_manager: EntityManager) -> list[ViewCard]:
     card_views = []
-    for id_card in entity_manager.id_cards_in_disc_pile:
-        if id_card == entity_manager.id_card_active:
-            raise ValueError(f"Card with id {id_card} is in the discard pile but it's active")
+    for card in entity_manager.disc_pile:
+        if card is entity_manager.card_active:
+            raise ValueError(f"Card {card.name} is in the discard pile but it's active")
 
-        card = entity_manager.entities[id_card]
         card_views.append(_get_card_view(card, False))
 
     return card_views
@@ -77,11 +74,10 @@ def get_view_pile_disc(entity_manager: EntityManager) -> list[ViewCard]:
 
 def get_view_pile_exhaust(entity_manager: EntityManager) -> list[ViewCard]:
     card_views = []
-    for id_card in entity_manager.id_cards_in_exhaust_pile:
-        if id_card == entity_manager.id_card_active:
-            raise ValueError(f"Card with id {id_card} is in the exhaust pile but it's active")
+    for card in entity_manager.exhaust_pile:
+        if card is entity_manager.card_active:
+            raise ValueError(f"Card {card.name} is in the exhaust pile but it's active")
 
-        card = entity_manager.entities[id_card]
         card_views.append(_get_card_view(card, False))
 
     return card_views
@@ -89,8 +85,7 @@ def get_view_pile_exhaust(entity_manager: EntityManager) -> list[ViewCard]:
 
 def get_view_deck(entity_manager: EntityManager) -> list[ViewCard]:
     card_views = []
-    for id_card in entity_manager.id_cards_in_deck:
-        card = entity_manager.entities[id_card]
+    for card in entity_manager.deck:
         card_views.append(_get_card_view(card, False))
 
     return card_views
@@ -98,11 +93,10 @@ def get_view_deck(entity_manager: EntityManager) -> list[ViewCard]:
 
 def get_view_reward_combat(entity_manager: EntityManager) -> list[ViewCard]:
     card_views = []
-    for id_card in entity_manager.id_card_reward:
-        if id_card == entity_manager.id_card_active:
-            raise ValueError(f"Card with id {id_card} is in combat rewards but it's active")
+    for card in entity_manager.card_reward:
+        if card is entity_manager.card_active:
+            raise ValueError(f"Card {card.name} is in combat rewards but it's active")
 
-        card = entity_manager.entities[id_card]
         card_views.append(_get_card_view(card, False))
 
     return card_views

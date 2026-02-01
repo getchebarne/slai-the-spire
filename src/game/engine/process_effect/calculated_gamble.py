@@ -7,7 +7,7 @@ from src.game.entity.manager import EntityManager
 def process_effect_calculated_gamble(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    num_cards_in_hand = len(entity_manager.id_cards_in_hand)
+    num_cards_in_hand = len(entity_manager.hand)
 
     return [], [
         Effect(EffectType.CARD_DISCARD, target_type=EffectTargetType.CARD_IN_HAND),

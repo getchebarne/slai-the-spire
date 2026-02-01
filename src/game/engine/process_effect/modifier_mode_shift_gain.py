@@ -17,10 +17,8 @@ _STACK_INCREASE_PER_CYCLE = 10
 def process_effect_modifier_mode_shift_gain(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
-    id_target = kwargs["id_target"]
+    target = kwargs["target"]
     ascension_level = kwargs["ascension_level"]
-
-    target = entity_manager.entities[id_target]
 
     # Count number of cycles
     cycle_num = target.move_name_history.count("Twin Slam")

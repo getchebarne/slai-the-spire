@@ -14,15 +14,12 @@ def process_effect_damage_deal_physical(
     entity_manager: EntityManager, **kwargs
 ) -> tuple[list[Effect], list[Effect]]:
     value = kwargs["value"]
-    id_source = kwargs["id_source"]
-    id_target = kwargs["id_target"]
-
-    source = entity_manager.entities[id_source]
-    target = entity_manager.entities[id_target]
+    source = kwargs["source"]
+    target = kwargs["target"]
 
     # TODO: think if there's a better solution
     if isinstance(source, EntityCard):
-        character = entity_manager.entities[entity_manager.id_character]
+        character = entity_manager.character
 
         # Apply accuracy bonus damage
         if (
@@ -31,7 +28,7 @@ def process_effect_damage_deal_physical(
             value += character.modifier_map[ModifierType.ACCURACY].stacks_current
 
         # Overwrite source with character to apply modifiers
-        source = entity_manager.entities[entity_manager.id_character]
+        source = character
 
     # Apply strength
     if ModifierType.STRENGTH in source.modifier_map:
@@ -53,8 +50,6 @@ def process_effect_damage_deal_physical(
     value = int(value)
 
     if value > 0:
-        return [], [
-            Effect(EffectType.DAMAGE_DEAL, value, id_target=id_target, id_source=id_source)
-        ]
+        return [], [Effect(EffectType.DAMAGE_DEAL, value, target=target, source=source)]
 
     return [], []
