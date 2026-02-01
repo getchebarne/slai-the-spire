@@ -43,9 +43,8 @@ def _resolve_effect_target_type(
         return entity_manager.id_monsters.copy()
 
     if effect_target_type == EffectTargetType.MAP_NODE:
-        # TODO: improve
-        # TODO: fix end of map bug
         if entity_manager.id_map_node_active is None:
+            # Starting position: return all valid nodes in the first row
             return [
                 entity_manager.id_map_nodes[0][x]
                 for x, node in enumerate(entity_manager.id_map_nodes[0])
@@ -54,7 +53,7 @@ def _resolve_effect_target_type(
 
         map_node_active = entity_manager.entities[entity_manager.id_map_node_active]
         y_next = map_node_active.y + 1
-        return [entity_manager.id_map_nodes[y_next][x] for x in range(3)]
+        return [entity_manager.id_map_nodes[y_next][x] for x in map_node_active.x_next]
 
     if effect_target_type == EffectTargetType.SOURCE:
         return [id_source]
