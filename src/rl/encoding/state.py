@@ -1,122 +1,105 @@
+from dataclasses import dataclass
+
 import torch
 
-from src.game.const import CARD_REWARD_NUM
-from src.game.const import MAP_HEIGHT
-from src.game.const import MAP_WIDTH
-from src.game.const import MAX_MONSTERS
-from src.game.const import MAX_SIZE_DECK
-from src.game.const import MAX_SIZE_DISC_PILE
-from src.game.const import MAX_SIZE_DRAW_PILE
-from src.game.const import MAX_SIZE_HAND
 from src.game.view.state import ViewGameState
-from src.rl.encoding.card import encode_view_cards
-from src.rl.encoding.card import get_encoding_card_dim
-from src.rl.encoding.character import encode_view_character
-from src.rl.encoding.character import get_encoding_character_dim
-from src.rl.encoding.energy import encode_view_energy
-from src.rl.encoding.energy import get_encoding_energy_dim
-from src.rl.encoding.map_ import encode_view_map
-from src.rl.encoding.map_ import get_encoding_map_dim
-from src.rl.encoding.monster import encode_view_monsters
-from src.rl.encoding.monster import get_encoding_monster_dim
+from src.rl.encoding.card import CardPile
+from src.rl.encoding.card import encode_batch_view_cards
+from src.rl.encoding.character import encode_batch_view_character
+from src.rl.encoding.energy import encode_batch_view_energy
+from src.rl.encoding.map_ import encode_batch_view_map
+from src.rl.encoding.monster import encode_batch_view_monsters
 
 
-_ENCODING_DIM_CARD = get_encoding_card_dim()
-_ENCODING_DIM_CHARACTER = get_encoding_character_dim()
-_ENCODING_DIM_ENERGY = get_encoding_energy_dim()
-_ENCODING_DIM_MAP = get_encoding_map_dim()
-_ENCODING_DIM_MONSTER = get_encoding_monster_dim()
-
-# TODO: revisit
-_ENCODING_DIMENSIONS = {
-    "hand": (MAX_SIZE_HAND, _ENCODING_DIM_CARD),
-    "hand_pad": (MAX_SIZE_HAND,),
-    "hand_active": (MAX_SIZE_HAND,),
-    "draw": (MAX_SIZE_DRAW_PILE, _ENCODING_DIM_CARD),
-    "draw_pad": (MAX_SIZE_DRAW_PILE,),
-    "disc": (MAX_SIZE_DISC_PILE, _ENCODING_DIM_CARD),
-    "disc_pad": (MAX_SIZE_DISC_PILE,),
-    "reward": (CARD_REWARD_NUM, _ENCODING_DIM_CARD),
-    "deck": (MAX_SIZE_DECK, _ENCODING_DIM_CARD),
-    "char": (_ENCODING_DIM_CHARACTER,),
-    "monster": (MAX_MONSTERS, _ENCODING_DIM_MONSTER),
-    "energy": (_ENCODING_DIM_ENERGY,),
-    "map": _ENCODING_DIM_MAP,
-}
-print(f"{_ENCODING_DIMENSIONS=}")
+@dataclass(frozen=True)
+class XGameState:
+    x_hand: torch.Tensor
+    x_hand_mask_pad: torch.Tensor
+    x_draw: torch.Tensor
+    x_draw_mask_pad: torch.Tensor
+    x_disc: torch.Tensor
+    x_disc_mask_pad: torch.Tensor
+    x_deck: torch.Tensor
+    x_deck_mask_pad: torch.Tensor
+    x_combat_reward: torch.Tensor
+    x_combat_reward_mask_pad: torch.Tensor
+    x_monsters: torch.Tensor
+    x_monsters_mask_pad: torch.Tensor
+    x_character: torch.Tensor
+    x_character_mask_pad: torch.Tensor
+    x_energy: torch.Tensor
+    x_energy_mask_pad: torch.Tensor
+    x_map: torch.Tensor
 
 
-def encode_view_game_state(
-    view_game_state: ViewGameState, device: torch.device
-) -> tuple[torch.Tensor, ...]:
-    # Encode cards in each collection
-    x_hand, x_hand_pad, x_hand_active = encode_view_cards(
-        view_game_state.hand, MAX_SIZE_HAND, device
-    )
-    x_draw, x_draw_pad, _ = encode_view_cards(
-        view_game_state.pile_draw, MAX_SIZE_DRAW_PILE, device
-    )
-    x_disc, x_disc_pad, _ = encode_view_cards(
-        view_game_state.pile_disc, MAX_SIZE_DISC_PILE, device
-    )
-    x_reward, _, _ = encode_view_cards(view_game_state.reward_combat, CARD_REWARD_NUM, device)
-    x_deck, x_deck_pad, _ = encode_view_cards(view_game_state.deck, MAX_SIZE_DECK, device)
+def encode_batch_view_game_state(
+    batch_view_game_state: list[ViewGameState], device: torch.device
+) -> XGameState:
+    batch_size = len(batch_view_game_state)
 
-    # Encode character
-    x_char = encode_view_character(view_game_state.character, device)
+    # Gather data from the batch of game states into separate lists
+    batch_hand = []
+    batch_draw = []
+    batch_disc = []
+    batch_deck = []
+    batch_combat_reward = []
+    batch_monsters = []
+    batch_character = []
+    batch_energy = []
+    batch_map = []
+    for view_game_state in batch_view_game_state:
+        batch_hand.append(view_game_state.hand)
+        batch_draw.append(view_game_state.pile_draw)
+        batch_disc.append(view_game_state.pile_disc)
+        batch_deck.append(view_game_state.deck)
+        batch_combat_reward.append(view_game_state.reward_combat)
+        batch_monsters.append(view_game_state.monsters)
+        batch_character.append(view_game_state.character)
+        batch_energy.append(view_game_state.energy)
+        batch_map.append(view_game_state.map)
 
-    # Encode monsters
-    x_monster, x_monster_pad = encode_view_monsters(view_game_state.monsters, device=device)
-
-    # Encode energy
-    x_energy = encode_view_energy(view_game_state.energy, device)
-
-    # Encode map
-    x_map = encode_view_map(view_game_state.map, device)
-
-    # Collect all tensors in a specific, consistent order
-    return (
-        x_hand.view(1, MAX_SIZE_HAND, -1),
-        x_hand_pad.view(1, -1),
-        x_hand_active.view(1, -1),
-        x_draw.view(1, MAX_SIZE_DRAW_PILE, -1),
-        x_draw_pad.view(1, -1),
-        x_disc.view(1, MAX_SIZE_DISC_PILE, -1),
-        x_disc_pad.view(1, -1),
-        x_deck.view(1, MAX_SIZE_DECK, -1),
-        x_deck_pad.view(1, -1),
-        x_reward.view(1, CARD_REWARD_NUM, -1),
-        x_char.view(1, -1),
-        x_monster.view(1, MAX_MONSTERS, -1),
-        x_monster_pad.view(1, -1),
-        x_energy.view(1, -1),
-        x_map.view(1, MAP_HEIGHT, MAP_WIDTH, -1),
+    # Cards (hand, draw pile, discard pile, deck, combat rewards)
+    x_hand, x_hand_mask_pad = encode_batch_view_cards(batch_hand, CardPile.HAND, device)
+    x_draw, x_draw_mask_pad = encode_batch_view_cards(batch_draw, CardPile.DRAW, device)
+    x_disc, x_disc_mask_pad = encode_batch_view_cards(batch_disc, CardPile.DISC, device)
+    x_deck, x_deck_mask_pad = encode_batch_view_cards(batch_deck, CardPile.DECK, device)
+    x_combat_reward, x_combat_reward_mask_pad = encode_batch_view_cards(
+        batch_combat_reward, CardPile.COMBAT_REWARD, device
     )
 
+    # Monsters
+    x_monsters, x_monsters_mask_pad, incoming_damages = encode_batch_view_monsters(
+        batch_monsters, device
+    )
 
-def unpack_encoded_state(x_state: torch.Tensor) -> dict[str, torch.Tensor]:
-    x_all = {}
+    # Character
+    x_character = encode_batch_view_character(batch_character, incoming_damages, device)
+    x_character_mask_pad = torch.ones(batch_size, 1, dtype=torch.bool, device=device)
 
-    # The order of keys must EXACTLY match the concatenation order in the encoder
-    # This is why using a predefined structure like ENCODING_INFO is reliable.
-    idx_start = 0
-    for key, dim in _ENCODING_DIMENSIONS.items():
-        # Calculate the number of elements for this component
-        num_elements = torch.prod(torch.tensor(dim)).item()
+    # Energy
+    x_energy = encode_batch_view_energy(batch_energy, device)
+    x_energy_mask_pad = torch.ones(batch_size, 1, dtype=torch.bool, device=device)
 
-        # Slice the flat tensor
-        idx_end = idx_start + num_elements
-        x_slice = x_state[idx_start:idx_end]
+    # Map
+    x_map = encode_batch_view_map(batch_map, device)
 
-        # Reshape the slice back to its original shape and store it
-        x_all[key] = x_slice.view(dim)
-
-        # Move the index for the next slice
-        idx_start = idx_end
-
-    if idx_end != x_state.shape[0]:
-        raise ValueError(
-            f"{x_state.shape[0] - idx_end} elements were lost during state tensor unpacking"
-        )
-
-    return x_all
+    # Collect all tensors
+    return XGameState(
+        x_hand,
+        x_hand_mask_pad,
+        x_draw,
+        x_draw_mask_pad,
+        x_disc,
+        x_disc_mask_pad,
+        x_deck,
+        x_deck_mask_pad,
+        x_combat_reward,
+        x_combat_reward_mask_pad,
+        x_monsters,
+        x_monsters_mask_pad,
+        x_character,
+        x_character_mask_pad,
+        x_energy,
+        x_energy_mask_pad,
+        x_map,
+    )

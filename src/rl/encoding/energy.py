@@ -1,23 +1,31 @@
 import torch
 
 from src.game.view.energy import ViewEnergy
-from src.rl.utils import encode_one_hot
+from src.rl.utils import encode_one_hot_list
 
 
 _ENERGY_MIN = 0
-_ENERGY_MAX = 3
+_ENERGY_MAX = 5
 
 
-def _get_view_energy_dummy() -> ViewEnergy:
-    return ViewEnergy(3, 3)
+def get_encoding_dim_energy() -> int:
+    view_energy_dummy = ViewEnergy(3, 3)
+    encoding_energy_dummy = _encode_energy_current(view_energy_dummy.current)
+    return len(encoding_energy_dummy)
 
 
-def get_encoding_energy_dim() -> int:
-    view_energy_dummy = _get_view_energy_dummy()
-    encoding_energy_dummy = encode_view_energy(view_energy_dummy, torch.device("cpu"))
-    return encoding_energy_dummy.shape[0]
+def _encode_energy_current(energy_current: int) -> list[int]:
+    energy_current_ohe = encode_one_hot_list(energy_current, _ENERGY_MIN, _ENERGY_MAX)
+
+    # Append scalar
+    return energy_current_ohe + [energy_current / _ENERGY_MAX]
 
 
-# TODO: add max energy, it's always 3 for now
-def encode_view_energy(view_energy: ViewEnergy, device: torch.device) -> torch.Tensor:
-    return encode_one_hot(view_energy.current, _ENERGY_MIN, _ENERGY_MAX, device)
+def encode_batch_view_energy(
+    batch_view_energy: list[ViewEnergy], device: torch.device
+) -> torch.Tensor:
+    return torch.tensor(
+        [_encode_energy_current(view_energy.current) for view_energy in batch_view_energy],
+        dtype=torch.float32,
+        device=device,
+    )

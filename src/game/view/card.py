@@ -5,6 +5,7 @@ from src.game.entity.card import CardRarity
 from src.game.entity.card import CardType
 from src.game.entity.card import EntityCard
 from src.game.entity.manager import EntityManager
+from src.game.utils import does_card_require_discard
 from src.game.utils import does_card_require_target
 from src.game.view.effect import ViewEffect
 
@@ -21,6 +22,7 @@ class ViewCard:
     innate: bool
     is_active: bool
     requires_target: bool
+    requires_discard: bool
 
 
 def _get_card_view(card: EntityCard, is_active: bool) -> ViewCard:
@@ -35,6 +37,7 @@ def _get_card_view(card: EntityCard, is_active: bool) -> ViewCard:
         card.innate,
         is_active,
         does_card_require_target(card),
+        does_card_require_discard(card),
     )
 
 

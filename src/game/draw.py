@@ -239,7 +239,7 @@ def get_view_game_state_str(view_game_state: ViewGameState) -> str:
     return str_
 
 
-def get_action_str(action: Action, view_game_state: ViewGameState) -> str:
+def get_action_str(action: Action, view_game_state: ViewGameState, fast_mode: bool) -> str:
     if action.type == ActionType.CARD_REWARD_SELECT:
         return f"> Add {view_game_state.reward_combat[action.index].name} to the Deck!"
 
@@ -249,7 +249,7 @@ def get_action_str(action: Action, view_game_state: ViewGameState) -> str:
     if action.type == ActionType.COMBAT_CARD_IN_HAND_SELECT:
         card = view_game_state.hand[action.index]
         if view_game_state.fsm == ViewFSM.COMBAT_DEFAULT:
-            if card.requires_target:
+            if card.requires_target and not fast_mode:
                 return f"> Select {card.name}."
 
             return f"> Play {card.name}."

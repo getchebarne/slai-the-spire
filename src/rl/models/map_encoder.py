@@ -2,60 +2,23 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-def _calculate_encoder_map_features(
-    input_dims: tuple[int, int], kernel_size: int, pad: int = 1
-) -> int:
-    H, W = input_dims
-
-    # --- Block 1: After _conv_1 and pool ---
-    # After _conv_1 (stride=1 is default)
-    H = ((H - kernel_size + 2 * pad) // 1) + 1
-    W = ((W - kernel_size + 2 * pad) // 1) + 1
-
-    # After self.pool (kernel=2, stride=2)
-    H = ((H - 2 + 2 * 0) // 2) + 1
-    W = ((W - 2 + 2 * 0) // 2) + 1
-
-    # --- Block 2: After _conv_2 and pool ---
-    # After _conv_2
-    H = ((H - kernel_size + 2 * pad) // 1) + 1
-    W = ((W - kernel_size + 2 * pad) // 1) + 1
-
-    # After self.pool
-    H = ((H - 2 + 2 * 0) // 2) + 1
-    W = ((W - 2 + 2 * 0) // 2) + 1
-
-    # Final channels from _conv_2 are 64
-    final_channels = 64
-
-    # The total number of features is the product of the final dimensions
-    return final_channels * H * W
+from src.rl.encoding.map_ import get_encoding_map_dim
 
 
-class EncoderMap(nn.Module):
-    def __init__(
-        self,
-        map_height: int,
-        map_width: int,
-        num_input_channels: int,
-        kernel_size: int,
-        pad: int = 1,
-        embedding_dim: int = 128,
-    ):
+MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS = get_encoding_map_dim()
+
+
+class MapEncoder(nn.Module):
+    def __init__(self, kernel_size: int, embedding_dim: int = 128, pad: int = 1):
         super().__init__()
 
-        self._num_input_channels = num_input_channels
         self._kernel_size = kernel_size
         self._embedding_dim = embedding_dim
         self._pad = pad
-        self._num_features = _calculate_encoder_map_features(
-            (map_height, map_width), kernel_size, pad
-        )
 
         # Convolutional layers
         self._conv_1 = nn.Conv2d(
-            in_channels=num_input_channels, out_channels=32, kernel_size=kernel_size, padding=pad
+            in_channels=_NUM_CHANNELS, out_channels=32, kernel_size=kernel_size, padding=pad
         )
         self._conv_2 = nn.Conv2d(
             in_channels=32, out_channels=64, kernel_size=kernel_size, padding=pad
@@ -64,7 +27,7 @@ class EncoderMap(nn.Module):
         # Pooling layer to downsample the spatial dimensions
         self._max_pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self._linear_1 = nn.Linear(self._num_features, 256)
+        self._linear_1 = nn.LazyLinear(256)
         self._linear_2 = nn.Linear(256, embedding_dim)
 
     def _forward_conv(self, x: torch.Tensor) -> torch.Tensor:

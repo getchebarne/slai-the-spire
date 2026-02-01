@@ -1,27 +1,35 @@
-exp_name: a2c/jaw/test-parallel-fix-IV
+exp_name: ppo_hierarchical_v2
 num_episodes: 1.0e+6
 log_every: 10
 save_every: 100
 gamma: 0.99
 lam: 0.95
 coef_value: 0.500
-coef_entropy_max: 0.020
+coef_entropy_max: 0.015
 coef_entropy_min: 0.010
-coef_entropy_elbow: 5.0e+4
+coef_entropy_elbow: 2.5e+4
 max_grad_norm: 0.500
-num_eval: 100
-num_envs: 8
+num_envs: 16
 clip_eps: 0.20
 clip_value_loss: true
-minibatch_size: 64
+minibatch_size: 512
 num_epochs: 4
 
-model: 
-  embedding_dim_card: 64
-  embedding_dim_char: 64
-  embedding_dim_monster: 64
-  embedding_dim_energy: 16
-  num_heads: 8
+model:
+  # Core encoder
+  dim_entity: 128
+  transformer_dim_ff: 256
+  transformer_num_heads: 4
+  transformer_num_blocks: 2
+  map_encoder_kernel_size: 3
+  map_encoder_dim: 32
+
+  # Head dimensions
+  dim_ff_action_type: 128
+  dim_ff_card: 128
+  dim_ff_monster: 128
+  dim_ff_map: 128
+  dim_ff_value: 128
 
 optimizer:
   name: Adam

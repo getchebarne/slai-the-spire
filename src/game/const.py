@@ -12,4 +12,7 @@ MAP_HEIGHT = 15
 MAP_WIDTH = 7
 
 # Number of cards per combat reward TODO: "Question Card" relic modifies this
-CARD_REWARD_NUM = 3
+MAX_SIZE_COMBAT_CARD_REWARD = 3
+
+# Rest site rest health gain factor (multiplied by the character's max health)
+REST_SITE_REST_HEALTH_GAIN_FACTOR = 0.30  # TODO: changes w/ ascension level

@@ -8,7 +8,7 @@ from src.game.factory.monster.the_guardian import _WHIRLWIND_INSTANCES  # TODO: 
 from src.game.view.monster import ViewIntent
 from src.game.view.monster import ViewMonster
 from src.rl.encoding.actor import encode_view_actor_modifiers
-from src.rl.utils import encode_one_hot
+from src.rl.utils import encode_one_hot_list
 
 
 _BLOCK_MAX = 20  # TODO: revisit
@@ -17,86 +17,89 @@ _DAMAGE_MAX = _FIERCE_BASH_DAMAGE_ASC_4
 _HEALTH_MAX = _HEALTH_MAX_ASC_9
 _HEALTH_MIN = 1
 _INSTANCES_MAX = _WHIRLWIND_INSTANCES
+_MONSTER_NAMES = list(FACTORY_LIB_MONSTER.keys())
 
 
-def _get_monster_names() -> list[str]:
-    return list(FACTORY_LIB_MONSTER.keys())
-
-
-_MONSTER_NAMES = _get_monster_names()
-
-
-def _encode_view_monster(view_monster: ViewMonster, device: torch.device) -> torch.Tensor:
+def _encode_view_monster(view_monster: ViewMonster) -> list[float]:
     idx_name = _MONSTER_NAMES.index(view_monster.name)
-    return torch.cat(
-        [
-            encode_one_hot(idx_name, 0, len(_MONSTER_NAMES) - 1, device),
-            encode_one_hot(view_monster.health_current, _HEALTH_MIN, _HEALTH_MAX, device),
-            encode_one_hot(view_monster.block_current, _BLOCK_MIN, _BLOCK_MAX, device),
-            encode_view_actor_modifiers(view_monster.modifiers, device),
-            _encode_view_intent(view_monster.intent, device),
-            torch.tensor(
-                [
-                    view_monster.health_current / _HEALTH_MAX,
-                    view_monster.block_current / _BLOCK_MAX,
-                ],
-                dtype=torch.float32,
-                device=device,
-            ),
-        ],
-    )
-
-
-def _encode_view_intent(view_intent: ViewIntent, device: torch.device) -> torch.Tensor:
-    return torch.tensor(
-        [
-            (view_intent.damage or 0) / _DAMAGE_MAX,
-            (view_intent.instances or 0) / _INSTANCES_MAX,
-            view_intent.block,
-            view_intent.buff,
-            view_intent.debuff_powerful,
-        ],
-        dtype=torch.float32,
-        device=device,
-    )
-
-
-def _get_view_monster_dummy() -> ViewMonster:
-    return ViewMonster("Dummy", 0, 0, 0, {}, ViewIntent())
-
-
-def get_encoding_monster_dim() -> int:
-    view_monster_dummy = _get_view_monster_dummy()
-    encoding_monster_dummy = _encode_view_monster(view_monster_dummy, torch.device("cpu"))
-    return encoding_monster_dummy.shape[0]
-
-
-def encode_view_monsters(
-    view_monsters: list[ViewMonster], device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor]:
-    mask_pad = torch.arange(MAX_MONSTERS, dtype=torch.float32, device=device) < len(view_monsters)
-    if not view_monsters:
-        # Get monster encoding dimension
-        encoding_monster_dim = get_encoding_monster_dim()
-
-        # Return all-zeros tensor of shape (`MAX_MONSTERS`, `monster_encoding_dim`)
-        return (
-            torch.zeros(MAX_MONSTERS, encoding_monster_dim, dtype=torch.float32, device=device),
-            mask_pad,
+    return (
+        # Monster name
+        encode_one_hot_list(idx_name, 0, len(_MONSTER_NAMES) - 1)
+        # Health / one-hot
+        + encode_one_hot_list(view_monster.health_current, _HEALTH_MIN, _HEALTH_MAX)
+        # Block / one-hot
+        + encode_one_hot_list(view_monster.block_current, _BLOCK_MIN, _BLOCK_MAX)
+        # Health + Block / one-hot
+        + encode_one_hot_list(
+            view_monster.health_current + view_monster.block_current,
+            _HEALTH_MIN + _BLOCK_MIN,
+            _HEALTH_MAX + _BLOCK_MAX,
         )
+        # Modifiers
+        + encode_view_actor_modifiers(view_monster.modifiers)
+        # Intent
+        + _encode_view_intent(view_monster.intent)
+        # Scalars
+        + [
+            # Health / scalar
+            view_monster.health_current / _HEALTH_MAX,
+            # Block / scalar
+            view_monster.block_current / _BLOCK_MAX,
+            # Health + Block / scalar
+            (view_monster.health_current + view_monster.block_current)
+            / (_HEALTH_MAX + _BLOCK_MAX),
+        ]
+    )
 
-    encoding_monsters = None
-    for idx, view_monster in enumerate(view_monsters):
-        # Get encoding
-        encoding_monster = _encode_view_monster(view_monster, device)
 
-        if encoding_monsters is None:
-            # Intialize all-zeros tensor to hold all encodings, now that we now the encoding dimension
-            encoding_monsters = torch.zeros(
-                MAX_MONSTERS, encoding_monster.shape[0], dtype=torch.float32, device=device
+def _encode_view_intent(view_intent: ViewIntent) -> list[float]:
+    return [
+        (view_intent.damage or 0) / _DAMAGE_MAX,
+        (view_intent.instances or 0) / _INSTANCES_MAX,
+        float(view_intent.block),
+        float(view_intent.buff),
+        float(view_intent.debuff_powerful),
+    ]
+
+
+def get_encoding_dim_monster() -> int:
+    view_monster_dummy = ViewMonster("Dummy", 0, 0, 0, {}, ViewIntent())
+    encoding_monster_dummy = _encode_view_monster(view_monster_dummy)
+    return len(encoding_monster_dummy)
+
+
+# TODO: handle these constants better
+_ENCODING_MONSTER_PAD = [0.0] * get_encoding_dim_monster()
+
+
+def encode_batch_view_monsters(
+    batch_view_monster: list[list[ViewMonster]], device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor, list[float]]:
+    # Iterate through each list of monsters in the batch
+    x_out = []
+    x_mask_pad = []
+    outgoing_damages = []
+    for view_monsters in batch_view_monster:
+
+        encoding_monsters = []
+        outgoing_damage = 0.0
+        for view_monster in view_monsters:
+            encoding_monsters.append(_encode_view_monster(view_monster))
+            outgoing_damage += (view_monster.intent.damage or 0.0) * (
+                view_monster.intent.instances or 0.0
             )
 
-        # Assign encoding
-        encoding_monsters[idx] = encoding_monster
+        # Padding
+        num_pad = MAX_MONSTERS - len(encoding_monsters)
+        encoding_monsters += [_ENCODING_MONSTER_PAD] * num_pad
 
-    return encoding_monsters, mask_pad
+        # Append to final tensor
+        x_out.append(encoding_monsters)
+        x_mask_pad.append([True] * len(view_monsters) + [False] * num_pad)
+        outgoing_damages.append(outgoing_damage)
+
+    return (
+        torch.tensor(x_out, dtype=torch.float32, device=device),
+        torch.tensor(x_mask_pad, dtype=torch.float32, device=device),
+        outgoing_damages,
+    )

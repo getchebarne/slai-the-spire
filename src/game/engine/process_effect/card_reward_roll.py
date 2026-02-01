@@ -1,7 +1,7 @@
 import random
 from collections import defaultdict
 
-from src.game.const import CARD_REWARD_NUM
+from src.game.const import MAX_SIZE_COMBAT_CARD_REWARD
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
@@ -33,7 +33,7 @@ def process_effect_card_reward_roll(
     character = entity_manager.entities[entity_manager.id_character]
 
     card_name_rolled = []
-    for _ in range(CARD_REWARD_NUM):
+    for _ in range(MAX_SIZE_COMBAT_CARD_REWARD):
         roll = random.randint(0, 98) + character.card_reward_roll_offset
 
         if roll < _CHANCE_RARE:

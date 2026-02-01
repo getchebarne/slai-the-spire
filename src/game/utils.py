@@ -1,4 +1,6 @@
+from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
+from src.game.core.effect import EffectType
 from src.game.entity.card import EntityCard
 from src.game.entity.manager import EntityManager
 
@@ -16,6 +18,18 @@ def is_combat_over(entity_manager: EntityManager) -> bool:
 def does_card_require_target(card: EntityCard) -> bool:
     for effect in card.effects:
         if effect.target_type == EffectTargetType.CARD_TARGET:
+            return True
+
+    return False
+
+
+# TODO: add number of cards to discard
+def does_card_require_discard(card: EntityCard) -> bool:
+    for effect in card.effects:
+        if (
+            effect.type == EffectType.CARD_DISCARD
+            and effect.selection_type == EffectSelectionType.INPUT
+        ):
             return True
 
     return False

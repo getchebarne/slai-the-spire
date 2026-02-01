@@ -1,10 +1,10 @@
 import os
+from typing import Literal
 
 import click
 import numpy as np
 import torch
 
-from src.game.const import MAX_SIZE_HAND
 from src.game.core.fsm import FSM
 from src.game.create import create_game_state
 from src.game.draw import get_action_str
@@ -34,7 +34,7 @@ def _format_array_floats(array: np.ndarray, precision: int = 4) -> str:
 
 
 def run_simulation(
-    policy: PolicyBase, num_games: int
+    policy: PolicyBase, num_games: int, fast_mode: bool
 ) -> list[list[tuple[ViewGameState, SelectActionMetadata]]]:
     games = []
     for _ in range(num_games):
@@ -48,7 +48,7 @@ def run_simulation(
             view_game_state = get_view_game_state(game_state)
 
             action, select_action_metadata = policy.select_action(view_game_state)
-            step(game_state, action)
+            step(game_state, action, fast_mode)
 
             view_game_states.append((view_game_state, action, select_action_metadata))
 
@@ -57,10 +57,12 @@ def run_simulation(
     return games
 
 
-def display_game(game_replay: list[tuple[ViewGameState, SelectActionMetadata]]) -> None:
+def display_game(
+    game_replay: list[tuple[ViewGameState, SelectActionMetadata]], fast_mode: bool
+) -> None:
     for view_game_state, action, select_action_metadata in game_replay:
         view_game_state_str = get_view_game_state_str(view_game_state)
-        action_str = get_action_str(action, view_game_state)
+        action_str = get_action_str(action, view_game_state, fast_mode)
         print(view_game_state_str)
         print("-" * _NCOL)
         print(action_str)
@@ -106,7 +108,19 @@ def display_game(game_replay: list[tuple[ViewGameState, SelectActionMetadata]]) 
     default="health",
     help="Sort criterion for games (health: final health, length: game duration)",
 )
-def main(exp_path, num_games, device, sort_by):
+@click.option(
+    "--fast-mode",
+    type=bool,
+    default=True,
+    help="Wether to run the simulations in fast mode",
+)
+def main(
+    exp_path: str,
+    num_games: int,
+    device: str,
+    sort_by: Literal["health", "length"],
+    fast_mode: bool,
+):
     """Run simulation of combat games using a trained model."""
     # Load config
     config = load_config(f"{exp_path}/config.yml")
@@ -117,7 +131,7 @@ def main(exp_path, num_games, device, sort_by):
 
     # Instance policy
     policy = PolicySoftmax(model, torch.device(device))
-    games = run_simulation(policy, num_games=num_games)
+    games = run_simulation(policy, num_games, fast_mode)
 
     # Sort games based on criterion
     if sort_by == "health":
@@ -128,7 +142,7 @@ def main(exp_path, num_games, device, sort_by):
         click.echo("Games sorted by game length (longest to shortest)")
 
     # Display
-    display_game(games[0])
+    display_game(games[0], fast_mode)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,11 @@ def process_effect_death(
 
     if isinstance(target, EntityMonster):
         # TODO: delete instance from `entity_manager.entities`
-        entity_manager.id_monsters.remove(id_target)
+        try:
+            entity_manager.id_monsters.remove(id_target)
+        except ValueError:
+            # Already dead TODO: fix
+            return [], []
 
         if entity_manager.id_monsters:
             effects_top = []
