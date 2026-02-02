@@ -80,7 +80,6 @@ def encode_batch_view_monsters(
     x_mask_pad = []
     outgoing_damages = []
     for view_monsters in batch_view_monster:
-
         encoding_monsters = []
         outgoing_damage = 0.0
         for view_monster in view_monsters:

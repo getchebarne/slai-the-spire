@@ -17,8 +17,8 @@ from src.game.action import Action
 from src.game.action import ActionType
 from src.game.const import MAP_WIDTH
 from src.game.core.fsm import FSM
-from src.rl.action_space.cascade import ActionRoute
 from src.rl.action_space.cascade import FSM_ROUTING
+from src.rl.action_space.cascade import ActionRoute
 from src.rl.action_space.cascade import get_secondary_head_type
 from src.rl.action_space.types import HeadType
 from src.rl.encoding.state import XGameState

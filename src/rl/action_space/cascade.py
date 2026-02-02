@@ -87,4 +87,3 @@ def get_secondary_head_type(fsm: FSM, action_type: ActionType) -> HeadType | Non
             return HeadType.CARD_UPGRADE
         case ActionType.MAP_NODE_SELECT:
             return HeadType.MAP_SELECT
-

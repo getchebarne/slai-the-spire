@@ -47,9 +47,7 @@ class EpisodeResult:
 def _get_masks(view_game_state, fsm: FSM, device: torch.device) -> dict[HeadType, torch.Tensor]:
     """Get all relevant masks for a single state."""
     masks = {
-        HeadType.ACTION_TYPE: get_valid_mask_batch(
-            HeadType.ACTION_TYPE, [view_game_state], device
-        )
+        HeadType.ACTION_TYPE: get_valid_mask_batch(HeadType.ACTION_TYPE, [view_game_state], device)
     }
 
     # Add masks for potential secondary heads
@@ -57,9 +55,7 @@ def _get_masks(view_game_state, fsm: FSM, device: torch.device) -> dict[HeadType
     for action_type in route.action_types:
         secondary_head = get_secondary_head_type(fsm, action_type)
         if secondary_head is not None and secondary_head not in masks:
-            masks[secondary_head] = get_valid_mask_batch(
-                secondary_head, [view_game_state], device
-            )
+            masks[secondary_head] = get_valid_mask_batch(secondary_head, [view_game_state], device)
 
     return masks
 
