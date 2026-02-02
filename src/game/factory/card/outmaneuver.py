@@ -27,7 +27,13 @@ def create_card_outmaneuver(upgraded: CardUpgraded) -> EntityCard:
             _TYPE,
             _COST,
             _RARITY,
-            [Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY_PLUS, EffectTargetType.CHARACTER)],
+            [
+                Effect(
+                    EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN,
+                    _ENERGY_PLUS,
+                    EffectTargetType.CHARACTER,
+                )
+            ],
         )
 
     return EntityCard(

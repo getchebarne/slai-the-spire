@@ -28,20 +28,15 @@ def is_combat_over(entity_manager: EntityManager) -> bool:
 
 
 def does_card_require_target(card: EntityCard) -> bool:
-    for effect in card.effects:
-        if effect.target_type == EffectTargetType.CARD_TARGET:
-            return True
-
-    return False
+    return any(effect.target_type == EffectTargetType.CARD_TARGET for effect in card.effects)
 
 
 # TODO: add number of cards to discard
 def does_card_require_discard(card: EntityCard) -> bool:
-    for effect in card.effects:
-        if (
+    return any(
+        (
             effect.type == EffectType.CARD_DISCARD
             and effect.selection_type == EffectSelectionType.INPUT
-        ):
-            return True
-
-    return False
+        )
+        for effect in card.effects
+    )
