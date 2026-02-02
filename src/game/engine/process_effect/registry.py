@@ -26,41 +26,32 @@ from src.game.engine.process_effect.energy_loss import process_effect_energy_los
 from src.game.engine.process_effect.health_gain import process_effect_health_gain
 from src.game.engine.process_effect.health_loss import process_effect_health_loss
 from src.game.engine.process_effect.map_node_active_set import process_effect_map_node_active_set
-from src.game.engine.process_effect.modifier_accuracy_gain import \
-    process_effect_modifier_accuracy_gain
-from src.game.engine.process_effect.modifier_after_image_gain import \
-    process_effect_modifier_after_image_gain
-from src.game.engine.process_effect.modifier_blur_gain import process_effect_modifier_blur_gain
-from src.game.engine.process_effect.modifier_burst_gain import process_effect_modifier_burst_gain
 from src.game.engine.process_effect.modifier_burst_loss import process_effect_modifier_burst_loss
-from src.game.engine.process_effect.modifier_dexterity_gain import \
-    process_effect_modifier_dexterity_gain
-from src.game.engine.process_effect.modifier_double_damage_gain import \
-    process_effect_modifier_double_damage_gain
-from src.game.engine.process_effect.modifier_infinite_blades_gain import \
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_accuracy_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_after_image_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_blur_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_burst_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_dexterity_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_double_damage_gain
+from src.game.engine.process_effect.modifier_gain import \
     process_effect_modifier_infinite_blades_gain
+from src.game.engine.process_effect.modifier_gain import \
+    process_effect_modifier_next_turn_block_gain
+from src.game.engine.process_effect.modifier_gain import \
+    process_effect_modifier_next_turn_energy_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_phantasmal_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_ritual_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_sharp_hide_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_strength_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_thousand_cuts_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_vulnerable_gain
+from src.game.engine.process_effect.modifier_gain import process_effect_modifier_weak_gain
 from src.game.engine.process_effect.modifier_mode_shift_gain import \
     process_effect_modifier_mode_shift_gain
-from src.game.engine.process_effect.modifier_next_turn_block_gain import \
-    process_effect_modifier_next_turn_block_gain
-from src.game.engine.process_effect.modifier_next_turn_energy_gain import \
-    process_effect_modifier_next_turn_energy_gain
-from src.game.engine.process_effect.modifier_phantasmal_gain import \
-    process_effect_modifier_phantasmal_gain
-from src.game.engine.process_effect.modifier_ritual_gain import process_effect_modifier_ritual_gain
 from src.game.engine.process_effect.modifier_set_not_new import process_effect_modifier_set_not_new
-from src.game.engine.process_effect.modifier_sharp_hide_gain import \
-    process_effect_modifier_sharp_hide_gain
 from src.game.engine.process_effect.modifier_sharp_hide_loss import \
     process_effect_modifier_sharp_hide_loss
-from src.game.engine.process_effect.modifier_strength_gain import \
-    process_effect_modifier_strength_gain
-from src.game.engine.process_effect.modifier_thousand_cuts_gain import \
-    process_effect_modifier_thousand_cuts_gain
 from src.game.engine.process_effect.modifier_tick import process_effect_modifier_tick
-from src.game.engine.process_effect.modifier_vulnerable_gain import \
-    process_effect_modifier_vulnerable_gain
-from src.game.engine.process_effect.modifier_weak_gain import process_effect_modifier_weak_gain
 from src.game.engine.process_effect.monster_move_update import process_effect_monster_move_update
 from src.game.engine.process_effect.room_enter import process_effect_room_enter
 from src.game.engine.process_effect.target_card_clear import process_effect_target_card_clear
@@ -107,21 +98,21 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.MODIFIER_BURST_LOSS: process_effect_modifier_burst_loss,
     EffectType.MODIFIER_DEXTERITY_GAIN: process_effect_modifier_dexterity_gain,
     EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN: process_effect_modifier_double_damage_gain,
-    EffectType.MODIFIER_PHANTASMAL_GAIN: process_effect_modifier_phantasmal_gain,
     EffectType.MODIFIER_INFINITE_BLADES_GAIN: process_effect_modifier_infinite_blades_gain,
     EffectType.MODIFIER_MODE_SHIFT_GAIN: process_effect_modifier_mode_shift_gain,
     EffectType.MODIFIER_NEXT_TURN_BLOCK_GAIN: process_effect_modifier_next_turn_block_gain,
     EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN: process_effect_modifier_next_turn_energy_gain,
+    EffectType.MODIFIER_PHANTASMAL_GAIN: process_effect_modifier_phantasmal_gain,
+    EffectType.MODIFIER_RITUAL_GAIN: process_effect_modifier_ritual_gain,
+    EffectType.MODIFIER_SET_NOT_NEW: process_effect_modifier_set_not_new,
     EffectType.MODIFIER_SHARP_HIDE_GAIN: process_effect_modifier_sharp_hide_gain,
     EffectType.MODIFIER_SHARP_HIDE_LOSS: process_effect_modifier_sharp_hide_loss,
+    EffectType.MODIFIER_STRENGTH_GAIN: process_effect_modifier_strength_gain,
     EffectType.MODIFIER_THOUSAND_CUTS_GAIN: process_effect_modifier_thousand_cuts_gain,
     EffectType.MODIFIER_TICK: process_effect_modifier_tick,
-    EffectType.MODIFIER_SET_NOT_NEW: process_effect_modifier_set_not_new,
-    EffectType.MONSTER_MOVE_UPDATE: process_effect_monster_move_update,
-    EffectType.MODIFIER_RITUAL_GAIN: process_effect_modifier_ritual_gain,
-    EffectType.MODIFIER_STRENGTH_GAIN: process_effect_modifier_strength_gain,
     EffectType.MODIFIER_VULNERABLE_GAIN: process_effect_modifier_vulnerable_gain,
     EffectType.MODIFIER_WEAK_GAIN: process_effect_modifier_weak_gain,
+    EffectType.MONSTER_MOVE_UPDATE: process_effect_monster_move_update,
     EffectType.ROOM_ENTER: process_effect_room_enter,
     EffectType.TARGET_CARD_CLEAR: process_effect_target_card_clear,
     EffectType.TARGET_CARD_SET: process_effect_target_card_set,

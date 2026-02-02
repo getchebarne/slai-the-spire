@@ -2,15 +2,12 @@ from src.game.core.effect import Effect
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.manager import EntityManager
+from src.game.factory.monster.the_guardian import _MODE_SHIFT_CONFIG
 from src.game.factory.monster.the_guardian import _MODE_SHIFT_STACKS_CURRENT
 from src.game.factory.monster.the_guardian import _MODE_SHIFT_STACKS_CURRENT_ASC_9
 from src.game.factory.monster.the_guardian import _MODE_SHIFT_STACKS_CURRENT_ASC_19
-from src.game.factory.monster.the_guardian import _MODE_SHIFT_STACKS_DURATION
-from src.game.factory.monster.the_guardian import _MODE_SHIFT_STACKS_MAX
-from src.game.factory.monster.the_guardian import _MODE_SHIFT_STACKS_MIN
 
 
-IS_BUFF = True
 _STACK_INCREASE_PER_CYCLE = 10
 
 
@@ -37,12 +34,9 @@ def process_effect_modifier_mode_shift_gain(
         raise ValueError("TODO: add message")
 
     target.modifier_map[ModifierType.MODE_SHIFT] = ModifierData(
-        IS_BUFF,
-        False,
-        min(stacks, _MODE_SHIFT_STACKS_MAX),
-        _MODE_SHIFT_STACKS_MIN,
-        _MODE_SHIFT_STACKS_MAX,
-        _MODE_SHIFT_STACKS_DURATION,
+        config=_MODE_SHIFT_CONFIG,
+        is_new=False,
+        stacks_current=min(stacks, _MODE_SHIFT_CONFIG.stacks_max),
     )
 
     return [], []

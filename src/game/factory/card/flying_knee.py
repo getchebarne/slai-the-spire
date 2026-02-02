@@ -32,7 +32,9 @@ def create_card_flying_knee(upgraded: CardUpgraded) -> EntityCard:
                 Effect(
                     EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE_PLUS, EffectTargetType.CARD_TARGET
                 ),
-                Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY),
+                Effect(
+                    EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY, EffectTargetType.CHARACTER
+                ),
             ],
         )
 
@@ -44,6 +46,6 @@ def create_card_flying_knee(upgraded: CardUpgraded) -> EntityCard:
         _RARITY,
         [
             Effect(EffectType.DAMAGE_DEAL_PHYSICAL, _DAMAGE, EffectTargetType.CARD_TARGET),
-            Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY),
+            Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY, EffectTargetType.CHARACTER),
         ],
     )

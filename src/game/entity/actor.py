@@ -26,14 +26,19 @@ class ModifierType(Enum):
     WEAK = "WEAK"
 
 
+@dataclass(frozen=True)
+class ModifierConfig:
+    is_buff: bool
+    stacks_duration: bool
+    stacks_min: int = 1
+    stacks_max: int = 999
+
+
 @dataclass
 class ModifierData:
-    is_buff: bool
+    config: ModifierConfig
     is_new: bool
-    stacks_current: int | None = None
-    stacks_min: int | None = None
-    stacks_max: int | None = None
-    stacks_duration: bool = False
+    stacks_current: int
 
 
 @dataclass

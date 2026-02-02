@@ -8,10 +8,10 @@ def process_effect_modifier_tick(
     target = kwargs["target"]
 
     for modifier_type, modifier_data in list(target.modifier_map.items()):
-        if modifier_data.stacks_duration and not modifier_data.is_new:
+        if modifier_data.config.stacks_duration and not modifier_data.is_new:
             modifier_data.stacks_current -= 1
 
-            if modifier_data.stacks_current < modifier_data.stacks_min:
+            if modifier_data.stacks_current < modifier_data.config.stacks_min:
                 del target.modifier_map[modifier_type]
 
     return [], []
