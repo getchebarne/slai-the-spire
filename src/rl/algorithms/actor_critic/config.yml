@@ -1,4 +1,4 @@
-exp_name: ppo_hierarchical_v3
+exp_name: ppo_hierarchical_v4
 num_episodes: 1.0e+6
 log_every: 10
 save_every: 100
@@ -17,19 +17,19 @@ num_epochs: 4
 
 model:
   # Core encoder
-  dim_entity: 128
-  transformer_dim_ff: 256
+  dim_entity: 64
+  transformer_dim_ff: 128
   transformer_num_heads: 4
   transformer_num_blocks: 2
   map_encoder_kernel_size: 3
-  map_encoder_dim: 32
+  map_encoder_dim: 64
 
   # Head dimensions
-  dim_ff_action_type: 128
-  dim_ff_card: 128
-  dim_ff_monster: 128
-  dim_ff_map: 128
-  dim_ff_value: 128
+  dim_ff_primary: 64
+  dim_ff_card: 64
+  dim_ff_monster: 64
+  dim_ff_map: 64
+  dim_ff_value: 64
 
 optimizer:
   name: Adam

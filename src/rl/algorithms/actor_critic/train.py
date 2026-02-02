@@ -15,17 +15,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.action import Action
-from src.game.action import ActionType
 from src.game.core.fsm import FSM
 from src.game.create import create_game_state
 from src.game.main import initialize_game_state
 from src.game.main import step
 from src.game.view.state import get_view_game_state
-from src.rl.action_space import FSM_ROUTING
-from src.rl.action_space import HeadType
-from src.rl.action_space import get_secondary_head_type
-from src.rl.action_space.masks import get_valid_mask_batch
+from src.rl.action_space.masks import get_masks
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
@@ -44,22 +39,6 @@ class EpisodeResult:
     entropies: list[torch.Tensor] = field(default_factory=list)
 
 
-def _get_masks(view_game_state, fsm: FSM, device: torch.device) -> dict[HeadType, torch.Tensor]:
-    """Get all relevant masks for a single state."""
-    masks = {
-        HeadType.ACTION_TYPE: get_valid_mask_batch(HeadType.ACTION_TYPE, [view_game_state], device)
-    }
-
-    # Add masks for potential secondary heads
-    route = FSM_ROUTING[fsm]
-    for action_type in route.action_types:
-        secondary_head = get_secondary_head_type(fsm, action_type)
-        if secondary_head is not None and secondary_head not in masks:
-            masks[secondary_head] = get_valid_mask_batch(secondary_head, [view_game_state], device)
-
-    return masks
-
-
 def _play_episode(model: ActorCritic, device: torch.device) -> tuple[EpisodeResult, int]:
     """
     Play a single episode and collect trajectory.
@@ -73,19 +52,18 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[EpisodeResu
 
     while game_state.fsm != FSM.GAME_OVER:
         view_game_state = get_view_game_state(game_state)
-        fsm = game_state.fsm
 
         # Encode state
         x_game_state = encode_batch_view_game_state([view_game_state], device)
 
         # Get masks
-        masks = _get_masks(view_game_state, fsm, device)
+        primary_mask, secondary_masks = get_masks(view_game_state, device)
 
         # Forward pass
-        output = model(x_game_state, fsm, masks, sample=True)
+        output = model.forward_single(x_game_state, primary_mask, secondary_masks, sample=True)
 
         # Build action
-        action = output.actor.to_action()
+        action = output.to_action()
 
         # Execute action
         step(game_state, action)
@@ -96,13 +74,12 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[EpisodeResu
         reward = compute_reward(view_game_state, view_game_state_next, game_over)
 
         # Store transition
-        result.log_probs.append(torch.unsqueeze(output.actor.total_log_prob, 0))
-        result.values.append(output.value)
+        result.log_probs.append(torch.unsqueeze(output.log_prob, 0))
+        result.values.append(output.value.unsqueeze(0))
         result.rewards.append(reward)
 
-        # Compute entropy (simplified - just from value, actual entropy needs distribution)
-        # In practice you'd want to compute this from the action distributions
-        result.entropies.append(torch.tensor([0.01], device=device))  # Placeholder
+        # Compute entropy (simplified placeholder)
+        result.entropies.append(torch.tensor([0.01], device=device))
 
     final_floor = view_game_state_next.map.y_current or 0
     return result, final_floor

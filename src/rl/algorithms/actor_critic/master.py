@@ -7,7 +7,7 @@ Coordinates multiple worker processes, collects trajectories, and updates the mo
 import os
 import random
 import shutil
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from typing import Iterator
@@ -19,40 +19,43 @@ from torch.multiprocessing import Pipe
 from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.action import Action
-from src.game.action import ActionType
-from src.game.const import MAP_WIDTH
-from src.game.core.fsm import FSM
-from src.rl.action_space import FSM_ROUTING
+from src.game.view.state import ViewGameState
+from src.rl.action_space import ActionChoice
+from src.rl.action_space import CHOICE_TO_HEAD
 from src.rl.action_space import HeadType
-from src.rl.action_space import get_secondary_head_type
-from src.rl.action_space.masks import get_valid_mask_batch
+from src.rl.action_space.masks import get_masks_batch
 from src.rl.algorithms.actor_critic.worker import Command
 from src.rl.algorithms.actor_critic.worker import WorkerData
 from src.rl.algorithms.actor_critic.worker import worker
-from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
-from src.rl.models.actor_critic import ActorOutput
-from src.rl.models.actor_critic import _slice_core_output
+from src.rl.models import _slice_core_output
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 
 
+# =============================================================================
+# Data Structures
+# =============================================================================
+
+
 @dataclass
 class Transition:
-    x_game_state: XGameState
-    fsm: FSM
-    action_type: ActionType
-    action_type_log_prob: torch.Tensor | None
-    secondary_index: int | None
-    secondary_log_prob: torch.Tensor | None
+    """Single transition in a trajectory."""
+
+    view_game_state: ViewGameState  # Store view state, encode lazily
+    action_choice: ActionChoice
+    action_choice_log_prob: torch.Tensor
+    secondary_index: int  # -1 if terminal
+    secondary_log_prob: torch.Tensor
     value: torch.Tensor
     reward: float
 
 
 @dataclass
 class Trajectory:
+    """Sequence of transitions from one episode."""
+
     transitions: list[Transition] = field(default_factory=list)
 
     def __len__(self) -> int:
@@ -63,24 +66,22 @@ class Trajectory:
 class TrajectoryBatch:
     """Batched trajectory data for training."""
 
-    # Encoded states (each field is a tensor)
-    x_game_states: list[XGameState]
-    fsms: list[FSM]
-
-    # Actions
-    action_types: list[ActionType]
-    action_type_indices: torch.Tensor  # (N,) index within route.action_types
-    action_type_log_probs: torch.Tensor  # (N,) log prob (0 if forced)
-    secondary_indices: torch.Tensor  # (N,) secondary head index (-1 if none)
-    secondary_log_probs: torch.Tensor  # (N,) log prob (0 if none)
-
-    # Values and returns
+    view_game_states: list[ViewGameState]
+    action_choices: torch.Tensor  # (N,) ActionChoice indices
+    action_choice_log_probs: torch.Tensor  # (N,)
+    secondary_indices: torch.Tensor  # (N,) -1 if terminal
+    secondary_log_probs: torch.Tensor  # (N,)
     values: torch.Tensor  # (N, 1)
     returns: torch.Tensor  # (N, 1)
     advantages: torch.Tensor  # (N, 1)
 
     def __len__(self) -> int:
-        return len(self.x_game_states)
+        return len(self.view_game_states)
+
+
+# =============================================================================
+# Episode Collection
+# =============================================================================
 
 
 def _run_episodes(
@@ -114,66 +115,30 @@ def _run_episodes(
             # Collect non-terminal states
             active_envs = []
             view_game_states = []
-            fsms = []
 
             for env_idx in running_envs:
                 data = worker_datas[env_idx]
                 if not data.game_over:
                     active_envs.append(env_idx)
                     view_game_states.append(data.view_game_state)
-                    fsms.append(data.fsm)
 
-            # Remove terminal envs
             running_envs = active_envs
             if not running_envs:
                 break
 
-            # Process each FSM group separately (can't batch different FSM states)
-            env_to_action: dict[int, Action] = {}
-            env_to_output: dict[int, tuple[ActorOutput, torch.Tensor]] = {}
+            # Encode all states at once
+            x_game_state = encode_batch_view_game_state(view_game_states, device)
 
-            # Group by FSM state
-            fsm_groups: dict[FSM, list[int]] = defaultdict(list)
-            for i, (env_idx, fsm) in enumerate(zip(active_envs, fsms)):
-                fsm_groups[fsm].append(i)
+            # Get masks for all states
+            primary_mask, secondary_masks = get_masks_batch(view_game_states, device)
 
-            # Process each FSM group (batched - model handles different action types)
-            for fsm, batch_indices in fsm_groups.items():
-                route = FSM_ROUTING[fsm]
-                batch_states = [view_game_states[i] for i in batch_indices]
-                batch_env_ids = [active_envs[i] for i in batch_indices]
-
-                # Encode states
-                x_game_state = encode_batch_view_game_state(batch_states, device)
-
-                # Get masks for action type head
-                masks = {}
-                masks[HeadType.ACTION_TYPE] = get_valid_mask_batch(
-                    HeadType.ACTION_TYPE, batch_states, device
-                )
-
-                # Get masks for all potential secondary heads
-                for action_type in route.action_types:
-                    secondary_head = get_secondary_head_type(fsm, action_type)
-                    if secondary_head is not None and secondary_head not in masks:
-                        masks[secondary_head] = get_valid_mask_batch(
-                            secondary_head, batch_states, device
-                        )
-
-                # Forward pass (batched - handles different action types per sample)
-                output = model.forward_batch(x_game_state, fsm, masks, sample=True)
-
-                # Extract per-sample results
-                for i, env_idx in enumerate(batch_env_ids):
-                    env_to_action[env_idx] = output.actor.to_action(i)
-                    env_to_output[env_idx] = (
-                        output.actor.to_actor_output(i),
-                        output.value[i] if output.value.dim() > 1 else output.value,
-                    )
+            # Forward pass (all samples, no FSM grouping needed!)
+            output = model(x_game_state, primary_mask, secondary_masks, sample=True)
 
             # Send actions to workers
-            for env_idx in running_envs:
-                conn_parents[env_idx].send((Command.STEP, env_to_action[env_idx]))
+            for i, env_idx in enumerate(active_envs):
+                action = output.get_action(i)
+                conn_parents[env_idx].send((Command.STEP, action))
 
             # Receive new states
             new_worker_datas = {}
@@ -182,22 +147,15 @@ def _run_episodes(
 
             # Store transitions
             for i, env_idx in enumerate(running_envs):
-                actor_out, value = env_to_output[env_idx]
                 reward = new_worker_datas[env_idx].reward
 
-                # Re-encode for storage (or store view_game_state and encode later)
-                x_game_state_single = encode_batch_view_game_state(
-                    [view_game_states[active_envs.index(env_idx)]], device
-                )
-
                 transition = Transition(
-                    x_game_state=x_game_state_single,
-                    fsm=fsms[active_envs.index(env_idx)],
-                    action_type=actor_out.action_type,
-                    action_type_log_prob=actor_out.action_type_log_prob,
-                    secondary_index=actor_out.secondary_index,
-                    secondary_log_prob=actor_out.secondary_log_prob,
-                    value=value,
+                    view_game_state=view_game_states[i],
+                    action_choice=ActionChoice(output.action_choices[i].item()),
+                    action_choice_log_prob=output.action_choice_log_probs[i],
+                    secondary_index=output.secondary_indices[i].item(),
+                    secondary_log_prob=output.secondary_log_probs[i],
+                    value=output.values[i],
                     reward=reward,
                 )
                 trajectories[env_idx].transitions.append(transition)
@@ -208,6 +166,11 @@ def _run_episodes(
 
     model.train()
     return trajectories
+
+
+# =============================================================================
+# GAE and Batch Creation
+# =============================================================================
 
 
 def _compute_gae(
@@ -221,7 +184,6 @@ def _compute_gae(
     returns = deque()
     advantages = deque()
 
-    # Add terminal value of 0
     values_with_terminal = values + [torch.tensor([[0.0]], device=device)]
 
     gae = 0.0
@@ -245,11 +207,9 @@ def _create_batch(
     device: torch.device,
 ) -> TrajectoryBatch:
     """Create a training batch from trajectories."""
-    all_x_game_states = []
-    all_fsms = []
-    all_action_types = []
-    all_action_type_indices = []
-    all_action_type_log_probs = []
+    all_view_states = []
+    all_action_choices = []
+    all_action_choice_log_probs = []
     all_secondary_indices = []
     all_secondary_log_probs = []
     all_values = []
@@ -260,46 +220,25 @@ def _create_batch(
         if len(trajectory) == 0:
             continue
 
-        # Compute returns and advantages
         rewards = [t.reward for t in trajectory.transitions]
         values = [t.value for t in trajectory.transitions]
         returns, advantages = _compute_gae(rewards, values, gamma, lam, device)
 
         for i, trans in enumerate(trajectory.transitions):
-            all_x_game_states.append(trans.x_game_state)
-            all_fsms.append(trans.fsm)
-            all_action_types.append(trans.action_type)
-
-            # Compute action type index within the route
-            route = FSM_ROUTING[trans.fsm]
-            action_type_idx = route.action_types.index(trans.action_type)
-            all_action_type_indices.append(action_type_idx)
-
-            # Log probs (0 if forced/none)
-            all_action_type_log_probs.append(
-                trans.action_type_log_prob.item()
-                if trans.action_type_log_prob is not None
-                else 0.0
-            )
-            all_secondary_indices.append(
-                trans.secondary_index if trans.secondary_index is not None else -1
-            )
-            all_secondary_log_probs.append(
-                trans.secondary_log_prob.item() if trans.secondary_log_prob is not None else 0.0
-            )
-
+            all_view_states.append(trans.view_game_state)
+            all_action_choices.append(int(trans.action_choice))
+            all_action_choice_log_probs.append(trans.action_choice_log_prob.item())
+            all_secondary_indices.append(trans.secondary_index)
+            all_secondary_log_probs.append(trans.secondary_log_prob.item())
             all_values.append(trans.value)
             all_returns.append(returns[i])
             all_advantages.append(advantages[i])
 
-    # Convert to tensors
     batch = TrajectoryBatch(
-        x_game_states=all_x_game_states,
-        fsms=all_fsms,
-        action_types=all_action_types,
-        action_type_indices=torch.tensor(all_action_type_indices, dtype=torch.long, device=device),
-        action_type_log_probs=torch.tensor(
-            all_action_type_log_probs, dtype=torch.float32, device=device
+        view_game_states=all_view_states,
+        action_choices=torch.tensor(all_action_choices, dtype=torch.long, device=device),
+        action_choice_log_probs=torch.tensor(
+            all_action_choice_log_probs, dtype=torch.float32, device=device
         ),
         secondary_indices=torch.tensor(all_secondary_indices, dtype=torch.long, device=device),
         secondary_log_probs=torch.tensor(
@@ -318,6 +257,11 @@ def _create_batch(
     return batch
 
 
+# =============================================================================
+# PPO Update
+# =============================================================================
+
+
 def _minibatch_indices(total: int, minibatch_size: int) -> Iterator[list[int]]:
     """Generate shuffled minibatch indices."""
     indices = list(range(total))
@@ -327,163 +271,98 @@ def _minibatch_indices(total: int, minibatch_size: int) -> Iterator[list[int]]:
         yield indices[i : i + minibatch_size]
 
 
-def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
-    """Concatenate multiple XGameState objects along the batch dimension."""
-    return XGameState(
-        x_hand=torch.cat([x.x_hand for x in x_game_states], dim=0),
-        x_hand_mask_pad=torch.cat([x.x_hand_mask_pad for x in x_game_states], dim=0),
-        x_draw=torch.cat([x.x_draw for x in x_game_states], dim=0),
-        x_draw_mask_pad=torch.cat([x.x_draw_mask_pad for x in x_game_states], dim=0),
-        x_disc=torch.cat([x.x_disc for x in x_game_states], dim=0),
-        x_disc_mask_pad=torch.cat([x.x_disc_mask_pad for x in x_game_states], dim=0),
-        x_deck=torch.cat([x.x_deck for x in x_game_states], dim=0),
-        x_deck_mask_pad=torch.cat([x.x_deck_mask_pad for x in x_game_states], dim=0),
-        x_combat_reward=torch.cat([x.x_combat_reward for x in x_game_states], dim=0),
-        x_combat_reward_mask_pad=torch.cat(
-            [x.x_combat_reward_mask_pad for x in x_game_states], dim=0
-        ),
-        x_monsters=torch.cat([x.x_monsters for x in x_game_states], dim=0),
-        x_monsters_mask_pad=torch.cat([x.x_monsters_mask_pad for x in x_game_states], dim=0),
-        x_character=torch.cat([x.x_character for x in x_game_states], dim=0),
-        x_character_mask_pad=torch.cat([x.x_character_mask_pad for x in x_game_states], dim=0),
-        x_energy=torch.cat([x.x_energy for x in x_game_states], dim=0),
-        x_energy_mask_pad=torch.cat([x.x_energy_mask_pad for x in x_game_states], dim=0),
-        x_map=torch.cat([x.x_map for x in x_game_states], dim=0),
-    )
-
-
 def _recompute_log_probs_batch(
     model: ActorCritic,
-    x_game_states: list[XGameState],
-    fsms: list[FSM],
-    action_types: list[ActionType],
-    action_type_indices: torch.Tensor,
+    view_game_states: list[ViewGameState],
+    action_choices: torch.Tensor,
     secondary_indices: torch.Tensor,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Recompute log probs and entropy for a batch of samples with current policy.
+    Recompute log probs and entropy for a batch with current policy.
 
-    This is the batched version - processes all samples efficiently by grouping
-    by FSM state and action type.
+    Efficient batched implementation:
+    1. Encode all states at once
+    2. Run core encoder once
+    3. Run primary head once
+    4. Run secondary heads grouped by type
 
-    Returns (log_probs, entropies, values) - all shape (N,)
+    Returns (log_probs, entropies, values) - all shape (N,) or (N, 1)
     """
-    n_samples = len(x_game_states)
+    B = len(view_game_states)
 
-    # Output tensors
-    log_probs = torch.zeros(n_samples, device=device)
-    entropies = torch.zeros(n_samples, device=device)
-    values = torch.zeros(n_samples, 1, device=device)
+    # Encode all states
+    x_game_state = encode_batch_view_game_state(view_game_states, device)
 
-    # Group samples by FSM state
-    fsm_groups: dict[FSM, list[int]] = defaultdict(list)
-    for i, fsm in enumerate(fsms):
-        fsm_groups[fsm].append(i)
+    # Get masks
+    primary_mask, secondary_masks = get_masks_batch(view_game_states, device)
 
-    # Process each FSM group
-    for fsm, group_indices in fsm_groups.items():
-        route = FSM_ROUTING[fsm]
-        group_size = len(group_indices)
+    # Core encoder (all samples)
+    core_out = model.core(x_game_state)
 
-        # Concatenate XGameStates for this group
-        group_x_states = [x_game_states[i] for i in group_indices]
-        x_batch = _concat_x_game_states(group_x_states)
+    # Value head (all samples)
+    values = model.head_value(core_out.x_global)
 
-        # Forward through core (batched)
-        core_out = model.core(x_batch)
+    # Primary head (all samples) - get distributions
+    primary_out = model.head_primary(core_out.x_global, primary_mask, sample=False)
+    primary_dist = torch.distributions.Categorical(logits=primary_out.logits)
+    primary_log_probs = primary_dist.log_prob(action_choices)
+    primary_entropies = primary_dist.entropy()
 
-        # Value head (batched)
-        group_values = model.head_value(core_out.x_global)
-        for local_i, global_i in enumerate(group_indices):
-            values[global_i] = group_values[local_i]
+    # Secondary heads - group by head type
+    secondary_log_probs = torch.zeros(B, device=device)
+    secondary_entropies = torch.zeros(B, device=device)
 
-        # Action type head
-        if route.is_forced:
-            # Forced action type - log prob and entropy are 0
-            for global_i in group_indices:
-                pass  # log_probs and entropies already initialized to 0
-        else:
-            # Run action type head (batched)
-            action_type_mask = torch.ones(
-                group_size, len(route.action_types), dtype=torch.bool, device=device
-            )
-            action_type_out = model.head_action_type(
-                core_out.x_global, action_type_mask, sample=False
-            )
+    head_to_samples: dict[HeadType, list[int]] = {ht: [] for ht in HeadType}
+    for i in range(B):
+        choice = ActionChoice(action_choices[i].item())
+        head_type = CHOICE_TO_HEAD[choice]
+        if head_type is not None and secondary_indices[i].item() >= 0:
+            head_to_samples[head_type].append(i)
 
-            action_type_dist = torch.distributions.Categorical(logits=action_type_out.logits)
+    for head_type, sample_idxs in head_to_samples.items():
+        if not sample_idxs:
+            continue
 
-            # Get the action type indices for this group
-            group_action_type_idxs = action_type_indices[[group_indices]]
+        idx = torch.tensor(sample_idxs, device=device)
+        subset_core = _slice_core_output(core_out, idx)
+        subset_mask = secondary_masks[head_type][idx]
+        subset_secondary_idx = secondary_indices[idx]
 
-            action_type_log_probs = action_type_dist.log_prob(group_action_type_idxs)
-            action_type_entropies = action_type_dist.entropy()
+        # Run head
+        _, log_probs, out = _run_secondary_head_for_training(
+            model, head_type, subset_core, subset_mask, subset_secondary_idx, device
+        )
 
-            for local_i, global_i in enumerate(group_indices):
-                log_probs[global_i] += action_type_log_probs[local_i]
-                entropies[global_i] += action_type_entropies[local_i]
+        secondary_log_probs[idx] = log_probs
+        secondary_entropies[idx] = out.entropy()
 
-        # Secondary heads - group by action type within this FSM group
-        action_type_subgroups: dict[ActionType, list[int]] = defaultdict(list)
-        for local_i, global_i in enumerate(group_indices):
-            action_type_subgroups[action_types[global_i]].append((local_i, global_i))
+    total_log_probs = primary_log_probs + secondary_log_probs
+    total_entropies = primary_entropies + secondary_entropies
 
-        for action_type, subgroup in action_type_subgroups.items():
-            secondary_head_type = get_secondary_head_type(fsm, action_type)
+    return total_log_probs, total_entropies, values
 
-            if secondary_head_type is None:
-                # Terminal action - no secondary head
-                continue
 
-            # Get local indices within the FSM group's core_out
-            local_indices = [pair[0] for pair in subgroup]
-            global_indices = [pair[1] for pair in subgroup]
+def _run_secondary_head_for_training(
+    model: ActorCritic,
+    head_type: HeadType,
+    core_out,
+    mask: torch.Tensor,
+    indices: torch.Tensor,
+    device: torch.device,
+):
+    """Run a secondary head and compute log probs for given indices."""
+    if head_type == HeadType.MAP_SELECT:
+        out = model.head_map_select(core_out.x_map, core_out.x_global, mask, sample=False)
+    else:
+        head = model._heads[head_type]
+        entities = model._get_entities(head_type, core_out)
+        out = head(entities, core_out.x_global, mask, sample=False)
 
-            # Check if any sample actually needs secondary head
-            needs_secondary = [secondary_indices[gi].item() >= 0 for gi in global_indices]
-            if not any(needs_secondary):
-                continue
+    dist = torch.distributions.Categorical(logits=out.logits)
+    log_probs = dist.log_prob(indices)
 
-            subgroup_size = len(local_indices)
-
-            # Slice core_out for this subgroup
-            subgroup_core_out = _slice_core_output(core_out, local_indices)
-
-            # Run the appropriate secondary head
-            if secondary_head_type == HeadType.MAP_SELECT:
-                secondary_mask = torch.ones(
-                    subgroup_size, MAP_WIDTH, dtype=torch.bool, device=device
-                )
-                secondary_out = model.head_map_select(
-                    subgroup_core_out.x_map,
-                    subgroup_core_out.x_global,
-                    secondary_mask,
-                    sample=False,
-                )
-            else:
-                x_entities = model._get_entities_for_head(secondary_head_type, subgroup_core_out)
-                secondary_mask = torch.ones(
-                    subgroup_size, x_entities.shape[1], dtype=torch.bool, device=device
-                )
-                head = model._secondary_heads[secondary_head_type]
-                secondary_out = head(
-                    x_entities, subgroup_core_out.x_global, secondary_mask, sample=False
-                )
-
-            secondary_dist = torch.distributions.Categorical(logits=secondary_out.logits)
-
-            # Get secondary indices for this subgroup
-            subgroup_secondary_idxs = secondary_indices[global_indices]
-            secondary_log_probs = secondary_dist.log_prob(subgroup_secondary_idxs)
-            secondary_entropies = secondary_dist.entropy()
-
-            for sub_i, global_i in enumerate(global_indices):
-                if secondary_indices[global_i].item() >= 0:
-                    log_probs[global_i] += secondary_log_probs[sub_i]
-                    entropies[global_i] += secondary_entropies[sub_i]
-
-    return log_probs, entropies, values
+    return indices, log_probs, dist
 
 
 def _update_ppo(
@@ -506,35 +385,26 @@ def _update_ppo(
     num_updates = 0
 
     for _ in range(num_epochs):
-        for minibatch_idxs in _minibatch_indices(len(batch), minibatch_size):
+        for mb_idxs in _minibatch_indices(len(batch), minibatch_size):
             # Gather minibatch data
-            mb_x_game_states = [batch.x_game_states[i] for i in minibatch_idxs]
-            mb_fsms = [batch.fsms[i] for i in minibatch_idxs]
-            mb_action_types = [batch.action_types[i] for i in minibatch_idxs]
-            mb_action_type_indices = batch.action_type_indices[minibatch_idxs]
-            mb_secondary_indices = batch.secondary_indices[minibatch_idxs]
+            mb_states = [batch.view_game_states[i] for i in mb_idxs]
+            mb_action_choices = batch.action_choices[mb_idxs]
+            mb_secondary_indices = batch.secondary_indices[mb_idxs]
 
-            # Batched forward pass - much faster than per-sample!
+            # Recompute with current policy
             log_probs_new, entropies, values_new = _recompute_log_probs_batch(
-                model,
-                mb_x_game_states,
-                mb_fsms,
-                mb_action_types,
-                mb_action_type_indices,
-                mb_secondary_indices,
-                device,
+                model, mb_states, mb_action_choices, mb_secondary_indices, device
             )
 
-            # Old log probs (combined)
+            # Old log probs
             log_probs_old = (
-                batch.action_type_log_probs[minibatch_idxs]
-                + batch.secondary_log_probs[minibatch_idxs]
+                batch.action_choice_log_probs[mb_idxs] + batch.secondary_log_probs[mb_idxs]
             )
 
             # Advantages and returns
-            advantages = torch.squeeze(batch.advantages[minibatch_idxs])
-            returns = batch.returns[minibatch_idxs]
-            values_old = batch.values[minibatch_idxs]
+            advantages = torch.squeeze(batch.advantages[mb_idxs])
+            returns = batch.returns[mb_idxs]
+            values_old = batch.values[mb_idxs]
 
             # Policy loss (PPO clipped)
             ratio = torch.exp(log_probs_new - log_probs_old)
@@ -575,6 +445,11 @@ def _update_ppo(
         total_loss_value / num_updates,
         total_loss_entropy / num_updates,
     )
+
+
+# =============================================================================
+# Training Loop
+# =============================================================================
 
 
 def _get_entropy_schedule(
@@ -662,11 +537,10 @@ def train(
                 writer.add_scalar("Loss/entropy", loss_entropy, episode)
                 writer.add_scalar("Entropy/coef", coef_entropy, episode)
 
-                # Log trajectory stats
                 total_reward = sum(
                     sum(t.reward for t in traj.transitions) for traj in trajectories
                 )
-                avg_length = sum(len(traj) for traj in trajectories) / len(trajectories)
+                avg_length = sum(len(traj) for traj in trajectories) / max(len(trajectories), 1)
                 writer.add_scalar("Trajectory/total_reward", total_reward, episode)
                 writer.add_scalar("Trajectory/avg_length", avg_length, episode)
 
@@ -675,7 +549,6 @@ def train(
                 torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
     finally:
-        # Clean up workers
         for conn in conn_parents:
             conn.send((Command.CLOSE, None))
         for p in processes:

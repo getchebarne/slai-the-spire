@@ -3,24 +3,28 @@ Actor-Critic model with hierarchical action heads.
 
 Architecture:
 1. Core encoder processes game state → entity embeddings + global context
-2. Primary head (action type) selects high-level action type
-3. Secondary heads select specific indices (card, monster, map node)
+2. Primary head selects ActionChoice (unambiguous action + routing)
+3. Secondary heads select specific indices (grouped by head type)
 4. Value head estimates state value
+
+Key design: ActionChoice directly determines which secondary head to use,
+eliminating FSM from the forward pass entirely. FSM is only used when
+building masks (before calling forward).
 """
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import torch
 import torch.nn as nn
 
 from src.game.action import Action
-from src.game.action import ActionType
 from src.game.const import MAP_WIDTH
-from src.game.core.fsm import FSM
-from src.rl.action_space.cascade import FSM_ROUTING
-from src.rl.action_space.cascade import ActionRoute
-from src.rl.action_space.cascade import get_secondary_head_type
+from src.rl.action_space.types import ActionChoice
+from src.rl.action_space.types import CHOICE_TO_ACTION_TYPE
+from src.rl.action_space.types import CHOICE_TO_HEAD
 from src.rl.action_space.types import HeadType
+from src.rl.action_space.types import NUM_ACTION_CHOICES
 from src.rl.encoding.state import XGameState
 from src.rl.models.core import Core
 from src.rl.models.core import CoreOutput
@@ -31,171 +35,125 @@ from src.rl.models.heads import HeadCardRewardSelect
 from src.rl.models.heads import HeadCardUpgrade
 from src.rl.models.heads import HeadMapSelect
 from src.rl.models.heads import HeadMonsterSelect
-from src.rl.models.heads import HeadOutput
 from src.rl.models.heads import HeadValue
 
 
-# Maximum number of action types in any FSM state (for action type head output size)
-_MAX_ACTION_TYPES = max(len(route.action_types) for route in FSM_ROUTING.values())
+# =============================================================================
+# Output Types
+# =============================================================================
+
+
+class ForwardOutput(NamedTuple):
+    """
+    Output from forward pass. All tensors are (B,) or (B, 1).
+
+    This is the primary output type - simple tensors, easy to work with.
+    """
+
+    # Primary action choice (index into ActionChoice enum)
+    action_choices: torch.Tensor  # (B,) int64
+    action_choice_log_probs: torch.Tensor  # (B,)
+
+    # Secondary index (-1 if terminal action)
+    secondary_indices: torch.Tensor  # (B,) int64
+    secondary_log_probs: torch.Tensor  # (B,)
+
+    # Value estimate
+    values: torch.Tensor  # (B, 1)
+
+    def get_action(self, idx: int) -> Action:
+        """Convert to game Action for sample at index."""
+        choice = ActionChoice(self.action_choices[idx].item())
+        action_type = CHOICE_TO_ACTION_TYPE[choice]
+
+        sec_idx = self.secondary_indices[idx].item()
+        index = None if sec_idx < 0 else sec_idx
+
+        return Action(type=action_type, index=index)
+
+    def get_log_prob(self, idx: int) -> torch.Tensor:
+        """Get total log prob for sample at index."""
+        choice = ActionChoice(self.action_choices[idx].item())
+
+        if CHOICE_TO_HEAD[choice] is None:
+            # Terminal action - only primary log prob
+            return self.action_choice_log_probs[idx]
+
+        return self.action_choice_log_probs[idx] + self.secondary_log_probs[idx]
 
 
 @dataclass
-class ActorOutput:
-    """Output from the actor (policy) - single sample."""
+class SingleOutput:
+    """Convenience wrapper for single-sample inference."""
 
-    action_type: ActionType
-    action_type_log_prob: torch.Tensor | None  # None if forced (single valid action type)
-    secondary_index: int | None  # None if terminal action (no secondary head)
-    secondary_log_prob: torch.Tensor | None  # None if terminal action
+    action_choice: ActionChoice
+    action_choice_log_prob: torch.Tensor
+    secondary_index: int  # -1 if terminal
+    secondary_log_prob: torch.Tensor
+    value: torch.Tensor
 
     def to_action(self) -> Action:
-        """Convert to game Action."""
-        return Action(type=self.action_type, index=self.secondary_index)
+        action_type = CHOICE_TO_ACTION_TYPE[self.action_choice]
+        index = None if self.secondary_index < 0 else self.secondary_index
+        return Action(type=action_type, index=index)
 
     @property
-    def total_log_prob(self) -> torch.Tensor:
-        """Combined log probability of the full action."""
-        log_probs = []
-        if self.action_type_log_prob is not None:
-            log_probs.append(self.action_type_log_prob)
-        if self.secondary_log_prob is not None:
-            log_probs.append(self.secondary_log_prob)
-
-        if not log_probs:
-            # Fully deterministic action
-            return torch.tensor(0.0)
-
-        return torch.sum(torch.stack(log_probs))
+    def log_prob(self) -> torch.Tensor:
+        if CHOICE_TO_HEAD[self.action_choice] is None:
+            return self.action_choice_log_prob
+        return self.action_choice_log_prob + self.secondary_log_prob
 
 
-@dataclass
-class BatchedActorOutput:
-    """Output from the actor (policy) - batched version for parallel environments."""
-
-    # The route determines how to map action_type_indices to ActionType
-    route: ActionRoute
-    fsm: FSM
-    batch_size: int
-
-    # Action type selection (None if forced)
-    action_type_indices: torch.Tensor | None  # (B,) indices into route.action_types
-    action_type_log_probs: torch.Tensor | None  # (B,) log probs
-
-    # Secondary selection - per sample (None means terminal action for that sample)
-    # These tensors have values for ALL samples, but only valid where secondary head was used
-    secondary_indices: torch.Tensor | None  # (B,) selected indices
-    secondary_log_probs: torch.Tensor | None  # (B,) log probs
-
-    def get_action_type(self, batch_idx: int) -> ActionType:
-        """Get action type for a specific sample in the batch."""
-        if self.route.is_forced:
-            return self.route.forced_action_type
-        return self.route.action_types[self.action_type_indices[batch_idx].item()]
-
-    def get_secondary_index(self, batch_idx: int) -> int | None:
-        """Get secondary index for a specific sample in the batch."""
-        action_type = self.get_action_type(batch_idx)
-        secondary_head_type = get_secondary_head_type(self.fsm, action_type)
-
-        # Terminal action - no secondary index
-        if secondary_head_type is None:
-            return None
-
-        if self.secondary_indices is None:
-            return None
-
-        return self.secondary_indices[batch_idx].item()
-
-    def get_action_type_log_prob(self, batch_idx: int) -> torch.Tensor | None:
-        """Get action type log prob for a specific sample."""
-        if self.action_type_log_probs is None:
-            return None
-        return self.action_type_log_probs[batch_idx]
-
-    def get_secondary_log_prob(self, batch_idx: int) -> torch.Tensor | None:
-        """Get secondary log prob for a specific sample."""
-        action_type = self.get_action_type(batch_idx)
-        secondary_head_type = get_secondary_head_type(self.fsm, action_type)
-
-        # Terminal action - no secondary log prob
-        if secondary_head_type is None:
-            return None
-
-        if self.secondary_log_probs is None:
-            return None
-
-        return self.secondary_log_probs[batch_idx]
-
-    def to_actor_output(self, batch_idx: int) -> ActorOutput:
-        """Extract ActorOutput for a specific sample in the batch."""
-        return ActorOutput(
-            action_type=self.get_action_type(batch_idx),
-            action_type_log_prob=self.get_action_type_log_prob(batch_idx),
-            secondary_index=self.get_secondary_index(batch_idx),
-            secondary_log_prob=self.get_secondary_log_prob(batch_idx),
-        )
-
-    def to_action(self, batch_idx: int) -> Action:
-        """Convert to game Action for a specific sample."""
-        return Action(
-            type=self.get_action_type(batch_idx),
-            index=self.get_secondary_index(batch_idx),
-        )
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
 
-@dataclass
-class ActorCriticOutput:
-    """Full output from actor-critic forward pass - single sample."""
-
-    actor: ActorOutput
-    value: torch.Tensor  # (1,) for single sample
-
-
-@dataclass
-class BatchedActorCriticOutput:
-    """Full output from actor-critic forward pass - batched version."""
-
-    actor: BatchedActorOutput
-    value: torch.Tensor  # (B, 1) for batch
-
-
-def _slice_core_output(core_out: CoreOutput, idxs: torch.Tensor) -> CoreOutput:
+def _slice_core_output(core_out: CoreOutput, indices: torch.Tensor) -> CoreOutput:
+    """Slice CoreOutput to specific batch indices."""
     return CoreOutput(
-        x_hand=core_out.x_hand[idxs],
-        x_draw=core_out.x_draw[idxs],
-        x_disc=core_out.x_disc[idxs],
-        x_deck=core_out.x_deck[idxs],
-        x_combat_reward=core_out.x_combat_reward[idxs],
-        x_monsters=core_out.x_monsters[idxs],
-        x_character=core_out.x_character[idxs],
-        x_energy=core_out.x_energy[idxs],
-        x_entity=core_out.x_entity[idxs],
-        x_entity_mask=core_out.x_entity_mask[idxs],
-        x_map=core_out.x_map[idxs],
-        x_global=core_out.x_global[idxs],
+        x_hand=core_out.x_hand[indices],
+        x_draw=core_out.x_draw[indices],
+        x_disc=core_out.x_disc[indices],
+        x_deck=core_out.x_deck[indices],
+        x_combat_reward=core_out.x_combat_reward[indices],
+        x_monsters=core_out.x_monsters[indices],
+        x_character=core_out.x_character[indices],
+        x_energy=core_out.x_energy[indices],
+        x_entity=core_out.x_entity[indices],
+        x_entity_mask=core_out.x_entity_mask[indices],
+        x_map=core_out.x_map[indices],
+        x_global=core_out.x_global[indices],
     )
+
+
+# =============================================================================
+# Model
+# =============================================================================
 
 
 class ActorCritic(nn.Module):
     """
-    Actor-Critic model with hierarchical action heads.
+    Actor-Critic with clean batched forward pass.
 
-    The action space is hierarchical:
-    1. Action type head selects the type of action (play card, end turn, etc.)
-    2. Secondary heads select specific indices based on action type
+    Forward pass efficiency:
+    - Core encoder: 1 call (all samples)
+    - Primary head: 1 call (all samples)
+    - Secondary heads: ≤6 calls (only heads with samples needing them)
+    - Value head: 1 call (all samples)
+
+    No FSM in forward - ActionChoice directly determines routing.
     """
 
     def __init__(
         self,
-        # Core params
         dim_entity: int = 128,
         transformer_dim_ff: int = 256,
         transformer_num_heads: int = 4,
         transformer_num_blocks: int = 2,
         map_encoder_kernel_size: int = 3,
         map_encoder_dim: int = 32,
-        # Head params
-        dim_ff_action_type: int = 128,
+        dim_ff_primary: int = 128,
         dim_ff_card: int = 128,
         dim_ff_monster: int = 128,
         dim_ff_map: int = 128,
@@ -216,43 +174,26 @@ class ActorCritic(nn.Module):
         dim_global = self.core.dim_global
         dim_map = self.core.dim_map
 
-        # Primary head: action type selection
-        self.head_action_type = HeadActionType(
+        # Primary head: outputs ActionChoice
+        self.head_primary = HeadActionType(
             dim_global=dim_global,
-            dim_ff=dim_ff_action_type,
-            max_action_types=_MAX_ACTION_TYPES,
+            dim_ff=dim_ff_primary,
+            max_action_types=NUM_ACTION_CHOICES,
         )
 
-        # Card heads (each with separate weights)
-        self.head_card_play = HeadCardPlay(
-            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
-        )
-        self.head_card_discard = HeadCardDiscard(
-            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
-        )
-        self.head_card_reward = HeadCardRewardSelect(
-            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
-        )
-        self.head_card_upgrade = HeadCardUpgrade(
-            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_card
-        )
+        # Secondary heads
+        self.head_card_play = HeadCardPlay(dim_entity, dim_global, dim_ff_card)
+        self.head_card_discard = HeadCardDiscard(dim_entity, dim_global, dim_ff_card)
+        self.head_card_reward = HeadCardRewardSelect(dim_entity, dim_global, dim_ff_card)
+        self.head_card_upgrade = HeadCardUpgrade(dim_entity, dim_global, dim_ff_card)
+        self.head_monster_select = HeadMonsterSelect(dim_entity, dim_global, dim_ff_monster)
+        self.head_map_select = HeadMapSelect(dim_map, dim_global, dim_ff_map, MAP_WIDTH)
 
-        # Other secondary heads
-        self.head_monster_select = HeadMonsterSelect(
-            dim_entity=dim_entity, dim_global=dim_global, dim_ff=dim_ff_monster
-        )
-        self.head_map_select = HeadMapSelect(
-            dim_map=dim_map,
-            dim_global=dim_global,
-            dim_ff=dim_ff_map,
-            num_columns=MAP_WIDTH,
-        )
+        # Value head
+        self.head_value = HeadValue(dim_global, dim_ff_value)
 
-        # Value head (critic)
-        self.head_value = HeadValue(dim_global=dim_global, dim_ff=dim_ff_value)
-
-        # Head registry for dispatch
-        self._secondary_heads: dict[HeadType, nn.Module] = {
+        # Head registry
+        self._heads: dict[HeadType, nn.Module] = {
             HeadType.CARD_PLAY: self.head_card_play,
             HeadType.CARD_DISCARD: self.head_card_discard,
             HeadType.CARD_REWARD_SELECT: self.head_card_reward,
@@ -261,12 +202,8 @@ class ActorCritic(nn.Module):
             HeadType.MAP_SELECT: self.head_map_select,
         }
 
-    def _get_entities_for_head(
-        self,
-        head_type: HeadType,
-        core_out: CoreOutput,
-    ) -> torch.Tensor:
-        """Get the entity tensor for the given head type."""
+    def _get_entities(self, head_type: HeadType, core_out: CoreOutput) -> torch.Tensor:
+        """Get entity tensor for a secondary head."""
         match head_type:
             case HeadType.CARD_PLAY | HeadType.CARD_DISCARD:
                 return core_out.x_hand
@@ -277,177 +214,133 @@ class ActorCritic(nn.Module):
             case HeadType.MONSTER_SELECT:
                 return core_out.x_monsters
             case _:
-                raise ValueError(f"No entity tensor for head type: {head_type}")
+                raise ValueError(f"Unknown head type: {head_type}")
 
-    def _invoke_secondary_head(
+    def _run_secondary(
         self,
         head_type: HeadType,
         core_out: CoreOutput,
         mask: torch.Tensor,
         sample: bool,
-    ) -> HeadOutput:
-        """Invoke the appropriate secondary head."""
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Run a secondary head.
+
+        Returns (indices, log_probs) tensors.
+        """
         if head_type == HeadType.MAP_SELECT:
-            # Map head has different signature
-            return self.head_map_select(core_out.x_map, core_out.x_global, mask, sample)
-
-        # Entity selection heads
-        head = self._secondary_heads[head_type]
-        x_entities = self._get_entities_for_head(head_type, core_out)
-        return head(x_entities, core_out.x_global, mask, sample)
-
-    def forward_batch(
-        self,
-        x_game_state: XGameState,
-        fsm: FSM,
-        masks: dict[HeadType, torch.Tensor],
-        sample: bool = True,
-    ) -> BatchedActorCriticOutput:
-        """
-        Batched forward pass through the actor-critic.
-
-        All samples in the batch must have the same FSM state.
-        Different samples may select different action types, and this method
-        properly handles running different secondary heads for each sub-group.
-
-        Args:
-            x_game_state: Encoded game state (batched)
-            fsm: Current FSM state (same for all samples)
-            masks: Pre-computed valid action masks for each head type
-            sample: Whether to sample actions (True) or just compute logits (False)
-
-        Returns:
-            BatchedActorCriticOutput with per-sample actor outputs and values
-        """
-        # 1. Encode game state
-        core_out = self.core(x_game_state)
-        batch_size = core_out.x_global.shape[0]
-        device = core_out.x_global.device
-
-        # 2. Get routing for this FSM state
-        route = FSM_ROUTING[fsm]
-
-        # 3. Action type selection (or bypass if forced)
-        if route.is_forced:
-            # Single valid action type - skip the action type head
-            # All samples get the same action type
-            action_type_indices = None
-            action_type_log_probs = None
-            # Create a tensor of the single action type index for grouping
-            per_sample_action_type_idx = torch.zeros(batch_size, dtype=torch.long, device=device)
+            out = self.head_map_select(core_out.x_map, core_out.x_global, mask, sample)
         else:
-            # Multiple valid action types - run the action type head
-            action_type_out = self.head_action_type(
-                core_out.x_global, masks[HeadType.ACTION_TYPE], sample
+            head = self._heads[head_type]
+            entities = self._get_entities(head_type, core_out)
+            out = head(entities, core_out.x_global, mask, sample)
+
+        if sample:
+            return out.indices, out.log_probs
+        else:
+            return torch.argmax(out.logits, dim=-1), torch.zeros(
+                out.logits.shape[0], device=out.logits.device
             )
-            if sample:
-                action_type_indices = action_type_out.indices  # (B,)
-                action_type_log_probs = action_type_out.log_probs  # (B,)
-                per_sample_action_type_idx = action_type_indices
-            else:
-                action_type_indices = None
-                action_type_log_probs = None
-                per_sample_action_type_idx = None
-
-        # 4. Secondary heads - handle different action types per sample
-        # Initialize output tensors (will be filled in per-group)
-        secondary_indices = torch.zeros(batch_size, dtype=torch.long, device=device)
-        secondary_log_probs = torch.zeros(batch_size, device=device)
-        has_any_secondary = False
-
-        if sample and per_sample_action_type_idx is not None:
-            # Group samples by their selected action type
-            unique_action_type_idxs = torch.unique(per_sample_action_type_idx)
-
-            for action_type_idx in unique_action_type_idxs:
-                action_type_idx_item = action_type_idx.item()
-                action_type = route.action_types[action_type_idx_item]
-
-                # Find which samples chose this action type
-                sample_mask = per_sample_action_type_idx == action_type_idx
-                sample_indices = torch.where(sample_mask)[0]
-
-                # Get secondary head type for this action type
-                secondary_head_type = get_secondary_head_type(fsm, action_type)
-
-                if secondary_head_type is None:
-                    # Terminal action - no secondary head needed for these samples
-                    continue
-
-                has_any_secondary = True
-
-                # Slice core output and masks for this subset
-                subset_core_out = _slice_core_output(core_out, sample_indices)
-                subset_mask = masks[secondary_head_type][sample_indices]
-
-                # Run secondary head on subset
-                subset_out = self._invoke_secondary_head(
-                    secondary_head_type, subset_core_out, subset_mask, sample=True
-                )
-
-                # Scatter results back to original positions
-                secondary_indices[sample_indices] = subset_out.indices
-                secondary_log_probs[sample_indices] = subset_out.log_probs
-
-        # Convert to None if no secondary heads were used
-        if not has_any_secondary:
-            secondary_indices = None
-            secondary_log_probs = None
-
-        # 5. Value estimate
-        value = self.head_value(core_out.x_global)
-
-        actor_output = BatchedActorOutput(
-            route=route,
-            fsm=fsm,
-            batch_size=batch_size,
-            action_type_indices=action_type_indices,
-            action_type_log_probs=action_type_log_probs,
-            secondary_indices=secondary_indices,
-            secondary_log_probs=secondary_log_probs,
-        )
-
-        return BatchedActorCriticOutput(actor=actor_output, value=value)
 
     def forward(
         self,
         x_game_state: XGameState,
-        fsm: FSM,
-        masks: dict[HeadType, torch.Tensor],
+        primary_mask: torch.Tensor,
+        secondary_masks: dict[HeadType, torch.Tensor],
         sample: bool = True,
-    ) -> ActorCriticOutput:
+    ) -> ForwardOutput:
         """
-        Forward pass for a single sample.
+        Batched forward pass.
 
         Args:
-            x_game_state: Encoded game state (batch size 1)
-            fsm: Current FSM state
-            masks: Pre-computed valid action masks for each head type
-            sample: Whether to sample actions (True) or just compute logits (False)
+            x_game_state: Encoded game state
+            primary_mask: Valid ActionChoice mask (B, NUM_ACTION_CHOICES)
+            secondary_masks: Per-head masks {HeadType: (B, head_output_size)}
+            sample: Whether to sample (True) or argmax (False)
 
         Returns:
-            ActorCriticOutput with actor output and value estimate
+            ForwardOutput with per-sample tensors
         """
-        batched_output = self.forward_batch(x_game_state, fsm, masks, sample)
+        device = x_game_state.x_hand.device
 
-        # Extract single sample result
-        actor_output = batched_output.actor.to_actor_output(0)
-        value = batched_output.value[0] if batched_output.value.dim() > 1 else batched_output.value
+        # =================================================================
+        # 1. Core encoder (all samples)
+        # =================================================================
+        core_out = self.core(x_game_state)
+        B = core_out.x_global.shape[0]
 
-        return ActorCriticOutput(actor=actor_output, value=value)
+        # =================================================================
+        # 2. Value head (all samples)
+        # =================================================================
+        values = self.head_value(core_out.x_global)
 
-    def get_action(
+        # =================================================================
+        # 3. Primary head (all samples) → ActionChoice
+        # =================================================================
+        primary_out = self.head_primary(core_out.x_global, primary_mask, sample)
+
+        if sample:
+            action_choices = primary_out.indices
+            action_choice_log_probs = primary_out.log_probs
+        else:
+            action_choices = torch.argmax(primary_out.logits, dim=-1)
+            action_choice_log_probs = torch.zeros(B, device=device)
+
+        # =================================================================
+        # 4. Group samples by secondary head type
+        # =================================================================
+        head_to_samples: dict[HeadType, list[int]] = {ht: [] for ht in HeadType}
+
+        for i in range(B):
+            choice = ActionChoice(action_choices[i].item())
+            head_type = CHOICE_TO_HEAD[choice]
+            if head_type is not None:
+                head_to_samples[head_type].append(i)
+
+        # =================================================================
+        # 5. Run secondary heads (grouped)
+        # =================================================================
+        secondary_indices = torch.full((B,), -1, dtype=torch.long, device=device)
+        secondary_log_probs = torch.zeros(B, device=device)
+
+        for head_type, sample_idxs in head_to_samples.items():
+            if not sample_idxs:
+                continue
+
+            # Slice for this head's samples
+            idx = torch.tensor(sample_idxs, device=device)
+            subset_core = _slice_core_output(core_out, idx)
+            subset_mask = secondary_masks[head_type][idx]
+
+            # Run head
+            indices, log_probs = self._run_secondary(head_type, subset_core, subset_mask, sample)
+
+            # Scatter results
+            secondary_indices[idx] = indices
+            secondary_log_probs[idx] = log_probs
+
+        return ForwardOutput(
+            action_choices=action_choices,
+            action_choice_log_probs=action_choice_log_probs,
+            secondary_indices=secondary_indices,
+            secondary_log_probs=secondary_log_probs,
+            values=values,
+        )
+
+    def forward_single(
         self,
         x_game_state: XGameState,
-        fsm: FSM,
-        masks: dict[HeadType, torch.Tensor],
-    ) -> tuple[Action, ActorOutput, torch.Tensor]:
-        """
-        Convenience method to get an action for a single game state.
+        primary_mask: torch.Tensor,
+        secondary_masks: dict[HeadType, torch.Tensor],
+        sample: bool = True,
+    ) -> SingleOutput:
+        """Convenience method for single sample."""
+        out = self.forward(x_game_state, primary_mask, secondary_masks, sample)
 
-        Returns:
-            Tuple of (Action, ActorOutput, value)
-        """
-        output = self.forward(x_game_state, fsm, masks, sample=True)
-        action = output.actor.to_action()
-        return action, output.actor, output.value
+        return SingleOutput(
+            action_choice=ActionChoice(out.action_choices[0].item()),
+            action_choice_log_prob=out.action_choice_log_probs[0],
+            secondary_index=out.secondary_indices[0].item(),
+            secondary_log_prob=out.secondary_log_probs[0],
+            value=out.values[0],
+        )

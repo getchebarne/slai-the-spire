@@ -18,10 +18,7 @@ from src.game.draw import get_view_game_state_str
 from src.game.main import initialize_game_state
 from src.game.main import step
 from src.game.view.state import get_view_game_state
-from src.rl.action_space import FSM_ROUTING
-from src.rl.action_space import HeadType
-from src.rl.action_space import get_secondary_head_type
-from src.rl.action_space.masks import get_valid_mask_batch
+from src.rl.action_space.masks import get_masks
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
@@ -34,26 +31,17 @@ def get_action_from_model(
     device: torch.device,
 ) -> Action:
     """Get an action from the model for the given game state."""
-    fsm = FSM[view_game_state.fsm.name]  # Convert ViewFSM to FSM
-
     # Encode state
     x_game_state = encode_batch_view_game_state([view_game_state], device)
 
     # Get masks
-    route = FSM_ROUTING[fsm]
-    masks = {
-        HeadType.ACTION_TYPE: get_valid_mask_batch(HeadType.ACTION_TYPE, [view_game_state], device)
-    }
-    for action_type in route.action_types:
-        secondary_head = get_secondary_head_type(fsm, action_type)
-        if secondary_head is not None and secondary_head not in masks:
-            masks[secondary_head] = get_valid_mask_batch(secondary_head, [view_game_state], device)
+    primary_mask, secondary_masks = get_masks(view_game_state, device)
 
     # Forward pass
     with torch.no_grad():
-        output = model(x_game_state, fsm, masks, sample=True)
+        output = model.forward_single(x_game_state, primary_mask, secondary_masks, sample=True)
 
-    return output.actor.to_action()
+    return output.to_action()
 
 
 def run_game(

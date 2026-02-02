@@ -1,14 +1,18 @@
-from src.rl.action_space.cascade import FSM_ROUTING
-from src.rl.action_space.cascade import ActionRoute
-from src.rl.action_space.cascade import get_secondary_head_type
-from src.rl.action_space.masks import get_valid_mask
+from src.rl.action_space.masks import get_masks
+from src.rl.action_space.masks import get_masks_batch
+from src.rl.action_space.types import ActionChoice
+from src.rl.action_space.types import CHOICE_TO_ACTION_TYPE
+from src.rl.action_space.types import CHOICE_TO_HEAD
 from src.rl.action_space.types import HeadType
+from src.rl.action_space.types import NUM_ACTION_CHOICES
 
 
 __all__ = [
-    "ActionRoute",
-    "FSM_ROUTING",
+    "ActionChoice",
+    "CHOICE_TO_ACTION_TYPE",
+    "CHOICE_TO_HEAD",
     "HeadType",
-    "get_secondary_head_type",
-    "get_valid_mask",
+    "NUM_ACTION_CHOICES",
+    "get_masks",
+    "get_masks_batch",
 ]
