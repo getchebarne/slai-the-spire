@@ -35,12 +35,13 @@ def process_effect_turn_start(
     if isinstance(target, EntityCharacter):
         effects += [
             Effect(EffectType.CARD_DRAW, 5),
-            Effect(EffectType.ENERGY_GAIN, entity_manager.energy.max - entity_manager.energy.current),
+            Effect(
+                EffectType.ENERGY_GAIN, entity_manager.energy.max - entity_manager.energy.current
+            ),
             Effect(EffectType.MODIFIER_TICK, target=entity_manager.character),
         ]
         effects += [
-            Effect(EffectType.MODIFIER_TICK, target=monster)
-            for monster in entity_manager.monsters
+            Effect(EffectType.MODIFIER_TICK, target=monster) for monster in entity_manager.monsters
         ]
 
         # Apply next turn energy modifier

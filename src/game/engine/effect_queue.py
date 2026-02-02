@@ -58,6 +58,9 @@ def _resolve_effect_target_type(
         return [entity_manager.map_nodes[y_next][x] for x in entity_manager.map_node_active.x_next]
 
     if effect_target_type == EffectTargetType.SOURCE:
+        if source is None:
+            raise ValueError("Effect target can't be None")
+
         return [source]
 
     raise ValueError(f"Unsupported effect target type: {effect_target_type}")

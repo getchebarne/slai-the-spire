@@ -53,14 +53,15 @@ def process_effect_card_play(
     effects_top.extend([replace(effect, source=target) for effect in target.effects])
     if ModifierType.BURST in character.modifier_map and target.type == CardType.SKILL:
         effects_top.extend([replace(effect, source=target) for effect in target.effects])
-        effects_top.append(
-            Effect(EffectType.MODIFIER_BURST_LOSS, 1, target=character)
-        )
+        effects_top.append(Effect(EffectType.MODIFIER_BURST_LOSS, 1, target=character))
 
     # Sharp hide (target monster has sharp hide, damages character when attacked)
     if entity_manager.card_target is not None:
         target_monster = entity_manager.card_target
-        if ModifierType.SHARP_HIDE in target_monster.modifier_map and target.type == CardType.ATTACK:
+        if (
+            ModifierType.SHARP_HIDE in target_monster.modifier_map
+            and target.type == CardType.ATTACK
+        ):
             modifier_data = target_monster.modifier_map[ModifierType.SHARP_HIDE]
             effects_top.append(
                 Effect(
