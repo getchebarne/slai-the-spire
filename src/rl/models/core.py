@@ -49,9 +49,7 @@ class CoreOutput:
     x_global: torch.Tensor  # (B, dim_global)
 
 
-def _calculate_masked_mean(
-    x: torch.Tensor, mask: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
+def _calculate_masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """
     Calculate mean over sequence dimension, respecting padding mask.
 
@@ -62,8 +60,6 @@ def _calculate_masked_mean(
     Returns:
         Tuple of (mean tensor (B, D), sequence lengths (B, 1))
     """
-    batch_size, seq_len, _ = x.shape
-
     # Zero out padded positions
     x_masked = x * torch.unsqueeze(mask, -1)
 
@@ -72,7 +68,7 @@ def _calculate_masked_mean(
     x_len = torch.clamp(torch.sum(mask, dim=1, keepdim=True).float(), min=1.0)
     x_mean = x_sum / x_len
 
-    return x_mean, x_len
+    return x_mean
 
 
 def _undo_entity_concatenation(
@@ -186,10 +182,6 @@ class Core(nn.Module):
         )
 
     @property
-    def dim_entity(self) -> int:
-        return self._dim_entity
-
-    @property
     def dim_map(self) -> int:
         return self._map_encoder_dim
 
@@ -209,17 +201,6 @@ class Core(nn.Module):
             ],
             dim=1,
         )
-        x_card_mask = torch.cat(
-            [
-                x_game_state.x_hand_mask_pad,
-                x_game_state.x_draw_mask_pad,
-                x_game_state.x_disc_mask_pad,
-                x_game_state.x_deck_mask_pad,
-                x_game_state.x_combat_reward_mask_pad,
-            ],
-            dim=1,
-        )
-
         # Project entities to shared dimension
         x_card_proj, x_monsters_proj, x_character_proj, x_energy_proj = self._entity_projector(
             x_card,
@@ -228,17 +209,32 @@ class Core(nn.Module):
             x_game_state.x_energy,
         )
 
-        # Pass through entity transformer
-        x_entity, x_entity_mask = self._entity_transformer(
-            x_card_proj,
-            x_card_mask,
-            x_monsters_proj,
-            x_game_state.x_monsters_mask_pad,
-            x_character_proj,
-            x_game_state.x_character_mask_pad,
-            x_energy_proj,
-            x_game_state.x_energy_mask_pad,
+        # Concatenate all entities and masks for transformer
+        x_entity_cat = torch.cat(
+            [
+                x_card_proj,
+                x_monsters_proj,
+                x_character_proj.unsqueeze(1),
+                x_energy_proj.unsqueeze(1),
+            ],
+            dim=1,
         )
+        x_entity_mask = torch.cat(
+            [
+                x_game_state.x_hand_mask_pad,
+                x_game_state.x_draw_mask_pad,
+                x_game_state.x_disc_mask_pad,
+                x_game_state.x_deck_mask_pad,
+                x_game_state.x_combat_reward_mask_pad,
+                x_game_state.x_monsters_mask_pad,
+                x_game_state.x_character_mask_pad,
+                x_game_state.x_energy_mask_pad,
+            ],
+            dim=1,
+        )
+
+        # Pass through entity transformer
+        x_entity = self._entity_transformer(x_entity_cat, x_entity_mask)
 
         # Undo concatenations to get individual tensors
         x_card_out, x_monsters_out, x_character_out, x_energy_out = _undo_entity_concatenation(
@@ -256,8 +252,8 @@ class Core(nn.Module):
         x_map = self._map_encoder(x_game_state.x_map)
 
         # Create global context: mean pool entities & map
-        x_entity_mean, _ = _calculate_masked_mean(x_entity, x_entity_mask)
-        x_global = self._global_projection(torch.cat([x_entity_mean, x_map], dim=-1))
+        x_entity_mean = _calculate_masked_mean(x_entity, x_entity_mask)
+        x_global = self._global_projection(torch.cat([x_entity_mean, x_map], dim=1))
 
         return CoreOutput(
             x_hand=x_hand_out,

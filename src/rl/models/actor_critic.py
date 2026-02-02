@@ -159,21 +159,20 @@ class BatchedActorCriticOutput:
     value: torch.Tensor  # (B, 1) for batch
 
 
-def _slice_core_output(core_out: CoreOutput, indices: torch.Tensor) -> CoreOutput:
-    """Slice a CoreOutput to only include specified batch indices."""
+def _slice_core_output(core_out: CoreOutput, idxs: torch.Tensor) -> CoreOutput:
     return CoreOutput(
-        x_hand=core_out.x_hand[indices],
-        x_draw=core_out.x_draw[indices],
-        x_disc=core_out.x_disc[indices],
-        x_deck=core_out.x_deck[indices],
-        x_combat_reward=core_out.x_combat_reward[indices],
-        x_monsters=core_out.x_monsters[indices],
-        x_character=core_out.x_character[indices],
-        x_energy=core_out.x_energy[indices],
-        x_entity=core_out.x_entity[indices],
-        x_entity_mask=core_out.x_entity_mask[indices],
-        x_map=core_out.x_map[indices],
-        x_global=core_out.x_global[indices],
+        x_hand=core_out.x_hand[idxs],
+        x_draw=core_out.x_draw[idxs],
+        x_disc=core_out.x_disc[idxs],
+        x_deck=core_out.x_deck[idxs],
+        x_combat_reward=core_out.x_combat_reward[idxs],
+        x_monsters=core_out.x_monsters[idxs],
+        x_character=core_out.x_character[idxs],
+        x_energy=core_out.x_energy[idxs],
+        x_entity=core_out.x_entity[idxs],
+        x_entity_mask=core_out.x_entity_mask[idxs],
+        x_map=core_out.x_map[idxs],
+        x_global=core_out.x_global[idxs],
     )
 
 
