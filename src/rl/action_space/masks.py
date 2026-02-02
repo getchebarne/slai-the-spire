@@ -34,9 +34,7 @@ def _get_mask_action_type(view_game_state: ViewGameState) -> list[bool]:
 
             case "REST_SITE_UPGRADE":
                 # Can only upgrade if there's at least one non-upgraded card
-                has_upgradable = any(
-                    not card.name.endswith("+") for card in view_game_state.deck
-                )
+                has_upgradable = any(not card.name.endswith("+") for card in view_game_state.deck)
                 mask[idx] = has_upgradable
 
     return mask

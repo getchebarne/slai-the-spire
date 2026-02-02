@@ -13,6 +13,7 @@ _VIEW_MODIFIER_TYPE_STACKS_MAX = {
     ViewModifierType.NEXT_TURN_BLOCK: 20,
     ViewModifierType.NEXT_TURN_ENERGY: 5,
     ViewModifierType.BLUR: 5,
+    # ViewModifierType.CURL_UP: 15,
     ViewModifierType.DEXTERITY: 12,
     ViewModifierType.INFINITE_BLADES: 5,
     ViewModifierType.AFTER_IMAGE: 3,

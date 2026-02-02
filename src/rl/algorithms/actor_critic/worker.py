@@ -65,11 +65,13 @@ def worker(conn: Connection) -> None:
             if game_over:
                 raise RuntimeError("Game started in game over state")
 
-            conn.send(WorkerData(
-                view_game_state=view_game_state,
-                fsm=game_state.fsm,
-                game_over=game_over,
-            ))
+            conn.send(
+                WorkerData(
+                    view_game_state=view_game_state,
+                    fsm=game_state.fsm,
+                    game_over=game_over,
+                )
+            )
 
         elif command == Command.STEP:
             if game_state is None:
@@ -94,9 +96,11 @@ def worker(conn: Connection) -> None:
             # Update current view
             view_game_state = view_game_state_next
 
-            conn.send(WorkerData(
-                view_game_state=view_game_state,
-                fsm=game_state.fsm,
-                game_over=game_over,
-                reward=reward,
-            ))
+            conn.send(
+                WorkerData(
+                    view_game_state=view_game_state,
+                    fsm=game_state.fsm,
+                    game_over=game_over,
+                    reward=reward,
+                )
+            )

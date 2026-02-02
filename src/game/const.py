@@ -1,6 +1,9 @@
 # Maximum number of monsters
 MAX_MONSTERS = 2
 
+# Cards drawn per turn
+CARDS_DRAWN_PER_TURN = 5
+
 # Hand, draw pile, and discard pile maximum sizes
 MAX_SIZE_DECK = 25  # TODO: revisit
 MAX_SIZE_HAND = 10

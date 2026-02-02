@@ -244,9 +244,13 @@ class Core(nn.Module):
         x_card_out, x_monsters_out, x_character_out, x_energy_out = _undo_entity_concatenation(
             x_entity
         )
-        x_hand_out, x_draw_out, x_disc_out, x_deck_out, x_combat_reward_out = (
-            _undo_card_concatenation(x_card_out)
-        )
+        (
+            x_hand_out,
+            x_draw_out,
+            x_disc_out,
+            x_deck_out,
+            x_combat_reward_out,
+        ) = _undo_card_concatenation(x_card_out)
 
         # Encode map
         x_map = self._map_encoder(x_game_state.x_map)

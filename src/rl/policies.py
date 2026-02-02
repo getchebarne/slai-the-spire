@@ -26,9 +26,7 @@ class PolicyBase(ABC):
     """Abstract base class for all policies."""
 
     @abstractmethod
-    def select_action(
-        self, view_game_state: ViewGameState
-    ) -> tuple[Action, SelectActionMetadata]:
+    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
         """
         Select an action given the current game state.
 
@@ -51,9 +49,7 @@ class PolicyRandom(PolicyBase):
     - Testing game mechanics
     """
 
-    def select_action(
-        self, view_game_state: ViewGameState
-    ) -> tuple[Action, SelectActionMetadata]:
+    def select_action(self, view_game_state: ViewGameState) -> tuple[Action, SelectActionMetadata]:
         """Select a random valid action."""
 
         # Card Reward screen
@@ -69,9 +65,7 @@ class PolicyRandom(PolicyBase):
             if view_game_state.map.y_current is None:
                 # First floor - select from starting nodes
                 valid_x = [
-                    x
-                    for x, node in enumerate(view_game_state.map.nodes[0])
-                    if node is not None
+                    x for x, node in enumerate(view_game_state.map.nodes[0]) if node is not None
                 ]
                 return Action(ActionType.MAP_NODE_SELECT, random.choice(valid_x)), {}
 
@@ -86,17 +80,13 @@ class PolicyRandom(PolicyBase):
 
         # Rest site
         if view_game_state.fsm == ViewFSM.REST_SITE:
-            action_type = random.choice(
-                [ActionType.REST_SITE_REST, ActionType.REST_SITE_UPGRADE]
-            )
+            action_type = random.choice([ActionType.REST_SITE_REST, ActionType.REST_SITE_UPGRADE])
             if action_type == ActionType.REST_SITE_REST:
                 return Action(action_type), {}
 
             # Find upgradable cards
             index_upgradable = [
-                idx
-                for idx, card in enumerate(view_game_state.deck)
-                if not card.name.endswith("+")
+                idx for idx, card in enumerate(view_game_state.deck) if not card.name.endswith("+")
             ]
             if not index_upgradable:
                 # No upgradable cards, rest instead
