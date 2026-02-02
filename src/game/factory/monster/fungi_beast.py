@@ -4,6 +4,7 @@ from typing import Callable
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
+from src.game.entity.actor import ModifierConfig
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.monster import EntityMonster
@@ -21,11 +22,8 @@ _BITE_DAMAGE = 6
 _GROW_STRENGTH = 3
 _GROW_STRENGTH_ASC_2 = 4
 _GROW_STRENGTH_ASC_17 = 5
-_SPORE_CLOUD_IS_BUFF = True
+_SPORE_CLOUD_CONFIG = ModifierConfig(is_buff=True, stacks_duration=False)
 _SPORE_CLOUD_STACKS_CURRENT = 2
-_SPORE_CLOUD_STACKS_MIN = 1
-_SPORE_CLOUD_STACKS_MAX = 999
-_SPORE_CLOUD_STACKS_DURATION = False
 
 
 @register_factory(_NAME)
@@ -50,12 +48,9 @@ def create_monster_fungi_beast(
             },
             modifier_map={
                 ModifierType.SPORE_CLOUD: ModifierData(
-                    _SPORE_CLOUD_IS_BUFF,
-                    False,
-                    _SPORE_CLOUD_STACKS_CURRENT,
-                    _SPORE_CLOUD_STACKS_MIN,
-                    _SPORE_CLOUD_STACKS_MAX,
-                    _SPORE_CLOUD_STACKS_DURATION,
+                    config=_SPORE_CLOUD_CONFIG,
+                    is_new=False,
+                    stacks_current=_SPORE_CLOUD_STACKS_CURRENT,
                 )
             },
         ),
@@ -97,9 +92,11 @@ def _get_move_grow(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 17:
         return MonsterMove(
             [
-                Effect(EffectType).MODIFIER_STRENGTH_GAIN,
-                _GROW_STRENGTH_ASC_2,
-                EffectTargetType.SOURCE,
+                Effect(
+                    EffectType.MODIFIER_STRENGTH_GAIN,
+                    _GROW_STRENGTH_ASC_2,
+                    EffectTargetType.SOURCE,
+                )
             ],
             Intent(buff=True),
         )

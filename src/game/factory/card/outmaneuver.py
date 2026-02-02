@@ -1,4 +1,5 @@
 from src.game.core.effect import Effect
+from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
 from src.game.entity.card import CardColor
 from src.game.entity.card import CardRarity
@@ -26,7 +27,7 @@ def create_card_outmaneuver(upgraded: CardUpgraded) -> EntityCard:
             _TYPE,
             _COST,
             _RARITY,
-            [Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY_PLUS)],
+            [Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY_PLUS, EffectTargetType.CHARACTER)],
         )
 
     return EntityCard(
@@ -35,5 +36,5 @@ def create_card_outmaneuver(upgraded: CardUpgraded) -> EntityCard:
         _TYPE,
         _COST,
         _RARITY,
-        [Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY)],
+        [Effect(EffectType.MODIFIER_NEXT_TURN_ENERGY_GAIN, _ENERGY, EffectTargetType.CHARACTER)],
     )

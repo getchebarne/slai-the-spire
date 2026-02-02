@@ -4,6 +4,7 @@ from typing import Callable
 from src.game.core.effect import Effect
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
+from src.game.entity.actor import ModifierConfig
 from src.game.entity.actor import ModifierData
 from src.game.entity.actor import ModifierType
 from src.game.entity.monster import EntityMonster
@@ -22,16 +23,13 @@ _BITE_DAMAGE_MIN = 5
 _BITE_DAMAGE_MAX = 7
 _GROW_STRENGTH = 3
 _GROW_STRENGTH_ASC_17 = 4
-_CURL_UP_IS_BUFF = True
+_CURL_UP_CONFIG = ModifierConfig(is_buff=True, stacks_duration=False)
 _CURL_UP_STACKS_CURRENT_MIN = 3
 _CURL_UP_STACKS_CURRENT_MAX = 7
 _CURL_UP_STACKS_CURRENT_MIN_ASC_7 = 4
 _CURL_UP_STACKS_CURRENT_MAX_ASC_7 = 8
 _CURL_UP_STACKS_CURRENT_MIN_ASC_17 = 9
 _CURL_UP_STACKS_CURRENT_MAX_ASC_17 = 12
-_CURL_UP_STACKS_MIN = 1
-_CURL_UP_STACKS_MAX = 999
-_CURL_UP_STACKS_DURATION = False
 
 
 @register_factory(_NAME)
@@ -69,12 +67,9 @@ def create_monster_louse_red(
             },
             modifier_map={
                 ModifierType.CURL_UP: ModifierData(
-                    _CURL_UP_IS_BUFF,
-                    False,
-                    curl_up_stacks_current,
-                    _CURL_UP_STACKS_MIN,
-                    _CURL_UP_STACKS_MAX,
-                    _CURL_UP_STACKS_DURATION,
+                    config=_CURL_UP_CONFIG,
+                    is_new=False,
+                    stacks_current=curl_up_stacks_current,
                 )
             },
         ),
@@ -112,9 +107,7 @@ def _get_move_grow(ascension_level: AscensionLevel) -> MonsterMove:
     if ascension_level < 17:
         return MonsterMove(
             [
-                Effect(EffectType).MODIFIER_STRENGTH_GAIN,
-                _GROW_STRENGTH,
-                EffectTargetType.SOURCE,
+                Effect(EffectType.MODIFIER_STRENGTH_GAIN, _GROW_STRENGTH, EffectTargetType.SOURCE),
             ],
             Intent(buff=True),
         )
