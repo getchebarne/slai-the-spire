@@ -20,46 +20,28 @@ class EntityTransformer(nn.Module):
 
     def forward(
         self,
-        x_card: torch.Tensor,
-        x_card_mask_pad: torch.Tensor,
-        x_monsters: torch.Tensor,
-        x_monsters_mask_pad: torch.Tensor,
-        x_character: torch.Tensor,
-        x_character_mask_pad: torch.Tensor,
-        x_energy: torch.Tensor,
-        x_energy_mask_pad: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size = x_card.shape[0]
+        x_entity: torch.Tensor,
+        x_entity_mask_pad: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Process all entities through transformer blocks.
 
-        # Concatenate all entities (and their padding masks)
-        x_entity = torch.cat(
-            [
-                x_card,
-                x_monsters,
-                x_character.view(batch_size, 1, -1),
-                x_energy.view(batch_size, 1, -1),
-            ],
-            dim=1,
-        )
-        x_entity_mask_pad = torch.cat(
-            [
-                x_card_mask_pad,
-                x_monsters_mask_pad,
-                x_character_mask_pad,
-                x_energy_mask_pad,
-            ],
-            dim=1,
-        )
+        Args:
+            x_entity: Concatenated entity tensor (B, S, D)
+            x_entity_mask_pad: Padding mask for entities (B, S), True = padded/invalid
 
+        Returns:
+            Transformed entity tensor (B, S, D)
+        """
         # Pass all entities through entity transformer
-        # # Input shape:
-        # #   `x_entity`: (B, S, D) (float)
-        # #   `x_mask`:   (B, S)    (bool)
+        # Input shape:
+        #   `x_entity`: (B, S, D) (float)
+        #   `x_entity_mask_pad`: (B, S) (bool)
         for entity_transformer_block in self._entity_transformer_blocks:
             x_entity = entity_transformer_block(x_entity, x_entity_mask_pad)
 
-        # # Output shape: (B, S, D)
-        return x_entity, x_entity_mask_pad
+        # Output shape: (B, S, D)
+        return x_entity
 
 
 class _EntityTransformerBlock(nn.Module):

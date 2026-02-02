@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from src.rl.encoding.map_ import get_encoding_map_dim
 
 
-MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS = get_encoding_map_dim()
+_, _, _NUM_CHANNELS = get_encoding_map_dim()
 
 
 class MapEncoder(nn.Module):
