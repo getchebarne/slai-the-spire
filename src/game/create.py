@@ -11,7 +11,7 @@ from src.game.state import GameState
 from src.game.types_ import AscensionLevel
 
 
-# TODO: parametrize deck, monster, etc.
+# TODO: parametrize deck, etc.
 def create_game_state(ascension_level: AscensionLevel) -> GameState:
     # Create empty EntityManager
     entity_manager = EntityManager()
@@ -19,8 +19,6 @@ def create_game_state(ascension_level: AscensionLevel) -> GameState:
     # Create entities
     character, deck_starter = FACTORY_LIB_CHARACTER["Silent"](ascension_level)
     energy = create_energy(3, 3)
-
-    # Assign directly
     entity_manager.character = character
     entity_manager.deck = deck_starter
     entity_manager.energy = energy
