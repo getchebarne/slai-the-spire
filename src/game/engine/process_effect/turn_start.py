@@ -27,7 +27,7 @@ def process_effect_turn_start(
 
     effects.append(Effect(EffectType.BLOCK_SET, block, target=target))
 
-    # Apply phantasmal
+    # Apply phantasmal TODO: revisit logic (stacks)
     if ModifierType.PHANTASMAL in target.modifier_map:
         effects.append(Effect(EffectType.MODIFIER_DOUBLE_DAMAGE_GAIN, 1, target=target))
 
