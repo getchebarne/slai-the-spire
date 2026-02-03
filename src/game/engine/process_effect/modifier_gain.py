@@ -26,7 +26,7 @@ MODIFIER_CONFIGS: dict[ModifierType, ModifierConfig] = {
     ModifierType.INFINITE_BLADES: ModifierConfig(is_buff=True, stacks_duration=False),
     ModifierType.NEXT_TURN_BLOCK: ModifierConfig(is_buff=True, stacks_duration=False),
     ModifierType.NEXT_TURN_ENERGY: ModifierConfig(is_buff=True, stacks_duration=False),
-    ModifierType.PHANTASMAL: ModifierConfig(is_buff=True, stacks_duration=False),
+    ModifierType.PHANTASMAL: ModifierConfig(is_buff=True, stacks_duration=True),
     ModifierType.RITUAL: ModifierConfig(is_buff=True, stacks_duration=False),
     ModifierType.SHARP_HIDE: ModifierConfig(is_buff=True, stacks_duration=False),
     ModifierType.STRENGTH: ModifierConfig(is_buff=True, stacks_duration=False),
