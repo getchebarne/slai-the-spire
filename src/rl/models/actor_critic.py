@@ -23,6 +23,8 @@ from src.game.const import MAP_WIDTH
 from src.rl.action_space.types import ActionChoice
 from src.rl.action_space.types import CHOICE_TO_ACTION_TYPE
 from src.rl.action_space.types import CHOICE_TO_HEAD
+from src.rl.action_space.types import CHOICE_TO_HEAD_IDX
+from src.rl.action_space.types import HEAD_TYPE_NONE
 from src.rl.action_space.types import HeadType
 from src.rl.action_space.types import NUM_ACTION_CHOICES
 from src.rl.encoding.state import XGameState
@@ -287,35 +289,35 @@ class ActorCritic(nn.Module):
             action_choice_log_probs = torch.zeros(B, device=device)
 
         # =================================================================
-        # 4. Group samples by secondary head type
+        # 4. Get head types for all samples (vectorized, no .item()!)
         # =================================================================
-        head_to_samples: dict[HeadType, list[int]] = {ht: [] for ht in HeadType}
-
-        for i in range(B):
-            choice = ActionChoice(action_choices[i].item())
-            head_type = CHOICE_TO_HEAD[choice]
-            if head_type is not None:
-                head_to_samples[head_type].append(i)
+        # Move lookup tensor to device if needed (cached after first call)
+        head_type_lookup = CHOICE_TO_HEAD_IDX.to(device)
+        head_type_indices = head_type_lookup[action_choices]  # (B,) tensor
 
         # =================================================================
-        # 5. Run secondary heads (grouped)
+        # 5. Run secondary heads (grouped by head type)
         # =================================================================
         secondary_indices = torch.full((B,), -1, dtype=torch.long, device=device)
         secondary_log_probs = torch.zeros(B, device=device)
 
-        for head_type, sample_idxs in head_to_samples.items():
-            if not sample_idxs:
+        for head_type in HeadType:
+            # Find samples needing this head (vectorized comparison)
+            sample_mask = head_type_indices == head_type
+            if not torch.any(sample_mask):
                 continue
 
+            # Get indices of matching samples
+            idx = torch.nonzero(sample_mask, as_tuple=True)[0]
+
             # Slice for this head's samples
-            idx = torch.tensor(sample_idxs, device=device)
             subset_core = _slice_core_output(core_out, idx)
             subset_mask = secondary_masks[head_type][idx]
 
             # Run head
             indices, log_probs = self._run_secondary(head_type, subset_core, subset_mask, sample)
 
-            # Scatter results
+            # Scatter results back
             secondary_indices[idx] = indices
             secondary_log_probs[idx] = log_probs
 

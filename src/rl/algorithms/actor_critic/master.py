@@ -20,7 +20,8 @@ from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
 from src.rl.action_space import ActionChoice
-from src.rl.action_space import CHOICE_TO_HEAD
+from src.rl.action_space import CHOICE_TO_HEAD_IDX
+from src.rl.action_space import HEAD_TYPE_NONE
 from src.rl.action_space import HeadType
 from src.rl.action_space.masks import get_masks_batch
 from src.rl.algorithms.actor_critic.worker import Command
@@ -88,6 +89,30 @@ class TrajectoryBatch:
 # =============================================================================
 
 
+def _move_x_game_state(x: XGameState, device: torch.device) -> XGameState:
+    """Move XGameState to a different device."""
+    return XGameState(
+        x_hand=x.x_hand.to(device),
+        x_hand_mask_pad=x.x_hand_mask_pad.to(device),
+        x_draw=x.x_draw.to(device),
+        x_draw_mask_pad=x.x_draw_mask_pad.to(device),
+        x_disc=x.x_disc.to(device),
+        x_disc_mask_pad=x.x_disc_mask_pad.to(device),
+        x_deck=x.x_deck.to(device),
+        x_deck_mask_pad=x.x_deck_mask_pad.to(device),
+        x_combat_reward=x.x_combat_reward.to(device),
+        x_combat_reward_mask_pad=x.x_combat_reward_mask_pad.to(device),
+        x_monsters=x.x_monsters.to(device),
+        x_monsters_mask_pad=x.x_monsters_mask_pad.to(device),
+        x_character=x.x_character.to(device),
+        x_character_mask_pad=x.x_character_mask_pad.to(device),
+        x_energy=x.x_energy.to(device),
+        x_energy_mask_pad=x.x_energy_mask_pad.to(device),
+        x_map=x.x_map.to(device),
+        x_fsm=x.x_fsm.to(device),
+    )
+
+
 def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
     """Concatenate multiple XGameState objects along batch dimension."""
     return XGameState(
@@ -110,6 +135,7 @@ def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
         x_energy=torch.cat([x.x_energy for x in x_game_states], dim=0),
         x_energy_mask_pad=torch.cat([x.x_energy_mask_pad for x in x_game_states], dim=0),
         x_map=torch.cat([x.x_map for x in x_game_states], dim=0),
+        x_fsm=torch.cat([x.x_fsm for x in x_game_states], dim=0),
     )
 
 
@@ -149,6 +175,7 @@ def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
         x_energy=x_game_state.x_energy[idx : idx + 1],
         x_energy_mask_pad=x_game_state.x_energy_mask_pad[idx : idx + 1],
         x_map=x_game_state.x_map[idx : idx + 1],
+        x_fsm=x_game_state.x_fsm[idx : idx + 1],
     )
 
 
@@ -176,6 +203,9 @@ def _run_episodes(
 ) -> list[Trajectory]:
     """
     Run episodes in parallel across all workers.
+
+    Note: For small models (<1M params), CPU is faster than MPS/GPU due to
+    transfer overhead. Use device='cpu' for best performance on small models.
 
     Returns a list of trajectories, one per worker.
     """
@@ -217,7 +247,7 @@ def _run_episodes(
             # Get masks for all states
             primary_mask, secondary_masks = get_masks_batch(view_game_states, device)
 
-            # Forward pass (all samples, no FSM grouping needed!)
+            # Forward pass
             output = model(x_game_state, primary_mask, secondary_masks, sample=True)
 
             # Send actions to workers
@@ -388,11 +418,18 @@ def _recompute_log_probs_batch(
     """
     B = len(x_game_states)
 
-    # Concatenate pre-encoded states (fast!)
+    # Concatenate pre-encoded states
     x_game_state = _concat_x_game_states(x_game_states)
+    x_game_state = _move_x_game_state(x_game_state, device)
 
     # Concatenate masks
     primary_mask, secondary_masks = _concat_masks(primary_masks, secondary_masks_list)
+    primary_mask = primary_mask.to(device)
+    secondary_masks = {k: v.to(device) for k, v in secondary_masks.items()}
+
+    # Ensure indices are on device
+    action_choices = action_choices.to(device)
+    secondary_indices = secondary_indices.to(device)
 
     # Core encoder (all samples)
     core_out = model.core(x_game_state)
@@ -406,33 +443,35 @@ def _recompute_log_probs_batch(
     primary_log_probs = primary_dist.log_prob(action_choices)
     primary_entropies = primary_dist.entropy()
 
-    # Secondary heads - group by head type
+    # Secondary heads - group by head type (vectorized, no .item()!)
     secondary_log_probs = torch.zeros(B, device=device)
     secondary_entropies = torch.zeros(B, device=device)
 
-    head_to_samples: dict[HeadType, list[int]] = {ht: [] for ht in HeadType}
-    for i in range(B):
-        choice = ActionChoice(action_choices[i].item())
-        head_type = CHOICE_TO_HEAD[choice]
-        if head_type is not None and secondary_indices[i].item() >= 0:
-            head_to_samples[head_type].append(i)
+    # Get head type for each sample
+    head_type_lookup = CHOICE_TO_HEAD_IDX.to(device)
+    head_type_indices = head_type_lookup[action_choices]  # (B,)
 
-    for head_type, sample_idxs in head_to_samples.items():
-        if not sample_idxs:
+    # Mask for samples that need secondary heads (non-terminal with valid index)
+    needs_secondary = (head_type_indices != HEAD_TYPE_NONE) & (secondary_indices >= 0)
+
+    for head_type in HeadType:
+        # Find samples needing this head
+        sample_mask = needs_secondary & (head_type_indices == head_type)
+        if not torch.any(sample_mask):
             continue
 
-        idx = torch.tensor(sample_idxs, device=device)
+        idx = torch.nonzero(sample_mask, as_tuple=True)[0]
         subset_core = _slice_core_output(core_out, idx)
         subset_mask = secondary_masks[head_type][idx]
         subset_secondary_idx = secondary_indices[idx]
 
         # Run head
-        _, log_probs, out = _run_secondary_head_for_training(
+        _, log_probs, dist = _run_secondary_head_for_training(
             model, head_type, subset_core, subset_mask, subset_secondary_idx, device
         )
 
         secondary_log_probs[idx] = log_probs
-        secondary_entropies[idx] = out.entropy()
+        secondary_entropies[idx] = dist.entropy()
 
     total_log_probs = primary_log_probs + secondary_log_probs
     total_entropies = primary_entropies + secondary_entropies
@@ -501,15 +540,15 @@ def _update_ppo(
                 device,
             )
 
-            # Old log probs
-            log_probs_old = (
-                batch.action_choice_log_probs[mb_idxs] + batch.secondary_log_probs[mb_idxs]
-            )
+            # Old log probs (move to device)
+            log_probs_old = batch.action_choice_log_probs[mb_idxs].to(
+                device
+            ) + batch.secondary_log_probs[mb_idxs].to(device)
 
-            # Advantages and returns
-            advantages = torch.squeeze(batch.advantages[mb_idxs])
-            returns = batch.returns[mb_idxs]
-            values_old = batch.values[mb_idxs]
+            # Advantages and returns (move to device)
+            advantages = torch.squeeze(batch.advantages[mb_idxs]).to(device)
+            returns = batch.returns[mb_idxs].to(device)
+            values_old = batch.values[mb_idxs].to(device)
 
             # Policy loss (PPO clipped)
             ratio = torch.exp(log_probs_new - log_probs_old)
