@@ -19,7 +19,6 @@ from torch.multiprocessing import Pipe
 from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.view.state import ViewGameState
 from src.rl.action_space import ActionChoice
 from src.rl.action_space import CHOICE_TO_HEAD
 from src.rl.action_space import HeadType
@@ -27,6 +26,7 @@ from src.rl.action_space.masks import get_masks_batch
 from src.rl.algorithms.actor_critic.worker import Command
 from src.rl.algorithms.actor_critic.worker import WorkerData
 from src.rl.algorithms.actor_critic.worker import worker
+from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
 from src.rl.models import _slice_core_output
@@ -41,9 +41,11 @@ from src.rl.utils import load_config
 
 @dataclass
 class Transition:
-    """Single transition in a trajectory."""
+    """Single transition in a trajectory. Stores pre-encoded state."""
 
-    view_game_state: ViewGameState  # Store view state, encode lazily
+    x_game_state: XGameState  # Pre-encoded state (batch=1)
+    primary_mask: torch.Tensor  # (1, num_action_choices)
+    secondary_masks: dict[HeadType, torch.Tensor]  # {HeadType: (1, head_output_size)}
     action_choice: ActionChoice
     action_choice_log_prob: torch.Tensor
     secondary_index: int  # -1 if terminal
@@ -66,7 +68,9 @@ class Trajectory:
 class TrajectoryBatch:
     """Batched trajectory data for training."""
 
-    view_game_states: list[ViewGameState]
+    x_game_states: list[XGameState]  # List of pre-encoded states (each batch=1)
+    primary_masks: list[torch.Tensor]  # List of primary masks (each batch=1)
+    secondary_masks_list: list[dict[HeadType, torch.Tensor]]  # List of secondary mask dicts
     action_choices: torch.Tensor  # (N,) ActionChoice indices
     action_choice_log_probs: torch.Tensor  # (N,)
     secondary_indices: torch.Tensor  # (N,) -1 if terminal
@@ -76,7 +80,88 @@ class TrajectoryBatch:
     advantages: torch.Tensor  # (N, 1)
 
     def __len__(self) -> int:
-        return len(self.view_game_states)
+        return len(self.x_game_states)
+
+
+# =============================================================================
+# XGameState Concatenation
+# =============================================================================
+
+
+def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
+    """Concatenate multiple XGameState objects along batch dimension."""
+    return XGameState(
+        x_hand=torch.cat([x.x_hand for x in x_game_states], dim=0),
+        x_hand_mask_pad=torch.cat([x.x_hand_mask_pad for x in x_game_states], dim=0),
+        x_draw=torch.cat([x.x_draw for x in x_game_states], dim=0),
+        x_draw_mask_pad=torch.cat([x.x_draw_mask_pad for x in x_game_states], dim=0),
+        x_disc=torch.cat([x.x_disc for x in x_game_states], dim=0),
+        x_disc_mask_pad=torch.cat([x.x_disc_mask_pad for x in x_game_states], dim=0),
+        x_deck=torch.cat([x.x_deck for x in x_game_states], dim=0),
+        x_deck_mask_pad=torch.cat([x.x_deck_mask_pad for x in x_game_states], dim=0),
+        x_combat_reward=torch.cat([x.x_combat_reward for x in x_game_states], dim=0),
+        x_combat_reward_mask_pad=torch.cat(
+            [x.x_combat_reward_mask_pad for x in x_game_states], dim=0
+        ),
+        x_monsters=torch.cat([x.x_monsters for x in x_game_states], dim=0),
+        x_monsters_mask_pad=torch.cat([x.x_monsters_mask_pad for x in x_game_states], dim=0),
+        x_character=torch.cat([x.x_character for x in x_game_states], dim=0),
+        x_character_mask_pad=torch.cat([x.x_character_mask_pad for x in x_game_states], dim=0),
+        x_energy=torch.cat([x.x_energy for x in x_game_states], dim=0),
+        x_energy_mask_pad=torch.cat([x.x_energy_mask_pad for x in x_game_states], dim=0),
+        x_map=torch.cat([x.x_map for x in x_game_states], dim=0),
+    )
+
+
+def _concat_masks(
+    primary_masks: list[torch.Tensor],
+    secondary_masks_list: list[dict[HeadType, torch.Tensor]],
+) -> tuple[torch.Tensor, dict[HeadType, torch.Tensor]]:
+    """Concatenate masks for a minibatch."""
+    primary_mask = torch.cat(primary_masks, dim=0)
+
+    secondary_masks = {}
+    for head_type in HeadType:
+        secondary_masks[head_type] = torch.cat(
+            [sm[head_type] for sm in secondary_masks_list], dim=0
+        )
+
+    return primary_mask, secondary_masks
+
+
+def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
+    """Slice a single sample from a batched XGameState."""
+    return XGameState(
+        x_hand=x_game_state.x_hand[idx : idx + 1],
+        x_hand_mask_pad=x_game_state.x_hand_mask_pad[idx : idx + 1],
+        x_draw=x_game_state.x_draw[idx : idx + 1],
+        x_draw_mask_pad=x_game_state.x_draw_mask_pad[idx : idx + 1],
+        x_disc=x_game_state.x_disc[idx : idx + 1],
+        x_disc_mask_pad=x_game_state.x_disc_mask_pad[idx : idx + 1],
+        x_deck=x_game_state.x_deck[idx : idx + 1],
+        x_deck_mask_pad=x_game_state.x_deck_mask_pad[idx : idx + 1],
+        x_combat_reward=x_game_state.x_combat_reward[idx : idx + 1],
+        x_combat_reward_mask_pad=x_game_state.x_combat_reward_mask_pad[idx : idx + 1],
+        x_monsters=x_game_state.x_monsters[idx : idx + 1],
+        x_monsters_mask_pad=x_game_state.x_monsters_mask_pad[idx : idx + 1],
+        x_character=x_game_state.x_character[idx : idx + 1],
+        x_character_mask_pad=x_game_state.x_character_mask_pad[idx : idx + 1],
+        x_energy=x_game_state.x_energy[idx : idx + 1],
+        x_energy_mask_pad=x_game_state.x_energy_mask_pad[idx : idx + 1],
+        x_map=x_game_state.x_map[idx : idx + 1],
+    )
+
+
+def _slice_masks(
+    primary_mask: torch.Tensor,
+    secondary_masks: dict[HeadType, torch.Tensor],
+    idx: int,
+) -> tuple[torch.Tensor, dict[HeadType, torch.Tensor]]:
+    """Slice masks for a single sample."""
+    return (
+        primary_mask[idx : idx + 1],
+        {ht: sm[idx : idx + 1] for ht, sm in secondary_masks.items()},
+    )
 
 
 # =============================================================================
@@ -145,12 +230,20 @@ def _run_episodes(
             for env_idx in running_envs:
                 new_worker_datas[env_idx] = conn_parents[env_idx].recv()
 
-            # Store transitions
+            # Store transitions with pre-encoded states and masks
             for i, env_idx in enumerate(running_envs):
                 reward = new_worker_datas[env_idx].reward
 
+                # Slice out this sample's encoded state and masks
+                x_state_single = _slice_x_game_state(x_game_state, i)
+                primary_mask_single, secondary_masks_single = _slice_masks(
+                    primary_mask, secondary_masks, i
+                )
+
                 transition = Transition(
-                    view_game_state=view_game_states[i],
+                    x_game_state=x_state_single,
+                    primary_mask=primary_mask_single,
+                    secondary_masks=secondary_masks_single,
                     action_choice=ActionChoice(output.action_choices[i].item()),
                     action_choice_log_prob=output.action_choice_log_probs[i],
                     secondary_index=output.secondary_indices[i].item(),
@@ -207,7 +300,9 @@ def _create_batch(
     device: torch.device,
 ) -> TrajectoryBatch:
     """Create a training batch from trajectories."""
-    all_view_states = []
+    all_x_game_states = []
+    all_primary_masks = []
+    all_secondary_masks = []
     all_action_choices = []
     all_action_choice_log_probs = []
     all_secondary_indices = []
@@ -225,7 +320,9 @@ def _create_batch(
         returns, advantages = _compute_gae(rewards, values, gamma, lam, device)
 
         for i, trans in enumerate(trajectory.transitions):
-            all_view_states.append(trans.view_game_state)
+            all_x_game_states.append(trans.x_game_state)
+            all_primary_masks.append(trans.primary_mask)
+            all_secondary_masks.append(trans.secondary_masks)
             all_action_choices.append(int(trans.action_choice))
             all_action_choice_log_probs.append(trans.action_choice_log_prob.item())
             all_secondary_indices.append(trans.secondary_index)
@@ -235,7 +332,9 @@ def _create_batch(
             all_advantages.append(advantages[i])
 
     batch = TrajectoryBatch(
-        view_game_states=all_view_states,
+        x_game_states=all_x_game_states,
+        primary_masks=all_primary_masks,
+        secondary_masks_list=all_secondary_masks,
         action_choices=torch.tensor(all_action_choices, dtype=torch.long, device=device),
         action_choice_log_probs=torch.tensor(
             all_action_choice_log_probs, dtype=torch.float32, device=device
@@ -273,7 +372,9 @@ def _minibatch_indices(total: int, minibatch_size: int) -> Iterator[list[int]]:
 
 def _recompute_log_probs_batch(
     model: ActorCritic,
-    view_game_states: list[ViewGameState],
+    x_game_states: list[XGameState],
+    primary_masks: list[torch.Tensor],
+    secondary_masks_list: list[dict[HeadType, torch.Tensor]],
     action_choices: torch.Tensor,
     secondary_indices: torch.Tensor,
     device: torch.device,
@@ -281,21 +382,17 @@ def _recompute_log_probs_batch(
     """
     Recompute log probs and entropy for a batch with current policy.
 
-    Efficient batched implementation:
-    1. Encode all states at once
-    2. Run core encoder once
-    3. Run primary head once
-    4. Run secondary heads grouped by type
+    Uses pre-encoded states - just concatenates, no re-encoding!
 
     Returns (log_probs, entropies, values) - all shape (N,) or (N, 1)
     """
-    B = len(view_game_states)
+    B = len(x_game_states)
 
-    # Encode all states
-    x_game_state = encode_batch_view_game_state(view_game_states, device)
+    # Concatenate pre-encoded states (fast!)
+    x_game_state = _concat_x_game_states(x_game_states)
 
-    # Get masks
-    primary_mask, secondary_masks = get_masks_batch(view_game_states, device)
+    # Concatenate masks
+    primary_mask, secondary_masks = _concat_masks(primary_masks, secondary_masks_list)
 
     # Core encoder (all samples)
     core_out = model.core(x_game_state)
@@ -386,14 +483,22 @@ def _update_ppo(
 
     for _ in range(num_epochs):
         for mb_idxs in _minibatch_indices(len(batch), minibatch_size):
-            # Gather minibatch data
-            mb_states = [batch.view_game_states[i] for i in mb_idxs]
+            # Gather minibatch data (pre-encoded states and masks)
+            mb_x_states = [batch.x_game_states[i] for i in mb_idxs]
+            mb_primary_masks = [batch.primary_masks[i] for i in mb_idxs]
+            mb_secondary_masks = [batch.secondary_masks_list[i] for i in mb_idxs]
             mb_action_choices = batch.action_choices[mb_idxs]
             mb_secondary_indices = batch.secondary_indices[mb_idxs]
 
-            # Recompute with current policy
+            # Recompute with current policy (uses concatenation, no re-encoding!)
             log_probs_new, entropies, values_new = _recompute_log_probs_batch(
-                model, mb_states, mb_action_choices, mb_secondary_indices, device
+                model,
+                mb_x_states,
+                mb_primary_masks,
+                mb_secondary_masks,
+                mb_action_choices,
+                mb_secondary_indices,
+                device,
             )
 
             # Old log probs
@@ -563,6 +668,7 @@ if __name__ == "__main__":
 
     # Model
     model = ActorCritic(**config["model"])
+    # print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     # Optimizer
     optimizer = init_optimizer(config["optimizer"]["name"], model, **config["optimizer"]["kwargs"])

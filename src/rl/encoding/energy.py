@@ -1,7 +1,7 @@
+import numpy as np
 import torch
 
 from src.game.view.energy import ViewEnergy
-from src.rl.utils import encode_one_hot_list
 
 
 _ENERGY_MIN = 0
@@ -9,23 +9,36 @@ _ENERGY_MAX = 5
 
 
 def get_encoding_dim_energy() -> int:
-    view_energy_dummy = ViewEnergy(3, 3)
-    encoding_energy_dummy = _encode_energy_current(view_energy_dummy.current)
-    return len(encoding_energy_dummy)
+    """Calculate energy encoding dimension."""
+    return (_ENERGY_MAX - _ENERGY_MIN + 1) + 1  # One-hot + scalar
 
 
-def _encode_energy_current(energy_current: int) -> list[int]:
-    energy_current_ohe = encode_one_hot_list(energy_current, _ENERGY_MIN, _ENERGY_MAX)
+_ENCODING_DIM_ENERGY = get_encoding_dim_energy()
 
-    # Append scalar
-    return energy_current_ohe + [energy_current / _ENERGY_MAX]
+
+def _encode_energy_into(out: np.ndarray, energy_current: int) -> None:
+    """Encode energy directly into a pre-allocated numpy array."""
+    # One-hot
+    energy_clamp = max(min(energy_current, _ENERGY_MAX), _ENERGY_MIN)
+    out[energy_clamp - _ENERGY_MIN] = 1.0
+
+    # Scalar
+    out[_ENERGY_MAX - _ENERGY_MIN + 1] = energy_current / _ENERGY_MAX
 
 
 def encode_batch_view_energy(
     batch_view_energy: list[ViewEnergy], device: torch.device
 ) -> torch.Tensor:
-    return torch.tensor(
-        [_encode_energy_current(view_energy.current) for view_energy in batch_view_energy],
-        dtype=torch.float32,
-        device=device,
-    )
+    """Encode a batch of energy using NumPy pre-allocation.
+    
+    Returns: (B, dim_energy) tensor
+    """
+    batch_size = len(batch_view_energy)
+
+    # Pre-allocate numpy array (2D: batch x features)
+    x_out = np.zeros((batch_size, _ENCODING_DIM_ENERGY), dtype=np.float32)
+
+    for b, view_energy in enumerate(batch_view_energy):
+        _encode_energy_into(x_out[b], view_energy.current)
+
+    return torch.from_numpy(x_out).to(device)

@@ -1,6 +1,11 @@
 from src.game.view.actor import ViewModifierType
 
 
+def get_encoding_dim_actor_modifiers() -> int:
+    """Return the dimension of actor modifier encoding."""
+    return len(ViewModifierType)
+
+
 _VIEW_MODIFIER_TYPE_STACKS_MAX = {
     ViewModifierType.STRENGTH: 20,
     ViewModifierType.WEAK: 5,
