@@ -128,11 +128,6 @@ def _encode_view_card(view_card: ViewCard, card_pile: CardPile) -> list[float]:
             float(view_card.requires_discard),
             float(view_card.exhaust),
             float(view_card.innate),
-            float(card_pile == CardPile.HAND),
-            float(card_pile == CardPile.DRAW),
-            float(card_pile == CardPile.DISC),
-            float(card_pile == CardPile.DECK),
-            float(card_pile == CardPile.COMBAT_REWARD),
         ]
     )
 
