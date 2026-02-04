@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 from src.game.const import MAX_MONSTERS
@@ -19,33 +21,40 @@ _HEALTH_MIN = 1
 _INSTANCES_MAX = _WHIRLWIND_INSTANCES
 _MONSTER_NAMES = list(FACTORY_LIB_MONSTER.keys())
 
+# Pre-computed sqrt bounds for one-hot encoding (AlphaStar-style compression)
+_SQRT_HEALTH_MIN = int(math.sqrt(_HEALTH_MIN))
+_SQRT_HEALTH_MAX = int(math.sqrt(_HEALTH_MAX))
+_SQRT_BLOCK_MIN = int(math.sqrt(_BLOCK_MIN))
+_SQRT_BLOCK_MAX = int(math.sqrt(_BLOCK_MAX))
+_SQRT_HP_BLOCK_MIN = int(math.sqrt(_HEALTH_MIN + _BLOCK_MIN))
+_SQRT_HP_BLOCK_MAX = int(math.sqrt(_HEALTH_MAX + _BLOCK_MAX))
+
 
 def _encode_view_monster(view_monster: ViewMonster) -> list[float]:
     idx_name = _MONSTER_NAMES.index(view_monster.name)
+    sqrt_health = int(math.sqrt(view_monster.health_current))
+    sqrt_block = int(math.sqrt(view_monster.block_current))
+    sqrt_hp_block = int(math.sqrt(view_monster.health_current + view_monster.block_current))
     return (
         # Monster name
         encode_one_hot_list(idx_name, 0, len(_MONSTER_NAMES) - 1)
-        # Health / one-hot
-        + encode_one_hot_list(view_monster.health_current, _HEALTH_MIN, _HEALTH_MAX)
-        # Block / one-hot
-        + encode_one_hot_list(view_monster.block_current, _BLOCK_MIN, _BLOCK_MAX)
-        # Health + Block / one-hot
-        + encode_one_hot_list(
-            view_monster.health_current + view_monster.block_current,
-            _HEALTH_MIN + _BLOCK_MIN,
-            _HEALTH_MAX + _BLOCK_MAX,
-        )
+        # Health / one-hot (sqrt compressed)
+        + encode_one_hot_list(sqrt_health, _SQRT_HEALTH_MIN, _SQRT_HEALTH_MAX)
+        # Block / one-hot (sqrt compressed)
+        + encode_one_hot_list(sqrt_block, _SQRT_BLOCK_MIN, _SQRT_BLOCK_MAX)
+        # Health + Block / one-hot (sqrt compressed)
+        + encode_one_hot_list(sqrt_hp_block, _SQRT_HP_BLOCK_MIN, _SQRT_HP_BLOCK_MAX)
         # Modifiers
         + encode_view_actor_modifiers(view_monster.modifiers)
         # Intent
         + _encode_view_intent(view_monster.intent)
         # Scalars
         + [
-            # Health / scalar
+            # Health
             view_monster.health_current / _HEALTH_MAX,
-            # Block / scalar
+            # Block
             view_monster.block_current / _BLOCK_MAX,
-            # Health + Block / scalar
+            # Health + Block
             (view_monster.health_current + view_monster.block_current)
             / (_HEALTH_MAX + _BLOCK_MAX),
         ]
