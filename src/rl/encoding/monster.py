@@ -21,13 +21,18 @@ _HEALTH_MIN = 1
 _INSTANCES_MAX = _WHIRLWIND_INSTANCES
 _MONSTER_NAMES = list(FACTORY_LIB_MONSTER.keys())
 
-# Pre-computed sqrt bounds for one-hot encoding (AlphaStar-style compression)
+# Pre-computed sqrt bounds for one-hot encoding
 _SQRT_HEALTH_MIN = int(math.sqrt(_HEALTH_MIN))
 _SQRT_HEALTH_MAX = int(math.sqrt(_HEALTH_MAX))
 _SQRT_BLOCK_MIN = int(math.sqrt(_BLOCK_MIN))
 _SQRT_BLOCK_MAX = int(math.sqrt(_BLOCK_MAX))
 _SQRT_HP_BLOCK_MIN = int(math.sqrt(_HEALTH_MIN + _BLOCK_MIN))
 _SQRT_HP_BLOCK_MAX = int(math.sqrt(_HEALTH_MAX + _BLOCK_MAX))
+
+# Sqrt bounds for intent damage
+_SQRT_DAMAGE_MIN = 0
+_SQRT_DAMAGE_MAX = int(math.sqrt(_DAMAGE_MAX))
+_SQRT_DAMAGE_DIM = _SQRT_DAMAGE_MAX - _SQRT_DAMAGE_MIN + 1
 
 
 def _encode_view_monster(view_monster: ViewMonster) -> list[float]:
@@ -62,8 +67,16 @@ def _encode_view_monster(view_monster: ViewMonster) -> list[float]:
 
 
 def _encode_view_intent(view_intent: ViewIntent) -> list[float]:
-    return [
-        (view_intent.damage or 0) / _DAMAGE_MAX,
+    damage = view_intent.damage or 0
+
+    # Sqrt one-hot for damage
+    sqrt_damage = int(math.sqrt(damage))
+    sqrt_damage = max(min(sqrt_damage, _SQRT_DAMAGE_MAX), _SQRT_DAMAGE_MIN)
+    damage_sqrt_one_hot = [0.0] * _SQRT_DAMAGE_DIM
+    damage_sqrt_one_hot[sqrt_damage - _SQRT_DAMAGE_MIN] = 1.0
+
+    return damage_sqrt_one_hot + [
+        damage / _DAMAGE_MAX,  # Scalar for damage
         (view_intent.instances or 0) / _INSTANCES_MAX,
         float(view_intent.block),
         float(view_intent.buff),
