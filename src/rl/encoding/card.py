@@ -1,3 +1,4 @@
+import math
 from enum import Enum
 from typing import TypeAlias
 
@@ -76,36 +77,84 @@ def _get_card_metadata() -> CardMetadata:
     return cost_max, effect_key_max, effect_key_pos
 
 
+def _compute_sqrt_bounds(
+    key_to_max: dict[EffectKey, int], value_min: int = 0
+) -> tuple[dict[EffectKey, tuple[int, int]], dict[EffectKey, int], int]:
+    sqrt_min = int(math.sqrt(value_min))
+    bounds = {}
+    positions = {}
+
+    pos_offset = 0
+    for key, max_val in key_to_max.items():
+        sqrt_max = int(math.sqrt(max_val))
+        bounds[key] = (sqrt_min, sqrt_max)
+        positions[key] = pos_offset
+        pos_offset += sqrt_max - sqrt_min + 1
+
+    return bounds, positions, pos_offset
+
+
 # Get card metadata
 _COST_MAX, _EFFECT_KEY_MAX, _EFFECT_KEY_POS = _get_card_metadata()
+
+# Pre-compute sqrt bounds for effect keys
+_EFFECT_KEY_SQRT_BOUNDS, _EFFECT_KEY_SQRT_POS, _EFFECT_SQRT_TOTAL_DIM = _compute_sqrt_bounds(
+    _EFFECT_KEY_MAX, value_min=0
+)
+
+# Pre-compute sqrt bounds for card cost
+_COST_SQRT_MIN = int(math.sqrt(0))
+_COST_SQRT_MAX = int(math.sqrt(_COST_MAX))
+_COST_SQRT_DIM = _COST_SQRT_MAX - _COST_SQRT_MIN + 1
 
 
 def _encode_view_card(view_card: ViewCard, card_pile: CardPile) -> list[float]:
     upgraded = view_card.name.endswith("+")  # TODO: add `upgraded` field
-    encoding = [0] * len(_EFFECT_KEY_MAX) + [
-        view_card.cost / _COST_MAX,
-        float(upgraded),
-        float(view_card.requires_target),
-        float(view_card.requires_discard),
-        float(view_card.exhaust),
-        float(view_card.innate),
-        float(card_pile == CardPile.HAND),
-        float(card_pile == CardPile.DRAW),
-        float(card_pile == CardPile.DISC),
-        float(card_pile == CardPile.DECK),
-        float(card_pile == CardPile.COMBAT_REWARD),
-    ]
+
+    # Cost sqrt one-hot
+    cost_sqrt_value = int(math.sqrt(view_card.cost))
+    cost_sqrt_value = max(min(cost_sqrt_value, _COST_SQRT_MAX), _COST_SQRT_MIN)
+    cost_sqrt_one_hot = [0.0] * _COST_SQRT_DIM
+    cost_sqrt_one_hot[cost_sqrt_value - _COST_SQRT_MIN] = 1.0
+
+    encoding = (
+        [0.0] * _EFFECT_SQRT_TOTAL_DIM  # Sqrt one-hot for effects
+        + [0.0] * len(_EFFECT_KEY_MAX)  # Scalar for effects
+        + cost_sqrt_one_hot  # Sqrt one-hot for cost
+        + [
+            view_card.cost / _COST_MAX,  # Scalar for cost
+            float(upgraded),
+            float(view_card.requires_target),
+            float(view_card.requires_discard),
+            float(view_card.exhaust),
+            float(view_card.innate),
+            float(card_pile == CardPile.HAND),
+            float(card_pile == CardPile.DRAW),
+            float(card_pile == CardPile.DISC),
+            float(card_pile == CardPile.DECK),
+            float(card_pile == CardPile.COMBAT_REWARD),
+        ]
+    )
 
     for effect in view_card.effects:
         effect_key = _get_effect_key(effect)
-        effect_key_pos = _EFFECT_KEY_POS[effect_key]
 
-        # Get effect value
+        # Get effect value (None -> 1 to signal presence)
         effect_value = effect.value
         if effect_value is None:
             effect_value = 1.0
 
-        encoding[effect_key_pos] = effect_value / _EFFECT_KEY_MAX[effect_key]
+        # Sqrt one-hot encoding
+        sqrt_min, sqrt_max = _EFFECT_KEY_SQRT_BOUNDS[effect_key]
+        sqrt_value = int(math.sqrt(effect_value))
+        sqrt_value = max(min(sqrt_value, sqrt_max), sqrt_min)
+        sqrt_start_pos = _EFFECT_KEY_SQRT_POS[effect_key]
+        sqrt_offset = sqrt_value - sqrt_min
+        encoding[sqrt_start_pos + sqrt_offset] = 1.0
+
+        # Scalar encoding (after sqrt one-hots)
+        scalar_pos = _EFFECT_SQRT_TOTAL_DIM + _EFFECT_KEY_POS[effect_key]
+        encoding[scalar_pos] = effect_value / _EFFECT_KEY_MAX[effect_key]
 
     return encoding
 
