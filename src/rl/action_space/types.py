@@ -1,17 +1,23 @@
 from enum import Enum, IntEnum
 
+import torch
+
 from src.game.action import ActionType
 
 
-class HeadType(Enum):
+class HeadType(IntEnum):
     """Secondary head types for entity selection."""
 
-    CARD_PLAY = "CARD_PLAY"
-    CARD_DISCARD = "CARD_DISCARD"
-    CARD_REWARD_SELECT = "CARD_REWARD_SELECT"
-    CARD_UPGRADE = "CARD_UPGRADE"
-    MONSTER_SELECT = "MONSTER_SELECT"
-    MAP_SELECT = "MAP_SELECT"
+    CARD_PLAY = 0
+    CARD_DISCARD = 1
+    CARD_REWARD_SELECT = 2
+    CARD_UPGRADE = 3
+    MONSTER_SELECT = 4
+    MAP_SELECT = 5
+
+
+NUM_HEAD_TYPES = len(HeadType)
+HEAD_TYPE_NONE = -1  # Sentinel for terminal actions (no secondary head)
 
 
 class ActionChoice(IntEnum):
@@ -52,6 +58,17 @@ CHOICE_TO_HEAD: dict[ActionChoice, HeadType | None] = {
     ActionChoice.CARD_UPGRADE: HeadType.CARD_UPGRADE,
     ActionChoice.MAP_SELECT: HeadType.MAP_SELECT,
 }
+
+
+# Tensor lookup: action_choice_idx → head_type_idx (-1 for terminal)
+# Usage: head_types = CHOICE_TO_HEAD_IDX[action_choices]  # No .item() needed!
+CHOICE_TO_HEAD_IDX = torch.tensor(
+    [
+        HEAD_TYPE_NONE if CHOICE_TO_HEAD[ActionChoice(i)] is None else int(CHOICE_TO_HEAD[ActionChoice(i)])
+        for i in range(NUM_ACTION_CHOICES)
+    ],
+    dtype=torch.long,
+)
 
 
 # ActionChoice → ActionType (for game interface)
