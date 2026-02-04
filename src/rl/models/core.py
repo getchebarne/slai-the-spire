@@ -18,10 +18,14 @@ from src.game.const import MAX_SIZE_DECK
 from src.game.const import MAX_SIZE_DISC_PILE
 from src.game.const import MAX_SIZE_DRAW_PILE
 from src.game.const import MAX_SIZE_HAND
+from src.rl.encoding.fsm import get_encoding_dim_fsm
 from src.rl.encoding.state import XGameState
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapEncoder
+
+
+_FSM_DIM = get_encoding_dim_fsm()
 
 
 @dataclass
@@ -174,9 +178,9 @@ class Core(nn.Module):
         # Map encoder
         self._map_encoder = MapEncoder(map_encoder_kernel_size, map_encoder_dim)
 
-        # Global context projection (entity mean + map → global)
+        # Global context projection (entity mean + map + FSM → global)
         self._global_projection = nn.Sequential(
-            nn.Linear(dim_entity + map_encoder_dim, dim_entity),
+            nn.Linear(dim_entity + map_encoder_dim + _FSM_DIM, dim_entity),
             nn.ReLU(),
             nn.Linear(dim_entity, dim_entity),
         )
@@ -251,9 +255,11 @@ class Core(nn.Module):
         # Encode map
         x_map = self._map_encoder(x_game_state.x_map)
 
-        # Create global context: mean pool entities & map
+        # Create global context: mean pool entities + map + FSM
         x_entity_mean = _calculate_masked_mean(x_entity, x_entity_mask)
-        x_global = self._global_projection(torch.cat([x_entity_mean, x_map], dim=1))
+        x_global = self._global_projection(
+            torch.cat([x_entity_mean, x_map, x_game_state.x_fsm], dim=1)
+        )
 
         return CoreOutput(
             x_hand=x_hand_out,

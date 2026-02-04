@@ -7,6 +7,7 @@ from src.rl.encoding.card import CardPile
 from src.rl.encoding.card import encode_batch_view_cards
 from src.rl.encoding.character import encode_batch_view_character
 from src.rl.encoding.energy import encode_batch_view_energy
+from src.rl.encoding.fsm import encode_batch_view_fsm
 from src.rl.encoding.map_ import encode_batch_view_map
 from src.rl.encoding.monster import encode_batch_view_monsters
 
@@ -30,6 +31,7 @@ class XGameState:
     x_energy: torch.Tensor
     x_energy_mask_pad: torch.Tensor
     x_map: torch.Tensor
+    x_fsm: torch.Tensor
 
 
 def encode_batch_view_game_state(
@@ -47,6 +49,7 @@ def encode_batch_view_game_state(
     batch_character = []
     batch_energy = []
     batch_map = []
+    batch_fsm = []
     for view_game_state in batch_view_game_state:
         batch_hand.append(view_game_state.hand)
         batch_draw.append(view_game_state.pile_draw)
@@ -57,6 +60,7 @@ def encode_batch_view_game_state(
         batch_character.append(view_game_state.character)
         batch_energy.append(view_game_state.energy)
         batch_map.append(view_game_state.map)
+        batch_fsm.append(view_game_state.fsm)
 
     # Cards (hand, draw pile, discard pile, deck, combat rewards)
     x_hand, x_hand_mask_pad = encode_batch_view_cards(batch_hand, CardPile.HAND, device)
@@ -83,6 +87,9 @@ def encode_batch_view_game_state(
     # Map
     x_map = encode_batch_view_map(batch_map, device)
 
+    # FSM
+    x_fsm = encode_batch_view_fsm(batch_fsm, device)
+
     # Collect all tensors
     return XGameState(
         x_hand,
@@ -102,4 +109,5 @@ def encode_batch_view_game_state(
         x_energy,
         x_energy_mask_pad,
         x_map,
+        x_fsm,
     )

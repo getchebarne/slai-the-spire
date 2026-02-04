@@ -12,6 +12,8 @@ from src.rl.encoding.character import encode_batch_view_character
 from src.rl.encoding.character import get_encoding_dim_character
 from src.rl.encoding.energy import encode_batch_view_energy
 from src.rl.encoding.energy import get_encoding_dim_energy
+from src.rl.encoding.fsm import encode_batch_view_fsm
+from src.rl.encoding.fsm import get_encoding_dim_fsm
 from src.rl.encoding.map_ import encode_batch_view_map
 from src.rl.encoding.map_ import get_encoding_map_dim
 from src.rl.encoding.monster import encode_batch_view_monsters
@@ -31,6 +33,9 @@ __all__ = [
     # Energy encoding
     "encode_batch_view_energy",
     "get_encoding_dim_energy",
+    # FSM encoding
+    "encode_batch_view_fsm",
+    "get_encoding_dim_fsm",
     # Map encoding
     "encode_batch_view_map",
     "get_encoding_map_dim",
