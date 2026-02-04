@@ -2,6 +2,7 @@ import math
 from enum import Enum
 from typing import TypeAlias
 
+import numpy as np
 import torch
 
 from src.game.const import MAX_SIZE_COMBAT_CARD_REWARD
@@ -13,9 +14,6 @@ from src.game.core.effect import Effect
 from src.game.core.effect import EffectSelectionType
 from src.game.core.effect import EffectTargetType
 from src.game.core.effect import EffectType
-from src.game.entity.card import CardColor  # TODO: should only import from `view`
-from src.game.entity.card import CardRarity  # TODO: should only import from `view`
-from src.game.entity.card import CardType  # TODO: should only import from `view`
 from src.game.factory.lib import FACTORY_LIB_CARD
 from src.game.view.card import ViewCard
 
@@ -108,33 +106,33 @@ _COST_SQRT_MAX = int(math.sqrt(_COST_MAX))
 _COST_SQRT_DIM = _COST_SQRT_MAX - _COST_SQRT_MIN + 1
 
 
-def _encode_view_card(view_card: ViewCard, card_pile: CardPile) -> list[float]:
-    upgraded = view_card.name.endswith("+")  # TODO: add `upgraded` field
+def _encode_view_card_into(out: np.ndarray, view_card: ViewCard, card_pile: CardPile) -> None:
+    """Encode a card directly into a pre-allocated numpy array."""
+    upgraded = view_card.name.endswith("+")
 
     # Cost sqrt one-hot
     cost_sqrt_value = int(math.sqrt(view_card.cost))
     cost_sqrt_value = max(min(cost_sqrt_value, _COST_SQRT_MAX), _COST_SQRT_MIN)
-    cost_sqrt_one_hot = [0.0] * _COST_SQRT_DIM
-    cost_sqrt_one_hot[cost_sqrt_value - _COST_SQRT_MIN] = 1.0
 
-    encoding = (
-        [0.0] * _EFFECT_SQRT_TOTAL_DIM  # Sqrt one-hot for effects
-        + [0.0] * len(_EFFECT_KEY_MAX)  # Scalar for effects
-        + cost_sqrt_one_hot  # Sqrt one-hot for cost
-        + [
-            view_card.cost / _COST_MAX,  # Scalar for cost
-            float(upgraded),
-            float(view_card.requires_target),
-            float(view_card.requires_discard),
-            float(view_card.exhaust),
-            float(view_card.innate),
-        ]
-    )
+    # Position offsets
+    pos_cost_sqrt = _EFFECT_SQRT_TOTAL_DIM + len(_EFFECT_KEY_MAX)
+    pos_scalars = pos_cost_sqrt + _COST_SQRT_DIM
 
+    # Set cost sqrt one-hot
+    out[pos_cost_sqrt + cost_sqrt_value - _COST_SQRT_MIN] = 1.0
+
+    # Set scalar features
+    out[pos_scalars] = view_card.cost / _COST_MAX
+    out[pos_scalars + 1] = float(upgraded)
+    out[pos_scalars + 2] = float(view_card.requires_target)
+    out[pos_scalars + 3] = float(view_card.requires_discard)
+    out[pos_scalars + 4] = float(view_card.exhaust)
+    out[pos_scalars + 5] = float(view_card.innate)
+
+    # Encode effects
     for effect in view_card.effects:
         effect_key = _get_effect_key(effect)
 
-        # Get effect value (None -> 1 to signal presence)
         effect_value = effect.value
         if effect_value is None:
             effect_value = 1.0
@@ -144,68 +142,44 @@ def _encode_view_card(view_card: ViewCard, card_pile: CardPile) -> list[float]:
         sqrt_value = int(math.sqrt(effect_value))
         sqrt_value = max(min(sqrt_value, sqrt_max), sqrt_min)
         sqrt_start_pos = _EFFECT_KEY_SQRT_POS[effect_key]
-        sqrt_offset = sqrt_value - sqrt_min
-        encoding[sqrt_start_pos + sqrt_offset] = 1.0
+        out[sqrt_start_pos + sqrt_value - sqrt_min] = 1.0
 
-        # Scalar encoding (after sqrt one-hots)
+        # Scalar encoding
         scalar_pos = _EFFECT_SQRT_TOTAL_DIM + _EFFECT_KEY_POS[effect_key]
-        encoding[scalar_pos] = effect_value / _EFFECT_KEY_MAX[effect_key]
-
-    return encoding
+        out[scalar_pos] = effect_value / _EFFECT_KEY_MAX[effect_key]
 
 
 def get_encoding_dim_card() -> int:
-    view_card_dummy = ViewCard(
-        "Dummy",
-        CardColor.GREEN,
-        CardType.ATTACK,
-        CardRarity.BASIC,
-        1,
-        [],
-        False,
-        False,
-        False,
-        False,
-        False,
+    # Calculate dimension from components
+    return (
+        _EFFECT_SQRT_TOTAL_DIM  # Sqrt one-hot for effects
+        + len(_EFFECT_KEY_MAX)  # Scalar for effects
+        + _COST_SQRT_DIM  # Sqrt one-hot for cost
+        + 6  # Scalars: cost, upgraded, requires_target, requires_discard, exhaust, innate
     )
 
-    encoding_card_dummy = _encode_view_card(view_card_dummy, CardPile.HAND)
-    return len(encoding_card_dummy)
 
-
-# TODO: handle these constants better
-_ENCODING_CARD_PAD = [0.0] * get_encoding_dim_card()
+_ENCODING_DIM_CARD = get_encoding_dim_card()
 
 
 def encode_batch_view_cards(
     batch_view_cards: list[list[ViewCard]], card_pile: CardPile, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # Get pile max size
+    """Encode a batch of card lists using NumPy pre-allocation."""
     max_size = _CARD_PILE_TO_MAX_SIZE[card_pile]
+    batch_size = len(batch_view_cards)
 
-    # Initialize empty lists to store encodings for each batch
-    x_out = []
-    x_mask_pad = []
+    # Pre-allocate numpy arrays
+    x_out = np.zeros((batch_size, max_size, _ENCODING_DIM_CARD), dtype=np.float32)
+    x_mask_pad = np.zeros((batch_size, max_size), dtype=bool)
 
-    # Iterate over batches
-    for view_cards in batch_view_cards:
-        # Truncate to max size TODO: add log
+    for b, view_cards in enumerate(batch_view_cards):
         view_cards = view_cards[:max_size]
-
-        encoding_cards = []
-        for view_card in view_cards:
-            encoding_card = _encode_view_card(view_card, card_pile)
-            encoding_cards.append(encoding_card)
-
-        # Pad to `max_size`
-        num_pad = max_size - len(view_cards)
-        encoding_cards += [_ENCODING_CARD_PAD] * num_pad
-
-        # Append batch encodings and padding mask
-        x_out.append(encoding_cards)
-        x_mask_pad.append([True] * len(view_cards) + [False] * num_pad)
+        for i, view_card in enumerate(view_cards):
+            _encode_view_card_into(x_out[b, i], view_card, card_pile)
+            x_mask_pad[b, i] = True
 
     return (
-        torch.tensor(x_out, dtype=torch.float32, device=device),
-        torch.tensor(x_mask_pad, dtype=torch.bool, device=device),
+        torch.from_numpy(x_out).to(device),
+        torch.from_numpy(x_mask_pad).to(device),
     )

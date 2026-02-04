@@ -1,5 +1,5 @@
-exp_name: ppo_hierarchical_v4
-num_episodes: 1.0e+6
+exp_name: test_fast
+num_episodes: 1.0e+2
 log_every: 10
 save_every: 100
 gamma: 0.99
