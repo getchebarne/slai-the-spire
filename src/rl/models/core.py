@@ -8,6 +8,7 @@ The core takes raw game state encodings and produces:
 """
 
 from dataclasses import dataclass
+from enum import IntEnum
 
 import torch
 import torch.nn as nn
@@ -26,6 +27,22 @@ from src.rl.models.map_encoder import MapEncoder
 
 
 _FSM_DIM = get_encoding_dim_fsm()
+
+
+class EntityType(IntEnum):
+    """Entity type indices for type embeddings."""
+
+    HAND = 0
+    DRAW = 1
+    DISC = 2
+    DECK = 3
+    COMBAT_REWARD = 4
+    MONSTER = 5
+    CHARACTER = 6
+    ENERGY = 7
+
+
+_NUM_ENTITY_TYPES = len(EntityType)
 
 
 @dataclass
@@ -62,7 +79,7 @@ def _calculate_masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         mask: Boolean mask of shape (B, S), True = valid
 
     Returns:
-        Tuple of (mean tensor (B, D), sequence lengths (B, 1))
+        Mean tensor (B, D)
     """
     # Zero out padded positions
     x_masked = x * torch.unsqueeze(mask, -1)
@@ -73,6 +90,33 @@ def _calculate_masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     x_mean = x_sum / x_len
 
     return x_mean
+
+
+def _calculate_masked_max(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    Calculate max over sequence dimension, respecting padding mask.
+
+    Args:
+        x: Tensor of shape (B, S, D)
+        mask: Mask of shape (B, S), True/1.0 = valid
+
+    Returns:
+        Max tensor (B, D)
+    """
+    mask_bool = mask.bool()
+
+    # Set padded positions to -inf so they don't affect max
+    mask_expanded = torch.unsqueeze(mask_bool, -1)  # (B, S, 1)
+    x_masked = torch.where(mask_expanded, x, torch.full_like(x, float("-inf")))
+
+    # Max over sequence dimension
+    x_max, _ = torch.max(x_masked, dim=1)
+
+    # Handle empty sequences: if all positions masked, return zeros instead of -inf
+    all_masked = ~torch.any(mask_bool, dim=1, keepdim=True)  # (B, 1)
+    x_max = torch.where(all_masked, torch.zeros_like(x_max), x_max)
+
+    return x_max
 
 
 def _undo_entity_concatenation(
@@ -136,9 +180,10 @@ class Core(nn.Module):
 
     Architecture:
     1. Project each entity type (cards, monsters, character, energy) to shared dimension
-    2. Pass all entities through transformer for cross-entity attention
-    3. Encode map separately
-    4. Pool entities into global context vector
+    2. Add learned type embeddings to distinguish entity sources
+    3. Pass all entities through transformer for cross-entity attention
+    4. Encode map separately
+    5. Pool entities per-type (mean + max for each) into global context vector
     """
 
     def __init__(
@@ -167,6 +212,10 @@ class Core(nn.Module):
         # Entity projector: project each entity type to shared dimension
         self._entity_projector = EntityProjector(dim_entity)
 
+        # Type embeddings: learnable embeddings for each entity type
+        # Allows transformer to distinguish hand cards from draw pile cards, etc.
+        self._type_embeddings = nn.Embedding(_NUM_ENTITY_TYPES, dim_entity)
+
         # Entity transformer: cross-entity attention
         self._entity_transformer = EntityTransformer(
             dim_entity,
@@ -178,9 +227,21 @@ class Core(nn.Module):
         # Map encoder
         self._map_encoder = MapEncoder(map_encoder_kernel_size, map_encoder_dim)
 
-        # Global context projection (entity mean + map + FSM → global)
+        # Global context projection with discriminated entity aggregation:
+        # - 6 sequence entity types (hand, draw, disc, deck, reward, monsters): mean + max each = 12 * dim
+        # - 2 singleton entities (character, energy): 2 * dim
+        # - Map encoding: map_encoder_dim
+        # - FSM state: FSM_DIM
+        _num_seq_entity_types = 6  # hand, draw, disc, deck, reward, monsters
+        _num_singleton_entities = 2  # character, energy
+        global_input_dim = (
+            _num_seq_entity_types * 2 * dim_entity  # mean + max for each sequence type
+            + _num_singleton_entities * dim_entity  # character + energy
+            + map_encoder_dim
+            + _FSM_DIM
+        )
         self._global_projection = nn.Sequential(
-            nn.Linear(dim_entity + map_encoder_dim + _FSM_DIM, dim_entity),
+            nn.Linear(global_input_dim, dim_entity),
             nn.ReLU(),
             nn.Linear(dim_entity, dim_entity),
         )
@@ -194,6 +255,9 @@ class Core(nn.Module):
         return self._dim_entity
 
     def forward(self, x_game_state: XGameState) -> CoreOutput:
+        batch_size = x_game_state.x_hand.shape[0]
+        device = x_game_state.x_hand.device
+
         # Concatenate all cards (and their masks)
         x_card = torch.cat(
             [
@@ -213,16 +277,42 @@ class Core(nn.Module):
             x_game_state.x_energy,
         )
 
-        # Concatenate all entities and masks for transformer
+        # Build type indices for each entity group
+        type_indices = torch.cat(
+            [
+                torch.full((batch_size, MAX_SIZE_HAND), EntityType.HAND, device=device),
+                torch.full((batch_size, MAX_SIZE_DRAW_PILE), EntityType.DRAW, device=device),
+                torch.full((batch_size, MAX_SIZE_DISC_PILE), EntityType.DISC, device=device),
+                torch.full((batch_size, MAX_SIZE_DECK), EntityType.DECK, device=device),
+                torch.full(
+                    (batch_size, MAX_SIZE_COMBAT_CARD_REWARD),
+                    EntityType.COMBAT_REWARD,
+                    device=device,
+                ),
+                torch.full((batch_size, MAX_MONSTERS), EntityType.MONSTER, device=device),
+                torch.full((batch_size, 1), EntityType.CHARACTER, device=device),
+                torch.full((batch_size, 1), EntityType.ENERGY, device=device),
+            ],
+            dim=1,
+        )  # (B, total_entities)
+
+        # Get type embeddings for all positions
+        type_emb = self._type_embeddings(type_indices)  # (B, total_entities, dim_entity)
+
+        # Concatenate all entities
         x_entity_cat = torch.cat(
             [
                 x_card_proj,
                 x_monsters_proj,
-                x_character_proj.unsqueeze(1),
-                x_energy_proj.unsqueeze(1),
+                torch.unsqueeze(x_character_proj, 1),
+                torch.unsqueeze(x_energy_proj, 1),
             ],
             dim=1,
         )
+
+        # Add type embeddings to entity embeddings
+        x_entity_cat = x_entity_cat + type_emb
+
         x_entity_mask = torch.cat(
             [
                 x_game_state.x_hand_mask_pad,
@@ -255,10 +345,56 @@ class Core(nn.Module):
         # Encode map
         x_map = self._map_encoder(x_game_state.x_map)
 
-        # Create global context: mean pool entities + map + FSM
-        x_entity_mean = _calculate_masked_mean(x_entity, x_entity_mask)
+        # Create global context with discriminated entity aggregation
+        # Compute mean + max for each entity type separately
+        x_hand_mean = _calculate_masked_mean(x_hand_out, x_game_state.x_hand_mask_pad)
+        x_hand_max = _calculate_masked_max(x_hand_out, x_game_state.x_hand_mask_pad)
+
+        x_draw_mean = _calculate_masked_mean(x_draw_out, x_game_state.x_draw_mask_pad)
+        x_draw_max = _calculate_masked_max(x_draw_out, x_game_state.x_draw_mask_pad)
+
+        x_disc_mean = _calculate_masked_mean(x_disc_out, x_game_state.x_disc_mask_pad)
+        x_disc_max = _calculate_masked_max(x_disc_out, x_game_state.x_disc_mask_pad)
+
+        x_deck_mean = _calculate_masked_mean(x_deck_out, x_game_state.x_deck_mask_pad)
+        x_deck_max = _calculate_masked_max(x_deck_out, x_game_state.x_deck_mask_pad)
+
+        x_reward_mean = _calculate_masked_mean(
+            x_combat_reward_out, x_game_state.x_combat_reward_mask_pad
+        )
+        x_reward_max = _calculate_masked_max(
+            x_combat_reward_out, x_game_state.x_combat_reward_mask_pad
+        )
+
+        x_monsters_mean = _calculate_masked_mean(x_monsters_out, x_game_state.x_monsters_mask_pad)
+        x_monsters_max = _calculate_masked_max(x_monsters_out, x_game_state.x_monsters_mask_pad)
+
+        # Concatenate all aggregated features
         x_global = self._global_projection(
-            torch.cat([x_entity_mean, x_map, x_game_state.x_fsm], dim=1)
+            torch.cat(
+                [
+                    # Sequence entity aggregations (mean + max)
+                    x_hand_mean,
+                    x_hand_max,
+                    x_draw_mean,
+                    x_draw_max,
+                    x_disc_mean,
+                    x_disc_max,
+                    x_deck_mean,
+                    x_deck_max,
+                    x_reward_mean,
+                    x_reward_max,
+                    x_monsters_mean,
+                    x_monsters_max,
+                    # Singleton entities
+                    x_character_out,
+                    x_energy_out,
+                    # Map and FSM
+                    x_map,
+                    x_game_state.x_fsm,
+                ],
+                dim=1,
+            )
         )
 
         return CoreOutput(

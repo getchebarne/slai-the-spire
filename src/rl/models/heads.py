@@ -23,6 +23,34 @@ class HeadOutput:
     log_probs: torch.Tensor | None  # (B,) log probs of sampled indices, None if not sampling
 
 
+def greedy_select_grouped(masked_logits: torch.Tensor) -> torch.Tensor:
+    """
+    Greedy selection that groups options with identical logits and sums their
+    probabilities before argmax.
+
+    By architecture design, identical cards produce identical logits (same
+    encoding → same embedding → same score). This ensures that e.g.:
+      Hand: [Strike, Strike, Defend]  →  probs: [0.30, 0.30, 0.40]
+      Grouped: Strike=0.60, Defend=0.40  →  argmax selects Strike.
+
+    Args:
+        masked_logits: Logits with -inf for invalid positions (B, N)
+
+    Returns:
+        Selected indices (B,)
+    """
+    probs = torch.softmax(masked_logits, dim=-1)  # (B, N)
+
+    # Group by identical logits: for each position, sum probs of all positions
+    # with the same logit value. (B, N, 1) == (B, 1, N) → (B, N, N)
+    same_group = torch.unsqueeze(masked_logits, 2) == torch.unsqueeze(masked_logits, 1)
+
+    # Sum probabilities within each group → (B, N)
+    grouped_probs = torch.sum(same_group.float() * torch.unsqueeze(probs, 1), dim=2)
+
+    return torch.argmax(grouped_probs, dim=-1)
+
+
 def sample_from_logits(
     logits: torch.Tensor,
     mask: torch.Tensor,

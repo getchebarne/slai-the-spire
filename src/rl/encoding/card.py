@@ -95,6 +95,10 @@ def _compute_sqrt_bounds(
 # Get card metadata
 _COST_MAX, _EFFECT_KEY_MAX, _EFFECT_KEY_POS = _get_card_metadata()
 
+# Card names for one-hot encoding (base names without "+")
+_CARD_NAMES = list(FACTORY_LIB_CARD.keys())
+_NUM_CARD_NAMES = len(_CARD_NAMES)
+
 # Pre-compute sqrt bounds for effect keys
 _EFFECT_KEY_SQRT_BOUNDS, _EFFECT_KEY_SQRT_POS, _EFFECT_SQRT_TOTAL_DIM = _compute_sqrt_bounds(
     _EFFECT_KEY_MAX, value_min=0
@@ -109,13 +113,22 @@ _COST_SQRT_DIM = _COST_SQRT_MAX - _COST_SQRT_MIN + 1
 def _encode_view_card_into(out: np.ndarray, view_card: ViewCard, card_pile: CardPile) -> None:
     """Encode a card directly into a pre-allocated numpy array."""
     upgraded = view_card.name.endswith("+")
+    pos = 0
+
+    # Card name one-hot (strip "+" suffix for upgraded cards)
+    base_name = view_card.name.rstrip("+")
+    idx_name = _CARD_NAMES.index(base_name)
+    out[idx_name] = 1.0
+    pos += _NUM_CARD_NAMES
 
     # Cost sqrt one-hot
     cost_sqrt_value = int(math.sqrt(view_card.cost))
     cost_sqrt_value = max(min(cost_sqrt_value, _COST_SQRT_MAX), _COST_SQRT_MIN)
 
-    # Position offsets
-    pos_cost_sqrt = _EFFECT_SQRT_TOTAL_DIM + len(_EFFECT_KEY_MAX)
+    # Position offsets (relative to after card name one-hot)
+    pos_effects_sqrt = pos
+    pos_effects_scalar = pos + _EFFECT_SQRT_TOTAL_DIM
+    pos_cost_sqrt = pos_effects_scalar + len(_EFFECT_KEY_MAX)
     pos_scalars = pos_cost_sqrt + _COST_SQRT_DIM
 
     # Set cost sqrt one-hot
@@ -141,18 +154,19 @@ def _encode_view_card_into(out: np.ndarray, view_card: ViewCard, card_pile: Card
         sqrt_min, sqrt_max = _EFFECT_KEY_SQRT_BOUNDS[effect_key]
         sqrt_value = int(math.sqrt(effect_value))
         sqrt_value = max(min(sqrt_value, sqrt_max), sqrt_min)
-        sqrt_start_pos = _EFFECT_KEY_SQRT_POS[effect_key]
+        sqrt_start_pos = pos_effects_sqrt + _EFFECT_KEY_SQRT_POS[effect_key]
         out[sqrt_start_pos + sqrt_value - sqrt_min] = 1.0
 
         # Scalar encoding
-        scalar_pos = _EFFECT_SQRT_TOTAL_DIM + _EFFECT_KEY_POS[effect_key]
+        scalar_pos = pos_effects_scalar + _EFFECT_KEY_POS[effect_key]
         out[scalar_pos] = effect_value / _EFFECT_KEY_MAX[effect_key]
 
 
 def get_encoding_dim_card() -> int:
     # Calculate dimension from components
     return (
-        _EFFECT_SQRT_TOTAL_DIM  # Sqrt one-hot for effects
+        _NUM_CARD_NAMES  # Card name one-hot
+        + _EFFECT_SQRT_TOTAL_DIM  # Sqrt one-hot for effects
         + len(_EFFECT_KEY_MAX)  # Scalar for effects
         + _COST_SQRT_DIM  # Sqrt one-hot for cost
         + 6  # Scalars: cost, upgraded, requires_target, requires_discard, exhaust, innate
