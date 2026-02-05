@@ -22,29 +22,52 @@ _INSTANCES_MAX = _WHIRLWIND_INSTANCES
 _MONSTER_NAMES = list(FACTORY_LIB_MONSTER.keys())
 _NUM_MONSTER_NAMES = len(_MONSTER_NAMES)
 
-# Pre-computed sqrt bounds for one-hot encoding
-_SQRT_HEALTH_MIN = int(math.sqrt(_HEALTH_MIN))
-_SQRT_HEALTH_MAX = int(math.sqrt(_HEALTH_MAX))
-_SQRT_BLOCK_MIN = int(math.sqrt(_BLOCK_MIN))
-_SQRT_BLOCK_MAX = int(math.sqrt(_BLOCK_MAX))
-_SQRT_HP_BLOCK_MIN = int(math.sqrt(_HEALTH_MIN + _BLOCK_MIN))
-_SQRT_HP_BLOCK_MAX = int(math.sqrt(_HEALTH_MAX + _BLOCK_MAX))
+# Threshold for piecewise linear-sqrt encoding
+# Values 0 to threshold get exact (linear) buckets for fine-grained lethal detection
+# Values above threshold get sqrt-compressed buckets
+_LINEAR_SQRT_THRESHOLD = 18
 
-# Sqrt bounds for intent damage
-_SQRT_DAMAGE_MIN = 0
-_SQRT_DAMAGE_MAX = int(math.sqrt(_DAMAGE_MAX))
-_SQRT_DAMAGE_DIM = _SQRT_DAMAGE_MAX - _SQRT_DAMAGE_MIN + 1
+
+def _get_piecewise_dim(min_val: int, max_val: int, threshold: int) -> int:
+    """Calculate dimension for piecewise linear-sqrt encoding."""
+    if max_val <= threshold:
+        return max_val - min_val + 1  # Pure linear
+    # Linear part: min_val to threshold
+    linear_dim = threshold - min_val + 1
+    # Sqrt part: floor(sqrt(threshold+1)) to floor(sqrt(max_val))
+    sqrt_dim = int(math.sqrt(max_val)) - int(math.sqrt(threshold))
+    return linear_dim + sqrt_dim
+
+
+def _get_piecewise_bucket(value: int, min_val: int, threshold: int) -> int:
+    """Get bucket index for piecewise linear-sqrt encoding."""
+    value = max(value, min_val)  # Clamp to min
+    if value <= threshold:
+        return value - min_val
+    # Above threshold: use sqrt buckets
+    sqrt_threshold = int(math.sqrt(threshold))
+    sqrt_value = int(math.sqrt(value))
+    return (threshold - min_val + 1) + (sqrt_value - sqrt_threshold - 1)
+
+
+# Pre-computed dimensions for piecewise encoding
+_HEALTH_DIM = _get_piecewise_dim(_HEALTH_MIN, _HEALTH_MAX, _LINEAR_SQRT_THRESHOLD)
+_BLOCK_DIM = _get_piecewise_dim(_BLOCK_MIN, _BLOCK_MAX, _LINEAR_SQRT_THRESHOLD)
+_HP_BLOCK_DIM = _get_piecewise_dim(
+    _HEALTH_MIN + _BLOCK_MIN, _HEALTH_MAX + _BLOCK_MAX, _LINEAR_SQRT_THRESHOLD
+)
+_DAMAGE_DIM = _get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
 
 def get_encoding_dim_monster() -> int:
     """Calculate monster encoding dimension."""
     return (
         _NUM_MONSTER_NAMES  # Monster name one-hot
-        + (_SQRT_HEALTH_MAX - _SQRT_HEALTH_MIN + 1)  # Health sqrt one-hot
-        + (_SQRT_BLOCK_MAX - _SQRT_BLOCK_MIN + 1)  # Block sqrt one-hot
-        + (_SQRT_HP_BLOCK_MAX - _SQRT_HP_BLOCK_MIN + 1)  # HP+Block sqrt one-hot
+        + _HEALTH_DIM  # Health piecewise one-hot
+        + _BLOCK_DIM  # Block piecewise one-hot
+        + _HP_BLOCK_DIM  # HP+Block piecewise one-hot
         + get_encoding_dim_actor_modifiers()  # Modifiers
-        + _SQRT_DAMAGE_DIM  # Intent damage sqrt one-hot
+        + _DAMAGE_DIM  # Intent damage piecewise one-hot
         + 5  # Intent scalars: damage, instances, block, buff, debuff
         + 3  # Scalars: health, block, hp+block
     )
@@ -62,23 +85,27 @@ def _encode_view_monster_into(out: np.ndarray, view_monster: ViewMonster) -> Non
     out[idx_name] = 1.0
     pos += _NUM_MONSTER_NAMES
 
-    # Health sqrt one-hot
-    sqrt_health = int(math.sqrt(view_monster.health_current))
-    sqrt_health = max(min(sqrt_health, _SQRT_HEALTH_MAX), _SQRT_HEALTH_MIN)
-    out[pos + sqrt_health - _SQRT_HEALTH_MIN] = 1.0
-    pos += _SQRT_HEALTH_MAX - _SQRT_HEALTH_MIN + 1
+    # Health piecewise one-hot (linear for 0-threshold, sqrt above)
+    health_bucket = _get_piecewise_bucket(
+        view_monster.health_current, _HEALTH_MIN, _LINEAR_SQRT_THRESHOLD
+    )
+    out[pos + health_bucket] = 1.0
+    pos += _HEALTH_DIM
 
-    # Block sqrt one-hot
-    sqrt_block = int(math.sqrt(view_monster.block_current))
-    sqrt_block = max(min(sqrt_block, _SQRT_BLOCK_MAX), _SQRT_BLOCK_MIN)
-    out[pos + sqrt_block - _SQRT_BLOCK_MIN] = 1.0
-    pos += _SQRT_BLOCK_MAX - _SQRT_BLOCK_MIN + 1
+    # Block piecewise one-hot
+    block_bucket = _get_piecewise_bucket(
+        view_monster.block_current, _BLOCK_MIN, _LINEAR_SQRT_THRESHOLD
+    )
+    out[pos + block_bucket] = 1.0
+    pos += _BLOCK_DIM
 
-    # HP+Block sqrt one-hot
-    sqrt_hp_block = int(math.sqrt(view_monster.health_current + view_monster.block_current))
-    sqrt_hp_block = max(min(sqrt_hp_block, _SQRT_HP_BLOCK_MAX), _SQRT_HP_BLOCK_MIN)
-    out[pos + sqrt_hp_block - _SQRT_HP_BLOCK_MIN] = 1.0
-    pos += _SQRT_HP_BLOCK_MAX - _SQRT_HP_BLOCK_MIN + 1
+    # HP+Block piecewise one-hot
+    hp_block = view_monster.health_current + view_monster.block_current
+    hp_block_bucket = _get_piecewise_bucket(
+        hp_block, _HEALTH_MIN + _BLOCK_MIN, _LINEAR_SQRT_THRESHOLD
+    )
+    out[pos + hp_block_bucket] = 1.0
+    pos += _HP_BLOCK_DIM
 
     # Modifiers (using list-based helper, then copy)
     modifiers_list = encode_view_actor_modifiers(view_monster.modifiers)
@@ -89,11 +116,10 @@ def _encode_view_monster_into(out: np.ndarray, view_monster: ViewMonster) -> Non
     # Intent
     damage = view_monster.intent.damage or 0
 
-    # Damage sqrt one-hot
-    sqrt_damage = int(math.sqrt(damage))
-    sqrt_damage = max(min(sqrt_damage, _SQRT_DAMAGE_MAX), _SQRT_DAMAGE_MIN)
-    out[pos + sqrt_damage - _SQRT_DAMAGE_MIN] = 1.0
-    pos += _SQRT_DAMAGE_DIM
+    # Damage piecewise one-hot
+    damage_bucket = _get_piecewise_bucket(damage, 0, _LINEAR_SQRT_THRESHOLD)
+    out[pos + damage_bucket] = 1.0
+    pos += _DAMAGE_DIM
 
     # Intent scalars
     out[pos] = damage / _DAMAGE_MAX

@@ -30,6 +30,7 @@ from src.rl.action_space.types import NUM_ACTION_CHOICES
 from src.rl.encoding.state import XGameState
 from src.rl.models.core import Core
 from src.rl.models.core import CoreOutput
+from src.rl.models.heads import greedy_select_grouped
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadCardDiscard
 from src.rl.models.heads import HeadCardPlay
@@ -240,7 +241,7 @@ class ActorCritic(nn.Module):
         if sample:
             return out.indices, out.log_probs
         else:
-            return torch.argmax(out.logits, dim=-1), torch.zeros(
+            return greedy_select_grouped(out.logits), torch.zeros(
                 out.logits.shape[0], device=out.logits.device
             )
 

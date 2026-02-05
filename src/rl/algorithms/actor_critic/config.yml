@@ -1,5 +1,5 @@
-exp_name: test_fast_II
-num_episodes: 1.0e+2
+exp_name: ppo/test_new_III
+num_episodes: 1.0e+6
 log_every: 10
 save_every: 100
 gamma: 0.99
@@ -9,7 +9,7 @@ coef_entropy_max: 0.015
 coef_entropy_min: 0.010
 coef_entropy_elbow: 2.5e+4
 max_grad_norm: 0.500
-num_envs: 16
+num_envs: 24
 clip_eps: 0.20
 clip_value_loss: true
 minibatch_size: 512
