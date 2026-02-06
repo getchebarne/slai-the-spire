@@ -249,6 +249,23 @@ class Core(nn.Module):
             nn.Linear(dim_global, dim_global),
         )
 
+        # Pre-build type indices (fixed structure, batch-independent)
+        # Shape (1, total_entities) — expanded to (B, total_entities) in forward
+        _type_indices = torch.cat(
+            [
+                torch.full((1, MAX_SIZE_HAND), EntityType.HAND),
+                torch.full((1, MAX_SIZE_DRAW_PILE), EntityType.DRAW),
+                torch.full((1, MAX_SIZE_DISC_PILE), EntityType.DISC),
+                torch.full((1, MAX_SIZE_DECK), EntityType.DECK),
+                torch.full((1, MAX_SIZE_COMBAT_CARD_REWARD), EntityType.COMBAT_REWARD),
+                torch.full((1, MAX_MONSTERS), EntityType.MONSTER),
+                torch.full((1, 1), EntityType.CHARACTER),
+                torch.full((1, 1), EntityType.ENERGY),
+            ],
+            dim=1,
+        )
+        self.register_buffer("_type_indices", _type_indices)
+
     @property
     def dim_map(self) -> int:
         return self._map_encoder_dim
@@ -259,7 +276,6 @@ class Core(nn.Module):
 
     def forward(self, x_game_state: XGameState) -> CoreOutput:
         batch_size = x_game_state.x_hand.shape[0]
-        device = x_game_state.x_hand.device
 
         # Concatenate all cards (and their masks)
         x_card = torch.cat(
@@ -280,24 +296,8 @@ class Core(nn.Module):
             x_game_state.x_energy,
         )
 
-        # Build type indices for each entity group
-        type_indices = torch.cat(
-            [
-                torch.full((batch_size, MAX_SIZE_HAND), EntityType.HAND, device=device),
-                torch.full((batch_size, MAX_SIZE_DRAW_PILE), EntityType.DRAW, device=device),
-                torch.full((batch_size, MAX_SIZE_DISC_PILE), EntityType.DISC, device=device),
-                torch.full((batch_size, MAX_SIZE_DECK), EntityType.DECK, device=device),
-                torch.full(
-                    (batch_size, MAX_SIZE_COMBAT_CARD_REWARD),
-                    EntityType.COMBAT_REWARD,
-                    device=device,
-                ),
-                torch.full((batch_size, MAX_MONSTERS), EntityType.MONSTER, device=device),
-                torch.full((batch_size, 1), EntityType.CHARACTER, device=device),
-                torch.full((batch_size, 1), EntityType.ENERGY, device=device),
-            ],
-            dim=1,
-        )  # (B, total_entities)
+        # Expand cached type indices to batch size (no memory allocation)
+        type_indices = self._type_indices.expand(batch_size, -1)  # (B, total_entities)
 
         # Get type embeddings for all positions
         type_emb = self._type_embeddings(type_indices)  # (B, total_entities, dim_entity)
