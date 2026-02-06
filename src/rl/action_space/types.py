@@ -1,4 +1,4 @@
-from enum import Enum, IntEnum
+from enum import IntEnum
 
 import torch
 
@@ -64,7 +64,11 @@ CHOICE_TO_HEAD: dict[ActionChoice, HeadType | None] = {
 # Usage: head_types = CHOICE_TO_HEAD_IDX[action_choices]  # No .item() needed!
 CHOICE_TO_HEAD_IDX = torch.tensor(
     [
-        HEAD_TYPE_NONE if CHOICE_TO_HEAD[ActionChoice(i)] is None else int(CHOICE_TO_HEAD[ActionChoice(i)])
+        (
+            HEAD_TYPE_NONE
+            if CHOICE_TO_HEAD[ActionChoice(i)] is None
+            else int(CHOICE_TO_HEAD[ActionChoice(i)])
+        )
         for i in range(NUM_ACTION_CHOICES)
     ],
     dtype=torch.long,
