@@ -24,6 +24,7 @@ class EntityProjector(nn.Module):
             nn.Linear(_INPUT_DIM_CARD, dim_embedding),
             nn.ReLU(),
             nn.Linear(dim_embedding, dim_embedding),
+            nn.LayerNorm(dim_embedding),
         )
 
         # Monsters
@@ -31,6 +32,7 @@ class EntityProjector(nn.Module):
             nn.Linear(_INPUT_DIM_MONSTER, dim_embedding),
             nn.ReLU(),
             nn.Linear(dim_embedding, dim_embedding),
+            nn.LayerNorm(dim_embedding),
         )
 
         # Character
@@ -38,6 +40,7 @@ class EntityProjector(nn.Module):
             nn.Linear(_INPUT_DIM_CHARACTER, dim_embedding),
             nn.ReLU(),
             nn.Linear(dim_embedding, dim_embedding),
+            nn.LayerNorm(dim_embedding),
         )
 
         # Energy
@@ -45,6 +48,7 @@ class EntityProjector(nn.Module):
             nn.Linear(_INPUT_DIM_ENERGY, dim_embedding),
             nn.ReLU(),
             nn.Linear(dim_embedding, dim_embedding),
+            nn.LayerNorm(dim_embedding),
         )
 
     def forward(
