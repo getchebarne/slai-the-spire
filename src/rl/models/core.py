@@ -288,11 +288,13 @@ class Core(nn.Module):
             ],
             dim=1,
         )
-        # Project entities to shared dimension
+        # Project entities to shared dimension (modifiers projected via shared weights)
         x_card_proj, x_monsters_proj, x_character_proj, x_energy_proj = self._entity_projector(
             x_card,
             x_game_state.x_monsters,
+            x_game_state.x_monster_modifiers,
             x_game_state.x_character,
+            x_game_state.x_character_modifiers,
             x_game_state.x_energy,
         )
 
