@@ -60,13 +60,12 @@ _DAMAGE_DIM = _get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
 
 def get_encoding_dim_monster() -> int:
-    """Calculate monster encoding dimension."""
+    """Calculate monster encoding dimension (excludes modifiers, encoded separately)."""
     return (
         _NUM_MONSTER_NAMES  # Monster name one-hot
         + _HEALTH_DIM  # Health piecewise one-hot
         + _BLOCK_DIM  # Block piecewise one-hot
         + _HP_BLOCK_DIM  # HP+Block piecewise one-hot
-        + get_encoding_dim_actor_modifiers()  # Modifiers
         + _DAMAGE_DIM  # Intent damage piecewise one-hot
         + 5  # Intent scalars: damage, instances, block, buff, debuff
         + 3  # Scalars: health, block, hp+block
@@ -107,12 +106,6 @@ def _encode_view_monster_into(out: np.ndarray, view_monster: ViewMonster) -> Non
     out[pos + hp_block_bucket] = 1.0
     pos += _HP_BLOCK_DIM
 
-    # Modifiers (using list-based helper, then copy)
-    modifiers_list = encode_view_actor_modifiers(view_monster.modifiers)
-    modifier_dim = len(modifiers_list)
-    out[pos : pos + modifier_dim] = modifiers_list
-    pos += modifier_dim
-
     # Intent
     damage = view_monster.intent.damage or 0
 
@@ -139,19 +132,29 @@ def _encode_view_monster_into(out: np.ndarray, view_monster: ViewMonster) -> Non
 
 def encode_batch_view_monsters(
     batch_view_monster: list[list[ViewMonster]], device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor, list[float]]:
-    """Encode a batch of monster lists using NumPy pre-allocation."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[float]]:
+    """Encode a batch of monster lists using NumPy pre-allocation.
+
+    Returns:
+        x_out: (B, MAX_MONSTERS, dim_monster) entity features (no modifiers)
+        x_mask_pad: (B, MAX_MONSTERS) padding mask
+        x_modifiers: (B, MAX_MONSTERS, dim_modifiers) modifier vectors
+        outgoing_damages: list of total incoming damage per sample
+    """
     batch_size = len(batch_view_monster)
+    modifier_dim = get_encoding_dim_actor_modifiers()
 
     # Pre-allocate numpy arrays
     x_out = np.zeros((batch_size, MAX_MONSTERS, _ENCODING_DIM_MONSTER), dtype=np.float32)
     x_mask_pad = np.zeros((batch_size, MAX_MONSTERS), dtype=np.float32)
+    x_modifiers = np.zeros((batch_size, MAX_MONSTERS, modifier_dim), dtype=np.float32)
     outgoing_damages = []
 
     for b, view_monsters in enumerate(batch_view_monster):
         outgoing_damage = 0.0
         for i, view_monster in enumerate(view_monsters):
             _encode_view_monster_into(x_out[b, i], view_monster)
+            x_modifiers[b, i] = encode_view_actor_modifiers(view_monster.modifiers)
             x_mask_pad[b, i] = 1.0
             outgoing_damage += (view_monster.intent.damage or 0.0) * (
                 view_monster.intent.instances or 1.0
@@ -161,5 +164,6 @@ def encode_batch_view_monsters(
     return (
         torch.from_numpy(x_out).to(device),
         torch.from_numpy(x_mask_pad).to(device),
+        torch.from_numpy(x_modifiers).to(device),
         outgoing_damages,
     )

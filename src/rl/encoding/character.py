@@ -24,12 +24,11 @@ _SQRT_HP_BLOCK_MAX = int(math.sqrt(_HEALTH_MAX + _BLOCK_MAX))
 
 
 def get_encoding_dim_character() -> int:
-    """Calculate character encoding dimension."""
+    """Calculate character encoding dimension (excludes modifiers, encoded separately)."""
     return (
         (_SQRT_HEALTH_MAX - _SQRT_HEALTH_MIN + 1)  # Health sqrt one-hot
         + (_SQRT_BLOCK_MAX - _SQRT_BLOCK_MIN + 1)  # Block sqrt one-hot
         + (_SQRT_HP_BLOCK_MAX - _SQRT_HP_BLOCK_MIN + 1)  # HP+Block sqrt one-hot
-        + get_encoding_dim_actor_modifiers()  # Modifiers
         + 5  # Scalars: health, block, hp+block, incoming_damage, blocked
     )
 
@@ -61,12 +60,6 @@ def _encode_view_character_into(
     out[pos + sqrt_hp_block - _SQRT_HP_BLOCK_MIN] = 1.0
     pos += _SQRT_HP_BLOCK_MAX - _SQRT_HP_BLOCK_MIN + 1
 
-    # Modifiers
-    modifiers_list = encode_view_actor_modifiers(view_character.modifiers)
-    modifier_dim = len(modifiers_list)
-    out[pos : pos + modifier_dim] = modifiers_list
-    pos += modifier_dim
-
     # Scalars
     out[pos] = view_character.health_current / _HEALTH_MAX
     out[pos + 1] = view_character.block_current / _BLOCK_MAX
@@ -79,19 +72,27 @@ def encode_batch_view_character(
     batch_view_character: list[ViewCharacter],
     batch_incoming_damage: list[int],
     device: torch.device,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Encode a batch of characters using NumPy pre-allocation.
-    
-    Returns: (B, dim_character) tensor
+
+    Returns:
+        x_out: (B, dim_character) entity features (no modifiers)
+        x_modifiers: (B, dim_modifiers) modifier vectors
     """
     batch_size = len(batch_view_character)
+    modifier_dim = get_encoding_dim_actor_modifiers()
 
-    # Pre-allocate numpy array (2D: batch x features)
+    # Pre-allocate numpy arrays
     x_out = np.zeros((batch_size, _ENCODING_DIM_CHARACTER), dtype=np.float32)
+    x_modifiers = np.zeros((batch_size, modifier_dim), dtype=np.float32)
 
     for b, (view_character, incoming_damage) in enumerate(
         zip(batch_view_character, batch_incoming_damage)
     ):
         _encode_view_character_into(x_out[b], view_character, incoming_damage)
+        x_modifiers[b] = encode_view_actor_modifiers(view_character.modifiers)
 
-    return torch.from_numpy(x_out).to(device)
+    return (
+        torch.from_numpy(x_out).to(device),
+        torch.from_numpy(x_modifiers).to(device),
+    )

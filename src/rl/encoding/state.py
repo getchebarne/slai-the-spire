@@ -26,8 +26,10 @@ class XGameState:
     x_combat_reward_mask_pad: torch.Tensor
     x_monsters: torch.Tensor
     x_monsters_mask_pad: torch.Tensor
+    x_monster_modifiers: torch.Tensor
     x_character: torch.Tensor
     x_character_mask_pad: torch.Tensor
+    x_character_modifiers: torch.Tensor
     x_energy: torch.Tensor
     x_energy_mask_pad: torch.Tensor
     x_map: torch.Tensor
@@ -72,12 +74,14 @@ def encode_batch_view_game_state(
     )
 
     # Monsters
-    x_monsters, x_monsters_mask_pad, incoming_damages = encode_batch_view_monsters(
-        batch_monsters, device
+    x_monsters, x_monsters_mask_pad, x_monster_modifiers, incoming_damages = (
+        encode_batch_view_monsters(batch_monsters, device)
     )
 
     # Character
-    x_character = encode_batch_view_character(batch_character, incoming_damages, device)
+    x_character, x_character_modifiers = encode_batch_view_character(
+        batch_character, incoming_damages, device
+    )
     x_character_mask_pad = torch.ones(batch_size, 1, dtype=torch.bool, device=device)
 
     # Energy
@@ -104,8 +108,10 @@ def encode_batch_view_game_state(
         x_combat_reward_mask_pad,
         x_monsters,
         x_monsters_mask_pad,
+        x_monster_modifiers,
         x_character,
         x_character_mask_pad,
+        x_character_modifiers,
         x_energy,
         x_energy_mask_pad,
         x_map,
