@@ -189,6 +189,7 @@ class Core(nn.Module):
     def __init__(
         self,
         dim_entity: int,
+        dim_global: int,
         transformer_dim_ff: int,
         transformer_num_heads: int,
         transformer_num_blocks: int,
@@ -198,6 +199,7 @@ class Core(nn.Module):
         """
         Args:
             dim_entity: Embedding dimension for all entities
+            dim_global: Dimension of the global context vector (output of pooling projection)
             transformer_dim_ff: Feedforward dimension in transformer blocks
             transformer_num_heads: Number of attention heads
             transformer_num_blocks: Number of transformer blocks
@@ -207,6 +209,7 @@ class Core(nn.Module):
         super().__init__()
 
         self._dim_entity = dim_entity
+        self._dim_global = dim_global
         self._map_encoder_dim = map_encoder_dim
 
         # Entity projector: project each entity type to shared dimension
@@ -241,9 +244,9 @@ class Core(nn.Module):
             + _FSM_DIM
         )
         self._global_projection = nn.Sequential(
-            nn.Linear(global_input_dim, dim_entity),
+            nn.Linear(global_input_dim, dim_global),
             nn.ReLU(),
-            nn.Linear(dim_entity, dim_entity),
+            nn.Linear(dim_global, dim_global),
         )
 
     @property
@@ -252,7 +255,7 @@ class Core(nn.Module):
 
     @property
     def dim_global(self) -> int:
-        return self._dim_entity
+        return self._dim_global
 
     def forward(self, x_game_state: XGameState) -> CoreOutput:
         batch_size = x_game_state.x_hand.shape[0]
@@ -328,6 +331,9 @@ class Core(nn.Module):
         )
 
         # Pass through entity transformer
+        # Invert mask: encoding uses True=valid, but PyTorch MHA key_padding_mask expects True=padded
+        x_entity_mask = x_entity_mask.bool()
+        x_entity_mask = ~x_entity_mask
         x_entity = self._entity_transformer(x_entity_cat, x_entity_mask)
 
         # Undo concatenations to get individual tensors

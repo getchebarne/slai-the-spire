@@ -24,7 +24,6 @@ from src.rl.action_space.types import ActionChoice
 from src.rl.action_space.types import CHOICE_TO_ACTION_TYPE
 from src.rl.action_space.types import CHOICE_TO_HEAD
 from src.rl.action_space.types import CHOICE_TO_HEAD_IDX
-from src.rl.action_space.types import HEAD_TYPE_NONE
 from src.rl.action_space.types import HeadType
 from src.rl.action_space.types import NUM_ACTION_CHOICES
 from src.rl.encoding.state import XGameState
@@ -136,21 +135,11 @@ def _slice_core_output(core_out: CoreOutput, indices: torch.Tensor) -> CoreOutpu
 
 
 class ActorCritic(nn.Module):
-    """
-    Actor-Critic with clean batched forward pass.
-
-    Forward pass efficiency:
-    - Core encoder: 1 call (all samples)
-    - Primary head: 1 call (all samples)
-    - Secondary heads: ≤6 calls (only heads with samples needing them)
-    - Value head: 1 call (all samples)
-
-    No FSM in forward - ActionChoice directly determines routing.
-    """
 
     def __init__(
         self,
         dim_entity: int = 128,
+        dim_global: int = 256,
         transformer_dim_ff: int = 256,
         transformer_num_heads: int = 4,
         transformer_num_blocks: int = 2,
@@ -167,6 +156,7 @@ class ActorCritic(nn.Module):
         # Core encoder
         self.core = Core(
             dim_entity=dim_entity,
+            dim_global=dim_global,
             transformer_dim_ff=transformer_dim_ff,
             transformer_num_heads=transformer_num_heads,
             transformer_num_blocks=transformer_num_blocks,
