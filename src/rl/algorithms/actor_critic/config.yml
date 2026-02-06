@@ -1,4 +1,4 @@
-exp_name: ppo/test_new_IV
+exp_name: ppo/test_new_V
 num_episodes: 1.0e+6
 log_every: 10
 save_every: 100
