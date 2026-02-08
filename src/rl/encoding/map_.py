@@ -12,17 +12,13 @@ _ROOM_TYPE_NUM = len(RoomType)
 _NUM_CHANNELS = _ROOM_TYPE_NUM + MAP_WIDTH + 1
 
 
-def _get_view_map_dummy() -> ViewMap:
-    return ViewMap([[None] * MAP_WIDTH] * MAP_HEIGHT)
-
-
 def get_encoding_map_dim() -> tuple[int, int, int]:
     return (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
 
 
 def _encode_view_map_into(out: np.ndarray, view_map: ViewMap) -> None:
     """Encode a map directly into a pre-allocated numpy array.
-    
+
     out shape: (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
     """
     # Populate room type and edge channels
