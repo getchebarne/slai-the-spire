@@ -5,10 +5,12 @@ Usage:
     poetry run python -m src.rl.test_agent --exp-path experiments/ppo_hierarchical_v1
 """
 
+import os
 import time
 
 import click
 import torch
+import torch.nn.functional as F
 
 from src.game.action import Action
 from src.game.core.fsm import FSM
@@ -17,20 +19,83 @@ from src.game.draw import get_action_str
 from src.game.draw import get_view_game_state_str
 from src.game.main import initialize_game_state
 from src.game.main import step
+from src.game.view.fsm import ViewFSM
+from src.game.view.state import ViewGameState
 from src.game.view.state import get_view_game_state
 from src.rl.action_space.masks import get_masks
+from src.rl.action_space.types import HeadType
 from src.rl.constants import ASCENSION_LEVEL
+from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
 from src.rl.utils import load_config
 
 
+N_COL, _ = os.get_terminal_size()
+
+
+def get_card_probabilities(
+    model: ActorCritic,
+    x_game_state: XGameState,
+    secondary_masks: dict[HeadType, torch.Tensor],
+) -> torch.Tensor:
+    """
+    Get probabilities for each card in hand from the card play head.
+
+    Returns:
+        Tensor of probabilities (num_cards_in_hand,), normalized over playable cards.
+        Invalid cards (cost > energy) will have probability 0.
+    """
+    # Run core encoder
+    core_out = model.core(x_game_state)
+
+    # Get card play mask
+    mask = secondary_masks[HeadType.CARD_PLAY]  # (1, MAX_HAND_SIZE)
+
+    # Run card play head without sampling to get logits
+    head_out = model.head_card_play(core_out.x_hand, core_out.x_global, mask, sample=False)
+
+    # Apply softmax to get probabilities (masked positions are -inf)
+    probs = F.softmax(head_out.logits, dim=-1)  # (1, MAX_HAND_SIZE)
+
+    return probs[0]  # Return first (only) batch item
+
+
+def format_card_probabilities(
+    view_game_state: ViewGameState,
+    probs: torch.Tensor,
+) -> str:
+    """Format card probabilities for display."""
+    lines = ["Card Play Probabilities:"]
+    for idx, card in enumerate(view_game_state.hand):
+        prob = probs[idx].item()
+        playable = card.cost <= view_game_state.energy.current
+        status = "" if playable else " (unplayable)"
+        # Handle NaN (happens when no cards are playable)
+        if prob != prob:  # NaN check
+            prob = 0.0
+        bar_len = int(prob * 20)  # Bar of max 20 chars
+        bar = "█" * bar_len + "░" * (20 - bar_len)
+        lines.append(f"  [{idx}] {card.name:15} [{bar}] {prob:5.1%}{status}")
+    return "\n".join(lines)
+
+
 def get_action_from_model(
     model: ActorCritic,
-    view_game_state,
+    view_game_state: ViewGameState,
     device: torch.device,
-) -> Action:
-    """Get an action from the model for the given game state."""
+    show_card_probs: bool = False,
+    greedy: bool = False,
+) -> tuple[Action, str | None]:
+    """
+    Get an action from the model for the given game state.
+
+    Args:
+        greedy: If True, use argmax instead of sampling (deterministic)
+
+    Returns:
+        (action, card_probs_str) where card_probs_str is None if not in combat
+    """
     # Encode state
     x_game_state = encode_batch_view_game_state([view_game_state], device)
 
@@ -39,9 +104,23 @@ def get_action_from_model(
 
     # Forward pass
     with torch.no_grad():
-        output = model.forward_single(x_game_state, primary_mask, secondary_masks, sample=True)
+        output = model.forward_single(
+            x_game_state, primary_mask, secondary_masks, sample=not greedy
+        )
 
-    return output.to_action()
+        # Get card probabilities if in combat and requested
+        card_probs_str = None
+        has_playable = any(c.cost <= view_game_state.energy.current for c in view_game_state.hand)
+        if (
+            show_card_probs
+            and view_game_state.fsm == ViewFSM.COMBAT_DEFAULT
+            and view_game_state.hand
+            and has_playable
+        ):
+            probs = get_card_probabilities(model, x_game_state, secondary_masks)
+            card_probs_str = format_card_probabilities(view_game_state, probs)
+
+    return output.to_action(), card_probs_str
 
 
 def run_game(
@@ -49,9 +128,14 @@ def run_game(
     device: torch.device,
     delay: float = 0.5,
     verbose: bool = True,
+    show_card_probs: bool = True,
+    greedy: bool = False,
 ) -> tuple[int, int]:
     """
     Run a single game with the trained model.
+
+    Args:
+        greedy: If True, use argmax instead of sampling (deterministic)
 
     Returns:
         (final_floor, final_health)
@@ -64,18 +148,27 @@ def run_game(
         view_game_state = get_view_game_state(game_state)
 
         if verbose:
-            print(f"\n{'=' * 80}")
-            print(f"Step {step_count}")
-            print("=" * 80)
             print(get_view_game_state_str(view_game_state))
-            print("-" * 80)
+            print("-" * N_COL)
 
         # Get action from model
-        action = get_action_from_model(model, view_game_state, device)
+        action, card_probs_str = get_action_from_model(
+            model,
+            view_game_state,
+            device,
+            show_card_probs=verbose and show_card_probs,
+            greedy=greedy,
+        )
 
         if verbose:
+            # Show card probabilities if in combat
+            if card_probs_str:
+                print(card_probs_str)
+                print("-" * N_COL)
+
             action_str = get_action_str(action, view_game_state, fast_mode=False)
             print(f"Action: {action_str}")
+            print("-" * N_COL)
             time.sleep(delay)
 
         # Execute action
@@ -88,11 +181,11 @@ def run_game(
     final_health = final_view.character.health_current
 
     if verbose:
-        print(f"\n{'=' * 80}")
+        print(f"\n{'=' * N_COL}")
         print("GAME OVER")
         print(f"Final Floor: {final_floor}")
         print(f"Final Health: {final_health}")
-        print("=" * 80)
+        print("=" * N_COL)
 
     return final_floor, final_health
 
@@ -126,7 +219,25 @@ def run_game(
     is_flag=True,
     help="Run without rendering (just show final results)",
 )
-def main(exp_path: str, delay: float, device: str, num_games: int, quiet: bool):
+@click.option(
+    "--no-probs",
+    is_flag=True,
+    help="Don't show card probabilities during combat",
+)
+@click.option(
+    "--greedy",
+    is_flag=True,
+    help="Use greedy (argmax) selection instead of sampling",
+)
+def main(
+    exp_path: str,
+    delay: float,
+    device: str,
+    num_games: int,
+    quiet: bool,
+    no_probs: bool,
+    greedy: bool,
+):
     """Test a trained agent by running games."""
     # Load config and model
     config = load_config(f"{exp_path}/config.yml")
@@ -144,7 +255,14 @@ def main(exp_path: str, delay: float, device: str, num_games: int, quiet: bool):
         if not quiet:
             print(f"\n--- Game {i + 1}/{num_games} ---")
 
-        floor, health = run_game(model, device, delay=delay, verbose=not quiet)
+        floor, health = run_game(
+            model,
+            device,
+            delay=delay,
+            verbose=not quiet,
+            show_card_probs=not no_probs,
+            greedy=greedy,
+        )
         results.append((floor, health))
 
         if quiet:

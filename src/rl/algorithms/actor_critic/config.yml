@@ -1,4 +1,4 @@
-exp_name: ppo/test_new_V
+exp_name: ppo/test_new_VII
 num_episodes: 1.0e+6
 log_every: 10
 save_every: 100
@@ -18,7 +18,7 @@ num_epochs: 4
 model:
   # Core encoder
   dim_entity: 64
-  dim_global: 256
+  dim_global: 128
   transformer_dim_ff: 128
   transformer_num_heads: 4
   transformer_num_blocks: 2

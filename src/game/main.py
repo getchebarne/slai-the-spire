@@ -25,10 +25,7 @@ from src.rl.policies import PolicyRandom
 from src.rl.policies import SelectActionMetadata
 
 
-try:
-    _NCOL, _ = os.get_terminal_size()
-except OSError:
-    _NCOL = 80
+_NCOL, _ = os.get_terminal_size()
 
 
 class InvalidActionError(Exception):

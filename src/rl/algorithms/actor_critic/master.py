@@ -305,6 +305,41 @@ def _run_episodes(
     return trajectories
 
 
+def _run_eval_episode(
+    model: ActorCritic,
+    conn: Connection,
+    device: torch.device,
+) -> tuple[float, int]:
+    """
+    Run a single greedy evaluation episode (sample=False).
+
+    Returns (total_reward, episode_length).
+    """
+    conn.send((Command.RESET, None))
+    data: WorkerData = conn.recv()
+
+    total_reward = 0.0
+    episode_length = 0
+
+    model.eval()
+    with torch.no_grad():
+        while not data.game_over:
+            x_game_state = encode_batch_view_game_state([data.view_game_state], device)
+            primary_mask, secondary_masks = get_masks_batch([data.view_game_state], device)
+
+            output = model(x_game_state, primary_mask, secondary_masks, sample=False)
+
+            action = output.get_action(0)
+            conn.send((Command.STEP, action))
+            data = conn.recv()
+
+            total_reward += data.reward
+            episode_length += 1
+
+    model.train()
+    return total_reward, episode_length
+
+
 # =============================================================================
 # GAE and Batch Creation
 # =============================================================================
@@ -701,6 +736,12 @@ def train(
                 avg_length = sum(len(traj) for traj in trajectories) / max(len(trajectories), 1)
                 writer.add_scalar("Trajectory/total_reward", total_reward, episode)
                 writer.add_scalar("Trajectory/avg_length", avg_length, episode)
+
+                # Greedy evaluation episode
+                eval_reward, eval_length = _run_eval_episode(model, conn_parents[0], device)
+                print(f"  eval: reward={eval_reward:.4f}, length={eval_length}")
+                writer.add_scalar("Eval/reward", eval_reward, episode)
+                writer.add_scalar("Eval/length", eval_length, episode)
 
             # Save
             if episode % save_every == 0:
