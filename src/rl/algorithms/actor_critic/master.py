@@ -31,6 +31,7 @@ from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
 from src.rl.models import _slice_core_output
+from src.rl.models.heads import compute_grouped_log_prob_and_entropy
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 
@@ -211,9 +212,7 @@ def _slice_masks(
 
 
 def _run_episodes(
-    model: ActorCritic,
-    conn_parents: list[Connection],
-    device: torch.device,
+    model: ActorCritic, conn_parents: list[Connection], device: torch.device
 ) -> list[Trajectory]:
     """
     Run episodes in parallel across all workers.
@@ -515,12 +514,12 @@ def _recompute_log_probs_batch(
         subset_secondary_idx = secondary_indices[idx]
 
         # Run head
-        _, log_probs, dist = _run_secondary_head_for_training(
+        _, log_probs, entropy = _run_secondary_head_for_training(
             model, head_type, subset_core, subset_mask, subset_secondary_idx, device
         )
 
         secondary_log_probs[idx] = log_probs
-        secondary_entropies[idx] = dist.entropy()
+        secondary_entropies[idx] = entropy
 
     total_log_probs = primary_log_probs + secondary_log_probs
     total_entropies = primary_entropies + secondary_entropies
@@ -535,8 +534,8 @@ def _run_secondary_head_for_training(
     mask: torch.Tensor,
     indices: torch.Tensor,
     device: torch.device,
-):
-    """Run a secondary head and compute log probs for given indices."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Run a secondary head and compute grouped log probs/entropy for given indices."""
     if head_type == HeadType.MAP_SELECT:
         out = model.head_map_select(core_out.x_map, core_out.x_global, mask, sample=False)
     else:
@@ -544,10 +543,9 @@ def _run_secondary_head_for_training(
         entities = model._get_entities(head_type, core_out)
         out = head(entities, core_out.x_global, mask, sample=False)
 
-    dist = torch.distributions.Categorical(logits=out.logits)
-    log_probs = dist.log_prob(indices)
+    log_probs, entropy = compute_grouped_log_prob_and_entropy(out.logits, indices)
 
-    return indices, log_probs, dist
+    return indices, log_probs, entropy
 
 
 def _update_ppo(

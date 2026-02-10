@@ -15,7 +15,10 @@ from src.game.view.state import ViewGameState
 
 
 # Get the terminal width (default to 80 if not available)
-N_COL, _ = os.get_terminal_size()
+try:
+    N_COL, _ = os.get_terminal_size()
+except OSError:
+    N_COL = 80
 
 # For calculating the actual length of strings with ANSI escape characters
 ANSI_ESCAPE_RE = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")

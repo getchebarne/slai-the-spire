@@ -10,7 +10,6 @@ import time
 
 import click
 import torch
-import torch.nn.functional as F
 
 from src.game.action import Action
 from src.game.core.fsm import FSM
@@ -28,6 +27,7 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
+from src.rl.models.heads import get_grouped_probs
 from src.rl.utils import load_config
 
 
@@ -40,11 +40,14 @@ def get_card_probabilities(
     secondary_masks: dict[HeadType, torch.Tensor],
 ) -> torch.Tensor:
     """
-    Get probabilities for each card in hand from the card play head.
+    Get grouped probabilities for cards in hand from the card play head.
+
+    Uses grouped softmax: identical cards are deduplicated so each card type
+    gets a single probability (not split across duplicates).
 
     Returns:
-        Tensor of probabilities (num_cards_in_hand,), normalized over playable cards.
-        Invalid cards (cost > energy) will have probability 0.
+        Tensor of per-position grouped probabilities (MAX_HAND_SIZE,).
+        Identical cards share the same probability value.
     """
     # Run core encoder
     core_out = model.core(x_game_state)
@@ -55,8 +58,8 @@ def get_card_probabilities(
     # Run card play head without sampling to get logits
     head_out = model.head_card_play(core_out.x_hand, core_out.x_global, mask, sample=False)
 
-    # Apply softmax to get probabilities (masked positions are -inf)
-    probs = F.softmax(head_out.logits, dim=-1)  # (1, MAX_HAND_SIZE)
+    # Get grouped probabilities (deduplicates identical cards)
+    probs = get_grouped_probs(head_out.logits)  # (1, MAX_HAND_SIZE)
 
     return probs[0]  # Return first (only) batch item
 
@@ -65,18 +68,31 @@ def format_card_probabilities(
     view_game_state: ViewGameState,
     probs: torch.Tensor,
 ) -> str:
-    """Format card probabilities for display."""
-    lines = ["Card Play Probabilities:"]
+    """Format card probabilities grouped by card type."""
+    # Group cards by name (identical cards share the same probability)
+    seen: dict[str, dict] = {}
+    order: list[str] = []
+
     for idx, card in enumerate(view_game_state.hand):
-        prob = probs[idx].item()
-        playable = card.cost <= view_game_state.energy.current
-        status = "" if playable else " (unplayable)"
-        # Handle NaN (happens when no cards are playable)
-        if prob != prob:  # NaN check
-            prob = 0.0
-        bar_len = int(prob * 20)  # Bar of max 20 chars
+        if card.name not in seen:
+            prob = probs[idx].item()
+            # Handle NaN (shouldn't happen with grouped probs, but safety)
+            if prob != prob:
+                prob = 0.0
+            playable = card.cost <= view_game_state.energy.current
+            seen[card.name] = {"prob": prob, "count": 1, "playable": playable}
+            order.append(card.name)
+        else:
+            seen[card.name]["count"] += 1
+
+    lines = ["Card Play Probabilities:"]
+    for name in order:
+        info = seen[name]
+        count_str = f" x{info['count']}" if info["count"] > 1 else ""
+        status = "" if info["playable"] else " (unplayable)"
+        bar_len = int(info["prob"] * 20)
         bar = "█" * bar_len + "░" * (20 - bar_len)
-        lines.append(f"  [{idx}] {card.name:15} [{bar}] {prob:5.1%}{status}")
+        lines.append(f"  {name}{count_str:4} [{bar}] {info['prob']:5.1%}{status}")
     return "\n".join(lines)
 
 
