@@ -18,37 +18,157 @@ import torch.nn as nn
 
 @dataclass
 class HeadOutput:
-    logits: torch.Tensor  # (B, num_options) raw scores before masking
+    logits: torch.Tensor  # (B, num_options) raw scores after masking
     indices: torch.Tensor | None  # (B,) sampled indices, None if not sampling
     log_probs: torch.Tensor | None  # (B,) log probs of sampled indices, None if not sampling
 
 
-def greedy_select_grouped(masked_logits: torch.Tensor) -> torch.Tensor:
-    """
-    Greedy selection that groups options with identical logits and sums their
-    probabilities before argmax.
+# =============================================================================
+# Grouped Sampling
+# =============================================================================
+#
+# Identical cards produce identical logits (same encoding → same embedding
+# → same score). Rather than splitting probability mass across duplicates,
+# we deduplicate: softmax over one representative per unique logit value,
+# then randomly pick an instance within the chosen group.
+#
+# Example:
+#   Hand: [Strike, Strike, Defend]   logits: [0.5, 0.5, 0.8]
+#   Representatives: Strike(0.5), Defend(0.8)
+#   Grouped softmax: Strike=43%, Defend=57%
+#   If Strike is sampled → randomly pick one of the two Strikes.
+#
+# This gives cleaner gradients (the model learns "play Strike", not
+# "play card in slot 0") and consistent sampling/greedy behavior.
+# =============================================================================
 
-    By architecture design, identical cards produce identical logits (same
-    encoding → same embedding → same score). This ensures that e.g.:
-      Hand: [Strike, Strike, Defend]  →  probs: [0.30, 0.30, 0.40]
-      Grouped: Strike=0.60, Defend=0.40  →  argmax selects Strike.
+
+def _get_representative_mask(masked_logits: torch.Tensor) -> torch.Tensor:
+    """
+    For groups of identical valid logits, mark only the first occurrence.
 
     Args:
-        masked_logits: Logits with -inf for invalid positions (B, N)
+        masked_logits: (B, N) with -inf for invalid positions
 
     Returns:
-        Selected indices (B,)
+        Boolean mask (B, N), True = first valid occurrence of its logit value
     """
-    probs = torch.softmax(masked_logits, dim=-1)  # (B, N)
+    N = masked_logits.shape[1]
+    device = masked_logits.device
 
-    # Group by identical logits: for each position, sum probs of all positions
-    # with the same logit value. (B, N, 1) == (B, 1, N) → (B, N, N)
-    same_group = torch.unsqueeze(masked_logits, 2) == torch.unsqueeze(masked_logits, 1)
+    valid = masked_logits != float("-inf")  # (B, N)
 
-    # Sum probabilities within each group → (B, N)
-    grouped_probs = torch.sum(same_group.float() * torch.unsqueeze(probs, 1), dim=2)
+    # same_logit[b, i, j] = True if positions i and j share a logit value
+    same_logit = torch.unsqueeze(masked_logits, 2) == torch.unsqueeze(masked_logits, 1)
 
-    return torch.argmax(grouped_probs, dim=-1)
+    # earlier[i, j] = True if j < i (strict lower-triangular)
+    earlier = torch.tril(torch.ones(N, N, device=device, dtype=torch.bool), diagonal=-1)
+
+    # has_earlier_dup[b, i] = exists valid j < i with same logit as i
+    has_earlier_dup = torch.any(
+        same_logit & earlier.unsqueeze(0) & valid.unsqueeze(1),
+        dim=2,
+    )
+
+    return valid & ~has_earlier_dup
+
+
+def _sample_grouped(masked_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Sample from groups of identical logits.
+
+    1. Deduplicate: keep one representative per unique logit value
+    2. Softmax over representatives → group probabilities
+    3. Sample a group
+    4. Uniformly pick an instance within the chosen group
+
+    log_prob = log(group_probability). The within-group uniform selection
+    is not part of the policy (identical cards are interchangeable).
+
+    Args:
+        masked_logits: (B, N) with -inf for invalid positions
+
+    Returns:
+        (indices, log_probs): selected position indices (B,) and group log probs (B,)
+    """
+    B = masked_logits.shape[0]
+    device = masked_logits.device
+
+    # Deduplicate: softmax over one representative per unique logit
+    is_rep = _get_representative_mask(masked_logits)
+    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
+
+    # Sample a group (via its representative)
+    group_dist = torch.distributions.Categorical(logits=rep_logits)
+    rep_idx = group_dist.sample()
+    log_probs = group_dist.log_prob(rep_idx)
+
+    # Find all valid members of the sampled group
+    rep_values = masked_logits[torch.arange(B, device=device), rep_idx]
+    valid = masked_logits != float("-inf")
+    in_group = (masked_logits == torch.unsqueeze(rep_values, 1)) & valid
+
+    # Uniformly pick one instance from the group
+    uniform_probs = in_group.float()
+    uniform_probs = uniform_probs / torch.sum(uniform_probs, dim=1, keepdim=True)
+    indices = torch.distributions.Categorical(probs=uniform_probs).sample()
+
+    return indices, log_probs
+
+
+def compute_grouped_log_prob_and_entropy(
+    masked_logits: torch.Tensor,
+    indices: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute grouped log probability and entropy for given action indices.
+
+    Used during PPO recomputation to evaluate actions under the current policy.
+    Maps each index to its group's representative, then evaluates the grouped
+    distribution.
+
+    Args:
+        masked_logits: (B, N) with -inf for invalid positions
+        indices: (B,) position indices of actions taken
+
+    Returns:
+        (log_probs, entropy) of the grouped distribution, both (B,)
+    """
+    B = masked_logits.shape[0]
+    device = masked_logits.device
+
+    is_rep = _get_representative_mask(masked_logits)
+    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
+    group_dist = torch.distributions.Categorical(logits=rep_logits)
+
+    # Map each index to its group's representative
+    idx_logits = masked_logits[torch.arange(B, device=device), indices]
+    rep_for_idx = is_rep & (masked_logits == torch.unsqueeze(idx_logits, 1))
+    rep_indices = torch.argmax(rep_for_idx.int(), dim=1)
+
+    return group_dist.log_prob(rep_indices), group_dist.entropy()
+
+
+def get_grouped_probs(masked_logits: torch.Tensor) -> torch.Tensor:
+    """
+    Compute per-position probabilities from the grouped distribution.
+
+    Each position gets its group's probability. Identical cards (same logit)
+    share the same probability value.
+
+    Args:
+        masked_logits: (B, N) with -inf for invalid positions
+
+    Returns:
+        (B, N) probabilities
+    """
+    is_rep = _get_representative_mask(masked_logits)
+    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
+    rep_probs = torch.softmax(rep_logits, dim=-1)
+
+    # Propagate each representative's probability to all group members
+    same_logit = torch.unsqueeze(masked_logits, 2) == torch.unsqueeze(masked_logits, 1)
+    return torch.sum(same_logit.float() * torch.unsqueeze(rep_probs, 1), dim=2)
 
 
 def sample_from_logits(
@@ -57,7 +177,10 @@ def sample_from_logits(
     sample: bool,
 ) -> HeadOutput:
     """
-    Apply mask to logits and optionally sample.
+    Apply mask to logits and optionally sample using grouped distribution.
+
+    Grouped sampling deduplicates identical logits (from identical cards)
+    so the model samples over card *types*, not card *slots*.
 
     Args:
         logits: Raw scores (B, num_options)
@@ -65,7 +188,7 @@ def sample_from_logits(
         sample: Whether to sample an action
 
     Returns:
-        HeadOutput with logits, and optionally indices/log_probs
+        HeadOutput with masked logits, and optionally indices/log_probs
     """
     # Mask invalid actions
     masked_logits = logits.masked_fill(~mask, float("-inf"))
@@ -73,10 +196,8 @@ def sample_from_logits(
     if not sample:
         return HeadOutput(logits=masked_logits, indices=None, log_probs=None)
 
-    # Sample from categorical distribution
-    dist = torch.distributions.Categorical(logits=masked_logits)
-    indices = dist.sample()
-    log_probs = dist.log_prob(indices)
+    # Grouped sampling: deduplicate identical logits, sample group, pick instance
+    indices, log_probs = _sample_grouped(masked_logits)
 
     return HeadOutput(logits=masked_logits, indices=indices, log_probs=log_probs)
 
