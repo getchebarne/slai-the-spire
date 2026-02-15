@@ -19,14 +19,11 @@ from src.game.const import MAX_SIZE_DECK
 from src.game.const import MAX_SIZE_DISC_PILE
 from src.game.const import MAX_SIZE_DRAW_PILE
 from src.game.const import MAX_SIZE_HAND
-from src.rl.encoding.fsm import get_encoding_dim_fsm
+from src.rl.encoding.fsm import FSM_DIM
 from src.rl.encoding.state import XGameState
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapEncoder
-
-
-_FSM_DIM = get_encoding_dim_fsm()
 
 
 class EntityType(IntEnum):
@@ -241,7 +238,7 @@ class Core(nn.Module):
             _num_seq_entity_types * 2 * dim_entity  # mean + max for each sequence type
             + _num_singleton_entities * dim_entity  # character + energy
             + map_encoder_dim
-            + _FSM_DIM
+            + FSM_DIM
         )
         self._global_projection = nn.Sequential(
             nn.Linear(global_input_dim, dim_global),
@@ -307,7 +304,7 @@ class Core(nn.Module):
         # Get type embeddings for all positions
         type_emb = self._type_embeddings(type_indices)  # (B, total_entities, dim_entity)
 
-        # Concatenate all entities
+        # Concatenate all entities and their masks
         x_entity_cat = torch.cat(
             [
                 x_card_proj,
@@ -317,10 +314,6 @@ class Core(nn.Module):
             ],
             dim=1,
         )
-
-        # Add type embeddings to entity embeddings
-        x_entity_cat = x_entity_cat + type_emb
-
         x_entity_mask = torch.cat(
             [
                 x_game_state.x_hand_mask_pad,
@@ -334,6 +327,10 @@ class Core(nn.Module):
             ],
             dim=1,
         )
+
+        # Add type embeddings to entity embeddings. Similar to adding positional encodings
+        # in Attention Is All You Need
+        x_entity_cat = x_entity_cat + type_emb
 
         # Pass through entity transformer
         # Invert mask: encoding uses True=valid, but PyTorch MHA key_padding_mask expects True=padded

@@ -19,11 +19,12 @@ from torch.multiprocessing import Pipe
 from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
-from src.rl.action_space import ActionChoice
-from src.rl.action_space import CHOICE_TO_HEAD_IDX
-from src.rl.action_space import HEAD_TYPE_NONE
-from src.rl.action_space import HeadType
-from src.rl.action_space.masks import get_masks_batch
+from src.rl.action_space.masks import MaskBatch
+from src.rl.action_space.masks import SELECTION_SIZES
+from src.rl.action_space.masks import get_mask_batch
+from src.rl.action_space.types import DECISION_PRIMARIES
+from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import PRIMARY_NUM_CHOICES
 from src.rl.algorithms.actor_critic.worker import Command
 from src.rl.algorithms.actor_critic.worker import WorkerData
 from src.rl.algorithms.actor_critic.worker import worker
@@ -46,12 +47,13 @@ class Transition:
     """Single transition in a trajectory. Stores pre-encoded state."""
 
     x_game_state: XGameState  # Pre-encoded state (batch=1)
-    primary_mask: torch.Tensor  # (1, num_action_choices)
-    secondary_masks: dict[HeadType, torch.Tensor]  # {HeadType: (1, head_output_size)}
-    action_choice: ActionChoice
-    action_choice_log_prob: torch.Tensor
-    secondary_index: int  # -1 if terminal
-    secondary_log_prob: torch.Tensor
+    head_type_primary: HeadTypePrimary
+    primary_mask: torch.Tensor | None  # (1, num_choices) for decision, None for direct
+    selection_mask: torch.Tensor  # (1, max_entities)
+    primary_index: int  # -1 for direct primaries
+    primary_log_prob: torch.Tensor
+    selection_index: int  # -1 if terminal
+    selection_log_prob: torch.Tensor
     value: torch.Tensor
     reward: float
 
@@ -71,12 +73,13 @@ class TrajectoryBatch:
     """Batched trajectory data for training."""
 
     x_game_states: list[XGameState]  # List of pre-encoded states (each batch=1)
-    primary_masks: list[torch.Tensor]  # List of primary masks (each batch=1)
-    secondary_masks_list: list[dict[HeadType, torch.Tensor]]  # List of secondary mask dicts
-    action_choices: torch.Tensor  # (N,) ActionChoice indices
-    action_choice_log_probs: torch.Tensor  # (N,)
-    secondary_indices: torch.Tensor  # (N,) -1 if terminal
-    secondary_log_probs: torch.Tensor  # (N,)
+    head_type_primaries: torch.Tensor  # (N,) HeadTypePrimary values
+    primary_masks: list[torch.Tensor | None]  # each (1, num_choices) or None
+    selection_masks: list[torch.Tensor]  # each (1, max_entities)
+    primary_indices: torch.Tensor  # (N,)
+    primary_log_probs: torch.Tensor  # (N,)
+    selection_indices: torch.Tensor  # (N,)
+    selection_log_probs: torch.Tensor  # (N,)
     values: torch.Tensor  # (N, 1)
     returns: torch.Tensor  # (N, 1)
     advantages: torch.Tensor  # (N, 1)
@@ -86,7 +89,7 @@ class TrajectoryBatch:
 
 
 # =============================================================================
-# XGameState Concatenation
+# XGameState Helpers
 # =============================================================================
 
 
@@ -150,22 +153,6 @@ def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
     )
 
 
-def _concat_masks(
-    primary_masks: list[torch.Tensor],
-    secondary_masks_list: list[dict[HeadType, torch.Tensor]],
-) -> tuple[torch.Tensor, dict[HeadType, torch.Tensor]]:
-    """Concatenate masks for a minibatch."""
-    primary_mask = torch.cat(primary_masks, dim=0)
-
-    secondary_masks = {}
-    for head_type in HeadType:
-        secondary_masks[head_type] = torch.cat(
-            [sm[head_type] for sm in secondary_masks_list], dim=0
-        )
-
-    return primary_mask, secondary_masks
-
-
 def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
     """Slice a single sample from a batched XGameState."""
     return XGameState(
@@ -194,16 +181,69 @@ def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
     )
 
 
-def _slice_masks(
-    primary_mask: torch.Tensor,
-    secondary_masks: dict[HeadType, torch.Tensor],
-    idx: int,
-) -> tuple[torch.Tensor, dict[HeadType, torch.Tensor]]:
-    """Slice masks for a single sample."""
-    return (
-        primary_mask[idx : idx + 1],
-        {ht: sm[idx : idx + 1] for ht, sm in secondary_masks.items()},
-    )
+# =============================================================================
+# Mask Extraction Helpers
+# =============================================================================
+
+
+def _extract_per_sample_masks(
+    mask_batch: MaskBatch,
+    batch_idx: int,
+    head_type_primary: HeadTypePrimary,
+) -> tuple[torch.Tensor | None, torch.Tensor]:
+    """
+    Extract per-sample masks from a MaskBatch.
+
+    Returns (primary_mask, selection_mask) each with batch dim 1.
+    primary_mask is None for direct primaries.
+    """
+    # Find this sample's position within its group
+    route = mask_batch.route[head_type_primary]
+    local_idx = (route == batch_idx).nonzero(as_tuple=True)[0].item()
+
+    primary_mask = None
+    if head_type_primary in DECISION_PRIMARIES:
+        primary_mask = mask_batch.primary_masks[head_type_primary][local_idx : local_idx + 1]
+
+    selection_mask = mask_batch.selection_masks[head_type_primary][local_idx : local_idx + 1]
+
+    return primary_mask, selection_mask
+
+
+def _build_mask_batch_from_samples(
+    head_type_primaries: list[int],
+    primary_masks: list[torch.Tensor | None],
+    selection_masks: list[torch.Tensor],
+    device: torch.device,
+) -> MaskBatch:
+    """Rebuild MaskBatch from per-sample data for PPO recomputation."""
+    route: dict[HeadTypePrimary, list[int]] = {htp: [] for htp in HeadTypePrimary}
+
+    for i, htp_val in enumerate(head_type_primaries):
+        route[HeadTypePrimary(htp_val)].append(i)
+
+    route_tensors: dict[HeadTypePrimary, torch.Tensor] = {}
+    pm_dict: dict[HeadTypePrimary, torch.Tensor] = {}
+    sm_dict: dict[HeadTypePrimary, torch.Tensor] = {}
+
+    for htp in HeadTypePrimary:
+        idxs = route[htp]
+        route_tensors[htp] = torch.tensor(idxs, dtype=torch.long, device=device)
+
+        if not idxs:
+            if htp in DECISION_PRIMARIES:
+                pm_dict[htp] = torch.zeros(
+                    0, PRIMARY_NUM_CHOICES[htp], dtype=torch.bool, device=device
+                )
+            sm_dict[htp] = torch.zeros(0, SELECTION_SIZES[htp], dtype=torch.bool, device=device)
+            continue
+
+        if htp in DECISION_PRIMARIES:
+            pm_dict[htp] = torch.cat([primary_masks[i] for i in idxs], dim=0).to(device)
+
+        sm_dict[htp] = torch.cat([selection_masks[i] for i in idxs], dim=0).to(device)
+
+    return MaskBatch(route=route_tensors, primary_masks=pm_dict, selection_masks=sm_dict)
 
 
 # =============================================================================
@@ -216,9 +256,6 @@ def _run_episodes(
 ) -> list[Trajectory]:
     """
     Run episodes in parallel across all workers.
-
-    Note: For small models (<1M params), CPU is faster than MPS/GPU due to
-    transfer overhead. Use device='cpu' for best performance on small models.
 
     Returns a list of trajectories, one per worker.
     """
@@ -257,11 +294,11 @@ def _run_episodes(
             # Encode all states at once
             x_game_state = encode_batch_view_game_state(view_game_states, device)
 
-            # Get masks for all states
-            primary_mask, secondary_masks = get_masks_batch(view_game_states, device)
+            # Build MaskBatch (routes + masks)
+            mask_batch = get_mask_batch(view_game_states, device)
 
             # Forward pass
-            output = model(x_game_state, primary_mask, secondary_masks, sample=True)
+            output = model(x_game_state, mask_batch, sample=True)
 
             # Send actions to workers
             for i, env_idx in enumerate(active_envs):
@@ -273,24 +310,22 @@ def _run_episodes(
             for env_idx in running_envs:
                 new_worker_datas[env_idx] = conn_parents[env_idx].recv()
 
-            # Store transitions with pre-encoded states and masks
+            # Store transitions
             for i, env_idx in enumerate(running_envs):
                 reward = new_worker_datas[env_idx].reward
 
-                # Slice out this sample's encoded state and masks
-                x_state_single = _slice_x_game_state(x_game_state, i)
-                primary_mask_single, secondary_masks_single = _slice_masks(
-                    primary_mask, secondary_masks, i
-                )
+                htp = HeadTypePrimary(output.head_type_primaries[i].item())
+                primary_mask, selection_mask = _extract_per_sample_masks(mask_batch, i, htp)
 
                 transition = Transition(
-                    x_game_state=x_state_single,
-                    primary_mask=primary_mask_single,
-                    secondary_masks=secondary_masks_single,
-                    action_choice=ActionChoice(output.action_choices[i].item()),
-                    action_choice_log_prob=output.action_choice_log_probs[i],
-                    secondary_index=output.secondary_indices[i].item(),
-                    secondary_log_prob=output.secondary_log_probs[i],
+                    x_game_state=_slice_x_game_state(x_game_state, i),
+                    head_type_primary=htp,
+                    primary_mask=primary_mask,
+                    selection_mask=selection_mask,
+                    primary_index=output.primary_indices[i].item(),
+                    primary_log_prob=output.primary_log_probs[i],
+                    selection_index=output.selection_indices[i].item(),
+                    selection_log_prob=output.selection_log_probs[i],
                     value=output.values[i],
                     reward=reward,
                 )
@@ -324,9 +359,9 @@ def _run_eval_episode(
     with torch.no_grad():
         while not data.game_over:
             x_game_state = encode_batch_view_game_state([data.view_game_state], device)
-            primary_mask, secondary_masks = get_masks_batch([data.view_game_state], device)
+            mask_batch = get_mask_batch([data.view_game_state], device)
 
-            output = model(x_game_state, primary_mask, secondary_masks, sample=False)
+            output = model(x_game_state, mask_batch, sample=False)
 
             action = output.get_action(0)
             conn.send((Command.STEP, action))
@@ -379,12 +414,13 @@ def _create_batch(
 ) -> TrajectoryBatch:
     """Create a training batch from trajectories."""
     all_x_game_states = []
+    all_head_type_primaries = []
     all_primary_masks = []
-    all_secondary_masks = []
-    all_action_choices = []
-    all_action_choice_log_probs = []
-    all_secondary_indices = []
-    all_secondary_log_probs = []
+    all_selection_masks = []
+    all_primary_indices = []
+    all_primary_log_probs = []
+    all_selection_indices = []
+    all_selection_log_probs = []
     all_values = []
     all_returns = []
     all_advantages = []
@@ -399,27 +435,27 @@ def _create_batch(
 
         for i, trans in enumerate(trajectory.transitions):
             all_x_game_states.append(trans.x_game_state)
+            all_head_type_primaries.append(int(trans.head_type_primary))
             all_primary_masks.append(trans.primary_mask)
-            all_secondary_masks.append(trans.secondary_masks)
-            all_action_choices.append(int(trans.action_choice))
-            all_action_choice_log_probs.append(trans.action_choice_log_prob.item())
-            all_secondary_indices.append(trans.secondary_index)
-            all_secondary_log_probs.append(trans.secondary_log_prob.item())
+            all_selection_masks.append(trans.selection_mask)
+            all_primary_indices.append(trans.primary_index)
+            all_primary_log_probs.append(trans.primary_log_prob.item())
+            all_selection_indices.append(trans.selection_index)
+            all_selection_log_probs.append(trans.selection_log_prob.item())
             all_values.append(trans.value)
             all_returns.append(returns[i])
             all_advantages.append(advantages[i])
 
     batch = TrajectoryBatch(
         x_game_states=all_x_game_states,
+        head_type_primaries=torch.tensor(all_head_type_primaries, dtype=torch.long, device=device),
         primary_masks=all_primary_masks,
-        secondary_masks_list=all_secondary_masks,
-        action_choices=torch.tensor(all_action_choices, dtype=torch.long, device=device),
-        action_choice_log_probs=torch.tensor(
-            all_action_choice_log_probs, dtype=torch.float32, device=device
-        ),
-        secondary_indices=torch.tensor(all_secondary_indices, dtype=torch.long, device=device),
-        secondary_log_probs=torch.tensor(
-            all_secondary_log_probs, dtype=torch.float32, device=device
+        selection_masks=all_selection_masks,
+        primary_indices=torch.tensor(all_primary_indices, dtype=torch.long, device=device),
+        primary_log_probs=torch.tensor(all_primary_log_probs, dtype=torch.float32, device=device),
+        selection_indices=torch.tensor(all_selection_indices, dtype=torch.long, device=device),
+        selection_log_probs=torch.tensor(
+            all_selection_log_probs, dtype=torch.float32, device=device
         ),
         values=torch.cat(all_values, dim=0).detach(),
         returns=torch.tensor(all_returns, dtype=torch.float32, device=device).view(-1, 1),
@@ -451,33 +487,31 @@ def _minibatch_indices(total: int, minibatch_size: int) -> Iterator[list[int]]:
 def _recompute_log_probs_batch(
     model: ActorCritic,
     x_game_states: list[XGameState],
-    primary_masks: list[torch.Tensor],
-    secondary_masks_list: list[dict[HeadType, torch.Tensor]],
-    action_choices: torch.Tensor,
-    secondary_indices: torch.Tensor,
+    head_type_primaries: list[int],
+    primary_masks: list[torch.Tensor | None],
+    selection_masks: list[torch.Tensor],
+    primary_indices: torch.Tensor,
+    selection_indices: torch.Tensor,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Recompute log probs and entropy for a batch with current policy.
-
-    Uses pre-encoded states - just concatenates, no re-encoding!
+    Recompute log probs and entropy for a minibatch with current policy.
 
     Returns (log_probs, entropies, values) - all shape (N,) or (N, 1)
     """
     B = len(x_game_states)
 
-    # Concatenate pre-encoded states
+    # Concatenate pre-encoded states and move to device
     x_game_state = _concat_x_game_states(x_game_states)
     x_game_state = _move_x_game_state(x_game_state, device)
 
-    # Concatenate masks
-    primary_mask, secondary_masks = _concat_masks(primary_masks, secondary_masks_list)
-    primary_mask = primary_mask.to(device)
-    secondary_masks = {k: v.to(device) for k, v in secondary_masks.items()}
+    # Rebuild MaskBatch for this minibatch
+    mask_batch = _build_mask_batch_from_samples(
+        head_type_primaries, primary_masks, selection_masks, device
+    )
 
-    # Ensure indices are on device
-    action_choices = action_choices.to(device)
-    secondary_indices = secondary_indices.to(device)
+    primary_indices = primary_indices.to(device)
+    selection_indices = selection_indices.to(device)
 
     # Core encoder (all samples)
     core_out = model.core(x_game_state)
@@ -485,67 +519,78 @@ def _recompute_log_probs_batch(
     # Value head (all samples)
     values = model.head_value(core_out.x_global)
 
-    # Primary head (all samples) - get distributions
-    primary_out = model.head_primary(core_out.x_global, primary_mask, sample=False)
-    primary_dist = torch.distributions.Categorical(logits=primary_out.logits)
-    primary_log_probs = primary_dist.log_prob(action_choices)
-    primary_entropies = primary_dist.entropy()
+    # Initialize log probs and entropies
+    total_log_probs = torch.zeros(B, device=device)
+    total_entropies = torch.zeros(B, device=device)
 
-    # Secondary heads - group by head type (vectorized, no .item()!)
-    secondary_log_probs = torch.zeros(B, device=device)
-    secondary_entropies = torch.zeros(B, device=device)
-
-    # Get head type for each sample
-    head_type_lookup = CHOICE_TO_HEAD_IDX.to(device)
-    head_type_indices = head_type_lookup[action_choices]  # (B,)
-
-    # Mask for samples that need secondary heads (non-terminal with valid index)
-    needs_secondary = (head_type_indices != HEAD_TYPE_NONE) & (secondary_indices >= 0)
-
-    for head_type in HeadType:
-        # Find samples needing this head
-        sample_mask = needs_secondary & (head_type_indices == head_type)
-        if not torch.any(sample_mask):
+    # Process each primary group
+    for htp in HeadTypePrimary:
+        idx = mask_batch.route[htp]
+        if len(idx) == 0:
             continue
 
-        idx = torch.nonzero(sample_mask, as_tuple=True)[0]
         subset_core = _slice_core_output(core_out, idx)
-        subset_mask = secondary_masks[head_type][idx]
-        subset_secondary_idx = secondary_indices[idx]
 
-        # Run head
-        _, log_probs, entropy = _run_secondary_head_for_training(
-            model, head_type, subset_core, subset_mask, subset_secondary_idx, device
-        )
+        if htp in DECISION_PRIMARIES:
+            # --- Recompute primary (binary) decision ---
+            primary_mask = mask_batch.primary_masks[htp]
+            decision_head = model._decision_heads[htp]
+            out = decision_head(subset_core.x_global, primary_mask, sample=False)
 
-        secondary_log_probs[idx] = log_probs
-        secondary_entropies[idx] = entropy
+            primary_dist = torch.distributions.Categorical(logits=out.logits)
+            group_primary_idx = primary_indices[idx]
+            total_log_probs[idx] += primary_dist.log_prob(group_primary_idx)
+            total_entropies[idx] += primary_dist.entropy()
 
-    total_log_probs = primary_log_probs + secondary_log_probs
-    total_entropies = primary_entropies + secondary_entropies
+            # --- Recompute secondary selection (for samples that chose "select") ---
+            needs_secondary = group_primary_idx == 1
+            if torch.any(needs_secondary):
+                sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
+                sec_batch = idx[sec_local]
+
+                sec_core = _slice_core_output(core_out, sec_batch)
+                sec_mask = mask_batch.selection_masks[htp][sec_local]
+                sec_indices = selection_indices[sec_batch]
+
+                sec_log_probs, sec_entropy = _run_selection_for_training(
+                    model, htp, sec_core, sec_mask, sec_indices
+                )
+
+                total_log_probs[sec_batch] += sec_log_probs
+                total_entropies[sec_batch] += sec_entropy
+
+        else:
+            # --- Direct primary: recompute selection ---
+            sel_mask = mask_batch.selection_masks[htp]
+            sel_indices = selection_indices[idx]
+
+            sel_log_probs, sel_entropy = _run_selection_for_training(
+                model, htp, subset_core, sel_mask, sel_indices
+            )
+
+            total_log_probs[idx] += sel_log_probs
+            total_entropies[idx] += sel_entropy
 
     return total_log_probs, total_entropies, values
 
 
-def _run_secondary_head_for_training(
+def _run_selection_for_training(
     model: ActorCritic,
-    head_type: HeadType,
+    head_type: HeadTypePrimary,
     core_out,
     mask: torch.Tensor,
     indices: torch.Tensor,
-    device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Run a secondary head and compute grouped log probs/entropy for given indices."""
-    if head_type == HeadType.MAP_SELECT:
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run a selection head and compute grouped log probs/entropy for PPO."""
+    if head_type == HeadTypePrimary.MAP_SELECT:
         out = model.head_map_select(core_out.x_map, core_out.x_global, mask, sample=False)
     else:
-        head = model._heads[head_type]
-        entities = model._get_entities(head_type, core_out)
+        head = model._selection_heads[head_type]
+        entities = model._get_selection_entities(head_type, core_out)
         out = head(entities, core_out.x_global, mask, sample=False)
 
     log_probs, entropy = compute_grouped_log_prob_and_entropy(out.logits, indices)
-
-    return indices, log_probs, entropy
+    return log_probs, entropy
 
 
 def _update_ppo(
@@ -569,30 +614,32 @@ def _update_ppo(
 
     for _ in range(num_epochs):
         for mb_idxs in _minibatch_indices(len(batch), minibatch_size):
-            # Gather minibatch data (pre-encoded states and masks)
+            # Gather minibatch data
             mb_x_states = [batch.x_game_states[i] for i in mb_idxs]
+            mb_htps = [batch.head_type_primaries[i].item() for i in mb_idxs]
             mb_primary_masks = [batch.primary_masks[i] for i in mb_idxs]
-            mb_secondary_masks = [batch.secondary_masks_list[i] for i in mb_idxs]
-            mb_action_choices = batch.action_choices[mb_idxs]
-            mb_secondary_indices = batch.secondary_indices[mb_idxs]
+            mb_selection_masks = [batch.selection_masks[i] for i in mb_idxs]
+            mb_primary_indices = batch.primary_indices[mb_idxs]
+            mb_selection_indices = batch.selection_indices[mb_idxs]
 
-            # Recompute with current policy (uses concatenation, no re-encoding!)
+            # Recompute with current policy
             log_probs_new, entropies, values_new = _recompute_log_probs_batch(
                 model,
                 mb_x_states,
+                mb_htps,
                 mb_primary_masks,
-                mb_secondary_masks,
-                mb_action_choices,
-                mb_secondary_indices,
+                mb_selection_masks,
+                mb_primary_indices,
+                mb_selection_indices,
                 device,
             )
 
-            # Old log probs (move to device)
-            log_probs_old = batch.action_choice_log_probs[mb_idxs].to(
+            # Old log probs
+            log_probs_old = batch.primary_log_probs[mb_idxs].to(
                 device
-            ) + batch.secondary_log_probs[mb_idxs].to(device)
+            ) + batch.selection_log_probs[mb_idxs].to(device)
 
-            # Advantages and returns (move to device)
+            # Advantages and returns
             advantages = torch.squeeze(batch.advantages[mb_idxs]).to(device)
             returns = batch.returns[mb_idxs].to(device)
             values_old = batch.values[mb_idxs].to(device)
@@ -656,8 +703,8 @@ def _get_entropy_schedule(
     for ep in range(num_episodes):
         if ep <= elbow:
             coefs.append(slope * ep + max_coef)
-        else:
-            coefs.append(min_coef)
+    else:
+        coefs.append(min_coef)
 
     return coefs
 
@@ -760,7 +807,6 @@ if __name__ == "__main__":
 
     # Model
     model = ActorCritic(**config["model"])
-    # print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     # Optimizer
     optimizer = init_optimizer(config["optimizer"]["name"], model, **config["optimizer"]["kwargs"])

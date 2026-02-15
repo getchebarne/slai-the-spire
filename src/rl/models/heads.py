@@ -1,15 +1,3 @@
-"""
-Action heads for the Actor-Critic model.
-
-This module contains all the heads used to select actions:
-- HeadActionType: Selects high-level action type (play card, end turn, etc.)
-- HeadEntitySelection: Base class for selecting one entity from a sequence
-- HeadCardPlay, HeadCardDiscard, HeadCardReward, HeadCardUpgrade: Card selection
-- HeadMonsterSelect: Monster targeting
-- HeadMapSelect: Map node selection
-- HeadValue: State value estimation (critic)
-"""
-
 from dataclasses import dataclass
 
 import torch
@@ -203,33 +191,24 @@ def sample_from_logits(
 
 
 # =============================================================================
-# Action Type Head (Primary)
+# Binary Choice Head (for decision primaries)
 # =============================================================================
 
 
-class HeadActionType(nn.Module):
+class HeadBinaryChoice(nn.Module):
     """
-    Primary head that selects the action type.
+    Small MLP for binary decisions (e.g., end_turn vs play_card).
 
-    This head chooses between high-level action types (e.g., play card vs end turn).
-    The number of outputs is dynamic based on the FSM state.
+    One instance per decision primary (COMBAT_DEFAULT, CARD_REWARD, REST_SITE).
     """
 
-    def __init__(self, dim_global: int, dim_ff: int, max_action_types: int):
-        """
-        Args:
-            dim_global: Dimension of the global context vector
-            dim_ff: Hidden dimension of the feedforward network
-            max_action_types: Maximum number of action types (for output layer size)
-        """
+    def __init__(self, dim_global: int, dim_ff: int, num_choices: int = 2):
         super().__init__()
 
         self._scorer = nn.Sequential(
             nn.Linear(dim_global, dim_ff),
             nn.ReLU(),
-            nn.Linear(dim_ff, dim_ff),
-            nn.ReLU(),
-            nn.Linear(dim_ff, max_action_types),
+            nn.Linear(dim_ff, num_choices),
         )
 
     def forward(
@@ -239,21 +218,17 @@ class HeadActionType(nn.Module):
         sample: bool = True,
     ) -> HeadOutput:
         """
-        Score and optionally sample action type.
+        Score and optionally sample from binary choices.
 
         Args:
             x_global: Global context vector (B, dim_global)
-            mask: Valid action type mask (B, num_action_types), True = valid
+            mask: Valid choice mask (B, num_choices), True = valid
             sample: Whether to sample an action
 
         Returns:
             HeadOutput with scores and optionally sampled indices
         """
-        logits = self._scorer(x_global)  # (B, max_action_types)
-
-        # Slice to match mask size (for FSM states with fewer action types)
-        logits = logits[:, : mask.shape[1]]
-
+        logits = self._scorer(x_global)
         return sample_from_logits(logits, mask, sample)
 
 

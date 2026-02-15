@@ -1,24 +1,26 @@
-from src.rl.action_space.masks import get_masks
-from src.rl.action_space.masks import get_masks_batch
-from src.rl.action_space.types import ActionChoice
-from src.rl.action_space.types import CHOICE_TO_ACTION_TYPE
-from src.rl.action_space.types import CHOICE_TO_HEAD
-from src.rl.action_space.types import CHOICE_TO_HEAD_IDX
-from src.rl.action_space.types import HEAD_TYPE_NONE
-from src.rl.action_space.types import HeadType
-from src.rl.action_space.types import NUM_ACTION_CHOICES
-from src.rl.action_space.types import NUM_HEAD_TYPES
+from src.rl.action_space.masks import MaskBatch
+from src.rl.action_space.masks import get_mask_batch
+from src.rl.action_space.masks import SELECTION_SIZES
+from src.rl.action_space.route import get_route_primary
+from src.rl.action_space.types import DECISION_PRIMARIES
+from src.rl.action_space.types import DIRECT_PRIMARIES
+from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import HeadTypeSecondary
+from src.rl.action_space.types import PRIMARY_NUM_CHOICES
+from src.rl.action_space.types import PRIMARY_TO_SECONDARY
+from src.rl.action_space.types import to_action
 
 
 __all__ = [
-    "ActionChoice",
-    "CHOICE_TO_ACTION_TYPE",
-    "CHOICE_TO_HEAD",
-    "CHOICE_TO_HEAD_IDX",
-    "HEAD_TYPE_NONE",
-    "HeadType",
-    "NUM_ACTION_CHOICES",
-    "NUM_HEAD_TYPES",
-    "get_masks",
-    "get_masks_batch",
+    "DECISION_PRIMARIES",
+    "DIRECT_PRIMARIES",
+    "HeadTypePrimary",
+    "HeadTypeSecondary",
+    "MaskBatch",
+    "PRIMARY_NUM_CHOICES",
+    "PRIMARY_TO_SECONDARY",
+    "SELECTION_SIZES",
+    "get_mask_batch",
+    "get_route_primary",
+    "to_action",
 ]

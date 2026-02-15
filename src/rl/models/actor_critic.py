@@ -1,15 +1,15 @@
 """
-Actor-Critic model with hierarchical action heads.
+Actor-Critic model with per-FSM-state hierarchical action heads.
 
 Architecture:
 1. Core encoder processes game state → entity embeddings + global context
-2. Primary head selects ActionChoice (unambiguous action + routing)
-3. Secondary heads select specific indices (grouped by head type)
-4. Value head estimates state value
-
-Key design: ActionChoice directly determines which secondary head to use,
-eliminating FSM from the forward pass entirely. FSM is only used when
-building masks (before calling forward).
+2. Samples are routed by HeadTypePrimary (determined by FSM state)
+3. Decision primaries (COMBAT_DEFAULT, CARD_REWARD, REST_SITE):
+   - Binary head makes a choice (e.g., end_turn vs play_card)
+   - If the "select" choice is picked, a secondary head picks the entity
+4. Direct primaries (COMBAT_CARD_DISCARD, COMBAT_MONSTER_SELECT, MAP_SELECT):
+   - Selection head directly picks the entity (no binary decision)
+5. Value head estimates state value
 """
 
 from dataclasses import dataclass
@@ -20,16 +20,16 @@ import torch.nn as nn
 
 from src.game.action import Action
 from src.game.const import MAP_WIDTH
-from src.rl.action_space.types import ActionChoice
-from src.rl.action_space.types import CHOICE_TO_ACTION_TYPE
-from src.rl.action_space.types import CHOICE_TO_HEAD
-from src.rl.action_space.types import CHOICE_TO_HEAD_IDX
-from src.rl.action_space.types import HeadType
-from src.rl.action_space.types import NUM_ACTION_CHOICES
+from src.rl.action_space.masks import MaskBatch
+from src.rl.action_space.types import DECISION_PRIMARIES
+from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import HeadTypeSecondary
+from src.rl.action_space.types import PRIMARY_TO_SECONDARY
+from src.rl.action_space.types import to_action
 from src.rl.encoding.state import XGameState
 from src.rl.models.core import Core
 from src.rl.models.core import CoreOutput
-from src.rl.models.heads import HeadActionType
+from src.rl.models.heads import HeadBinaryChoice
 from src.rl.models.heads import HeadCardDiscard
 from src.rl.models.heads import HeadCardPlay
 from src.rl.models.heads import HeadCardRewardSelect
@@ -46,63 +46,52 @@ from src.rl.models.heads import HeadValue
 
 class ForwardOutput(NamedTuple):
     """
-    Output from forward pass. All tensors are (B,) or (B, 1).
-
-    This is the primary output type - simple tensors, easy to work with.
+    Output from batched forward pass. All tensors are (B,) or (B, 1).
     """
 
-    # Primary action choice (index into ActionChoice enum)
-    action_choices: torch.Tensor  # (B,) int64
-    action_choice_log_probs: torch.Tensor  # (B,)
+    # Which primary group each sample belongs to
+    head_type_primaries: torch.Tensor  # (B,) int64
 
-    # Secondary index (-1 if terminal action)
-    secondary_indices: torch.Tensor  # (B,) int64
-    secondary_log_probs: torch.Tensor  # (B,)
+    # Primary decision (decision primaries only, -1 for direct primaries)
+    primary_indices: torch.Tensor  # (B,) int64
+    primary_log_probs: torch.Tensor  # (B,)
+
+    # Entity selection (-1 if terminal, e.g. end_turn/skip/rest)
+    selection_indices: torch.Tensor  # (B,) int64
+    selection_log_probs: torch.Tensor  # (B,)
 
     # Value estimate
     values: torch.Tensor  # (B, 1)
 
     def get_action(self, idx: int) -> Action:
         """Convert to game Action for sample at index."""
-        choice = ActionChoice(self.action_choices[idx].item())
-        action_type = CHOICE_TO_ACTION_TYPE[choice]
-
-        sec_idx = self.secondary_indices[idx].item()
-        index = None if sec_idx < 0 else sec_idx
-
-        return Action(type=action_type, index=index)
+        htp = HeadTypePrimary(self.head_type_primaries[idx].item())
+        pi = self.primary_indices[idx].item()
+        si = self.selection_indices[idx].item()
+        return to_action(htp, pi, si)
 
     def get_log_prob(self, idx: int) -> torch.Tensor:
         """Get total log prob for sample at index."""
-        choice = ActionChoice(self.action_choices[idx].item())
-
-        if CHOICE_TO_HEAD[choice] is None:
-            # Terminal action - only primary log prob
-            return self.action_choice_log_probs[idx]
-
-        return self.action_choice_log_probs[idx] + self.secondary_log_probs[idx]
+        return self.primary_log_probs[idx] + self.selection_log_probs[idx]
 
 
 @dataclass
 class SingleOutput:
     """Convenience wrapper for single-sample inference."""
 
-    action_choice: ActionChoice
-    action_choice_log_prob: torch.Tensor
-    secondary_index: int  # -1 if terminal
-    secondary_log_prob: torch.Tensor
+    head_type_primary: HeadTypePrimary
+    primary_index: int  # -1 for direct primaries
+    primary_log_prob: torch.Tensor
+    selection_index: int  # -1 if terminal
+    selection_log_prob: torch.Tensor
     value: torch.Tensor
 
     def to_action(self) -> Action:
-        action_type = CHOICE_TO_ACTION_TYPE[self.action_choice]
-        index = None if self.secondary_index < 0 else self.secondary_index
-        return Action(type=action_type, index=index)
+        return to_action(self.head_type_primary, self.primary_index, self.selection_index)
 
     @property
     def log_prob(self) -> torch.Tensor:
-        if CHOICE_TO_HEAD[self.action_choice] is None:
-            return self.action_choice_log_prob
-        return self.action_choice_log_prob + self.secondary_log_prob
+        return self.primary_log_prob + self.selection_log_prob
 
 
 # =============================================================================
@@ -166,17 +155,15 @@ class ActorCritic(nn.Module):
         dim_global = self.core.dim_global
         dim_map = self.core.dim_map
 
-        # Primary head: outputs ActionChoice
-        self.head_primary = HeadActionType(
-            dim_global=dim_global,
-            dim_ff=dim_ff_primary,
-            max_action_types=NUM_ACTION_CHOICES,
-        )
+        # Decision primary heads (binary choice)
+        self.head_combat_default = HeadBinaryChoice(dim_global, dim_ff_primary)
+        self.head_card_reward = HeadBinaryChoice(dim_global, dim_ff_primary)
+        self.head_rest_site = HeadBinaryChoice(dim_global, dim_ff_primary)
 
-        # Secondary heads
+        # Entity selection heads
         self.head_card_play = HeadCardPlay(dim_entity, dim_global, dim_ff_card)
         self.head_card_discard = HeadCardDiscard(dim_entity, dim_global, dim_ff_card)
-        self.head_card_reward = HeadCardRewardSelect(dim_entity, dim_global, dim_ff_card)
+        self.head_card_reward_select = HeadCardRewardSelect(dim_entity, dim_global, dim_ff_card)
         self.head_card_upgrade = HeadCardUpgrade(dim_entity, dim_global, dim_ff_card)
         self.head_monster_select = HeadMonsterSelect(dim_entity, dim_global, dim_ff_monster)
         self.head_map_select = HeadMapSelect(dim_map, dim_global, dim_ff_map, MAP_WIDTH)
@@ -184,70 +171,68 @@ class ActorCritic(nn.Module):
         # Value head
         self.head_value = HeadValue(dim_global, dim_ff_value)
 
-        # Head registry
-        self._heads: dict[HeadType, nn.Module] = {
-            HeadType.CARD_PLAY: self.head_card_play,
-            HeadType.CARD_DISCARD: self.head_card_discard,
-            HeadType.CARD_REWARD_SELECT: self.head_card_reward,
-            HeadType.CARD_UPGRADE: self.head_card_upgrade,
-            HeadType.MONSTER_SELECT: self.head_monster_select,
-            HeadType.MAP_SELECT: self.head_map_select,
+        # ---- Registries (for programmatic access) ----
+
+        # Decision primary → binary head
+        self._decision_heads: dict[HeadTypePrimary, HeadBinaryChoice] = {
+            HeadTypePrimary.COMBAT_DEFAULT: self.head_combat_default,
+            HeadTypePrimary.CARD_REWARD: self.head_card_reward,
+            HeadTypePrimary.REST_SITE: self.head_rest_site,
         }
 
-    def _get_entities(self, head_type: HeadType, core_out: CoreOutput) -> torch.Tensor:
-        """Get entity tensor for a secondary head."""
+        # HeadTypePrimary → entity selection head
+        # (MAP_SELECT handled separately due to different input signature)
+        self._selection_heads: dict[HeadTypePrimary, nn.Module] = {
+            HeadTypePrimary.COMBAT_DEFAULT: self.head_card_play,
+            HeadTypePrimary.CARD_REWARD: self.head_card_reward_select,
+            HeadTypePrimary.REST_SITE: self.head_card_upgrade,
+            HeadTypePrimary.COMBAT_CARD_DISCARD: self.head_card_discard,
+            HeadTypePrimary.COMBAT_MONSTER_SELECT: self.head_monster_select,
+        }
+
+    def _get_selection_entities(
+        self, head_type: HeadTypePrimary, core_out: CoreOutput
+    ) -> torch.Tensor:
+        """Get the entity tensor for a selection head."""
         match head_type:
-            case HeadType.CARD_PLAY | HeadType.CARD_DISCARD:
+            case HeadTypePrimary.COMBAT_DEFAULT | HeadTypePrimary.COMBAT_CARD_DISCARD:
                 return core_out.x_hand
-            case HeadType.CARD_REWARD_SELECT:
+            case HeadTypePrimary.CARD_REWARD:
                 return core_out.x_combat_reward
-            case HeadType.CARD_UPGRADE:
+            case HeadTypePrimary.REST_SITE:
                 return core_out.x_deck
-            case HeadType.MONSTER_SELECT:
+            case HeadTypePrimary.COMBAT_MONSTER_SELECT:
                 return core_out.x_monsters
             case _:
-                raise ValueError(f"Unknown head type: {head_type}")
+                raise ValueError(f"No entity tensor for: {head_type}")
 
-    def _run_secondary(
+    def _run_selection(
         self,
-        head_type: HeadType,
+        head_type: HeadTypePrimary,
         core_out: CoreOutput,
         mask: torch.Tensor,
         sample: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Run a secondary head.
+    ):
+        """Run the appropriate selection head for a primary type."""
+        if head_type == HeadTypePrimary.MAP_SELECT:
+            return self.head_map_select(core_out.x_map, core_out.x_global, mask, sample)
 
-        Returns (indices, log_probs) tensors.
-        """
-        if head_type == HeadType.MAP_SELECT:
-            out = self.head_map_select(core_out.x_map, core_out.x_global, mask, sample)
-        else:
-            head = self._heads[head_type]
-            entities = self._get_entities(head_type, core_out)
-            out = head(entities, core_out.x_global, mask, sample)
-
-        if sample:
-            return out.indices, out.log_probs
-        else:
-            return torch.argmax(out.logits, dim=-1), torch.zeros(
-                out.logits.shape[0], device=out.logits.device
-            )
+        head = self._selection_heads[head_type]
+        entities = self._get_selection_entities(head_type, core_out)
+        return head(entities, core_out.x_global, mask, sample)
 
     def forward(
         self,
         x_game_state: XGameState,
-        primary_mask: torch.Tensor,
-        secondary_masks: dict[HeadType, torch.Tensor],
+        mask_batch: MaskBatch,
         sample: bool = True,
     ) -> ForwardOutput:
         """
-        Batched forward pass.
+        Batched forward pass with per-primary-type routing.
 
         Args:
             x_game_state: Encoded game state
-            primary_mask: Valid ActionChoice mask (B, NUM_ACTION_CHOICES)
-            secondary_masks: Per-head masks {HeadType: (B, head_output_size)}
+            mask_batch: Per-HeadTypePrimary routing and masks
             sample: Whether to sample (True) or argmax (False)
 
         Returns:
@@ -267,72 +252,90 @@ class ActorCritic(nn.Module):
         values = self.head_value(core_out.x_global)
 
         # =================================================================
-        # 3. Primary head (all samples) → ActionChoice
+        # 3. Initialize output tensors
         # =================================================================
-        primary_out = self.head_primary(core_out.x_global, primary_mask, sample)
-
-        if sample:
-            action_choices = primary_out.indices
-            action_choice_log_probs = primary_out.log_probs
-        else:
-            action_choices = torch.argmax(primary_out.logits, dim=-1)
-            action_choice_log_probs = torch.zeros(B, device=device)
+        head_type_primaries = torch.full((B,), -1, dtype=torch.long, device=device)
+        primary_indices = torch.full((B,), -1, dtype=torch.long, device=device)
+        primary_log_probs = torch.zeros(B, device=device)
+        selection_indices = torch.full((B,), -1, dtype=torch.long, device=device)
+        selection_log_probs = torch.zeros(B, device=device)
 
         # =================================================================
-        # 4. Get head types for all samples (vectorized, no .item()!)
+        # 4. Process each primary group
         # =================================================================
-        # Move lookup tensor to device if needed (cached after first call)
-        head_type_lookup = CHOICE_TO_HEAD_IDX.to(device)
-        head_type_indices = head_type_lookup[action_choices]  # (B,) tensor
-
-        # =================================================================
-        # 5. Run secondary heads (grouped by head type)
-        # =================================================================
-        secondary_indices = torch.full((B,), -1, dtype=torch.long, device=device)
-        secondary_log_probs = torch.zeros(B, device=device)
-
-        for head_type in HeadType:
-            # Find samples needing this head (vectorized comparison)
-            sample_mask = head_type_indices == head_type
-            if not torch.any(sample_mask):
+        for head_type in HeadTypePrimary:
+            idx = mask_batch.route[head_type]
+            if len(idx) == 0:
                 continue
 
-            # Get indices of matching samples
-            idx = torch.nonzero(sample_mask, as_tuple=True)[0]
-
-            # Slice for this head's samples
+            head_type_primaries[idx] = head_type
             subset_core = _slice_core_output(core_out, idx)
-            subset_mask = secondary_masks[head_type][idx]
 
-            # Run head
-            indices, log_probs = self._run_secondary(head_type, subset_core, subset_mask, sample)
+            if head_type in DECISION_PRIMARIES:
+                # --- Decision primary: binary head + conditional secondary ---
+                primary_mask = mask_batch.primary_masks[head_type]
+                decision_head = self._decision_heads[head_type]
+                out = decision_head(subset_core.x_global, primary_mask, sample)
 
-            # Scatter results back
-            secondary_indices[idx] = indices
-            secondary_log_probs[idx] = log_probs
+                if sample:
+                    chosen = out.indices
+                    primary_indices[idx] = chosen
+                    primary_log_probs[idx] = out.log_probs
+                else:
+                    chosen = torch.argmax(out.logits, dim=-1)
+                    primary_indices[idx] = chosen
+
+                # Run secondary head for samples that chose "select" (index == 1)
+                needs_secondary = chosen == 1
+                if torch.any(needs_secondary):
+                    sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
+                    sec_batch = idx[sec_local]
+
+                    sec_core = _slice_core_output(core_out, sec_batch)
+                    sec_mask = mask_batch.selection_masks[head_type][sec_local]
+
+                    sec_out = self._run_selection(head_type, sec_core, sec_mask, sample)
+
+                    if sample:
+                        selection_indices[sec_batch] = sec_out.indices
+                        selection_log_probs[sec_batch] = sec_out.log_probs
+                    else:
+                        selection_indices[sec_batch] = torch.argmax(sec_out.logits, dim=-1)
+
+            else:
+                # --- Direct primary: selection head only ---
+                sel_mask = mask_batch.selection_masks[head_type]
+                sel_out = self._run_selection(head_type, subset_core, sel_mask, sample)
+
+                if sample:
+                    selection_indices[idx] = sel_out.indices
+                    selection_log_probs[idx] = sel_out.log_probs
+                else:
+                    selection_indices[idx] = torch.argmax(sel_out.logits, dim=-1)
 
         return ForwardOutput(
-            action_choices=action_choices,
-            action_choice_log_probs=action_choice_log_probs,
-            secondary_indices=secondary_indices,
-            secondary_log_probs=secondary_log_probs,
+            head_type_primaries=head_type_primaries,
+            primary_indices=primary_indices,
+            primary_log_probs=primary_log_probs,
+            selection_indices=selection_indices,
+            selection_log_probs=selection_log_probs,
             values=values,
         )
 
     def forward_single(
         self,
         x_game_state: XGameState,
-        primary_mask: torch.Tensor,
-        secondary_masks: dict[HeadType, torch.Tensor],
+        mask_batch: MaskBatch,
         sample: bool = True,
     ) -> SingleOutput:
         """Convenience method for single sample."""
-        out = self.forward(x_game_state, primary_mask, secondary_masks, sample)
+        out = self.forward(x_game_state, mask_batch, sample)
 
         return SingleOutput(
-            action_choice=ActionChoice(out.action_choices[0].item()),
-            action_choice_log_prob=out.action_choice_log_probs[0],
-            secondary_index=out.secondary_indices[0].item(),
-            secondary_log_prob=out.secondary_log_probs[0],
+            head_type_primary=HeadTypePrimary(out.head_type_primaries[0].item()),
+            primary_index=out.primary_indices[0].item(),
+            primary_log_prob=out.primary_log_probs[0],
+            selection_index=out.selection_indices[0].item(),
+            selection_log_prob=out.selection_log_probs[0],
             value=out.values[0],
         )
