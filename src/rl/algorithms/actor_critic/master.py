@@ -32,6 +32,7 @@ from src.rl.action_space.types import HeadTypePrimary
 from src.rl.action_space.types import IS_DECISION_PRIMARY
 from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.rl.action_space.types import PRIMARY_NUM_CHOICES
+from src.rl.action_space.types import to_action
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
@@ -251,14 +252,31 @@ def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
 # =============================================================================
 
 
+def _build_route_map(mask_batch: MaskBatch) -> dict[tuple[int, int], int]:
+    """
+    Build a reverse-index map from (htp, batch_idx) -> local_idx.
+
+    One bulk .cpu().tolist() per active head type instead of
+    nonzero().item() per env (eliminates ~2 syncs per env per step).
+    """
+    route_map: dict[tuple[int, int], int] = {}
+    for htp in range(NUM_PRIMARY_HEADS):
+        route = mask_batch.route[htp]
+        if len(route) == 0:
+            continue
+        for local_idx, batch_idx in enumerate(route.cpu().tolist()):
+            route_map[(htp, batch_idx)] = local_idx
+    return route_map
+
+
 def _extract_per_sample_masks(
     mask_batch: MaskBatch,
     batch_idx: int,
     htp: int,
+    route_map: dict[tuple[int, int], int],
 ) -> tuple[torch.Tensor | None, torch.Tensor]:
-    """Extract per-sample masks from a MaskBatch."""
-    route = mask_batch.route[htp]
-    local_idx = (route == batch_idx).nonzero(as_tuple=True)[0].item()
+    """Extract per-sample masks from a MaskBatch using pre-computed route map."""
+    local_idx = route_map[(htp, batch_idx)]
 
     primary_mask = None
     if IS_DECISION_PRIMARY[htp]:
@@ -347,11 +365,21 @@ def _collect_rollout(
             mask_batch = get_mask_batch(view_states, device)
             output = model(x_game_state, mask_batch, sample=True)
 
+            # Bulk-extract discrete outputs: 3 syncs instead of 8 * num_envs
+            htps = output.head_type_primaries.cpu().tolist()
+            pis = output.primary_indices.cpu().tolist()
+            sis = output.selection_indices.cpu().tolist()
+
+            # Pre-compute route reverse map (eliminates nonzero().item() per env)
+            route_map = _build_route_map(mask_batch)
+
             # Step each environment
             for i in range(num_envs):
-                action = output.get_action(i)
-                htp = output.head_type_primaries[i].item()
-                primary_mask, selection_mask = _extract_per_sample_masks(mask_batch, i, htp)
+                htp = htps[i]
+                action = to_action(HeadTypePrimary(htp), pis[i], sis[i])
+                primary_mask, selection_mask = _extract_per_sample_masks(
+                    mask_batch, i, htp, route_map
+                )
 
                 reward, done = env_mgr.step(i, action)
 
@@ -361,9 +389,9 @@ def _collect_rollout(
                         head_type_primary=htp,
                         primary_mask=primary_mask,
                         selection_mask=selection_mask,
-                        primary_index=output.primary_indices[i].item(),
+                        primary_index=pis[i],
                         primary_log_prob=output.primary_log_probs[i],
-                        selection_index=output.selection_indices[i].item(),
+                        selection_index=sis[i],
                         selection_log_prob=output.selection_log_probs[i],
                         value=output.values[i],
                         reward=reward,
@@ -450,19 +478,23 @@ def _compute_gae(
     advantages = [0.0] * T
     returns = [0.0] * T
 
+    # Bulk-transfer values to CPU: 1 sync instead of ~3*T syncs
+    values_cpu = torch.stack(values).squeeze(-1).cpu().tolist()
+    bootstrap_cpu = bootstrap_value.cpu().item()
+
     gae = 0.0
     for t in reversed(range(T)):
         if t == T - 1:
-            next_value = bootstrap_value.item()
+            next_value = bootstrap_cpu
         else:
-            next_value = values[t + 1].item()
+            next_value = values_cpu[t + 1]
 
         # If episode ended at step t, don't bootstrap from next state
         non_terminal = 1.0 - float(dones[t])
-        delta = rewards[t] + gamma * next_value * non_terminal - values[t].item()
+        delta = rewards[t] + gamma * next_value * non_terminal - values_cpu[t]
         gae = delta + gamma * lam * non_terminal * gae
         advantages[t] = gae
-        returns[t] = gae + values[t].item()
+        returns[t] = gae + values_cpu[t]
 
     return returns, advantages
 
@@ -505,9 +537,9 @@ def _create_batch(
             all_primary_masks.append(trans.primary_mask)
             all_selection_masks.append(trans.selection_mask)
             all_primary_indices.append(trans.primary_index)
-            all_primary_log_probs.append(trans.primary_log_prob.item())
+            all_primary_log_probs.append(trans.primary_log_prob)
             all_selection_indices.append(trans.selection_index)
-            all_selection_log_probs.append(trans.selection_log_prob.item())
+            all_selection_log_probs.append(trans.selection_log_prob)
             all_values.append(trans.value)
             all_returns.append(ret[i])
             all_advantages.append(adv[i])
@@ -518,11 +550,9 @@ def _create_batch(
         primary_masks=all_primary_masks,
         selection_masks=all_selection_masks,
         primary_indices=torch.tensor(all_primary_indices, dtype=torch.long, device=device),
-        primary_log_probs=torch.tensor(all_primary_log_probs, dtype=torch.float32, device=device),
+        primary_log_probs=torch.stack(all_primary_log_probs).detach().to(device),
         selection_indices=torch.tensor(all_selection_indices, dtype=torch.long, device=device),
-        selection_log_probs=torch.tensor(
-            all_selection_log_probs, dtype=torch.float32, device=device
-        ),
+        selection_log_probs=torch.stack(all_selection_log_probs).detach().to(device),
         values=torch.cat(all_values, dim=0).detach(),
         returns=torch.tensor(all_returns, dtype=torch.float32, device=device).view(-1, 1),
         advantages=torch.tensor(all_advantages, dtype=torch.float32, device=device).view(-1, 1),
@@ -656,7 +686,7 @@ def _update_ppo(
     for _ in range(num_epochs):
         for mb_idxs in _minibatch_indices(len(batch), minibatch_size):
             mb_x_states = [batch.x_game_states[i] for i in mb_idxs]
-            mb_htps = [batch.head_type_primaries[i].item() for i in mb_idxs]
+            mb_htps = batch.head_type_primaries[mb_idxs].cpu().tolist()
             mb_primary_masks = [batch.primary_masks[i] for i in mb_idxs]
             mb_selection_masks = [batch.selection_masks[i] for i in mb_idxs]
             mb_primary_indices = batch.primary_indices[mb_idxs]
