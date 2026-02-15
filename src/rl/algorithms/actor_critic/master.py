@@ -162,6 +162,7 @@ def _move_x_game_state(x: XGameState, device: torch.device) -> XGameState:
     return XGameState(
         x_hand=x.x_hand.to(device),
         x_hand_mask_pad=x.x_hand_mask_pad.to(device),
+        x_active_card_mask=x.x_active_card_mask.to(device),
         x_draw=x.x_draw.to(device),
         x_draw_mask_pad=x.x_draw_mask_pad.to(device),
         x_disc=x.x_disc.to(device),
@@ -190,6 +191,7 @@ def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
     return XGameState(
         x_hand=torch.cat([x.x_hand for x in x_game_states], dim=0),
         x_hand_mask_pad=torch.cat([x.x_hand_mask_pad for x in x_game_states], dim=0),
+        x_active_card_mask=torch.cat([x.x_active_card_mask for x in x_game_states], dim=0),
         x_draw=torch.cat([x.x_draw for x in x_game_states], dim=0),
         x_draw_mask_pad=torch.cat([x.x_draw_mask_pad for x in x_game_states], dim=0),
         x_disc=torch.cat([x.x_disc for x in x_game_states], dim=0),
@@ -224,6 +226,7 @@ def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
     return XGameState(
         x_hand=x_game_state.x_hand[idx : idx + 1],
         x_hand_mask_pad=x_game_state.x_hand_mask_pad[idx : idx + 1],
+        x_active_card_mask=x_game_state.x_active_card_mask[idx : idx + 1],
         x_draw=x_game_state.x_draw[idx : idx + 1],
         x_draw_mask_pad=x_game_state.x_draw_mask_pad[idx : idx + 1],
         x_disc=x_game_state.x_disc[idx : idx + 1],
@@ -654,7 +657,16 @@ def _recompute_log_probs_batch(
             sel_indices = selection_indices[idx]
 
             sel_head = model._selection_heads[htp]
-            out = sel_head(entities_group, x_global_group, sel_mask, sample=False)
+
+            # Monster select gets active card embedding for card-dependent targeting
+            if htp == int(HeadTypePrimary.COMBAT_MONSTER_SELECT):
+                out = sel_head(
+                    entities_group, x_global_group, sel_mask, sample=False,
+                    x_active_card=core_out.x_active_card[idx],
+                )
+            else:
+                out = sel_head(entities_group, x_global_group, sel_mask, sample=False)
+
             sel_log_probs, sel_entropy = compute_grouped_log_prob_and_entropy(
                 out.logits, sel_indices
             )

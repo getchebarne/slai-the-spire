@@ -290,7 +290,15 @@ class ActorCritic(nn.Module):
                 entities_group = entity_tensors[htp][idx]
                 sel_mask = mask_batch.selection_masks[htp]
                 sel_head = self._selection_heads[htp]
-                sel_out = sel_head(entities_group, x_global_group, sel_mask, sample)
+
+                # Monster select gets active card embedding for card-dependent targeting
+                if htp == _HTP_COMBAT_MONSTER_SELECT:
+                    sel_out = sel_head(
+                        entities_group, x_global_group, sel_mask, sample,
+                        x_active_card=core_out.x_active_card[idx],
+                    )
+                else:
+                    sel_out = sel_head(entities_group, x_global_group, sel_mask, sample)
 
                 if sample:
                     selection_indices[idx] = sel_out.indices

@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
+from src.game.const import MAX_SIZE_HAND
 from src.game.view.state import ViewGameState
 from src.rl.encoding.card import CardPile
 from src.rl.encoding.card import encode_batch_view_cards
@@ -16,6 +18,7 @@ from src.rl.encoding.monster import encode_batch_view_monsters
 class XGameState:
     x_hand: torch.Tensor
     x_hand_mask_pad: torch.Tensor
+    x_active_card_mask: torch.Tensor  # (B, MAX_SIZE_HAND) bool, True for the active card
     x_draw: torch.Tensor
     x_draw_mask_pad: torch.Tensor
     x_disc: torch.Tensor
@@ -68,6 +71,16 @@ def encode_batch_view_game_state(
 
     # Cards (hand, draw pile, discard pile, deck, combat rewards)
     x_hand, x_hand_mask_pad = encode_batch_view_cards(batch_hand, CardPile.HAND, device)
+
+    # Active card mask: True for the hand card with is_active=True (at most one per sample)
+    active_card_mask_np = np.zeros((batch_size, MAX_SIZE_HAND), dtype=bool)
+    for b, hand in enumerate(batch_hand):
+        for i, card in enumerate(hand[:MAX_SIZE_HAND]):
+            if card.is_active:
+                active_card_mask_np[b, i] = True
+                break
+    x_active_card_mask = torch.from_numpy(active_card_mask_np).to(device)
+
     x_draw, x_draw_mask_pad = encode_batch_view_cards(batch_draw, CardPile.DRAW, device)
     x_disc, x_disc_mask_pad = encode_batch_view_cards(batch_disc, CardPile.DISC, device)
     x_deck, x_deck_mask_pad = encode_batch_view_cards(batch_deck, CardPile.DECK, device)
@@ -104,6 +117,7 @@ def encode_batch_view_game_state(
     return XGameState(
         x_hand,
         x_hand_mask_pad,
+        x_active_card_mask,
         x_draw,
         x_draw_mask_pad,
         x_disc,
