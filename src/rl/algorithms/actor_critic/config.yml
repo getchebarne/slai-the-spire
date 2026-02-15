@@ -1,5 +1,5 @@
-exp_name: ppo/newest_test_II
-num_episodes: 1.0e+6
+exp_name: ppo/newest_test
+num_iterations: 1.0e+6
 log_every: 10
 save_every: 100
 gamma: 0.99
@@ -10,6 +10,7 @@ coef_entropy_min: 0.010
 coef_entropy_elbow: 2.5e+4
 max_grad_norm: 0.500
 num_envs: 24
+rollout_length: 256
 clip_eps: 0.20
 clip_value_loss: true
 minibatch_size: 512
