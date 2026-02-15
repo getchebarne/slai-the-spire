@@ -1,7 +1,9 @@
 """
-Master process for PPO training with parallel workers.
+PPO training with fixed-length rollouts and in-process environments.
 
-Coordinates multiple worker processes, collects trajectories, and updates the model.
+No multiprocessing -- all game environments run in the main process.
+Each iteration collects a fixed number of steps from all environments,
+auto-resetting games that end. GAE handles episode boundaries correctly.
 """
 
 import os
@@ -9,30 +11,34 @@ import random
 import shutil
 from collections import deque
 from dataclasses import dataclass, field
-from multiprocessing.connection import Connection
 from typing import Iterator
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.multiprocessing import Pipe
-from torch.multiprocessing import Process
 from torch.utils.tensorboard import SummaryWriter
 
+from src.game.action import Action
+from src.game.core.fsm import FSM
+from src.game.create import create_game_state
+from src.game.main import initialize_game_state
+from src.game.main import step as game_step
+from src.game.view.state import ViewGameState
+from src.game.view.state import get_view_game_state
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import SELECTION_SIZES
 from src.rl.action_space.masks import get_mask_batch
+from src.rl.action_space.types import HeadTypePrimary
 from src.rl.action_space.types import IS_DECISION_PRIMARY
 from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.rl.action_space.types import PRIMARY_NUM_CHOICES
-from src.rl.algorithms.actor_critic.worker import Command
-from src.rl.algorithms.actor_critic.worker import WorkerData
-from src.rl.algorithms.actor_critic.worker import worker
+from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
 from src.rl.models.actor_critic import _build_entity_tensors
 from src.rl.models.heads import compute_grouped_log_prob_and_entropy
+from src.rl.reward import compute_reward
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 
@@ -44,11 +50,11 @@ from src.rl.utils import load_config
 
 @dataclass
 class Transition:
-    """Single transition in a trajectory. Stores pre-encoded state."""
+    """Single transition with done flag for episode boundaries."""
 
     x_game_state: XGameState  # Pre-encoded state (batch=1)
-    head_type_primary: int  # int(HeadTypePrimary) for fast indexing
-    primary_mask: torch.Tensor | None  # (1, num_choices) for decision, None for direct
+    head_type_primary: int  # int(HeadTypePrimary)
+    primary_mask: torch.Tensor | None  # (1, num_choices) or None
     selection_mask: torch.Tensor  # (1, max_entities)
     primary_index: int  # -1 for direct primaries
     primary_log_prob: torch.Tensor
@@ -56,26 +62,17 @@ class Transition:
     selection_log_prob: torch.Tensor
     value: torch.Tensor
     reward: float
-
-
-@dataclass
-class Trajectory:
-    """Sequence of transitions from one episode."""
-
-    transitions: list[Transition] = field(default_factory=list)
-
-    def __len__(self) -> int:
-        return len(self.transitions)
+    done: bool  # True if episode ended at this step
 
 
 @dataclass
 class TrajectoryBatch:
-    """Batched trajectory data for training."""
+    """Batched data for PPO training."""
 
-    x_game_states: list[XGameState]  # List of pre-encoded states (each batch=1)
-    head_type_primaries: torch.Tensor  # (N,) int values of HeadTypePrimary
-    primary_masks: list[torch.Tensor | None]  # each (1, num_choices) or None
-    selection_masks: list[torch.Tensor]  # each (1, max_entities)
+    x_game_states: list[XGameState]
+    head_type_primaries: torch.Tensor  # (N,)
+    primary_masks: list[torch.Tensor | None]
+    selection_masks: list[torch.Tensor]
     primary_indices: torch.Tensor  # (N,)
     primary_log_probs: torch.Tensor  # (N,)
     selection_indices: torch.Tensor  # (N,)
@@ -86,6 +83,72 @@ class TrajectoryBatch:
 
     def __len__(self) -> int:
         return len(self.x_game_states)
+
+
+@dataclass
+class EpisodeStats:
+    """Stats from a completed episode (for logging)."""
+
+    total_reward: float
+    length: int
+
+
+# =============================================================================
+# In-Process Environment Manager
+# =============================================================================
+
+
+class EnvironmentManager:
+    """
+    Manages N game environments in-process (no IPC).
+
+    Environments persist across rollouts. Games that end are auto-reset.
+    """
+
+    def __init__(self, num_envs: int):
+        self.num_envs = num_envs
+        self._game_states = []
+        self._view_states: list[ViewGameState] = []
+
+        for _ in range(num_envs):
+            gs, vgs = self._make_env()
+            self._game_states.append(gs)
+            self._view_states.append(vgs)
+
+    @staticmethod
+    def _make_env():
+        gs = create_game_state(ASCENSION_LEVEL)
+        initialize_game_state(gs)
+        vgs = get_view_game_state(gs)
+        return gs, vgs
+
+    def get_view_states(self) -> list[ViewGameState]:
+        return self._view_states
+
+    def step(self, env_idx: int, action: Action) -> tuple[float, bool]:
+        """
+        Step environment, auto-reset on game over.
+
+        Returns (reward, done).
+        """
+        gs = self._game_states[env_idx]
+        vgs_prev = self._view_states[env_idx]
+
+        game_step(gs, action, fast_mode=True)
+        vgs_next = get_view_game_state(gs)
+        done = gs.fsm == FSM.GAME_OVER
+
+        reward = compute_reward(vgs_prev, vgs_next, done)
+
+        if done:
+            # Auto-reset
+            gs_new, vgs_new = self._make_env()
+            self._game_states[env_idx] = gs_new
+            self._view_states[env_idx] = vgs_new
+        else:
+            self._view_states[env_idx] = vgs_next
+
+        return reward, done
 
 
 # =============================================================================
@@ -138,7 +201,9 @@ def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
         ),
         x_monsters=torch.cat([x.x_monsters for x in x_game_states], dim=0),
         x_monsters_mask_pad=torch.cat([x.x_monsters_mask_pad for x in x_game_states], dim=0),
-        x_monster_health_block=torch.cat([x.x_monster_health_block for x in x_game_states], dim=0),
+        x_monster_health_block=torch.cat(
+            [x.x_monster_health_block for x in x_game_states], dim=0
+        ),
         x_monster_modifiers=torch.cat([x.x_monster_modifiers for x in x_game_states], dim=0),
         x_character=torch.cat([x.x_character for x in x_game_states], dim=0),
         x_character_mask_pad=torch.cat([x.x_character_mask_pad for x in x_game_states], dim=0),
@@ -182,7 +247,7 @@ def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
 
 
 # =============================================================================
-# Mask Extraction Helpers
+# Mask Helpers
 # =============================================================================
 
 
@@ -191,13 +256,7 @@ def _extract_per_sample_masks(
     batch_idx: int,
     htp: int,
 ) -> tuple[torch.Tensor | None, torch.Tensor]:
-    """
-    Extract per-sample masks from a MaskBatch.
-
-    Returns (primary_mask, selection_mask) each with batch dim 1.
-    primary_mask is None for direct primaries.
-    """
-    # Find this sample's position within its group
+    """Extract per-sample masks from a MaskBatch."""
     route = mask_batch.route[htp]
     local_idx = (route == batch_idx).nonzero(as_tuple=True)[0].item()
 
@@ -206,7 +265,6 @@ def _extract_per_sample_masks(
         primary_mask = mask_batch.primary_masks[htp][local_idx : local_idx + 1]
 
     selection_mask = mask_batch.selection_masks[htp][local_idx : local_idx + 1]
-
     return primary_mask, selection_mask
 
 
@@ -218,7 +276,6 @@ def _build_mask_batch_from_samples(
 ) -> MaskBatch:
     """Rebuild MaskBatch from per-sample data for PPO recomputation."""
     route_lists: list[list[int]] = [[] for _ in range(NUM_PRIMARY_HEADS)]
-
     for i, htp in enumerate(head_type_primaries):
         route_lists[htp].append(i)
 
@@ -251,131 +308,123 @@ def _build_mask_batch_from_samples(
 
 
 # =============================================================================
-# Episode Collection
+# Rollout Collection
 # =============================================================================
 
 
-def _run_episodes(
-    model: ActorCritic, conn_parents: list[Connection], device: torch.device
-) -> list[Trajectory]:
+def _collect_rollout(
+    model: ActorCritic,
+    env_mgr: EnvironmentManager,
+    rollout_length: int,
+    device: torch.device,
+) -> tuple[list[list[Transition]], list[torch.Tensor], list[EpisodeStats]]:
     """
-    Run episodes in parallel across all workers.
+    Collect a fixed-length rollout from all environments.
 
-    Returns a list of trajectories, one per worker.
+    Each env takes exactly `rollout_length` steps. Games that end are
+    auto-reset and collection continues. Environments persist across calls.
+
+    Returns:
+        transitions: [num_envs][rollout_length] transitions
+        bootstrap_values: [num_envs] V(s') for truncated rollouts (GAE)
+        completed_episodes: stats for episodes that finished during this rollout
     """
-    num_envs = len(conn_parents)
+    num_envs = env_mgr.num_envs
+    transitions: list[list[Transition]] = [[] for _ in range(num_envs)]
+    completed_episodes: list[EpisodeStats] = []
 
-    # Reset all environments
-    for conn in conn_parents:
-        conn.send((Command.RESET, None))
-
-    # Get initial states
-    worker_datas: list[WorkerData] = [conn.recv() for conn in conn_parents]
-
-    # Initialize trajectories
-    trajectories = [Trajectory() for _ in range(num_envs)]
-
-    # Track which envs are still running
-    running_envs = list(range(num_envs))
+    # Track running episode stats for logging
+    ep_rewards = [0.0] * num_envs
+    ep_lengths = [0] * num_envs
 
     model.eval()
     with torch.no_grad():
-        while running_envs:
-            # Collect non-terminal states
-            active_envs = []
-            view_game_states = []
+        for _ in range(rollout_length):
+            view_states = env_mgr.get_view_states()
 
-            for env_idx in running_envs:
-                data = worker_datas[env_idx]
-                if not data.game_over:
-                    active_envs.append(env_idx)
-                    view_game_states.append(data.view_game_state)
-
-            running_envs = active_envs
-            if not running_envs:
-                break
-
-            # Encode all states at once
-            x_game_state = encode_batch_view_game_state(view_game_states, device)
-
-            # Build MaskBatch (routes + masks)
-            mask_batch = get_mask_batch(view_game_states, device)
-
-            # Forward pass
+            # Batch encode + forward
+            x_game_state = encode_batch_view_game_state(view_states, device)
+            mask_batch = get_mask_batch(view_states, device)
             output = model(x_game_state, mask_batch, sample=True)
 
-            # Send actions to workers
-            for i, env_idx in enumerate(active_envs):
+            # Step each environment
+            for i in range(num_envs):
                 action = output.get_action(i)
-                conn_parents[env_idx].send((Command.STEP, action))
-
-            # Receive new states
-            new_worker_datas = {}
-            for env_idx in running_envs:
-                new_worker_datas[env_idx] = conn_parents[env_idx].recv()
-
-            # Store transitions
-            for i, env_idx in enumerate(running_envs):
-                reward = new_worker_datas[env_idx].reward
-
                 htp = output.head_type_primaries[i].item()
                 primary_mask, selection_mask = _extract_per_sample_masks(mask_batch, i, htp)
 
-                transition = Transition(
-                    x_game_state=_slice_x_game_state(x_game_state, i),
-                    head_type_primary=htp,
-                    primary_mask=primary_mask,
-                    selection_mask=selection_mask,
-                    primary_index=output.primary_indices[i].item(),
-                    primary_log_prob=output.primary_log_probs[i],
-                    selection_index=output.selection_indices[i].item(),
-                    selection_log_prob=output.selection_log_probs[i],
-                    value=output.values[i],
-                    reward=reward,
-                )
-                trajectories[env_idx].transitions.append(transition)
+                reward, done = env_mgr.step(i, action)
 
-            # Update worker data
-            for env_idx in running_envs:
-                worker_datas[env_idx] = new_worker_datas[env_idx]
+                transitions[i].append(
+                    Transition(
+                        x_game_state=_slice_x_game_state(x_game_state, i),
+                        head_type_primary=htp,
+                        primary_mask=primary_mask,
+                        selection_mask=selection_mask,
+                        primary_index=output.primary_indices[i].item(),
+                        primary_log_prob=output.primary_log_probs[i],
+                        selection_index=output.selection_indices[i].item(),
+                        selection_log_prob=output.selection_log_probs[i],
+                        value=output.values[i],
+                        reward=reward,
+                        done=done,
+                    )
+                )
+
+                # Track episode stats
+                ep_rewards[i] += reward
+                ep_lengths[i] += 1
+                if done:
+                    completed_episodes.append(EpisodeStats(ep_rewards[i], ep_lengths[i]))
+                    ep_rewards[i] = 0.0
+                    ep_lengths[i] = 0
+
+        # Bootstrap values for GAE at truncation point
+        view_states = env_mgr.get_view_states()
+        x_game_state = encode_batch_view_game_state(view_states, device)
+        mask_batch = get_mask_batch(view_states, device)
+        output = model(x_game_state, mask_batch, sample=False)
+        bootstrap_values = [output.values[i] for i in range(num_envs)]
 
     model.train()
-    return trajectories
+    return transitions, bootstrap_values, completed_episodes
 
 
 def _run_eval_episode(
     model: ActorCritic,
-    conn: Connection,
     device: torch.device,
 ) -> tuple[float, int]:
     """
-    Run a single greedy evaluation episode (sample=False).
+    Run a single greedy evaluation episode (no workers needed).
 
     Returns (total_reward, episode_length).
     """
-    conn.send((Command.RESET, None))
-    data: WorkerData = conn.recv()
+    gs = create_game_state(ASCENSION_LEVEL)
+    initialize_game_state(gs)
 
     total_reward = 0.0
-    episode_length = 0
+    length = 0
 
     model.eval()
     with torch.no_grad():
-        while not data.game_over:
-            x_game_state = encode_batch_view_game_state([data.view_game_state], device)
-            mask_batch = get_mask_batch([data.view_game_state], device)
-
-            output = model(x_game_state, mask_batch, sample=False)
-
+        while gs.fsm != FSM.GAME_OVER:
+            vgs = get_view_game_state(gs)
+            x = encode_batch_view_game_state([vgs], device)
+            mb = get_mask_batch([vgs], device)
+            output = model(x, mb, sample=False)
             action = output.get_action(0)
-            conn.send((Command.STEP, action))
-            data = conn.recv()
 
-            total_reward += data.reward
-            episode_length += 1
+            vgs_prev = vgs
+            game_step(gs, action, fast_mode=True)
+            vgs_next = get_view_game_state(gs)
+            done = gs.fsm == FSM.GAME_OVER
+            reward = compute_reward(vgs_prev, vgs_next, done)
+
+            total_reward += reward
+            length += 1
 
     model.train()
-    return total_reward, episode_length
+    return total_reward, length
 
 
 # =============================================================================
@@ -386,37 +435,46 @@ def _run_eval_episode(
 def _compute_gae(
     rewards: list[float],
     values: list[torch.Tensor],
+    dones: list[bool],
+    bootstrap_value: torch.Tensor,
     gamma: float,
     lam: float,
-    device: torch.device,
 ) -> tuple[list[float], list[float]]:
-    """Compute returns and GAE advantages."""
-    returns = deque()
-    advantages = deque()
+    """
+    Compute returns and GAE advantages with episode boundary handling.
 
-    values_with_terminal = values + [torch.tensor([[0.0]], device=device)]
+    At done=True boundaries: bootstrap with 0 (episode ended).
+    At rollout end (truncation): bootstrap with bootstrap_value.
+    """
+    T = len(rewards)
+    advantages = [0.0] * T
+    returns = [0.0] * T
 
     gae = 0.0
-    for t in reversed(range(len(rewards))):
-        delta = (
-            rewards[t]
-            + gamma * values_with_terminal[t + 1].item()
-            - values_with_terminal[t].item()
-        )
-        gae = delta + gamma * lam * gae
-        returns.appendleft(gae + values_with_terminal[t].item())
-        advantages.appendleft(gae)
+    for t in reversed(range(T)):
+        if t == T - 1:
+            next_value = bootstrap_value.item()
+        else:
+            next_value = values[t + 1].item()
 
-    return list(returns), list(advantages)
+        # If episode ended at step t, don't bootstrap from next state
+        non_terminal = 1.0 - float(dones[t])
+        delta = rewards[t] + gamma * next_value * non_terminal - values[t].item()
+        gae = delta + gamma * lam * non_terminal * gae
+        advantages[t] = gae
+        returns[t] = gae + values[t].item()
+
+    return returns, advantages
 
 
 def _create_batch(
-    trajectories: list[Trajectory],
+    transitions: list[list[Transition]],
+    bootstrap_values: list[torch.Tensor],
     gamma: float,
     lam: float,
     device: torch.device,
 ) -> TrajectoryBatch:
-    """Create a training batch from trajectories."""
+    """Create a training batch from rollout transitions with GAE."""
     all_x_game_states = []
     all_head_type_primaries = []
     all_primary_masks = []
@@ -429,15 +487,19 @@ def _create_batch(
     all_returns = []
     all_advantages = []
 
-    for trajectory in trajectories:
-        if len(trajectory) == 0:
+    for env_idx, env_transitions in enumerate(transitions):
+        if not env_transitions:
             continue
 
-        rewards = [t.reward for t in trajectory.transitions]
-        values = [t.value for t in trajectory.transitions]
-        returns, advantages = _compute_gae(rewards, values, gamma, lam, device)
+        rewards = [t.reward for t in env_transitions]
+        values = [t.value for t in env_transitions]
+        dones = [t.done for t in env_transitions]
 
-        for i, trans in enumerate(trajectory.transitions):
+        ret, adv = _compute_gae(
+            rewards, values, dones, bootstrap_values[env_idx], gamma, lam
+        )
+
+        for i, trans in enumerate(env_transitions):
             all_x_game_states.append(trans.x_game_state)
             all_head_type_primaries.append(trans.head_type_primary)
             all_primary_masks.append(trans.primary_mask)
@@ -447,8 +509,8 @@ def _create_batch(
             all_selection_indices.append(trans.selection_index)
             all_selection_log_probs.append(trans.selection_log_prob.item())
             all_values.append(trans.value)
-            all_returns.append(returns[i])
-            all_advantages.append(advantages[i])
+            all_returns.append(ret[i])
+            all_advantages.append(adv[i])
 
     batch = TrajectoryBatch(
         x_game_states=all_x_game_states,
@@ -483,7 +545,6 @@ def _minibatch_indices(total: int, minibatch_size: int) -> Iterator[list[int]]:
     """Generate shuffled minibatch indices."""
     indices = list(range(total))
     random.shuffle(indices)
-
     for i in range(0, total, minibatch_size):
         yield indices[i : i + minibatch_size]
 
@@ -506,11 +567,9 @@ def _recompute_log_probs_batch(
     """
     B = len(x_game_states)
 
-    # Concatenate pre-encoded states and move to device
     x_game_state = _concat_x_game_states(x_game_states)
     x_game_state = _move_x_game_state(x_game_state, device)
 
-    # Rebuild MaskBatch for this minibatch
     mask_batch = _build_mask_batch_from_samples(
         head_type_primaries, primary_masks, selection_masks, device
     )
@@ -518,20 +577,13 @@ def _recompute_log_probs_batch(
     primary_indices = primary_indices.to(device)
     selection_indices = selection_indices.to(device)
 
-    # Core encoder (all samples)
     core_out = model.core(x_game_state)
-
-    # Value head (all samples)
     values = model.head_value(core_out.x_global)
-
-    # Pre-extract entity tensors (just references, no copy)
     entity_tensors = _build_entity_tensors(core_out)
 
-    # Initialize log probs and entropies
     total_log_probs = torch.zeros(B, device=device)
     total_entropies = torch.zeros(B, device=device)
 
-    # Process each primary group
     for htp in range(NUM_PRIMARY_HEADS):
         idx = mask_batch.route[htp]
         if len(idx) == 0:
@@ -540,7 +592,6 @@ def _recompute_log_probs_batch(
         x_global_group = core_out.x_global[idx]
 
         if IS_DECISION_PRIMARY[htp]:
-            # --- Recompute primary (binary) decision ---
             primary_mask = mask_batch.primary_masks[htp]
             decision_head = model._decision_heads[htp]
             out = decision_head(x_global_group, primary_mask, sample=False)
@@ -550,7 +601,6 @@ def _recompute_log_probs_batch(
             total_log_probs[idx] += primary_dist.log_prob(group_primary_idx)
             total_entropies[idx] += primary_dist.entropy()
 
-            # --- Recompute secondary selection (for samples that chose "select") ---
             needs_secondary = group_primary_idx == 1
             if torch.any(needs_secondary):
                 sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
@@ -566,12 +616,9 @@ def _recompute_log_probs_batch(
                 sec_log_probs, sec_entropy = compute_grouped_log_prob_and_entropy(
                     out.logits, sec_indices
                 )
-
                 total_log_probs[sec_batch] += sec_log_probs
                 total_entropies[sec_batch] += sec_entropy
-
         else:
-            # --- Direct primary: recompute selection ---
             entities_group = entity_tensors[htp][idx]
             sel_mask = mask_batch.selection_masks[htp]
             sel_indices = selection_indices[idx]
@@ -581,7 +628,6 @@ def _recompute_log_probs_batch(
             sel_log_probs, sel_entropy = compute_grouped_log_prob_and_entropy(
                 out.logits, sel_indices
             )
-
             total_log_probs[idx] += sel_log_probs
             total_entropies[idx] += sel_entropy
 
@@ -609,7 +655,6 @@ def _update_ppo(
 
     for _ in range(num_epochs):
         for mb_idxs in _minibatch_indices(len(batch), minibatch_size):
-            # Gather minibatch data
             mb_x_states = [batch.x_game_states[i] for i in mb_idxs]
             mb_htps = [batch.head_type_primaries[i].item() for i in mb_idxs]
             mb_primary_masks = [batch.primary_masks[i] for i in mb_idxs]
@@ -617,7 +662,6 @@ def _update_ppo(
             mb_primary_indices = batch.primary_indices[mb_idxs]
             mb_selection_indices = batch.selection_indices[mb_idxs]
 
-            # Recompute with current policy
             log_probs_new, entropies, values_new = _recompute_log_probs_batch(
                 model,
                 mb_x_states,
@@ -629,23 +673,19 @@ def _update_ppo(
                 device,
             )
 
-            # Old log probs
             log_probs_old = batch.primary_log_probs[mb_idxs].to(
                 device
             ) + batch.selection_log_probs[mb_idxs].to(device)
 
-            # Advantages and returns
             advantages = torch.squeeze(batch.advantages[mb_idxs]).to(device)
             returns = batch.returns[mb_idxs].to(device)
             values_old = batch.values[mb_idxs].to(device)
 
-            # Policy loss (PPO clipped)
             ratio = torch.exp(log_probs_new - log_probs_old)
             surr1 = ratio * advantages
             surr2 = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages
             loss_policy = -torch.mean(torch.min(surr1, surr2))
 
-            # Value loss
             if clip_value_loss:
                 values_clipped = values_old + torch.clamp(
                     values_new - values_old, -clip_eps, clip_eps
@@ -656,13 +696,9 @@ def _update_ppo(
             else:
                 loss_value = F.mse_loss(values_new, returns)
 
-            # Entropy loss
             loss_entropy = -torch.mean(entropies)
-
-            # Total loss
             loss = loss_policy + coef_value * loss_value + coef_entropy * loss_entropy
 
-            # Backward
             optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -686,7 +722,7 @@ def _update_ppo(
 
 
 def _get_entropy_schedule(
-    num_episodes: int,
+    num_iterations: int,
     elbow: int,
     max_coef: float,
     min_coef: float,
@@ -695,9 +731,9 @@ def _get_entropy_schedule(
     coefs = []
     slope = (min_coef - max_coef) / elbow
 
-    for ep in range(num_episodes):
-        if ep <= elbow:
-            coefs.append(slope * ep + max_coef)
+    for it in range(num_iterations):
+        if it <= elbow:
+            coefs.append(slope * it + max_coef)
         else:
             coefs.append(min_coef)
 
@@ -706,11 +742,12 @@ def _get_entropy_schedule(
 
 def train(
     exp_name: str,
-    num_episodes: int,
+    num_iterations: int,
     log_every: int,
     save_every: int,
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
+    rollout_length: int,
     num_epochs: int,
     minibatch_size: int,
     clip_eps: float,
@@ -723,28 +760,32 @@ def train(
     num_envs: int,
     device: torch.device,
 ) -> None:
-    """Main training loop."""
+    """Main training loop with fixed-length rollouts."""
     writer = SummaryWriter(f"experiments/{exp_name}")
     model.to(device)
 
-    # Start worker processes
-    conn_parents, conn_children = zip(*[Pipe() for _ in range(num_envs)])
-    processes = [Process(target=worker, args=(conn,)) for conn in conn_children]
-    for p in processes:
-        p.start()
+    # Create in-process environment manager
+    env_mgr = EnvironmentManager(num_envs)
+
+    total_steps = 0
 
     try:
-        for episode in range(num_episodes):
-            coef_entropy = coefs_entropy[episode]
+        for iteration in range(num_iterations):
+            coef_entropy = coefs_entropy[iteration]
 
-            # Collect trajectories
-            trajectories = _run_episodes(model, list(conn_parents), device)
+            # Collect fixed-length rollout
+            transitions, bootstrap_values, completed_episodes = _collect_rollout(
+                model, env_mgr, rollout_length, device
+            )
 
-            # Create batch
-            batch = _create_batch(trajectories, gamma, lam, device)
+            num_transitions = rollout_length * num_envs
+            total_steps += num_transitions
+
+            # Create batch with GAE
+            batch = _create_batch(transitions, bootstrap_values, gamma, lam, device)
 
             if len(batch) == 0:
-                print(f"Episode {episode}: Empty batch, skipping")
+                print(f"Iteration {iteration}: Empty batch, skipping")
                 continue
 
             # PPO update
@@ -763,35 +804,44 @@ def train(
             )
 
             # Logging
-            if episode % log_every == 0:
-                print(f"Episode {episode}: policy={loss_policy:.4f}, value={loss_value:.4f}")
-                writer.add_scalar("Loss/policy", loss_policy, episode)
-                writer.add_scalar("Loss/value", loss_value, episode)
-                writer.add_scalar("Loss/entropy", loss_entropy, episode)
-                writer.add_scalar("Entropy/coef", coef_entropy, episode)
-
-                total_reward = sum(
-                    sum(t.reward for t in traj.transitions) for traj in trajectories
+            if iteration % log_every == 0:
+                print(
+                    f"Iter {iteration} | steps={total_steps} | "
+                    f"policy={loss_policy:.4f} value={loss_value:.4f} | "
+                    f"episodes={len(completed_episodes)}"
                 )
-                avg_length = sum(len(traj) for traj in trajectories) / max(len(trajectories), 1)
-                writer.add_scalar("Trajectory/total_reward", total_reward, episode)
-                writer.add_scalar("Trajectory/avg_length", avg_length, episode)
+                writer.add_scalar("Loss/policy", loss_policy, iteration)
+                writer.add_scalar("Loss/value", loss_value, iteration)
+                writer.add_scalar("Loss/entropy", loss_entropy, iteration)
+                writer.add_scalar("Entropy/coef", coef_entropy, iteration)
+                writer.add_scalar("Steps/total", total_steps, iteration)
+
+                if completed_episodes:
+                    avg_reward = sum(e.total_reward for e in completed_episodes) / len(
+                        completed_episodes
+                    )
+                    avg_length = sum(e.length for e in completed_episodes) / len(
+                        completed_episodes
+                    )
+                    writer.add_scalar("Episode/avg_reward", avg_reward, iteration)
+                    writer.add_scalar("Episode/avg_length", avg_length, iteration)
+                    writer.add_scalar(
+                        "Episode/completed_count", len(completed_episodes), iteration
+                    )
 
                 # Greedy evaluation episode
-                eval_reward, eval_length = _run_eval_episode(model, conn_parents[0], device)
+                eval_reward, eval_length = _run_eval_episode(model, device)
                 print(f"  eval: reward={eval_reward:.4f}, length={eval_length}")
-                writer.add_scalar("Eval/reward", eval_reward, episode)
-                writer.add_scalar("Eval/length", eval_length, episode)
+                writer.add_scalar("Eval/reward", eval_reward, iteration)
+                writer.add_scalar("Eval/length", eval_length, iteration)
 
             # Save
-            if episode % save_every == 0:
+            if iteration % save_every == 0:
                 torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
-    finally:
-        for conn in conn_parents:
-            conn.send((Command.CLOSE, None))
-        for p in processes:
-            p.join()
+    except KeyboardInterrupt:
+        print("\nTraining interrupted. Saving model...")
+        torch.save(model.state_dict(), f"experiments/{exp_name}/model.pth")
 
     writer.close()
 
@@ -812,7 +862,7 @@ if __name__ == "__main__":
 
     # Entropy schedule
     coefs_entropy = _get_entropy_schedule(
-        int(config["num_episodes"]),
+        int(config["num_iterations"]),
         int(config["coef_entropy_elbow"]),
         config["coef_entropy_max"],
         config["coef_entropy_min"],
@@ -820,13 +870,16 @@ if __name__ == "__main__":
 
     # Train
     print(f"Starting training: {config['exp_name']}")
+    print(f"  num_envs={config['num_envs']}, rollout_length={config['rollout_length']}")
+    print(f"  transitions/iter={config['num_envs'] * config['rollout_length']}")
     train(
         config["exp_name"],
-        int(config["num_episodes"]),
+        int(config["num_iterations"]),
         config["log_every"],
         config["save_every"],
         model,
         optimizer,
+        config["rollout_length"],
         config["num_epochs"],
         config["minibatch_size"],
         config["clip_eps"],
