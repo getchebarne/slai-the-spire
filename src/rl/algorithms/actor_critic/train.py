@@ -20,7 +20,7 @@ from src.game.create import create_game_state
 from src.game.main import initialize_game_state
 from src.game.main import step
 from src.game.view.state import get_view_game_state
-from src.rl.action_space.masks import get_masks
+from src.rl.action_space.masks import get_mask_batch
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
@@ -57,10 +57,10 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[EpisodeResu
         x_game_state = encode_batch_view_game_state([view_game_state], device)
 
         # Get masks
-        primary_mask, secondary_masks = get_masks(view_game_state, device)
+        mask_batch = get_mask_batch([view_game_state], device)
 
         # Forward pass
-        output = model.forward_single(x_game_state, primary_mask, secondary_masks, sample=True)
+        output = model.forward_single(x_game_state, mask_batch, sample=True)
 
         # Build action
         action = output.to_action()

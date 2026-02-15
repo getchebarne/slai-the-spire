@@ -21,8 +21,9 @@ from src.game.main import step
 from src.game.view.fsm import ViewFSM
 from src.game.view.state import ViewGameState
 from src.game.view.state import get_view_game_state
-from src.rl.action_space.masks import get_masks
-from src.rl.action_space.types import HeadType
+from src.rl.action_space.masks import MaskBatch
+from src.rl.action_space.masks import get_mask_batch
+from src.rl.action_space.types import HeadTypePrimary
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
@@ -31,13 +32,16 @@ from src.rl.models.heads import get_grouped_probs
 from src.rl.utils import load_config
 
 
-N_COL, _ = os.get_terminal_size()
+try:
+    N_COL, _ = os.get_terminal_size()
+except OSError:
+    N_COL = 120
 
 
 def get_card_probabilities(
     model: ActorCritic,
     x_game_state: XGameState,
-    secondary_masks: dict[HeadType, torch.Tensor],
+    mask_batch: MaskBatch,
 ) -> torch.Tensor:
     """
     Get grouped probabilities for cards in hand from the card play head.
@@ -52,8 +56,8 @@ def get_card_probabilities(
     # Run core encoder
     core_out = model.core(x_game_state)
 
-    # Get card play mask
-    mask = secondary_masks[HeadType.CARD_PLAY]  # (1, MAX_HAND_SIZE)
+    # Get selection mask for COMBAT_DEFAULT (which is the card play mask)
+    mask = mask_batch.selection_masks[HeadTypePrimary.COMBAT_DEFAULT]  # (1, MAX_HAND_SIZE)
 
     # Run card play head without sampling to get logits
     head_out = model.head_card_play(core_out.x_hand, core_out.x_global, mask, sample=False)
@@ -116,13 +120,11 @@ def get_action_from_model(
     x_game_state = encode_batch_view_game_state([view_game_state], device)
 
     # Get masks
-    primary_mask, secondary_masks = get_masks(view_game_state, device)
+    mask_batch = get_mask_batch([view_game_state], device)
 
     # Forward pass
     with torch.no_grad():
-        output = model.forward_single(
-            x_game_state, primary_mask, secondary_masks, sample=not greedy
-        )
+        output = model.forward_single(x_game_state, mask_batch, sample=not greedy)
 
         # Get card probabilities if in combat and requested
         card_probs_str = None
@@ -133,7 +135,7 @@ def get_action_from_model(
             and view_game_state.hand
             and has_playable
         ):
-            probs = get_card_probabilities(model, x_game_state, secondary_masks)
+            probs = get_card_probabilities(model, x_game_state, mask_batch)
             card_probs_str = format_card_probabilities(view_game_state, probs)
 
     return output.to_action(), card_probs_str
