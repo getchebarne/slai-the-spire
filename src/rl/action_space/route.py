@@ -1,4 +1,5 @@
 from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.game.view.fsm import ViewFSM
 from src.game.view.state import ViewGameState
 
@@ -13,11 +14,12 @@ _VIEW_FSM_TO_HEAD_TYPE_PRIMARY = {
 }
 
 
-def get_route_primary(view_game_states: list[ViewGameState]) -> dict[HeadTypePrimary, list[int]]:
-    route = {head_type_primary: [] for head_type_primary in HeadTypePrimary}
+def get_route_primary(view_game_states: list[ViewGameState]) -> list[list[int]]:
+    """Route game states to primary head groups. Returns list indexed by int(HeadTypePrimary)."""
+    route: list[list[int]] = [[] for _ in range(NUM_PRIMARY_HEADS)]
 
     for i, view_game_state in enumerate(view_game_states):
-        head_type_primary = _VIEW_FSM_TO_HEAD_TYPE_PRIMARY[view_game_state.fsm]
-        route[head_type_primary].append(i)
+        htp = _VIEW_FSM_TO_HEAD_TYPE_PRIMARY[view_game_state.fsm]
+        route[htp].append(i)
 
     return route

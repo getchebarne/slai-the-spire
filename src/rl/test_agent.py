@@ -57,7 +57,7 @@ def get_card_probabilities(
     core_out = model.core(x_game_state)
 
     # Get selection mask for COMBAT_DEFAULT (which is the card play mask)
-    mask = mask_batch.selection_masks[HeadTypePrimary.COMBAT_DEFAULT]  # (1, MAX_HAND_SIZE)
+    mask = mask_batch.selection_masks[int(HeadTypePrimary.COMBAT_DEFAULT)]  # (1, MAX_HAND_SIZE)
 
     # Run card play head without sampling to get logits
     head_out = model.head_card_play(core_out.x_hand, core_out.x_global, mask, sample=False)

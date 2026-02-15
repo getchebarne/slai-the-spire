@@ -10,6 +10,9 @@ Architecture:
 4. Direct primaries (COMBAT_CARD_DISCARD, COMBAT_MONSTER_SELECT, MAP_SELECT):
    - Selection head directly picks the entity (no binary decision)
 5. Value head estimates state value
+
+Performance: All routing uses int-indexed lists (no enum dict lookups).
+Entity tensors are sliced individually (not via full CoreOutput slicing).
 """
 
 from dataclasses import dataclass
@@ -21,10 +24,9 @@ import torch.nn as nn
 from src.game.action import Action
 from src.game.const import MAP_WIDTH
 from src.rl.action_space.masks import MaskBatch
-from src.rl.action_space.types import DECISION_PRIMARIES
 from src.rl.action_space.types import HeadTypePrimary
-from src.rl.action_space.types import HeadTypeSecondary
-from src.rl.action_space.types import PRIMARY_TO_SECONDARY
+from src.rl.action_space.types import IS_DECISION_PRIMARY
+from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.rl.action_space.types import to_action
 from src.rl.encoding.state import XGameState
 from src.rl.models.core import Core
@@ -95,26 +97,34 @@ class SingleOutput:
 
 
 # =============================================================================
-# Helper Functions
+# Helper: build per-head-type entity tensor list from CoreOutput
 # =============================================================================
 
+# Cached constants for HeadTypePrimary int values (avoid enum attribute lookup in hot loops)
+_HTP_CARD_REWARD = int(HeadTypePrimary.CARD_REWARD)
+_HTP_COMBAT_CARD_DISCARD = int(HeadTypePrimary.COMBAT_CARD_DISCARD)
+_HTP_COMBAT_DEFAULT = int(HeadTypePrimary.COMBAT_DEFAULT)
+_HTP_COMBAT_MONSTER_SELECT = int(HeadTypePrimary.COMBAT_MONSTER_SELECT)
+_HTP_MAP_SELECT = int(HeadTypePrimary.MAP_SELECT)
+_HTP_REST_SITE = int(HeadTypePrimary.REST_SITE)
 
-def _slice_core_output(core_out: CoreOutput, indices: torch.Tensor) -> CoreOutput:
-    """Slice CoreOutput to specific batch indices."""
-    return CoreOutput(
-        x_hand=core_out.x_hand[indices],
-        x_draw=core_out.x_draw[indices],
-        x_disc=core_out.x_disc[indices],
-        x_deck=core_out.x_deck[indices],
-        x_combat_reward=core_out.x_combat_reward[indices],
-        x_monsters=core_out.x_monsters[indices],
-        x_character=core_out.x_character[indices],
-        x_energy=core_out.x_energy[indices],
-        x_entity=core_out.x_entity[indices],
-        x_entity_mask=core_out.x_entity_mask[indices],
-        x_map=core_out.x_map[indices],
-        x_global=core_out.x_global[indices],
-    )
+
+def _build_entity_tensors(core_out: CoreOutput) -> list[torch.Tensor]:
+    """
+    Get per-head-type entity tensors from CoreOutput.
+
+    Returns a list indexed by int(HeadTypePrimary). Each entry is the
+    entity/feature tensor that the corresponding selection head operates on.
+    No data is copied — these are views into the original CoreOutput tensors.
+    """
+    et: list[torch.Tensor | None] = [None] * NUM_PRIMARY_HEADS
+    et[_HTP_CARD_REWARD] = core_out.x_combat_reward
+    et[_HTP_COMBAT_CARD_DISCARD] = core_out.x_hand
+    et[_HTP_COMBAT_DEFAULT] = core_out.x_hand
+    et[_HTP_COMBAT_MONSTER_SELECT] = core_out.x_monsters
+    et[_HTP_MAP_SELECT] = core_out.x_map
+    et[_HTP_REST_SITE] = core_out.x_deck
+    return et  # type: ignore
 
 
 # =============================================================================
@@ -171,55 +181,22 @@ class ActorCritic(nn.Module):
         # Value head
         self.head_value = HeadValue(dim_global, dim_ff_value)
 
-        # ---- Registries (for programmatic access) ----
+        # ---- Registries: list-indexed by int(HeadTypePrimary) for fast lookup ----
 
-        # Decision primary → binary head
-        self._decision_heads: dict[HeadTypePrimary, HeadBinaryChoice] = {
-            HeadTypePrimary.COMBAT_DEFAULT: self.head_combat_default,
-            HeadTypePrimary.CARD_REWARD: self.head_card_reward,
-            HeadTypePrimary.REST_SITE: self.head_rest_site,
-        }
+        # Decision primary → binary head (None for direct primaries)
+        self._decision_heads: list[HeadBinaryChoice | None] = [None] * NUM_PRIMARY_HEADS
+        self._decision_heads[_HTP_COMBAT_DEFAULT] = self.head_combat_default
+        self._decision_heads[_HTP_CARD_REWARD] = self.head_card_reward
+        self._decision_heads[_HTP_REST_SITE] = self.head_rest_site
 
-        # HeadTypePrimary → entity selection head
-        # (MAP_SELECT handled separately due to different input signature)
-        self._selection_heads: dict[HeadTypePrimary, nn.Module] = {
-            HeadTypePrimary.COMBAT_DEFAULT: self.head_card_play,
-            HeadTypePrimary.CARD_REWARD: self.head_card_reward_select,
-            HeadTypePrimary.REST_SITE: self.head_card_upgrade,
-            HeadTypePrimary.COMBAT_CARD_DISCARD: self.head_card_discard,
-            HeadTypePrimary.COMBAT_MONSTER_SELECT: self.head_monster_select,
-        }
-
-    def _get_selection_entities(
-        self, head_type: HeadTypePrimary, core_out: CoreOutput
-    ) -> torch.Tensor:
-        """Get the entity tensor for a selection head."""
-        match head_type:
-            case HeadTypePrimary.COMBAT_DEFAULT | HeadTypePrimary.COMBAT_CARD_DISCARD:
-                return core_out.x_hand
-            case HeadTypePrimary.CARD_REWARD:
-                return core_out.x_combat_reward
-            case HeadTypePrimary.REST_SITE:
-                return core_out.x_deck
-            case HeadTypePrimary.COMBAT_MONSTER_SELECT:
-                return core_out.x_monsters
-            case _:
-                raise ValueError(f"No entity tensor for: {head_type}")
-
-    def _run_selection(
-        self,
-        head_type: HeadTypePrimary,
-        core_out: CoreOutput,
-        mask: torch.Tensor,
-        sample: bool,
-    ):
-        """Run the appropriate selection head for a primary type."""
-        if head_type == HeadTypePrimary.MAP_SELECT:
-            return self.head_map_select(core_out.x_map, core_out.x_global, mask, sample)
-
-        head = self._selection_heads[head_type]
-        entities = self._get_selection_entities(head_type, core_out)
-        return head(entities, core_out.x_global, mask, sample)
+        # HeadTypePrimary → entity/map selection head (all types, including MAP_SELECT)
+        self._selection_heads: list[nn.Module | None] = [None] * NUM_PRIMARY_HEADS
+        self._selection_heads[_HTP_COMBAT_DEFAULT] = self.head_card_play
+        self._selection_heads[_HTP_CARD_REWARD] = self.head_card_reward_select
+        self._selection_heads[_HTP_REST_SITE] = self.head_card_upgrade
+        self._selection_heads[_HTP_COMBAT_CARD_DISCARD] = self.head_card_discard
+        self._selection_heads[_HTP_COMBAT_MONSTER_SELECT] = self.head_monster_select
+        self._selection_heads[_HTP_MAP_SELECT] = self.head_map_select
 
     def forward(
         self,
@@ -230,13 +207,8 @@ class ActorCritic(nn.Module):
         """
         Batched forward pass with per-primary-type routing.
 
-        Args:
-            x_game_state: Encoded game state
-            mask_batch: Per-HeadTypePrimary routing and masks
-            sample: Whether to sample (True) or argmax (False)
-
-        Returns:
-            ForwardOutput with per-sample tensors
+        Uses direct tensor field access (no full CoreOutput slicing).
+        Only the 1-2 tensors needed per head type are indexed.
         """
         device = x_game_state.x_hand.device
 
@@ -261,21 +233,28 @@ class ActorCritic(nn.Module):
         selection_log_probs = torch.zeros(B, device=device)
 
         # =================================================================
-        # 4. Process each primary group
+        # 4. Pre-extract entity tensors (just references, no copy)
         # =================================================================
-        for head_type in HeadTypePrimary:
-            idx = mask_batch.route[head_type]
+        entity_tensors = _build_entity_tensors(core_out)
+
+        # =================================================================
+        # 5. Process each primary group
+        # =================================================================
+        for htp in range(NUM_PRIMARY_HEADS):
+            idx = mask_batch.route[htp]
             if len(idx) == 0:
                 continue
 
-            head_type_primaries[idx] = head_type
-            subset_core = _slice_core_output(core_out, idx)
+            head_type_primaries[idx] = htp
 
-            if head_type in DECISION_PRIMARIES:
+            # Only slice the tensors this head type actually needs
+            x_global_group = core_out.x_global[idx]
+
+            if IS_DECISION_PRIMARY[htp]:
                 # --- Decision primary: binary head + conditional secondary ---
-                primary_mask = mask_batch.primary_masks[head_type]
-                decision_head = self._decision_heads[head_type]
-                out = decision_head(subset_core.x_global, primary_mask, sample)
+                primary_mask = mask_batch.primary_masks[htp]
+                decision_head = self._decision_heads[htp]
+                out = decision_head(x_global_group, primary_mask, sample)
 
                 if sample:
                     chosen = out.indices
@@ -291,10 +270,14 @@ class ActorCritic(nn.Module):
                     sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
                     sec_batch = idx[sec_local]
 
-                    sec_core = _slice_core_output(core_out, sec_batch)
-                    sec_mask = mask_batch.selection_masks[head_type][sec_local]
+                    # Slice from group subset (not full core_out) for x_global;
+                    # slice entities from original (needed for correct batch indices)
+                    sec_x_global = x_global_group[sec_local]
+                    sec_entities = entity_tensors[htp][sec_batch]
+                    sec_mask = mask_batch.selection_masks[htp][sec_local]
 
-                    sec_out = self._run_selection(head_type, sec_core, sec_mask, sample)
+                    sel_head = self._selection_heads[htp]
+                    sec_out = sel_head(sec_entities, sec_x_global, sec_mask, sample)
 
                     if sample:
                         selection_indices[sec_batch] = sec_out.indices
@@ -304,8 +287,10 @@ class ActorCritic(nn.Module):
 
             else:
                 # --- Direct primary: selection head only ---
-                sel_mask = mask_batch.selection_masks[head_type]
-                sel_out = self._run_selection(head_type, subset_core, sel_mask, sample)
+                entities_group = entity_tensors[htp][idx]
+                sel_mask = mask_batch.selection_masks[htp]
+                sel_head = self._selection_heads[htp]
+                sel_out = sel_head(entities_group, x_global_group, sel_mask, sample)
 
                 if sample:
                     selection_indices[idx] = sel_out.indices

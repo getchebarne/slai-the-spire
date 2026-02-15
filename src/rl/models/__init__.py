@@ -10,7 +10,7 @@ Main exports:
 from src.rl.models.actor_critic import ActorCritic
 from src.rl.models.actor_critic import ForwardOutput
 from src.rl.models.actor_critic import SingleOutput
-from src.rl.models.actor_critic import _slice_core_output
+from src.rl.models.actor_critic import _build_entity_tensors
 from src.rl.models.core import Core
 from src.rl.models.core import CoreOutput
 
@@ -21,5 +21,5 @@ __all__ = [
     "CoreOutput",
     "ForwardOutput",
     "SingleOutput",
-    "_slice_core_output",
+    "_build_entity_tensors",
 ]
