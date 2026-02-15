@@ -22,8 +22,8 @@ from torch.utils.tensorboard import SummaryWriter
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import SELECTION_SIZES
 from src.rl.action_space.masks import get_mask_batch
-from src.rl.action_space.types import DECISION_PRIMARIES
-from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import IS_DECISION_PRIMARY
+from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.rl.action_space.types import PRIMARY_NUM_CHOICES
 from src.rl.algorithms.actor_critic.worker import Command
 from src.rl.algorithms.actor_critic.worker import WorkerData
@@ -31,7 +31,7 @@ from src.rl.algorithms.actor_critic.worker import worker
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
-from src.rl.models import _slice_core_output
+from src.rl.models.actor_critic import _build_entity_tensors
 from src.rl.models.heads import compute_grouped_log_prob_and_entropy
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
@@ -47,7 +47,7 @@ class Transition:
     """Single transition in a trajectory. Stores pre-encoded state."""
 
     x_game_state: XGameState  # Pre-encoded state (batch=1)
-    head_type_primary: HeadTypePrimary
+    head_type_primary: int  # int(HeadTypePrimary) for fast indexing
     primary_mask: torch.Tensor | None  # (1, num_choices) for decision, None for direct
     selection_mask: torch.Tensor  # (1, max_entities)
     primary_index: int  # -1 for direct primaries
@@ -73,7 +73,7 @@ class TrajectoryBatch:
     """Batched trajectory data for training."""
 
     x_game_states: list[XGameState]  # List of pre-encoded states (each batch=1)
-    head_type_primaries: torch.Tensor  # (N,) HeadTypePrimary values
+    head_type_primaries: torch.Tensor  # (N,) int values of HeadTypePrimary
     primary_masks: list[torch.Tensor | None]  # each (1, num_choices) or None
     selection_masks: list[torch.Tensor]  # each (1, max_entities)
     primary_indices: torch.Tensor  # (N,)
@@ -189,7 +189,7 @@ def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
 def _extract_per_sample_masks(
     mask_batch: MaskBatch,
     batch_idx: int,
-    head_type_primary: HeadTypePrimary,
+    htp: int,
 ) -> tuple[torch.Tensor | None, torch.Tensor]:
     """
     Extract per-sample masks from a MaskBatch.
@@ -198,14 +198,14 @@ def _extract_per_sample_masks(
     primary_mask is None for direct primaries.
     """
     # Find this sample's position within its group
-    route = mask_batch.route[head_type_primary]
+    route = mask_batch.route[htp]
     local_idx = (route == batch_idx).nonzero(as_tuple=True)[0].item()
 
     primary_mask = None
-    if head_type_primary in DECISION_PRIMARIES:
-        primary_mask = mask_batch.primary_masks[head_type_primary][local_idx : local_idx + 1]
+    if IS_DECISION_PRIMARY[htp]:
+        primary_mask = mask_batch.primary_masks[htp][local_idx : local_idx + 1]
 
-    selection_mask = mask_batch.selection_masks[head_type_primary][local_idx : local_idx + 1]
+    selection_mask = mask_batch.selection_masks[htp][local_idx : local_idx + 1]
 
     return primary_mask, selection_mask
 
@@ -217,33 +217,37 @@ def _build_mask_batch_from_samples(
     device: torch.device,
 ) -> MaskBatch:
     """Rebuild MaskBatch from per-sample data for PPO recomputation."""
-    route: dict[HeadTypePrimary, list[int]] = {htp: [] for htp in HeadTypePrimary}
+    route_lists: list[list[int]] = [[] for _ in range(NUM_PRIMARY_HEADS)]
 
-    for i, htp_val in enumerate(head_type_primaries):
-        route[HeadTypePrimary(htp_val)].append(i)
+    for i, htp in enumerate(head_type_primaries):
+        route_lists[htp].append(i)
 
-    route_tensors: dict[HeadTypePrimary, torch.Tensor] = {}
-    pm_dict: dict[HeadTypePrimary, torch.Tensor] = {}
-    sm_dict: dict[HeadTypePrimary, torch.Tensor] = {}
+    route: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
+    pm_list: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
+    sm_list: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
 
-    for htp in HeadTypePrimary:
-        idxs = route[htp]
-        route_tensors[htp] = torch.tensor(idxs, dtype=torch.long, device=device)
+    for htp in range(NUM_PRIMARY_HEADS):
+        idxs = route_lists[htp]
+        route[htp] = torch.tensor(idxs, dtype=torch.long, device=device)
 
         if not idxs:
-            if htp in DECISION_PRIMARIES:
-                pm_dict[htp] = torch.zeros(
+            if IS_DECISION_PRIMARY[htp]:
+                pm_list[htp] = torch.zeros(
                     0, PRIMARY_NUM_CHOICES[htp], dtype=torch.bool, device=device
                 )
-            sm_dict[htp] = torch.zeros(0, SELECTION_SIZES[htp], dtype=torch.bool, device=device)
+            else:
+                pm_list[htp] = torch.empty(0, dtype=torch.bool, device=device)
+            sm_list[htp] = torch.zeros(0, SELECTION_SIZES[htp], dtype=torch.bool, device=device)
             continue
 
-        if htp in DECISION_PRIMARIES:
-            pm_dict[htp] = torch.cat([primary_masks[i] for i in idxs], dim=0).to(device)
+        if IS_DECISION_PRIMARY[htp]:
+            pm_list[htp] = torch.cat([primary_masks[i] for i in idxs], dim=0).to(device)
+        else:
+            pm_list[htp] = torch.empty(0, dtype=torch.bool, device=device)
 
-        sm_dict[htp] = torch.cat([selection_masks[i] for i in idxs], dim=0).to(device)
+        sm_list[htp] = torch.cat([selection_masks[i] for i in idxs], dim=0).to(device)
 
-    return MaskBatch(route=route_tensors, primary_masks=pm_dict, selection_masks=sm_dict)
+    return MaskBatch(route=route, primary_masks=pm_list, selection_masks=sm_list)
 
 
 # =============================================================================
@@ -314,7 +318,7 @@ def _run_episodes(
             for i, env_idx in enumerate(running_envs):
                 reward = new_worker_datas[env_idx].reward
 
-                htp = HeadTypePrimary(output.head_type_primaries[i].item())
+                htp = output.head_type_primaries[i].item()
                 primary_mask, selection_mask = _extract_per_sample_masks(mask_batch, i, htp)
 
                 transition = Transition(
@@ -435,7 +439,7 @@ def _create_batch(
 
         for i, trans in enumerate(trajectory.transitions):
             all_x_game_states.append(trans.x_game_state)
-            all_head_type_primaries.append(int(trans.head_type_primary))
+            all_head_type_primaries.append(trans.head_type_primary)
             all_primary_masks.append(trans.primary_mask)
             all_selection_masks.append(trans.selection_mask)
             all_primary_indices.append(trans.primary_index)
@@ -497,6 +501,7 @@ def _recompute_log_probs_batch(
     """
     Recompute log probs and entropy for a minibatch with current policy.
 
+    Uses direct tensor field access (no full CoreOutput slicing).
     Returns (log_probs, entropies, values) - all shape (N,) or (N, 1)
     """
     B = len(x_game_states)
@@ -519,23 +524,26 @@ def _recompute_log_probs_batch(
     # Value head (all samples)
     values = model.head_value(core_out.x_global)
 
+    # Pre-extract entity tensors (just references, no copy)
+    entity_tensors = _build_entity_tensors(core_out)
+
     # Initialize log probs and entropies
     total_log_probs = torch.zeros(B, device=device)
     total_entropies = torch.zeros(B, device=device)
 
     # Process each primary group
-    for htp in HeadTypePrimary:
+    for htp in range(NUM_PRIMARY_HEADS):
         idx = mask_batch.route[htp]
         if len(idx) == 0:
             continue
 
-        subset_core = _slice_core_output(core_out, idx)
+        x_global_group = core_out.x_global[idx]
 
-        if htp in DECISION_PRIMARIES:
+        if IS_DECISION_PRIMARY[htp]:
             # --- Recompute primary (binary) decision ---
             primary_mask = mask_batch.primary_masks[htp]
             decision_head = model._decision_heads[htp]
-            out = decision_head(subset_core.x_global, primary_mask, sample=False)
+            out = decision_head(x_global_group, primary_mask, sample=False)
 
             primary_dist = torch.distributions.Categorical(logits=out.logits)
             group_primary_idx = primary_indices[idx]
@@ -548,12 +556,15 @@ def _recompute_log_probs_batch(
                 sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
                 sec_batch = idx[sec_local]
 
-                sec_core = _slice_core_output(core_out, sec_batch)
+                sec_x_global = x_global_group[sec_local]
+                sec_entities = entity_tensors[htp][sec_batch]
                 sec_mask = mask_batch.selection_masks[htp][sec_local]
                 sec_indices = selection_indices[sec_batch]
 
-                sec_log_probs, sec_entropy = _run_selection_for_training(
-                    model, htp, sec_core, sec_mask, sec_indices
+                sel_head = model._selection_heads[htp]
+                out = sel_head(sec_entities, sec_x_global, sec_mask, sample=False)
+                sec_log_probs, sec_entropy = compute_grouped_log_prob_and_entropy(
+                    out.logits, sec_indices
                 )
 
                 total_log_probs[sec_batch] += sec_log_probs
@@ -561,36 +572,20 @@ def _recompute_log_probs_batch(
 
         else:
             # --- Direct primary: recompute selection ---
+            entities_group = entity_tensors[htp][idx]
             sel_mask = mask_batch.selection_masks[htp]
             sel_indices = selection_indices[idx]
 
-            sel_log_probs, sel_entropy = _run_selection_for_training(
-                model, htp, subset_core, sel_mask, sel_indices
+            sel_head = model._selection_heads[htp]
+            out = sel_head(entities_group, x_global_group, sel_mask, sample=False)
+            sel_log_probs, sel_entropy = compute_grouped_log_prob_and_entropy(
+                out.logits, sel_indices
             )
 
             total_log_probs[idx] += sel_log_probs
             total_entropies[idx] += sel_entropy
 
     return total_log_probs, total_entropies, values
-
-
-def _run_selection_for_training(
-    model: ActorCritic,
-    head_type: HeadTypePrimary,
-    core_out,
-    mask: torch.Tensor,
-    indices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run a selection head and compute grouped log probs/entropy for PPO."""
-    if head_type == HeadTypePrimary.MAP_SELECT:
-        out = model.head_map_select(core_out.x_map, core_out.x_global, mask, sample=False)
-    else:
-        head = model._selection_heads[head_type]
-        entities = model._get_selection_entities(head_type, core_out)
-        out = head(entities, core_out.x_global, mask, sample=False)
-
-    log_probs, entropy = compute_grouped_log_prob_and_entropy(out.logits, indices)
-    return log_probs, entropy
 
 
 def _update_ppo(
@@ -703,8 +698,8 @@ def _get_entropy_schedule(
     for ep in range(num_episodes):
         if ep <= elbow:
             coefs.append(slope * ep + max_coef)
-    else:
-        coefs.append(min_coef)
+        else:
+            coefs.append(min_coef)
 
     return coefs
 

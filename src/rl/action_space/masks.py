@@ -1,7 +1,7 @@
 """
 Mask generation for the actor-critic model.
 
-Generates per-HeadTypePrimary masks:
+Generates per-HeadTypePrimary masks using list-based indexing (no enum dict lookups).
 - primary_masks: binary decision masks for decision primaries
 - selection_masks: entity selection masks for all primaries
 """
@@ -18,28 +18,30 @@ from src.game.const import MAX_SIZE_DECK
 from src.game.const import MAX_SIZE_HAND
 from src.game.view.state import ViewGameState
 from src.rl.action_space.route import get_route_primary
-from src.rl.action_space.types import DECISION_PRIMARIES
 from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import IS_DECISION_PRIMARY
+from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.rl.action_space.types import PRIMARY_NUM_CHOICES
 
 
 # =============================================================================
-# Constants
+# Constants (list-indexed by int(HeadTypePrimary))
 # =============================================================================
 
-# Entity selection mask sizes per primary type
-SELECTION_SIZES: dict[HeadTypePrimary, int] = {
-    HeadTypePrimary.COMBAT_DEFAULT: MAX_SIZE_HAND,
-    HeadTypePrimary.CARD_REWARD: MAX_SIZE_COMBAT_CARD_REWARD,
-    HeadTypePrimary.REST_SITE: MAX_SIZE_DECK,
-    HeadTypePrimary.COMBAT_CARD_DISCARD: MAX_SIZE_HAND,
-    HeadTypePrimary.COMBAT_MONSTER_SELECT: MAX_MONSTERS,
-    HeadTypePrimary.MAP_SELECT: MAP_WIDTH,
-}
+_SELECTION_SIZES: list[int] = [0] * NUM_PRIMARY_HEADS
+_SELECTION_SIZES[HeadTypePrimary.COMBAT_DEFAULT] = MAX_SIZE_HAND
+_SELECTION_SIZES[HeadTypePrimary.CARD_REWARD] = MAX_SIZE_COMBAT_CARD_REWARD
+_SELECTION_SIZES[HeadTypePrimary.REST_SITE] = MAX_SIZE_DECK
+_SELECTION_SIZES[HeadTypePrimary.COMBAT_CARD_DISCARD] = MAX_SIZE_HAND
+_SELECTION_SIZES[HeadTypePrimary.COMBAT_MONSTER_SELECT] = MAX_MONSTERS
+_SELECTION_SIZES[HeadTypePrimary.MAP_SELECT] = MAP_WIDTH
+
+# Public immutable version
+SELECTION_SIZES: tuple[int, ...] = tuple(_SELECTION_SIZES)
 
 
 # =============================================================================
-# MaskBatch
+# MaskBatch (list-indexed, no enum dict lookups)
 # =============================================================================
 
 
@@ -48,15 +50,17 @@ class MaskBatch:
     """
     Batched masks organized by HeadTypePrimary.
 
+    All lists are indexed by int(HeadTypePrimary) and have length NUM_PRIMARY_HEADS.
+
     Attributes:
-        route: sample indices per primary group. {type: (N_group,) int64}
-        primary_masks: decision masks (decision primaries only). {type: (N_group, num_choices)}
-        selection_masks: entity selection masks (all groups). {type: (N_group, max_entities)}
+        route: sample indices per primary group. route[htp] → (N_group,) int64
+        primary_masks: decision masks. primary_masks[htp] → (N_group, num_choices) or empty
+        selection_masks: entity selection masks. selection_masks[htp] → (N_group, max_entities) or empty
     """
 
-    route: dict[HeadTypePrimary, torch.Tensor]
-    primary_masks: dict[HeadTypePrimary, torch.Tensor]
-    selection_masks: dict[HeadTypePrimary, torch.Tensor]
+    route: list[torch.Tensor]
+    primary_masks: list[torch.Tensor]
+    selection_masks: list[torch.Tensor]
 
 
 # =============================================================================
@@ -82,11 +86,11 @@ def _get_primary_mask_rest_site(state: ViewGameState) -> list[bool]:
     return [True, has_upgradable]
 
 
-_PRIMARY_MASK_FNS: dict[HeadTypePrimary, callable] = {
-    HeadTypePrimary.COMBAT_DEFAULT: _get_primary_mask_combat_default,
-    HeadTypePrimary.CARD_REWARD: _get_primary_mask_card_reward,
-    HeadTypePrimary.REST_SITE: _get_primary_mask_rest_site,
-}
+# List-indexed by int(HeadTypePrimary). None for non-decision types.
+_PRIMARY_MASK_FNS: list = [None] * NUM_PRIMARY_HEADS
+_PRIMARY_MASK_FNS[HeadTypePrimary.COMBAT_DEFAULT] = _get_primary_mask_combat_default
+_PRIMARY_MASK_FNS[HeadTypePrimary.CARD_REWARD] = _get_primary_mask_card_reward
+_PRIMARY_MASK_FNS[HeadTypePrimary.REST_SITE] = _get_primary_mask_rest_site
 
 
 # =============================================================================
@@ -94,44 +98,42 @@ _PRIMARY_MASK_FNS: dict[HeadTypePrimary, callable] = {
 # =============================================================================
 
 
-def _get_selection_mask(head_type: HeadTypePrimary, state: ViewGameState) -> list[bool]:
-    """Get entity selection mask for a primary type."""
-    match head_type:
-        case HeadTypePrimary.COMBAT_DEFAULT:
-            mask = [False] * MAX_SIZE_HAND
-            for idx, card in enumerate(state.hand):
-                mask[idx] = card.cost <= state.energy.current
-            return mask
+def _get_selection_mask(htp: int, state: ViewGameState) -> list[bool]:
+    """Get entity selection mask for a primary type (int-indexed)."""
+    if htp == HeadTypePrimary.COMBAT_DEFAULT:
+        mask = [False] * MAX_SIZE_HAND
+        for idx, card in enumerate(state.hand):
+            mask[idx] = card.cost <= state.energy.current
+        return mask
 
-        case HeadTypePrimary.COMBAT_CARD_DISCARD:
-            mask = [False] * MAX_SIZE_HAND
-            for idx in range(len(state.hand)):
-                mask[idx] = True
-            return mask
+    if htp == HeadTypePrimary.COMBAT_CARD_DISCARD:
+        mask = [False] * MAX_SIZE_HAND
+        for idx in range(len(state.hand)):
+            mask[idx] = True
+        return mask
 
-        case HeadTypePrimary.CARD_REWARD:
-            mask = [False] * MAX_SIZE_COMBAT_CARD_REWARD
-            for idx in range(len(state.reward_combat)):
-                mask[idx] = True
-            return mask
+    if htp == HeadTypePrimary.CARD_REWARD:
+        mask = [False] * MAX_SIZE_COMBAT_CARD_REWARD
+        for idx in range(len(state.reward_combat)):
+            mask[idx] = True
+        return mask
 
-        case HeadTypePrimary.REST_SITE:
-            mask = [False] * MAX_SIZE_DECK
-            for idx, card in enumerate(state.deck):
-                mask[idx] = not card.name.endswith("+")
-            return mask
+    if htp == HeadTypePrimary.REST_SITE:
+        mask = [False] * MAX_SIZE_DECK
+        for idx, card in enumerate(state.deck):
+            mask[idx] = not card.name.endswith("+")
+        return mask
 
-        case HeadTypePrimary.COMBAT_MONSTER_SELECT:
-            mask = [False] * MAX_MONSTERS
-            for idx in range(len(state.monsters)):
-                mask[idx] = True
-            return mask
+    if htp == HeadTypePrimary.COMBAT_MONSTER_SELECT:
+        mask = [False] * MAX_MONSTERS
+        for idx in range(len(state.monsters)):
+            mask[idx] = True
+        return mask
 
-        case HeadTypePrimary.MAP_SELECT:
-            return _get_mask_map(state)
+    if htp == HeadTypePrimary.MAP_SELECT:
+        return _get_mask_map(state)
 
-        case _:
-            raise ValueError(f"Unknown head type: {head_type}")
+    raise ValueError(f"Unknown head type: {htp}")
 
 
 def _get_mask_map(state: ViewGameState) -> list[bool]:
@@ -179,45 +181,49 @@ def get_mask_batch(
 
     Routes states by FSM, then generates primary and selection masks
     for each HeadTypePrimary group using NumPy pre-allocation.
+    All output lists are indexed by int(HeadTypePrimary).
     """
     route_lists = get_route_primary(states)
 
-    route: dict[HeadTypePrimary, torch.Tensor] = {}
-    primary_masks: dict[HeadTypePrimary, torch.Tensor] = {}
-    selection_masks: dict[HeadTypePrimary, torch.Tensor] = {}
+    route: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
+    primary_masks: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
+    selection_masks: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
 
-    for head_type in HeadTypePrimary:
-        indices = route_lists[head_type]
-        route[head_type] = torch.tensor(indices, dtype=torch.long, device=device)
+    for htp in range(NUM_PRIMARY_HEADS):
+        indices = route_lists[htp]
+        route[htp] = torch.tensor(indices, dtype=torch.long, device=device)
 
         n = len(indices)
-        sel_size = SELECTION_SIZES[head_type]
+        sel_size = SELECTION_SIZES[htp]
 
         if n == 0:
-            # Empty group — still create correctly shaped empty tensors
-            if head_type in DECISION_PRIMARIES:
-                primary_masks[head_type] = torch.zeros(
-                    0, PRIMARY_NUM_CHOICES[head_type], dtype=torch.bool, device=device
+            if IS_DECISION_PRIMARY[htp]:
+                primary_masks[htp] = torch.zeros(
+                    0, PRIMARY_NUM_CHOICES[htp], dtype=torch.bool, device=device
                 )
-            selection_masks[head_type] = torch.zeros(0, sel_size, dtype=torch.bool, device=device)
+            else:
+                primary_masks[htp] = torch.empty(0, dtype=torch.bool, device=device)
+            selection_masks[htp] = torch.zeros(0, sel_size, dtype=torch.bool, device=device)
             continue
 
         group_states = [states[i] for i in indices]
 
         # Primary masks (decision primaries only)
-        if head_type in DECISION_PRIMARIES:
-            num_choices = PRIMARY_NUM_CHOICES[head_type]
-            primary_fn = _PRIMARY_MASK_FNS[head_type]
+        if IS_DECISION_PRIMARY[htp]:
+            num_choices = PRIMARY_NUM_CHOICES[htp]
+            primary_fn = _PRIMARY_MASK_FNS[htp]
             primary_np = np.zeros((n, num_choices), dtype=bool)
             for b, state in enumerate(group_states):
                 primary_np[b] = primary_fn(state)
-            primary_masks[head_type] = torch.from_numpy(primary_np).to(device)
+            primary_masks[htp] = torch.from_numpy(primary_np).to(device)
+        else:
+            primary_masks[htp] = torch.empty(0, dtype=torch.bool, device=device)
 
         # Selection masks (all groups)
         sel_np = np.zeros((n, sel_size), dtype=bool)
         for b, state in enumerate(group_states):
-            sel_np[b] = _get_selection_mask(head_type, state)
-        selection_masks[head_type] = torch.from_numpy(sel_np).to(device)
+            sel_np[b] = _get_selection_mask(htp, state)
+        selection_masks[htp] = torch.from_numpy(sel_np).to(device)
 
     return MaskBatch(
         route=route,

@@ -39,45 +39,31 @@ class HeadTypeSecondary(IntEnum):
 
 
 # =========================================================================
-# Primary head classification
+# Primary head classification (list-based for fast int-indexed lookup)
 # =========================================================================
 
-# Decision primaries: binary choice, may trigger a secondary head
-DECISION_PRIMARIES: frozenset[HeadTypePrimary] = frozenset(
-    {
+NUM_PRIMARY_HEADS: int = len(HeadTypePrimary)
+
+# IS_DECISION_PRIMARY[int(htp)] → True if this is a decision primary
+IS_DECISION_PRIMARY: tuple[bool, ...] = tuple(
+    htp
+    in {
         HeadTypePrimary.COMBAT_DEFAULT,
         HeadTypePrimary.CARD_REWARD,
         HeadTypePrimary.REST_SITE,
     }
+    for htp in HeadTypePrimary
 )
 
-# Direct primaries: go straight to entity selection (no binary choice)
-DIRECT_PRIMARIES: frozenset[HeadTypePrimary] = frozenset(
+# PRIMARY_NUM_CHOICES[int(htp)] → number of choices (0 for direct primaries)
+PRIMARY_NUM_CHOICES: tuple[int, ...] = tuple(
     {
-        HeadTypePrimary.COMBAT_CARD_DISCARD,
-        HeadTypePrimary.COMBAT_MONSTER_SELECT,
-        HeadTypePrimary.MAP_SELECT,
-    }
+        HeadTypePrimary.COMBAT_DEFAULT: 2,
+        HeadTypePrimary.CARD_REWARD: 2,
+        HeadTypePrimary.REST_SITE: 2,
+    }.get(htp, 0)
+    for htp in HeadTypePrimary
 )
-
-
-# =========================================================================
-# Decision primary → secondary head mapping
-# =========================================================================
-
-# For decision primaries: which secondary head to run when primary_index == 1
-PRIMARY_TO_SECONDARY: dict[HeadTypePrimary, HeadTypeSecondary] = {
-    HeadTypePrimary.COMBAT_DEFAULT: HeadTypeSecondary.CARD_PLAY,
-    HeadTypePrimary.CARD_REWARD: HeadTypeSecondary.CARD_REWARD_SELECT,
-    HeadTypePrimary.REST_SITE: HeadTypeSecondary.CARD_UPGRADE,
-}
-
-# Number of choices for each decision primary (all binary for now)
-PRIMARY_NUM_CHOICES: dict[HeadTypePrimary, int] = {
-    HeadTypePrimary.COMBAT_DEFAULT: 2,  # [end_turn, play_card]
-    HeadTypePrimary.CARD_REWARD: 2,  # [skip, select]
-    HeadTypePrimary.REST_SITE: 2,  # [rest, upgrade]
-}
 
 
 # =========================================================================
