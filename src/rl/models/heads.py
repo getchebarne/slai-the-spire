@@ -315,10 +315,59 @@ class HeadCardUpgrade(HeadEntitySelection):
     pass
 
 
-class HeadMonsterSelect(HeadEntitySelection):
-    """Head for selecting a monster to target."""
+class HeadMonsterSelect(nn.Module):
+    """
+    Head for selecting a monster to target.
 
-    pass
+    Unlike other entity selection heads, this receives the active card embedding
+    as an additional input so the model can make card-dependent targeting decisions.
+    Input per monster: [monster_emb, global, active_card_emb].
+    """
+
+    def __init__(self, dim_entity: int, dim_global: int, dim_ff: int):
+        super().__init__()
+
+        self._scorer = nn.Sequential(
+            nn.Linear(dim_entity + dim_global + dim_entity, dim_ff),
+            nn.ReLU(),
+            nn.Linear(dim_ff, dim_ff),
+            nn.ReLU(),
+            nn.Linear(dim_ff, 1),
+        )
+
+    def forward(
+        self,
+        x_entities: torch.Tensor,
+        x_global: torch.Tensor,
+        mask: torch.Tensor,
+        sample: bool = True,
+        x_active_card: torch.Tensor | None = None,
+    ) -> HeadOutput:
+        """
+        Score and optionally sample from monsters.
+
+        Args:
+            x_entities: Monster embeddings (B, N, dim_entity)
+            x_global: Global context vector (B, dim_global)
+            mask: Valid monster mask (B, N), True = valid
+            sample: Whether to sample an action
+            x_active_card: Active card embedding (B, dim_entity), zeros if no card active
+        """
+        _, num_entities, _ = x_entities.shape
+
+        x_global_exp = torch.unsqueeze(x_global, 1).expand(-1, num_entities, -1)
+
+        if x_active_card is not None:
+            x_active_exp = torch.unsqueeze(x_active_card, 1).expand(-1, num_entities, -1)
+            x_input = torch.cat([x_entities, x_global_exp, x_active_exp], dim=-1)
+        else:
+            # Fallback: zero active card (shouldn't happen in practice during targeting)
+            x_active_zero = torch.zeros_like(x_entities)
+            x_input = torch.cat([x_entities, x_global_exp, x_active_zero], dim=-1)
+
+        logits = torch.squeeze(self._scorer(x_input), -1)  # (B, N)
+
+        return sample_from_logits(logits, mask, sample)
 
 
 # =============================================================================

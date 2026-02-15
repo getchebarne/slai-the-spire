@@ -159,6 +159,7 @@ def _encode_view_card_into(out: np.ndarray, view_card: ViewCard, card_pile: Card
     out[pos_scalars + 3] = float(view_card.requires_discard)
     out[pos_scalars + 4] = float(view_card.exhaust)
     out[pos_scalars + 5] = float(view_card.innate)
+    out[pos_scalars + 6] = float(view_card.is_active)
 
     # Encode effects
     for effect in view_card.effects:
@@ -193,7 +194,7 @@ def get_encoding_dim_card() -> int:
         + len(_EFFECT_TYPE_MAX)  # Scalar for effect values (keyed by EffectType)
         + len(_EFFECT_KEY_MAX)  # Binary context flags (keyed by full EffectKey)
         + _COST_SQRT_DIM  # Sqrt one-hot for cost
-        + 6  # Scalars: cost, upgraded, requires_target, requires_discard, exhaust, innate
+        + 7  # Scalars: cost, upgraded, requires_target, requires_discard, exhaust, innate, is_active
     )
 
 
