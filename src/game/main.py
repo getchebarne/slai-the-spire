@@ -236,11 +236,12 @@ def _handle_card_reward_skip(game_state: GameState) -> tuple[list[Effect], list[
     game_state.effect_queue.popleft()
 
     return [
+        Effect(EffectType.CARD_REWARD_CLEAR),
         Effect(
             EffectType.MAP_NODE_ACTIVE_SET,
             target_type=EffectTargetType.MAP_NODE,
             selection_type=EffectSelectionType.INPUT,
-        )
+        ),
     ], []
 
 
