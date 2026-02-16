@@ -13,6 +13,7 @@ from src.game.engine.process_effect.card_draw import process_effect_card_draw
 from src.game.engine.process_effect.card_exhaust import process_effect_card_exhaust
 from src.game.engine.process_effect.card_play import process_effect_card_play
 from src.game.engine.process_effect.card_remove import process_effect_card_remove
+from src.game.engine.process_effect.card_reward_clear import process_effect_card_reward_clear
 from src.game.engine.process_effect.card_reward_roll import process_effect_card_reward_roll
 from src.game.engine.process_effect.card_reward_select import process_effect_card_reward_select
 from src.game.engine.process_effect.card_upgrade import process_effect_card_upgrade
@@ -78,6 +79,7 @@ REGISTRY_EFFECT_TYPE_PROCESS_EFFECT: dict[EffectType, ProcessEffect] = {
     EffectType.CARD_EXHAUST: process_effect_card_exhaust,
     EffectType.CARD_PLAY: process_effect_card_play,
     EffectType.CARD_REMOVE: process_effect_card_remove,
+    EffectType.CARD_REWARD_CLEAR: process_effect_card_reward_clear,
     EffectType.CARD_REWARD_ROLL: process_effect_card_reward_roll,
     EffectType.CARD_REWARD_SELECT: process_effect_card_reward_select,
     EffectType.CARD_UPGRADE: process_effect_card_upgrade,
