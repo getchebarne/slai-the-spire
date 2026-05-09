@@ -9,8 +9,7 @@ auto-resetting games that end. GAE handles episode boundaries correctly.
 import os
 import random
 import shutil
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterator
 
 import torch
@@ -18,13 +17,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.action import Action
-from src.game.core.fsm import FSM
-from src.game.create import create_game_state
-from src.game.main import initialize_game_state
-from src.game.main import step as game_step
-from src.game.view.state import ViewGameState
-from src.game.view.state import get_view_game_state
+import slai
+
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import SELECTION_SIZES
 from src.rl.action_space.masks import get_mask_batch
@@ -36,6 +30,7 @@ from src.rl.action_space.types import to_action
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
+from src.rl.env_wrapper import EnvWrapper
 from src.rl.models import ActorCritic
 from src.rl.models.actor_critic import _build_entity_tensors
 from src.rl.models.heads import compute_grouped_log_prob_and_entropy
@@ -101,55 +96,54 @@ class EpisodeStats:
 
 class EnvironmentManager:
     """
-    Manages N game environments in-process (no IPC).
+    Manages N slai environments in-process (no IPC).
 
-    Environments persist across rollouts. Games that end are auto-reset.
+    Each env is wrapped in `EnvWrapper` so the trainer's two-step card-
+    targeting protocol (HeadCardPlay then HeadMonsterSelect) is preserved
+    despite slai bundling target into a single CardPlay action.
+
+    Environments persist across rollouts. Games that end are auto-reset
+    with a fresh seed.
     """
 
     def __init__(self, num_envs: int):
         self.num_envs = num_envs
-        self._game_states = []
-        self._view_states: list[ViewGameState] = []
-
+        self._wrappers: list[EnvWrapper] = []
         for _ in range(num_envs):
-            gs, vgs = self._make_env()
-            self._game_states.append(gs)
-            self._view_states.append(vgs)
+            self._wrappers.append(self._make_env())
 
     @staticmethod
-    def _make_env():
-        gs = create_game_state(ASCENSION_LEVEL)
-        initialize_game_state(gs)
-        vgs = get_view_game_state(gs)
-        return gs, vgs
+    def _make_env() -> EnvWrapper:
+        wrapper = EnvWrapper(ascension=ASCENSION_LEVEL)
+        wrapper.reset(seed=random.randint(0, 2**31 - 1))
+        return wrapper
 
-    def get_view_states(self) -> list[ViewGameState]:
-        return self._view_states
+    def get_wrappers(self) -> list[EnvWrapper]:
+        return self._wrappers
 
-    def step(self, env_idx: int, action: Action) -> tuple[float, bool]:
+    def get_view_states(self) -> list[slai.GameState]:
+        """Return the current obs from each wrapper (for encoder input)."""
+        return [w.obs for w in self._wrappers]
+
+    def step(self, env_idx: int, action) -> tuple[float, bool]:
         """
         Step environment, auto-reset on game over.
 
-        Returns (reward, done).
+        `action` may be a slai.Action.* instance or a `_PendingCardPlay`/
+        `_ResolveCardPlay` marker (handled by EnvWrapper.step). Returns
+        (reward, done).
         """
-        gs = self._game_states[env_idx]
-        vgs_prev = self._view_states[env_idx]
+        wrapper = self._wrappers[env_idx]
+        vgs_prev = wrapper.obs
 
-        game_step(gs, action, fast_mode=True)
-        vgs_next = get_view_game_state(gs)
-        done = gs.fsm == FSM.GAME_OVER
+        vgs_next, _engine_reward, terminated, _truncated, _info = wrapper.step(action)
 
-        reward = compute_reward(vgs_prev, vgs_next, done)
+        reward = compute_reward(vgs_prev, vgs_next, terminated)
 
-        if done:
-            # Auto-reset
-            gs_new, vgs_new = self._make_env()
-            self._game_states[env_idx] = gs_new
-            self._view_states[env_idx] = vgs_new
-        else:
-            self._view_states[env_idx] = vgs_next
+        if terminated:
+            self._wrappers[env_idx] = self._make_env()
 
-        return reward, done
+        return reward, terminated
 
 
 # =============================================================================
@@ -361,11 +355,12 @@ def _collect_rollout(
     model.eval()
     with torch.no_grad():
         for _ in range(rollout_length):
-            view_states = env_mgr.get_view_states()
+            wrappers = env_mgr.get_wrappers()
+            view_states = [w.obs for w in wrappers]
 
             # Batch encode + forward
             x_game_state = encode_batch_view_game_state(view_states, device)
-            mask_batch = get_mask_batch(view_states, device)
+            mask_batch = get_mask_batch(wrappers, device)
             output = model(x_game_state, mask_batch, sample=True)
 
             # Bulk-extract discrete outputs: 3 syncs instead of 8 * num_envs
@@ -411,9 +406,10 @@ def _collect_rollout(
                     ep_lengths[i] = 0
 
         # Bootstrap values for GAE at truncation point
-        view_states = env_mgr.get_view_states()
+        wrappers = env_mgr.get_wrappers()
+        view_states = [w.obs for w in wrappers]
         x_game_state = encode_batch_view_game_state(view_states, device)
-        mask_batch = get_mask_batch(view_states, device)
+        mask_batch = get_mask_batch(wrappers, device)
         output = model(x_game_state, mask_batch, sample=False)
         bootstrap_values = [output.values[i] for i in range(num_envs)]
 
@@ -430,26 +426,24 @@ def _run_eval_episode(
 
     Returns (total_reward, episode_length).
     """
-    gs = create_game_state(ASCENSION_LEVEL)
-    initialize_game_state(gs)
+    wrapper = EnvWrapper(ascension=ASCENSION_LEVEL)
+    wrapper.reset(seed=random.randint(0, 2**31 - 1))
 
     total_reward = 0.0
     length = 0
+    terminated = False
 
     model.eval()
     with torch.no_grad():
-        while gs.fsm != FSM.GAME_OVER:
-            vgs = get_view_game_state(gs)
-            x = encode_batch_view_game_state([vgs], device)
-            mb = get_mask_batch([vgs], device)
+        while not terminated:
+            vgs_prev = wrapper.obs
+            x = encode_batch_view_game_state([vgs_prev], device)
+            mb = get_mask_batch([wrapper], device)
             output = model(x, mb, sample=False)
             action = output.get_action(0)
 
-            vgs_prev = vgs
-            game_step(gs, action, fast_mode=True)
-            vgs_next = get_view_game_state(gs)
-            done = gs.fsm == FSM.GAME_OVER
-            reward = compute_reward(vgs_prev, vgs_next, done)
+            vgs_next, _engine_reward, terminated, _truncated, _info = wrapper.step(action)
+            reward = compute_reward(vgs_prev, vgs_next, terminated)
 
             total_reward += reward
             length += 1

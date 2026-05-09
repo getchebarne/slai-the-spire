@@ -13,12 +13,12 @@ from enum import IntEnum
 import torch
 import torch.nn as nn
 
-from src.game.const import MAX_MONSTERS
-from src.game.const import MAX_SIZE_COMBAT_CARD_REWARD
-from src.game.const import MAX_SIZE_DECK
-from src.game.const import MAX_SIZE_DISC_PILE
-from src.game.const import MAX_SIZE_DRAW_PILE
-from src.game.const import MAX_SIZE_HAND
+from src.rl.constants import MAX_MONSTERS
+from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
+from src.rl.constants import MAX_SIZE_DECK
+from src.rl.constants import MAX_SIZE_DISC_PILE
+from src.rl.constants import MAX_SIZE_DRAW_PILE
+from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.fsm import FSM_DIM
 from src.rl.encoding.state import XGameState
 from src.rl.models.entity_projector import EntityProjector

@@ -47,17 +47,18 @@ MODIFIER_STACKS_MAX = {
 }
 
 # =============================================================================
-# Re-exports from game constants (for convenience)
+# Game-shape constants (mirror slai's Rust-side `consts.rs`; slai does not
+# expose these via the Python API today, so they're hardcoded here).
 # =============================================================================
 
-from src.game.const import MAP_HEIGHT
-from src.game.const import MAP_WIDTH
-from src.game.const import MAX_MONSTERS
-from src.game.const import MAX_SIZE_COMBAT_CARD_REWARD
-from src.game.const import MAX_SIZE_DECK
-from src.game.const import MAX_SIZE_DISC_PILE
-from src.game.const import MAX_SIZE_DRAW_PILE
-from src.game.const import MAX_SIZE_HAND
+MAP_HEIGHT = 15
+MAP_WIDTH = 7
+MAX_MONSTERS = 2  # RL-side cap; slai supports up to 5. See migration plan.
+MAX_SIZE_COMBAT_CARD_REWARD = 3
+MAX_SIZE_DECK = 25  # dynamic in slai; this is an encoder-side cap
+MAX_SIZE_DISC_PILE = 25
+MAX_SIZE_DRAW_PILE = 25
+MAX_SIZE_HAND = 10
 
 
 __all__ = [

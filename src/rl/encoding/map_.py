@@ -1,42 +1,47 @@
 import numpy as np
+import slai
 import torch
 
-from src.game.const import MAP_HEIGHT
-from src.game.const import MAP_WIDTH
-from src.game.entity.map_node import RoomType  # TODO: should only import from `view`
-from src.game.view.map_ import ViewMap
+from src.rl.constants import MAP_HEIGHT
+from src.rl.constants import MAP_WIDTH
 
 
-_ROOM_TYPE_CHANNEL = {room_type: channel for channel, room_type in enumerate(RoomType)}
-_ROOM_TYPE_NUM = len(RoomType)
-_NUM_CHANNELS = _ROOM_TYPE_NUM + MAP_WIDTH + 1
+# Snapshot RoomKind variants at module load. slai exposes 4 today
+# (CombatMonster, CombatBoss, CombatElite, RestSite); slot count is fixed
+# at module load.
+_ROOM_KIND_NAMES: list[str] = sorted(n for n in dir(slai.RoomKind) if not n.startswith("_"))
+_ROOM_KIND_TO_IDX: dict[object, int] = {
+    getattr(slai.RoomKind, name): idx for idx, name in enumerate(_ROOM_KIND_NAMES)
+}
+_ROOM_KIND_NUM = len(_ROOM_KIND_NAMES)
+_NUM_CHANNELS = _ROOM_KIND_NUM + MAP_WIDTH + 1  # room kind one-hot + edge multi-hot + cur-pos
 
 
 def get_encoding_map_dim() -> tuple[int, int, int]:
     return (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
 
 
-def _encode_view_map_into(out: np.ndarray, view_map: ViewMap) -> None:
+def _encode_view_map_into(out: np.ndarray, view_map: slai.Map) -> None:
     """Encode a map directly into a pre-allocated numpy array.
 
     out shape: (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
     """
-    # Populate room type and edge channels
-    for y, row in enumerate(view_map.nodes):
-        for x, node in enumerate(row):
-            if node is None:
+    # Populate room kind and edge channels
+    for y, row in enumerate(view_map.rooms[:MAP_HEIGHT]):
+        for x, room in enumerate(row[:MAP_WIDTH]):
+            if room is None:
                 continue
 
-            # One-hot encode the room type
-            idx_room_type = _ROOM_TYPE_CHANNEL[node.room_type]
-            out[y, x, idx_room_type] = 1.0
+            # One-hot encode the room kind
+            idx_room_kind = _ROOM_KIND_TO_IDX.get(room.room_kind)
+            if idx_room_kind is not None:
+                out[y, x, idx_room_kind] = 1.0
 
             # Multi-hot encode the outgoing edges/paths
-            if node.x_next is not None:
-                for x_next in node.x_next:
-                    if 0 <= x_next < MAP_WIDTH:
-                        idx_edge = _ROOM_TYPE_NUM + x_next
-                        out[y, x, idx_edge] = 1.0
+            for x_next in room.edges:
+                if 0 <= x_next < MAP_WIDTH:
+                    idx_edge = _ROOM_KIND_NUM + x_next
+                    out[y, x, idx_edge] = 1.0
 
     # Populate the current position channel
     if (
@@ -49,7 +54,7 @@ def _encode_view_map_into(out: np.ndarray, view_map: ViewMap) -> None:
         out[view_map.y_current, view_map.x_current, idx_current_pos] = 1.0
 
 
-def encode_batch_view_map(batch_view_map: list[ViewMap], device: torch.device) -> torch.Tensor:
+def encode_batch_view_map(batch_view_map: list[slai.Map], device: torch.device) -> torch.Tensor:
     """Encode a batch of maps using NumPy pre-allocation."""
     batch_size = len(batch_view_map)
 

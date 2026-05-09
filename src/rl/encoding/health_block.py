@@ -10,14 +10,14 @@ import math
 
 import numpy as np
 
-from src.game.factory.monster.the_guardian import _HEALTH_MAX_ASC_9  # TODO: queries
 
-
-# Unified bounds (max of character and monster ranges)
+# Unified bounds (covers both character and monster ranges).
+# 250 was the old `_HEALTH_MAX_ASC_9` (The Guardian asc-9). slai's biggest
+# act-1 boss is similar magnitude; bump only when adding boss content.
 _HEALTH_MIN = 1
-_HEALTH_MAX = _HEALTH_MAX_ASC_9  # 250 (covers both character 70 and monster 250)
+_HEALTH_MAX = 250
 _BLOCK_MIN = 0
-_BLOCK_MAX = 20  # Same for both
+_BLOCK_MAX = 35
 
 # Piecewise linear-sqrt threshold (shared with monster.py)
 _LINEAR_SQRT_THRESHOLD = 18
@@ -34,9 +34,10 @@ def _get_piecewise_dim(min_val: int, max_val: int, threshold: int) -> int:
     return linear_dim + sqrt_dim
 
 
-def _get_piecewise_bucket(value: int, min_val: int, threshold: int) -> int:
+def _get_piecewise_bucket(value: int, min_val: int, max_val: int, threshold: int) -> int:
     """Get bucket index for piecewise linear-sqrt encoding."""
-    value = max(value, min_val)  # Clamp to min
+    value = max(value, min_val)
+    value = min(value, max_val)
     if value <= threshold:
         return value - min_val
     # Above threshold: use sqrt buckets
@@ -72,19 +73,19 @@ def encode_health_block_into(out: np.ndarray, health: int, block: int) -> None:
     pos = 0
 
     # Health piecewise one-hot
-    health_bucket = _get_piecewise_bucket(health, _HEALTH_MIN, _LINEAR_SQRT_THRESHOLD)
+    health_bucket = _get_piecewise_bucket(health, _HEALTH_MIN, _HEALTH_MAX, _LINEAR_SQRT_THRESHOLD)
     out[pos + health_bucket] = 1.0
     pos += _HEALTH_DIM
 
     # Block piecewise one-hot
-    block_bucket = _get_piecewise_bucket(block, _BLOCK_MIN, _LINEAR_SQRT_THRESHOLD)
+    block_bucket = _get_piecewise_bucket(block, _BLOCK_MIN, _BLOCK_MAX, _LINEAR_SQRT_THRESHOLD)
     out[pos + block_bucket] = 1.0
     pos += _BLOCK_DIM
 
     # HP+Block piecewise one-hot
     hp_block = health + block
     hp_block_bucket = _get_piecewise_bucket(
-        hp_block, _HEALTH_MIN + _BLOCK_MIN, _LINEAR_SQRT_THRESHOLD
+        hp_block, _HEALTH_MIN + _BLOCK_MIN, _HEALTH_MAX + _BLOCK_MAX, _LINEAR_SQRT_THRESHOLD
     )
     out[pos + hp_block_bucket] = 1.0
     pos += _HP_BLOCK_DIM

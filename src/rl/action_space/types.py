@@ -1,7 +1,18 @@
+"""Head-type taxonomy and model-output → slai action conversion.
+
+The HeadTypePrimary enum is kept identical to pre-migration so the model
+heads' tensor layouts don't move. Routing policy (which head fires for a
+given env state) lives in route.py; this file is just the conversion from
+(head_type, primary_idx, selection_idx) to a slai action (or a buffering
+marker for the two-step card-targeting wrapper).
+"""
+
 from enum import IntEnum
 
-from src.game.action import Action
-from src.game.action import ActionType
+import slai
+
+from src.rl.env_wrapper import _PendingCardPlay
+from src.rl.env_wrapper import _ResolveCardPlay
 
 
 class HeadTypePrimary(IntEnum):
@@ -15,7 +26,8 @@ class HeadTypePrimary(IntEnum):
 
     Direct primaries (no primary choice, go straight to entity selection):
         COMBAT_CARD_DISCARD: pick card to discard
-        COMBAT_MONSTER_SELECT: pick monster to target
+        COMBAT_MONSTER_SELECT: pick monster to target (driven by EnvWrapper
+            re-presentation when a buffered card-play is awaiting a target)
         MAP_SELECT: pick map node
     """
 
@@ -75,9 +87,14 @@ def to_action(
     head_type_primary: HeadTypePrimary,
     primary_index: int,
     selection_index: int,
-) -> Action:
+):
     """
-    Convert model output to game Action.
+    Convert model output to a slai action (or a buffering marker for
+    two-step card-targeting).
+
+    Returns either a `slai.Action.*` instance (passed straight to
+    `EnvWrapper.step`) or a `_PendingCardPlay` / `_ResolveCardPlay` marker
+    that the wrapper interprets.
 
     Args:
         head_type_primary: Which primary group this sample belongs to
@@ -88,28 +105,30 @@ def to_action(
         # Decision primaries: primary_index 0 = terminal, 1 = select
         case HeadTypePrimary.COMBAT_DEFAULT:
             if primary_index == 0:
-                return Action(type=ActionType.COMBAT_TURN_END)
-            return Action(type=ActionType.COMBAT_CARD_IN_HAND_SELECT, index=selection_index)
+                return slai.Action.EndTurn()
+            return _PendingCardPlay(idx_hand=selection_index)
 
         case HeadTypePrimary.CARD_REWARD:
             if primary_index == 0:
-                return Action(type=ActionType.CARD_REWARD_SKIP)
-            return Action(type=ActionType.CARD_REWARD_SELECT, index=selection_index)
+                return slai.Action.CardRewardSkip()
+            return slai.Action.CardRewardSelect(idx_reward=selection_index)
 
         case HeadTypePrimary.REST_SITE:
             if primary_index == 0:
-                return Action(type=ActionType.REST_SITE_REST)
-            return Action(type=ActionType.REST_SITE_UPGRADE, index=selection_index)
+                return slai.Action.RestSiteRest()
+            return slai.Action.RestSiteCardUpgrade(idx_deck=selection_index)
 
-        # Direct primaries: no primary decision, selection_index is the action
+        # Direct primaries
         case HeadTypePrimary.COMBAT_CARD_DISCARD:
-            return Action(type=ActionType.COMBAT_CARD_IN_HAND_SELECT, index=selection_index)
+            # slai's CardDiscard takes a list of indices; the trainer picks
+            # one card per model decision, so we wrap the single index.
+            return slai.Action.CardDiscard(indices_hand=[selection_index])
 
         case HeadTypePrimary.COMBAT_MONSTER_SELECT:
-            return Action(type=ActionType.COMBAT_MONSTER_SELECT, index=selection_index)
+            return _ResolveCardPlay(idx_monster=selection_index)
 
         case HeadTypePrimary.MAP_SELECT:
-            return Action(type=ActionType.MAP_NODE_SELECT, index=selection_index)
+            return slai.Action.RoomSelect(idx_column=selection_index)
 
         case _:
             raise ValueError(f"Unknown head type primary: {head_type_primary}")

@@ -6,6 +6,7 @@ Useful for debugging and understanding the training loop.
 """
 
 import os
+import random
 import shutil
 from collections import deque
 from dataclasses import dataclass, field
@@ -15,14 +16,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.game.core.fsm import FSM
-from src.game.create import create_game_state
-from src.game.main import initialize_game_state
-from src.game.main import step
-from src.game.view.state import get_view_game_state
 from src.rl.action_space.masks import get_mask_batch
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import encode_batch_view_game_state
+from src.rl.env_wrapper import EnvWrapper
 from src.rl.models import ActorCritic
 from src.rl.reward import compute_reward
 from src.rl.utils import init_optimizer
@@ -45,33 +42,33 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[EpisodeResu
 
     Returns (EpisodeResult, final_floor)
     """
-    game_state = create_game_state(ASCENSION_LEVEL)
-    initialize_game_state(game_state)
+    wrapper = EnvWrapper(ascension=ASCENSION_LEVEL)
+    wrapper.reset(seed=random.randint(0, 2**31 - 1))
 
     result = EpisodeResult()
+    terminated = False
+    view_game_state_next = wrapper.obs
 
-    while game_state.fsm != FSM.GAME_OVER:
-        view_game_state = get_view_game_state(game_state)
+    while not terminated:
+        view_game_state = wrapper.obs
 
         # Encode state
         x_game_state = encode_batch_view_game_state([view_game_state], device)
 
-        # Get masks
-        mask_batch = get_mask_batch([view_game_state], device)
+        # Get masks (route.py reads wrapper.is_awaiting_target so pass the wrapper)
+        mask_batch = get_mask_batch([wrapper], device)
 
         # Forward pass
         output = model.forward_single(x_game_state, mask_batch, sample=True)
 
-        # Build action
+        # Build action (may be a slai.Action.* or a buffering marker)
         action = output.to_action()
 
         # Execute action
-        step(game_state, action)
+        view_game_state_next, _engine_reward, terminated, _trunc, _info = wrapper.step(action)
 
         # Get reward
-        view_game_state_next = get_view_game_state(game_state)
-        game_over = game_state.fsm == FSM.GAME_OVER
-        reward = compute_reward(view_game_state, view_game_state_next, game_over)
+        reward = compute_reward(view_game_state, view_game_state_next, terminated)
 
         # Store transition
         result.log_probs.append(torch.unsqueeze(output.log_prob, 0))
