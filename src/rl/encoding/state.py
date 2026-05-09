@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 
 import numpy as np
+import slai
 import torch
 
-from src.game.const import MAX_SIZE_HAND
-from src.game.view.state import ViewGameState
+from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.card import CardPile
 from src.rl.encoding.card import encode_batch_view_cards
 from src.rl.encoding.character import encode_batch_view_character
@@ -18,7 +18,7 @@ from src.rl.encoding.monster import encode_batch_view_monsters
 class XGameState:
     x_hand: torch.Tensor
     x_hand_mask_pad: torch.Tensor
-    x_active_card_mask: torch.Tensor  # (B, MAX_SIZE_HAND) bool, True for the active card
+    x_active_card_mask: torch.Tensor  # (B, MAX_SIZE_HAND) bool, vestigial post-migration; always all-False
     x_draw: torch.Tensor
     x_draw_mask_pad: torch.Tensor
     x_disc: torch.Tensor
@@ -42,7 +42,7 @@ class XGameState:
 
 
 def encode_batch_view_game_state(
-    batch_view_game_state: list[ViewGameState], device: torch.device
+    batch_view_game_state: list[slai.GameState], device: torch.device
 ) -> XGameState:
     batch_size = len(batch_view_game_state)
 
@@ -56,30 +56,26 @@ def encode_batch_view_game_state(
     batch_character = []
     batch_energy = []
     batch_map = []
-    batch_fsm = []
+    batch_phase = []
     for view_game_state in batch_view_game_state:
         batch_hand.append(view_game_state.hand)
         batch_draw.append(view_game_state.pile_draw)
-        batch_disc.append(view_game_state.pile_disc)
+        batch_disc.append(view_game_state.pile_discard)
         batch_deck.append(view_game_state.deck)
-        batch_combat_reward.append(view_game_state.reward_combat)
+        batch_combat_reward.append(view_game_state.card_rewards)
         batch_monsters.append(view_game_state.monsters)
         batch_character.append(view_game_state.character)
         batch_energy.append(view_game_state.energy)
         batch_map.append(view_game_state.map)
-        batch_fsm.append(view_game_state.fsm)
+        batch_phase.append(view_game_state.phase)
 
     # Cards (hand, draw pile, discard pile, deck, combat rewards)
     x_hand, x_hand_mask_pad = encode_batch_view_cards(batch_hand, CardPile.HAND, device)
 
-    # Active card mask: True for the hand card with is_active=True (at most one per sample)
-    active_card_mask_np = np.zeros((batch_size, MAX_SIZE_HAND), dtype=bool)
-    for b, hand in enumerate(batch_hand):
-        for i, card in enumerate(hand[:MAX_SIZE_HAND]):
-            if card.is_active:
-                active_card_mask_np[b, i] = True
-                break
-    x_active_card_mask = torch.from_numpy(active_card_mask_np).to(device)
+    # Active card mask: vestigial. slai bundles target into Action.CardPlay,
+    # so there's no in-flight "card awaiting target" state to highlight.
+    # Kept all-False for shape stability.
+    x_active_card_mask = torch.zeros(batch_size, MAX_SIZE_HAND, dtype=torch.bool, device=device)
 
     x_draw, x_draw_mask_pad = encode_batch_view_cards(batch_draw, CardPile.DRAW, device)
     x_disc, x_disc_mask_pad = encode_batch_view_cards(batch_disc, CardPile.DISC, device)
@@ -110,8 +106,8 @@ def encode_batch_view_game_state(
     # Map
     x_map = encode_batch_view_map(batch_map, device)
 
-    # FSM
-    x_fsm = encode_batch_view_fsm(batch_fsm, device)
+    # FSM (one-hot over slai.Phase)
+    x_fsm = encode_batch_view_fsm(batch_phase, device)
 
     # Collect all tensors
     return XGameState(

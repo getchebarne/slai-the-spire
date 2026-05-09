@@ -6,27 +6,20 @@ Usage:
 """
 
 import os
+import random
 import time
 
 import click
+import slai
 import torch
 
-from src.game.action import Action
-from src.game.core.fsm import FSM
-from src.game.create import create_game_state
-from src.game.draw import get_action_str
-from src.game.draw import get_view_game_state_str
-from src.game.main import initialize_game_state
-from src.game.main import step
-from src.game.view.fsm import ViewFSM
-from src.game.view.state import ViewGameState
-from src.game.view.state import get_view_game_state
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import get_mask_batch
 from src.rl.action_space.types import HeadTypePrimary
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
+from src.rl.env_wrapper import EnvWrapper
 from src.rl.models import ActorCritic
 from src.rl.models.heads import get_grouped_probs
 from src.rl.utils import load_config
@@ -36,6 +29,44 @@ try:
     N_COL, _ = os.get_terminal_size()
 except OSError:
     N_COL = 120
+
+
+def _format_view(view: slai.GameState, awaiting_target: bool) -> str:
+    """Compact textual rendering of the game state."""
+    lines = [
+        f"Phase: {type(view.phase).__name__}{' (awaiting target)' if awaiting_target else ''}",
+        f"Char: HP {view.character.health}/{view.character.health_max}  Block {view.character.block}",
+    ]
+    if view.character.modifiers:
+        mods = ", ".join(f"{type(m.kind).__name__}={m.stacks}" for m in view.character.modifiers)
+        lines.append(f"  modifiers: {mods}")
+
+    if view.monsters:
+        lines.append("Monsters:")
+        for i, m in enumerate(view.monsters):
+            intent = m.intent
+            intent_str = ""
+            if intent.damage:
+                intent_str = f"ATK {intent.damage}x{intent.instances or 1}"
+            elif intent.block:
+                intent_str = "BLOCK"
+            elif intent.buff:
+                intent_str = "BUFF"
+            elif intent.debuff:
+                intent_str = "DEBUFF"
+            lines.append(f"  [{i}] {m.name}: HP {m.health}/{m.health_max} Block {m.block}  → {intent_str}")
+
+    lines.append(f"Energy: {view.energy.current}/{view.energy.max}")
+    if view.hand:
+        lines.append("Hand:")
+        for i, c in enumerate(view.hand):
+            tgt = " (target)" if c.requires_target else ""
+            playable = "" if c.cost <= view.energy.current and c.playable else " (unplayable)"
+            lines.append(f"  [{i}] {c.name} cost={c.cost}{tgt}{playable}")
+
+    if view.card_rewards:
+        lines.append(f"Card rewards: {[c.name for c in view.card_rewards]}")
+    return "\n".join(lines)
 
 
 def get_card_probabilities(
@@ -69,21 +100,19 @@ def get_card_probabilities(
 
 
 def format_card_probabilities(
-    view_game_state: ViewGameState,
+    view: slai.GameState,
     probs: torch.Tensor,
 ) -> str:
     """Format card probabilities grouped by card type."""
-    # Group cards by name (identical cards share the same probability)
     seen: dict[str, dict] = {}
     order: list[str] = []
 
-    for idx, card in enumerate(view_game_state.hand):
+    for idx, card in enumerate(view.hand):
         if card.name not in seen:
             prob = probs[idx].item()
-            # Handle NaN (shouldn't happen with grouped probs, but safety)
-            if prob != prob:
+            if prob != prob:  # NaN guard
                 prob = 0.0
-            playable = card.cost <= view_game_state.energy.current
+            playable = card.cost <= view.energy.current and card.playable
             seen[card.name] = {"prob": prob, "count": 1, "playable": playable}
             order.append(card.name)
         else:
@@ -102,41 +131,47 @@ def format_card_probabilities(
 
 def get_action_from_model(
     model: ActorCritic,
-    view_game_state: ViewGameState,
+    wrapper: EnvWrapper,
     device: torch.device,
     show_card_probs: bool = False,
     greedy: bool = False,
-) -> tuple[Action, str | None]:
+) -> tuple[object, str | None]:
     """
-    Get an action from the model for the given game state.
+    Get an action from the model for the wrapper's current state.
 
     Args:
         greedy: If True, use argmax instead of sampling (deterministic)
 
     Returns:
-        (action, card_probs_str) where card_probs_str is None if not in combat
+        (action, card_probs_str). action may be a slai.Action.* or a
+        wrapper marker (PendingCardPlay / ResolveCardPlay).
     """
-    # Encode state
-    x_game_state = encode_batch_view_game_state([view_game_state], device)
+    view = wrapper.obs
 
-    # Get masks
-    mask_batch = get_mask_batch([view_game_state], device)
+    # Encode state
+    x_game_state = encode_batch_view_game_state([view], device)
+
+    # Get masks (wrapper-aware: routes correctly when awaiting target)
+    mask_batch = get_mask_batch([wrapper], device)
 
     # Forward pass
     with torch.no_grad():
         output = model.forward_single(x_game_state, mask_batch, sample=not greedy)
 
-        # Get card probabilities if in combat and requested
+        # Get card probabilities only when in true CombatDefault (not buffered).
         card_probs_str = None
-        has_playable = any(c.cost <= view_game_state.energy.current for c in view_game_state.hand)
+        has_playable = any(
+            c.cost <= view.energy.current and c.playable for c in view.hand
+        )
         if (
             show_card_probs
-            and view_game_state.fsm == ViewFSM.COMBAT_DEFAULT
-            and view_game_state.hand
+            and isinstance(view.phase, slai.Phase.CombatDefault)
+            and not wrapper.is_awaiting_target
+            and view.hand
             and has_playable
         ):
             probs = get_card_probabilities(model, x_game_state, mask_batch)
-            card_probs_str = format_card_probabilities(view_game_state, probs)
+            card_probs_str = format_card_probabilities(view, probs)
 
     return output.to_action(), card_probs_str
 
@@ -152,57 +187,48 @@ def run_game(
     """
     Run a single game with the trained model.
 
-    Args:
-        greedy: If True, use argmax instead of sampling (deterministic)
-
     Returns:
         (final_floor, final_health)
     """
-    game_state = create_game_state(ASCENSION_LEVEL)
-    initialize_game_state(game_state)
+    wrapper = EnvWrapper(ascension=ASCENSION_LEVEL)
+    wrapper.reset(seed=random.randint(0, 2**31 - 1))
 
     step_count = 0
-    while game_state.fsm != FSM.GAME_OVER:
-        view_game_state = get_view_game_state(game_state)
-
+    terminated = False
+    while not terminated:
         if verbose:
-            print(get_view_game_state_str(view_game_state))
+            print(_format_view(wrapper.obs, wrapper.is_awaiting_target))
             print("-" * N_COL)
 
-        # Get action from model
         action, card_probs_str = get_action_from_model(
             model,
-            view_game_state,
+            wrapper,
             device,
             show_card_probs=verbose and show_card_probs,
             greedy=greedy,
         )
 
         if verbose:
-            # Show card probabilities if in combat
             if card_probs_str:
                 print(card_probs_str)
                 print("-" * N_COL)
-
-            action_str = get_action_str(action, view_game_state, fast_mode=False)
-            print(f"Action: {action_str}")
+            print(f"Action: {type(action).__name__} {getattr(action, '__dict__', '')}")
             print("-" * N_COL)
             time.sleep(delay)
 
-        # Execute action
-        step(game_state, action, fast_mode=False)
+        _, _, terminated, _, _ = wrapper.step(action)
         step_count += 1
 
-    # Get final state
-    final_view = get_view_game_state(game_state)
+    final_view = wrapper.obs
     final_floor = final_view.map.y_current or 0
-    final_health = final_view.character.health_current
+    final_health = final_view.character.health
 
     if verbose:
         print(f"\n{'=' * N_COL}")
         print("GAME OVER")
         print(f"Final Floor: {final_floor}")
         print(f"Final Health: {final_health}")
+        print(f"Steps: {step_count}")
         print("=" * N_COL)
 
     return final_floor, final_health
@@ -257,7 +283,6 @@ def main(
     greedy: bool,
 ):
     """Test a trained agent by running games."""
-    # Load config and model
     config = load_config(f"{exp_path}/config.yml")
     model = ActorCritic(**config["model"])
     model.load_state_dict(torch.load(f"{exp_path}/model.pth", weights_only=True))
@@ -286,7 +311,6 @@ def main(
         if quiet:
             print(f"Game {i + 1}: Floor {floor}, Health {health}")
 
-    # Summary
     if num_games > 1:
         avg_floor = sum(r[0] for r in results) / num_games
         avg_health = sum(r[1] for r in results) / num_games

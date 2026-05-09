@@ -21,13 +21,12 @@ from typing import NamedTuple
 import torch
 import torch.nn as nn
 
-from src.game.action import Action
-from src.game.const import MAP_WIDTH
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.types import HeadTypePrimary
 from src.rl.action_space.types import IS_DECISION_PRIMARY
 from src.rl.action_space.types import NUM_PRIMARY_HEADS
 from src.rl.action_space.types import to_action
+from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.state import XGameState
 from src.rl.models.core import Core
 from src.rl.models.core import CoreOutput
@@ -65,8 +64,8 @@ class ForwardOutput(NamedTuple):
     # Value estimate
     values: torch.Tensor  # (B, 1)
 
-    def get_action(self, idx: int) -> Action:
-        """Convert to game Action for sample at index."""
+    def get_action(self, idx: int):
+        """Convert to a slai action (or pending/resolve marker) for sample at index."""
         htp = HeadTypePrimary(self.head_type_primaries[idx].item())
         pi = self.primary_indices[idx].item()
         si = self.selection_indices[idx].item()
@@ -88,7 +87,7 @@ class SingleOutput:
     selection_log_prob: torch.Tensor
     value: torch.Tensor
 
-    def to_action(self) -> Action:
+    def to_action(self):
         return to_action(self.head_type_primary, self.primary_index, self.selection_index)
 
     @property

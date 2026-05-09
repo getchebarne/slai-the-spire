@@ -1,7 +1,6 @@
 import numpy as np
+import slai
 import torch
-
-from src.game.view.energy import ViewEnergy
 
 
 _ENERGY_MIN = 0
@@ -27,10 +26,10 @@ def _encode_energy_into(out: np.ndarray, energy_current: int) -> None:
 
 
 def encode_batch_view_energy(
-    batch_view_energy: list[ViewEnergy], device: torch.device
+    batch_view_energy: list[slai.Energy], device: torch.device
 ) -> torch.Tensor:
     """Encode a batch of energy using NumPy pre-allocation.
-    
+
     Returns: (B, dim_energy) tensor
     """
     batch_size = len(batch_view_energy)

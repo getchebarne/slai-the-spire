@@ -1,28 +1,37 @@
+"""Card encoder.
+
+Pre-migration this module introspected the old emulator's card factories
+to derive a per-card-name one-hot and a per-EffectKey value-aware encoding.
+slai exposes neither a "list of all cards" API nor a stable Python-side
+view of effect values, so we use a structural encoding instead:
+
+  - One-hot of `CardKind` (Attack / Skill / Power / Curse / Status)
+  - One-hot of `CardColor` (Green / Colorless / Curse)
+  - One-hot of `CardRarity` (Basic / Common / Uncommon / Rare / Special / Curse)
+  - Cost as scalar + one-hot bucket
+  - Boolean flags: upgraded, exhaust, innate, ethereal, retain, requires_target, playable
+  - Effect histogram: count of each `Effect.*` variant on the card
+  - Target histogram: count of each `CandidatePool` referenced by effects' targets
+  - Selection histogram: count of each `Selection` kind referenced by effects' targets
+
+Per-card-name one-hot can be added back by hardcoding slai's card roster
+(see `slai/src/cards/`) once we want to feed the model identity bits.
+"""
+
 import math
 from enum import Enum
-from typing import TypeAlias
 
 import numpy as np
+import slai
 import torch
 
-from src.game.const import MAX_SIZE_COMBAT_CARD_REWARD
-from src.game.const import MAX_SIZE_DECK
-from src.game.const import MAX_SIZE_DISC_PILE
-from src.game.const import MAX_SIZE_DRAW_PILE
-from src.game.const import MAX_SIZE_HAND
-from src.game.core.effect import Effect
-from src.game.core.effect import EffectSelectionType
-from src.game.core.effect import EffectTargetType
-from src.game.core.effect import EffectType
-from src.game.factory.lib import FACTORY_LIB_CARD
-from src.game.view.card import ViewCard
+from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
+from src.rl.constants import MAX_SIZE_DECK
+from src.rl.constants import MAX_SIZE_DISC_PILE
+from src.rl.constants import MAX_SIZE_DRAW_PILE
+from src.rl.constants import MAX_SIZE_HAND
 
 
-EffectKey: TypeAlias = tuple[EffectType, EffectTargetType, EffectSelectionType]
-CardMetadata: TypeAlias = tuple[int, dict[EffectKey, int], dict[EffectKey, int]]
-
-
-# TODO: put somewhere else?
 class CardPile(Enum):
     HAND = "HAND"
     DRAW = "DRAW"
@@ -40,182 +49,131 @@ _CARD_PILE_TO_MAX_SIZE = {
 }
 
 
-def _get_effect_key(effect: Effect) -> EffectKey:
-    return (effect.type, effect.target_type, effect.selection_type)
+# ---------- Snapshot slai enum surfaces at module load ----------
+
+_CARD_KIND_NAMES = sorted(n for n in dir(slai.CardKind) if not n.startswith("_"))
+_CARD_KIND_TO_IDX = {getattr(slai.CardKind, n): i for i, n in enumerate(_CARD_KIND_NAMES)}
+
+_CARD_COLOR_NAMES = sorted(n for n in dir(slai.CardColor) if not n.startswith("_"))
+_CARD_COLOR_TO_IDX = {getattr(slai.CardColor, n): i for i, n in enumerate(_CARD_COLOR_NAMES)}
+
+_CARD_RARITY_NAMES = sorted(n for n in dir(slai.CardRarity) if not n.startswith("_"))
+_CARD_RARITY_TO_IDX = {getattr(slai.CardRarity, n): i for i, n in enumerate(_CARD_RARITY_NAMES)}
+
+_EFFECT_NAMES = sorted(n for n in dir(slai.Effect) if not n.startswith("_"))
+_EFFECT_CLASSES: list[type] = [getattr(slai.Effect, n) for n in _EFFECT_NAMES]
+
+_CANDIDATE_POOL_NAMES = sorted(n for n in dir(slai.CandidatePool) if not n.startswith("_"))
+_CANDIDATE_POOL_TO_IDX = {
+    getattr(slai.CandidatePool, n): i for i, n in enumerate(_CANDIDATE_POOL_NAMES)
+}
+
+_SELECTION_NAMES = sorted(n for n in dir(slai.Selection) if not n.startswith("_"))
+_SELECTION_CLASSES: list[type] = [getattr(slai.Selection, n) for n in _SELECTION_NAMES]
 
 
-def _get_card_metadata() -> CardMetadata:
-    cost_max = -1
-    effect_key_max = {}
-    for _, card_factory in FACTORY_LIB_CARD.items():
-        # Instantiate card
-        card = card_factory(False)
-        card_upgraded = card_factory(True)
-
-        # Get maximum cost
-        cost_max = max(cost_max, card.cost, card_upgraded.cost)
-
-        # Get maximum value for each possible effect
-        for effect in card.effects + card_upgraded.effects:
-            effect_value = effect.value
-
-            # If the effect's value is `None`, change it to 1 to signal its presence
-            if effect_value is None:
-                effect_value = 1
-
-            effect_key = _get_effect_key(effect)
-            if effect_key in effect_key_max:
-                effect_key_max[effect_key] = max(effect_key_max[effect_key], effect_value)
-            else:
-                effect_key_max[effect_key] = effect_value
-
-    # Also create a list to keep fixed positions for each effect key
-    effect_key_pos = {effect_key: pos for pos, effect_key in enumerate(effect_key_max)}
-
-    return cost_max, effect_key_max, effect_key_pos
-
-
-def _compute_sqrt_bounds(key_to_max: dict, value_min: int = 0) -> tuple[dict, dict, int]:
-    sqrt_min = int(math.sqrt(value_min))
-    bounds = {}
-    positions = {}
-
-    pos_offset = 0
-    for key, max_val in key_to_max.items():
-        sqrt_max = int(math.sqrt(max_val))
-        bounds[key] = (sqrt_min, sqrt_max)
-        positions[key] = pos_offset
-        pos_offset += sqrt_max - sqrt_min + 1
-
-    return bounds, positions, pos_offset
-
-
-def _collapse_to_effect_type(
-    effect_key_max: dict[EffectKey, int],
-) -> dict[EffectType, int]:
-    """Collapse effect key max values to EffectType level (max across all target/selection variants)."""
-    effect_type_max: dict[EffectType, int] = {}
-    for (effect_type, _, _), max_val in effect_key_max.items():
-        if effect_type in effect_type_max:
-            effect_type_max[effect_type] = max(effect_type_max[effect_type], max_val)
-        else:
-            effect_type_max[effect_type] = max_val
-    return effect_type_max
-
-
-# Get card metadata
-_COST_MAX, _EFFECT_KEY_MAX, _EFFECT_KEY_POS = _get_card_metadata()
-
-# Card names for one-hot encoding (base names without "+")
-_CARD_NAMES = list(FACTORY_LIB_CARD.keys())
-_NUM_CARD_NAMES = len(_CARD_NAMES)
-
-# Collapse to EffectType for shared value sqrt OHE
-_EFFECT_TYPE_MAX = _collapse_to_effect_type(_EFFECT_KEY_MAX)
-
-# Pre-compute sqrt bounds keyed by EffectType (shared value encoding)
-_EFFECT_TYPE_SQRT_BOUNDS, _EFFECT_TYPE_SQRT_POS, _EFFECT_SQRT_TOTAL_DIM = _compute_sqrt_bounds(
-    _EFFECT_TYPE_MAX, value_min=0
-)
-
-# Pre-compute scalar positions keyed by EffectType
-_EFFECT_TYPE_SCALAR_POS = {effect_type: pos for pos, effect_type in enumerate(_EFFECT_TYPE_MAX)}
-
-# Pre-compute sqrt bounds for card cost
-_COST_SQRT_MIN = int(math.sqrt(0))
+# Cost normalization
+_COST_MAX = 5  # X-cost cards top out around energy.max
+_COST_SQRT_MIN = 0
 _COST_SQRT_MAX = int(math.sqrt(_COST_MAX))
 _COST_SQRT_DIM = _COST_SQRT_MAX - _COST_SQRT_MIN + 1
 
-
-def _encode_view_card_into(out: np.ndarray, view_card: ViewCard, card_pile: CardPile) -> None:
-    """Encode a card directly into a pre-allocated numpy array."""
-    upgraded = view_card.name.endswith("+")
-    pos = 0
-
-    # Card name one-hot (strip "+" suffix for upgraded cards)
-    base_name = view_card.name.rstrip("+")
-    idx_name = _CARD_NAMES.index(base_name)
-    out[idx_name] = 1.0
-    pos += _NUM_CARD_NAMES
-
-    # Cost sqrt one-hot
-    cost_sqrt_value = int(math.sqrt(view_card.cost))
-    cost_sqrt_value = max(min(cost_sqrt_value, _COST_SQRT_MAX), _COST_SQRT_MIN)
-
-    # Position offsets (relative to after card name one-hot)
-    pos_effects_sqrt = pos
-    pos_effects_scalar = pos + _EFFECT_SQRT_TOTAL_DIM
-    pos_effects_context = pos_effects_scalar + len(_EFFECT_TYPE_MAX)
-    pos_cost_sqrt = pos_effects_context + len(_EFFECT_KEY_MAX)
-    pos_scalars = pos_cost_sqrt + _COST_SQRT_DIM
-
-    # Set cost sqrt one-hot
-    out[pos_cost_sqrt + cost_sqrt_value - _COST_SQRT_MIN] = 1.0
-
-    # Set scalar features
-    out[pos_scalars] = view_card.cost / _COST_MAX
-    out[pos_scalars + 1] = float(upgraded)
-    out[pos_scalars + 2] = float(view_card.requires_target)
-    out[pos_scalars + 3] = float(view_card.requires_discard)
-    out[pos_scalars + 4] = float(view_card.exhaust)
-    out[pos_scalars + 5] = float(view_card.innate)
-    out[pos_scalars + 6] = float(view_card.is_active)
-
-    # Encode effects
-    for effect in view_card.effects:
-        effect_key = _get_effect_key(effect)
-        effect_type = effect.type
-
-        effect_value = effect.value
-        if effect_value is None:
-            effect_value = 1.0
-
-        # Sqrt one-hot encoding (keyed by EffectType — shared across target variants)
-        sqrt_min, sqrt_max = _EFFECT_TYPE_SQRT_BOUNDS[effect_type]
-        sqrt_value = int(math.sqrt(effect_value))
-        sqrt_value = max(min(sqrt_value, sqrt_max), sqrt_min)
-        sqrt_start_pos = pos_effects_sqrt + _EFFECT_TYPE_SQRT_POS[effect_type]
-        out[sqrt_start_pos + sqrt_value - sqrt_min] = 1.0
-
-        # Value scalar (keyed by EffectType — shared across target variants)
-        scalar_pos = pos_effects_scalar + _EFFECT_TYPE_SCALAR_POS[effect_type]
-        out[scalar_pos] = effect_value / _EFFECT_TYPE_MAX[effect_type]
-
-        # Binary context flag (keyed by full EffectKey — distinguishes target variants)
-        context_pos = pos_effects_context + _EFFECT_KEY_POS[effect_key]
-        out[context_pos] = 1.0
+# Number of boolean flag scalars per card
+_NUM_FLAG_SCALARS = 7  # upgraded, exhaust, innate, ethereal, retain, requires_target, playable
 
 
 def get_encoding_dim_card() -> int:
-    # Calculate dimension from components
     return (
-        _NUM_CARD_NAMES  # Card name one-hot
-        + _EFFECT_SQRT_TOTAL_DIM  # Sqrt one-hot for effect values (keyed by EffectType)
-        + len(_EFFECT_TYPE_MAX)  # Scalar for effect values (keyed by EffectType)
-        + len(_EFFECT_KEY_MAX)  # Binary context flags (keyed by full EffectKey)
-        + _COST_SQRT_DIM  # Sqrt one-hot for cost
-        + 7  # Scalars: cost, upgraded, requires_target, requires_discard, exhaust, innate, is_active
+        len(_CARD_KIND_NAMES)
+        + len(_CARD_COLOR_NAMES)
+        + len(_CARD_RARITY_NAMES)
+        + _COST_SQRT_DIM
+        + 1  # cost scalar
+        + _NUM_FLAG_SCALARS
+        + len(_EFFECT_NAMES)  # effect-kind histogram
+        + len(_CANDIDATE_POOL_NAMES)  # target-pool histogram
+        + len(_SELECTION_NAMES)  # selection histogram
     )
 
 
 _ENCODING_DIM_CARD = get_encoding_dim_card()
 
 
+def _encode_view_card_into(out: np.ndarray, view_card: slai.Card) -> None:
+    """Encode a slai.Card into a pre-allocated numpy array."""
+    pos = 0
+
+    # CardKind one-hot
+    idx = _CARD_KIND_TO_IDX.get(view_card.kind)
+    if idx is not None:
+        out[pos + idx] = 1.0
+    pos += len(_CARD_KIND_NAMES)
+
+    # CardColor one-hot
+    idx = _CARD_COLOR_TO_IDX.get(view_card.color)
+    if idx is not None:
+        out[pos + idx] = 1.0
+    pos += len(_CARD_COLOR_NAMES)
+
+    # CardRarity one-hot
+    idx = _CARD_RARITY_TO_IDX.get(view_card.rarity)
+    if idx is not None:
+        out[pos + idx] = 1.0
+    pos += len(_CARD_RARITY_NAMES)
+
+    # Cost sqrt one-hot
+    cost = max(0, min(view_card.cost, _COST_MAX))
+    cost_sqrt = max(_COST_SQRT_MIN, min(int(math.sqrt(cost)), _COST_SQRT_MAX))
+    out[pos + cost_sqrt - _COST_SQRT_MIN] = 1.0
+    pos += _COST_SQRT_DIM
+
+    # Cost scalar
+    out[pos] = cost / _COST_MAX
+    pos += 1
+
+    # Flag scalars
+    out[pos] = float(view_card.upgraded)
+    out[pos + 1] = float(view_card.exhaust)
+    out[pos + 2] = float(view_card.innate)
+    out[pos + 3] = float(view_card.ethereal)
+    out[pos + 4] = float(view_card.retain)
+    out[pos + 5] = float(view_card.requires_target)
+    out[pos + 6] = float(view_card.playable)
+    pos += _NUM_FLAG_SCALARS
+
+    # Effect histogram + target pool / selection histogram (over the card's effects)
+    for effect in view_card.effects:
+        for idx, eff_cls in enumerate(_EFFECT_CLASSES):
+            if isinstance(effect, eff_cls):
+                out[pos + idx] += 1.0
+                break
+        target = getattr(effect, "target", None)
+        if target is not None:
+            cand_idx = _CANDIDATE_POOL_TO_IDX.get(target.candidates)
+            if cand_idx is not None:
+                out[pos + len(_EFFECT_NAMES) + cand_idx] += 1.0
+            for sel_idx, sel_cls in enumerate(_SELECTION_CLASSES):
+                if isinstance(target.selection, sel_cls):
+                    out[
+                        pos + len(_EFFECT_NAMES) + len(_CANDIDATE_POOL_NAMES) + sel_idx
+                    ] += 1.0
+                    break
+
+
 def encode_batch_view_cards(
-    batch_view_cards: list[list[ViewCard]], card_pile: CardPile, device: torch.device
+    batch_view_cards: list[list[slai.Card]], card_pile: CardPile, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Encode a batch of card lists using NumPy pre-allocation."""
     max_size = _CARD_PILE_TO_MAX_SIZE[card_pile]
     batch_size = len(batch_view_cards)
 
-    # Pre-allocate numpy arrays
     x_out = np.zeros((batch_size, max_size, _ENCODING_DIM_CARD), dtype=np.float32)
     x_mask_pad = np.zeros((batch_size, max_size), dtype=bool)
 
     for b, view_cards in enumerate(batch_view_cards):
         view_cards = view_cards[:max_size]
         for i, view_card in enumerate(view_cards):
-            _encode_view_card_into(x_out[b, i], view_card, card_pile)
+            _encode_view_card_into(x_out[b, i], view_card)
             x_mask_pad[b, i] = True
 
     return (
