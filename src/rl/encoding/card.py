@@ -71,6 +71,15 @@ _CANDIDATE_POOL_TO_IDX = {
 _SELECTION_NAMES = sorted(n for n in dir(slai.Selection) if not n.startswith("_"))
 _SELECTION_CLASSES: list[type] = [getattr(slai.Selection, n) for n in _SELECTION_NAMES]
 
+# Per-card-name one-hot. CardName variants are integer-comparable (eq_int);
+# sort by int for a stable enumeration order.
+_CARD_NAMES = sorted(
+    (getattr(slai.CardName, n) for n in dir(slai.CardName) if not n.startswith("_")),
+    key=lambda c: int(c),
+)
+_CARD_NAME_TO_IDX = {n: i for i, n in enumerate(_CARD_NAMES)}
+_NUM_CARD_NAMES = len(_CARD_NAMES)
+
 
 # Cost normalization
 _COST_MAX = 5  # X-cost cards top out around energy.max
@@ -84,7 +93,8 @@ _NUM_FLAG_SCALARS = 7  # upgraded, exhaust, innate, ethereal, retain, requires_t
 
 def get_encoding_dim_card() -> int:
     return (
-        len(_CARD_KIND_NAMES)
+        _NUM_CARD_NAMES  # per-card-name one-hot (78 today)
+        + len(_CARD_KIND_NAMES)
         + len(_CARD_COLOR_NAMES)
         + len(_CARD_RARITY_NAMES)
         + _COST_SQRT_DIM
@@ -99,30 +109,108 @@ def get_encoding_dim_card() -> int:
 _ENCODING_DIM_CARD = get_encoding_dim_card()
 
 
+# =============================================================================
+# Card identity — single source of truth for the policy-relevant attribute
+# list. Used by:
+#   - _encode_view_card_into  (to build the per-slot encoder feature vector)
+#   - _card_identity          (to compute the per-slot group identity used
+#                              by grouped sampling — see heads.py)
+# Adding an attribute the policy should respond to: add it here. The encoder
+# destructures this tuple at its top, so forgetting to update one consumer
+# raises at module load via a tuple-unpack length mismatch.
+# =============================================================================
+
+
+def _card_policy_features(card: slai.Card) -> tuple:
+    """Tuple of card attributes the policy depends on. Stable per
+    (card_name, upgraded) for template-derived attrs; varies per-instance for
+    `cost` (X-cost / dynamic-cost / free_to_play_once), `retain` (settable
+    via Well Laid Plans), and `playable` (Entangled etc.)."""
+    return (
+        card.card_name,
+        card.kind,
+        card.color,
+        card.rarity,
+        card.cost,
+        card.upgraded,
+        card.exhaust,
+        card.innate,
+        card.ethereal,
+        card.retain,
+        card.requires_target,
+        card.playable,
+        # Effects are template-derived from (card_name, upgraded) but listed
+        # explicitly so the encoder/identity coupling stays honest if that
+        # ever changes. slai effects are frozen pyclasses with eq/hash.
+        tuple(card.effects),
+    )
+
+
+def card_identity_ids(cards: list[slai.Card]) -> list[int]:
+    """Assign per-state integer group ids to a sequence of cards. Two cards
+    with identical `_card_policy_features` get the same id. Ids are
+    contiguous starting at 0. Use -1 for invalid/padded slots (the caller
+    pads). No risk of hash collisions across cards within the same call."""
+    seen: dict[tuple, int] = {}
+    out: list[int] = []
+    for card in cards:
+        key = _card_policy_features(card)
+        gid = seen.setdefault(key, len(seen))
+        out.append(gid)
+    return out
+
+
 def _encode_view_card_into(out: np.ndarray, view_card: slai.Card) -> None:
-    """Encode a slai.Card into a pre-allocated numpy array."""
+    """Encode a slai.Card into a pre-allocated numpy array.
+
+    Reads attributes via `_card_policy_features` so the encoder and the
+    identity hash stay coupled — adding/removing an attribute touches one
+    list and propagates here via the tuple unpack.
+    """
+    (
+        card_name,
+        kind,
+        color,
+        rarity,
+        cost_raw,
+        upgraded,
+        exhaust,
+        innate,
+        ethereal,
+        retain,
+        requires_target,
+        playable,
+        effects,
+    ) = _card_policy_features(view_card)
+
     pos = 0
 
+    # Per-card-name one-hot
+    idx = _CARD_NAME_TO_IDX.get(card_name)
+    if idx is not None:
+        out[pos + idx] = 1.0
+    pos += _NUM_CARD_NAMES
+
     # CardKind one-hot
-    idx = _CARD_KIND_TO_IDX.get(view_card.kind)
+    idx = _CARD_KIND_TO_IDX.get(kind)
     if idx is not None:
         out[pos + idx] = 1.0
     pos += len(_CARD_KIND_NAMES)
 
     # CardColor one-hot
-    idx = _CARD_COLOR_TO_IDX.get(view_card.color)
+    idx = _CARD_COLOR_TO_IDX.get(color)
     if idx is not None:
         out[pos + idx] = 1.0
     pos += len(_CARD_COLOR_NAMES)
 
     # CardRarity one-hot
-    idx = _CARD_RARITY_TO_IDX.get(view_card.rarity)
+    idx = _CARD_RARITY_TO_IDX.get(rarity)
     if idx is not None:
         out[pos + idx] = 1.0
     pos += len(_CARD_RARITY_NAMES)
 
     # Cost sqrt one-hot
-    cost = max(0, min(view_card.cost, _COST_MAX))
+    cost = max(0, min(cost_raw, _COST_MAX))
     cost_sqrt = max(_COST_SQRT_MIN, min(int(math.sqrt(cost)), _COST_SQRT_MAX))
     out[pos + cost_sqrt - _COST_SQRT_MIN] = 1.0
     pos += _COST_SQRT_DIM
@@ -132,22 +220,30 @@ def _encode_view_card_into(out: np.ndarray, view_card: slai.Card) -> None:
     pos += 1
 
     # Flag scalars
-    out[pos] = float(view_card.upgraded)
-    out[pos + 1] = float(view_card.exhaust)
-    out[pos + 2] = float(view_card.innate)
-    out[pos + 3] = float(view_card.ethereal)
-    out[pos + 4] = float(view_card.retain)
-    out[pos + 5] = float(view_card.requires_target)
-    out[pos + 6] = float(view_card.playable)
+    out[pos] = float(upgraded)
+    out[pos + 1] = float(exhaust)
+    out[pos + 2] = float(innate)
+    out[pos + 3] = float(ethereal)
+    out[pos + 4] = float(retain)
+    out[pos + 5] = float(requires_target)
+    out[pos + 6] = float(playable)
     pos += _NUM_FLAG_SCALARS
 
     # Effect histogram + target pool / selection histogram (over the card's effects)
-    for effect in view_card.effects:
+    for effect in effects:
         for idx, eff_cls in enumerate(_EFFECT_CLASSES):
             if isinstance(effect, eff_cls):
                 out[pos + idx] += 1.0
                 break
-        target = getattr(effect, "target", None)
+        # Most Effect variants name their target slot `target: Optional[Target]`.
+        # `Effect.DrawUpTo` is the exception: its `target` is the draw count
+        # (int), and the actual Target lives on `target_field`. Normalize.
+        candidate = getattr(effect, "target", None)
+        target = (
+            candidate
+            if isinstance(candidate, slai.Target)
+            else getattr(effect, "target_field", None)
+        )
         if target is not None:
             cand_idx = _CANDIDATE_POOL_TO_IDX.get(target.candidates)
             if cand_idx is not None:

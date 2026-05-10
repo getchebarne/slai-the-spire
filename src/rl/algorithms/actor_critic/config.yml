@@ -1,4 +1,4 @@
-exp_name: ppo/NEW_TEST_4
+exp_name: ppo/NEWERA
 num_iterations: 1.0e+6
 log_every: 10
 save_every: 100

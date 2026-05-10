@@ -19,16 +19,21 @@ _INSTANCES_MAX = 5  # was Whirlwind cap
 
 _DAMAGE_DIM = _get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
+# Per-monster-name one-hot. MonsterName variants are integer-comparable
+# (eq_int); sort by int for a stable enumeration order.
+_MONSTER_NAMES = sorted(
+    (getattr(slai.MonsterName, n) for n in dir(slai.MonsterName) if not n.startswith("_")),
+    key=lambda m: int(m),
+)
+_MONSTER_NAME_TO_IDX = {n: i for i, n in enumerate(_MONSTER_NAMES)}
+_NUM_MONSTER_NAMES = len(_MONSTER_NAMES)
+
 
 def get_encoding_dim_monster() -> int:
-    """Calculate monster encoding dimension (excludes modifiers and health/block).
-
-    Identity (per-monster-name one-hot) is dropped vs the pre-migration
-    encoder: slai exposes 27 monster types and the pyi doesn't enumerate
-    them; restore this once we have a stable Python-side roster.
-    """
+    """Calculate monster encoding dimension (excludes modifiers and health/block)."""
     return (
-        _DAMAGE_DIM  # Intent damage piecewise one-hot
+        _NUM_MONSTER_NAMES  # per-monster-name one-hot (25 today)
+        + _DAMAGE_DIM  # Intent damage piecewise one-hot
         + 5  # Intent scalars: damage, instances, block, buff, debuff
     )
 
@@ -37,8 +42,14 @@ _ENCODING_DIM_MONSTER = get_encoding_dim_monster()
 
 
 def _encode_view_monster_into(out: np.ndarray, view_monster: slai.Monster) -> None:
-    """Encode monster intent into a pre-allocated numpy array."""
+    """Encode monster identity + intent into a pre-allocated numpy array."""
     pos = 0
+
+    # Per-monster-name one-hot
+    idx_name = _MONSTER_NAME_TO_IDX.get(view_monster.monster_name)
+    if idx_name is not None:
+        out[pos + idx_name] = 1.0
+    pos += _NUM_MONSTER_NAMES
 
     intent = view_monster.intent
     damage = intent.damage or 0

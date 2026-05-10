@@ -7,6 +7,7 @@ Usage:
 
 import os
 import random
+import sys
 import time
 
 import click
@@ -19,7 +20,6 @@ from src.rl.action_space.types import HeadTypePrimary
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
-from src.rl.env_wrapper import EnvWrapper
 from src.rl.models import ActorCritic
 from src.rl.models.heads import get_grouped_probs
 from src.rl.utils import load_config
@@ -31,30 +31,160 @@ except OSError:
     N_COL = 120
 
 
-def _format_view(view: slai.GameState, awaiting_target: bool) -> str:
-    """Compact textual rendering of the game state."""
-    lines = [
-        f"Phase: {type(view.phase).__name__}{' (awaiting target)' if awaiting_target else ''}",
-        f"Char: HP {view.character.health}/{view.character.health_max}  Block {view.character.block}",
-    ]
+# ANSI styling — mirrors play/__main__.py's curses color pairs.
+_USE_COLOR = sys.stdout.isatty()
+_RED = "\033[31m" if _USE_COLOR else ""
+_CYAN = "\033[36m" if _USE_COLOR else ""
+_RESET = "\033[0m" if _USE_COLOR else ""
+
+
+def _hp(s: str) -> str:
+    return f"{_RED}{s}{_RESET}"
+
+
+def _block(s: str) -> str:
+    return f"{_CYAN}{s}{_RESET}"
+
+
+def _ansi_len(s: str) -> int:
+    """Visible length, stripping ANSI escape sequences."""
+    return len(s.replace(_RED, "").replace(_CYAN, "").replace(_RESET, ""))
+
+
+def _variant_name(value: object) -> str:
+    """`ModifierKind.Strength` → `Strength` (slai pyclass enums repr that way)."""
+    s = repr(value)
+    return s.rsplit(".", 1)[-1] if "." in s else s
+
+
+# Modifier abbreviations — copied from play/__main__.py::MOD_ABBR.
+_MOD_ABBR = {
+    slai.ModifierKind.Accuracy: "acc",
+    slai.ModifierKind.AfterImage: "aimg",
+    slai.ModifierKind.Angry: "ang",
+    slai.ModifierKind.Artifact: "art",
+    slai.ModifierKind.Asleep: "slp",
+    slai.ModifierKind.Blur: "blur",
+    slai.ModifierKind.Burst: "brst",
+    slai.ModifierKind.Choke: "chk",
+    slai.ModifierKind.CorpseExplosion: "cexp",
+    slai.ModifierKind.CurlUp: "curl",
+    slai.ModifierKind.Dexterity: "dex",
+    slai.ModifierKind.DoubleDamage: "ddmg",
+    slai.ModifierKind.DrawCardNextTurn: "ndraw",
+    slai.ModifierKind.Enrage: "enr",
+    slai.ModifierKind.Entangled: "entg",
+    slai.ModifierKind.Envenom: "env",
+    slai.ModifierKind.Frail: "frail",
+    slai.ModifierKind.InfiniteBlades: "iblad",
+    slai.ModifierKind.Intangible: "intg",
+    slai.ModifierKind.Metallicize: "metl",
+    slai.ModifierKind.ModeShift: "mshft",
+    slai.ModifierKind.NextTurnBlock: "ntblk",
+    slai.ModifierKind.NextTurnEnergy: "nterg",
+    slai.ModifierKind.NoDraw: "nodr",
+    slai.ModifierKind.NoxiousFumes: "nox",
+    slai.ModifierKind.Phantasmal: "phant",
+    slai.ModifierKind.Poison: "poi",
+    slai.ModifierKind.Retain: "ret",
+    slai.ModifierKind.Ritual: "rit",
+    slai.ModifierKind.Shackled: "shk",
+    slai.ModifierKind.SharpHide: "shrp",
+    slai.ModifierKind.Splittable: "splt",
+    slai.ModifierKind.SporeCloud: "spore",
+    slai.ModifierKind.Strength: "str",
+    slai.ModifierKind.Thievery: "thief",
+    slai.ModifierKind.Thorns: "thorn",
+    slai.ModifierKind.ThousandCuts: "cuts",
+    slai.ModifierKind.ToolsOfTheTrade: "tools",
+    slai.ModifierKind.Vulnerable: "vuln",
+    slai.ModifierKind.Weak: "weak",
+    slai.ModifierKind.WraithForm: "wrth",
+}
+
+
+def _fmt_modifiers(mods: list) -> str:
+    return "  ".join(
+        f"{_MOD_ABBR.get(m.kind, _variant_name(m.kind).lower())} {m.stacks}"
+        for m in mods
+    )
+
+
+def _fmt_action(action: object) -> str:
+    """Per-variant action formatter — slai actions are frozen pyclasses
+    without `__dict__`, so we match on type to expose target / multi-pick
+    indices."""
+    if isinstance(action, slai.Action.CardPlay):
+        tgt = f", target={action.idx_monster}" if action.idx_monster is not None else ""
+        return f"CardPlay(hand={action.idx_hand}{tgt})"
+    if isinstance(action, slai.Action.CardDiscard):
+        return f"CardDiscard(indices={list(action.indices_hand)})"
+    if isinstance(action, slai.Action.CardRetain):
+        return f"CardRetain(indices={list(action.indices_hand)})"
+    if isinstance(action, slai.Action.CardSetup):
+        return f"CardSetup(hand={action.idx_hand})"
+    if isinstance(action, slai.Action.CardNightmare):
+        return f"CardNightmare(hand={action.idx_hand})"
+    if isinstance(action, slai.Action.RoomSelect):
+        return f"RoomSelect(col={action.idx_column})"
+    if isinstance(action, slai.Action.CardRewardSelect):
+        return f"CardRewardSelect(idx={action.idx_reward})"
+    if isinstance(action, slai.Action.RelicRewardSelect):
+        return f"RelicRewardSelect(idx={action.idx_reward})"
+    if isinstance(action, slai.Action.RestSiteCardUpgrade):
+        return f"RestSiteCardUpgrade(deck={action.idx_deck})"
+    return type(action).__name__  # EndTurn, *Skip, RestSiteRest
+
+
+def _enemy_row(i: int, m: slai.Monster) -> str:
+    """Render a monster row WITHOUT padding — pre-pad outside this fn."""
+    intent = m.intent
+    if intent.damage:
+        intent_str = f"ATK {intent.damage}x{intent.instances or 1}"
+    elif intent.block:
+        intent_str = "BLOCK"
+    elif intent.buff:
+        intent_str = "BUFF"
+    elif intent.debuff:
+        intent_str = "DEBUFF"
+    else:
+        intent_str = ""
+    hp = _hp(f"HP {m.health}/{m.health_max}")
+    blk = f"  {_block(f'Block {m.block}')}" if m.block > 0 else ""
+    return f"[{i}] {m.name}: {hp}{blk}  → {intent_str}"
+
+
+def _format_view(view: slai.GameState) -> str:
+    """Compact textual rendering of the game state.
+
+    Two-column layout: character/hand on the left, monsters right-padded
+    so name/HP/intent columns line up vertically (mirrors `play/__main__.py`).
+    """
+    lines = [f"Phase: {type(view.phase).__name__}"]
+
+    char_line = (
+        f"Char: {_hp(f'HP {view.character.health}/{view.character.health_max}')}"
+        f"  {_block(f'Block {view.character.block}')}"
+    )
+    lines.append(char_line)
     if view.character.modifiers:
-        mods = ", ".join(f"{type(m.kind).__name__}={m.stacks}" for m in view.character.modifiers)
-        lines.append(f"  modifiers: {mods}")
+        lines.append(f"  modifiers: {_fmt_modifiers(view.character.modifiers)}")
+
+    if view.relics:
+        relics_str = ", ".join(_variant_name(r.name) for r in view.relics)
+        lines.append(f"Relics: {relics_str}")
 
     if view.monsters:
+        # Right-pad monster rows so they all start at the same column —
+        # matches play/__main__.py's `block_x = right_edge - max(...)`.
+        rendered = [_enemy_row(i, m) for i, m in enumerate(view.monsters)]
+        max_w = max(_ansi_len(r) for r in rendered)
+        left_pad = max(0, N_COL - max_w)
         lines.append("Monsters:")
-        for i, m in enumerate(view.monsters):
-            intent = m.intent
-            intent_str = ""
-            if intent.damage:
-                intent_str = f"ATK {intent.damage}x{intent.instances or 1}"
-            elif intent.block:
-                intent_str = "BLOCK"
-            elif intent.buff:
-                intent_str = "BUFF"
-            elif intent.debuff:
-                intent_str = "DEBUFF"
-            lines.append(f"  [{i}] {m.name}: HP {m.health}/{m.health_max} Block {m.block}  → {intent_str}")
+        for i, (m, row) in enumerate(zip(view.monsters, rendered)):
+            lines.append(" " * left_pad + row)
+            if m.modifiers:
+                lines.append(" " * left_pad + f"  modifiers: {_fmt_modifiers(m.modifiers)}")
 
     lines.append(f"Energy: {view.energy.current}/{view.energy.max}")
     if view.hand:
@@ -66,6 +196,8 @@ def _format_view(view: slai.GameState, awaiting_target: bool) -> str:
 
     if view.card_rewards:
         lines.append(f"Card rewards: {[c.name for c in view.card_rewards]}")
+    if view.relic_rewards:
+        lines.append(f"Relic rewards: {[_variant_name(r.name) for r in view.relic_rewards]}")
     return "\n".join(lines)
 
 
@@ -131,34 +263,26 @@ def format_card_probabilities(
 
 def get_action_from_model(
     model: ActorCritic,
-    wrapper: EnvWrapper,
+    view: slai.GameState,
     device: torch.device,
     show_card_probs: bool = False,
     greedy: bool = False,
 ) -> tuple[object, str | None]:
     """
-    Get an action from the model for the wrapper's current state.
+    Get an action from the model for the given view.
 
     Args:
         greedy: If True, use argmax instead of sampling (deterministic)
 
     Returns:
-        (action, card_probs_str). action may be a slai.Action.* or a
-        wrapper marker (PendingCardPlay / ResolveCardPlay).
+        (action, card_probs_str). action is a `slai.Action.*` instance.
     """
-    view = wrapper.obs
-
-    # Encode state
     x_game_state = encode_batch_view_game_state([view], device)
+    mask_batch = get_mask_batch([view], device)
 
-    # Get masks (wrapper-aware: routes correctly when awaiting target)
-    mask_batch = get_mask_batch([wrapper], device)
-
-    # Forward pass
     with torch.no_grad():
         output = model.forward_single(x_game_state, mask_batch, sample=not greedy)
 
-        # Get card probabilities only when in true CombatDefault (not buffered).
         card_probs_str = None
         has_playable = any(
             c.cost <= view.energy.current and c.playable for c in view.hand
@@ -166,7 +290,6 @@ def get_action_from_model(
         if (
             show_card_probs
             and isinstance(view.phase, slai.Phase.CombatDefault)
-            and not wrapper.is_awaiting_target
             and view.hand
             and has_playable
         ):
@@ -190,19 +313,19 @@ def run_game(
     Returns:
         (final_floor, final_health)
     """
-    wrapper = EnvWrapper(ascension=ASCENSION_LEVEL)
-    wrapper.reset(seed=random.randint(0, 2**31 - 1))
+    env = slai.GameEnv(ascension=ASCENSION_LEVEL)
+    obs, _ = env.reset(seed=random.randint(0, 2**31 - 1))
 
     step_count = 0
     terminated = False
     while not terminated:
         if verbose:
-            print(_format_view(wrapper.obs, wrapper.is_awaiting_target))
+            print(_format_view(obs))
             print("-" * N_COL)
 
         action, card_probs_str = get_action_from_model(
             model,
-            wrapper,
+            obs,
             device,
             show_card_probs=verbose and show_card_probs,
             greedy=greedy,
@@ -212,16 +335,15 @@ def run_game(
             if card_probs_str:
                 print(card_probs_str)
                 print("-" * N_COL)
-            print(f"Action: {type(action).__name__} {getattr(action, '__dict__', '')}")
+            print(f"Action: {_fmt_action(action)}")
             print("-" * N_COL)
             time.sleep(delay)
 
-        _, _, terminated, _, _ = wrapper.step(action)
+        obs, _, terminated, _, _ = env.step(action)
         step_count += 1
 
-    final_view = wrapper.obs
-    final_floor = final_view.map.y_current or 0
-    final_health = final_view.character.health
+    final_floor = obs.map.y_current or 0
+    final_health = obs.character.health
 
     if verbose:
         print(f"\n{'=' * N_COL}")

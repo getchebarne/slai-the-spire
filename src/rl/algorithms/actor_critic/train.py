@@ -11,6 +11,7 @@ import shutil
 from collections import deque
 from dataclasses import dataclass, field
 
+import slai
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,7 +20,6 @@ from torch.utils.tensorboard import SummaryWriter
 from src.rl.action_space.masks import get_mask_batch
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import encode_batch_view_game_state
-from src.rl.env_wrapper import EnvWrapper
 from src.rl.models import ActorCritic
 from src.rl.reward import compute_reward
 from src.rl.utils import init_optimizer
@@ -42,43 +42,29 @@ def _play_episode(model: ActorCritic, device: torch.device) -> tuple[EpisodeResu
 
     Returns (EpisodeResult, final_floor)
     """
-    wrapper = EnvWrapper(ascension=ASCENSION_LEVEL)
-    wrapper.reset(seed=random.randint(0, 2**31 - 1))
+    env = slai.GameEnv(ascension=ASCENSION_LEVEL)
+    obs, _ = env.reset(seed=random.randint(0, 2**31 - 1))
 
     result = EpisodeResult()
     terminated = False
-    view_game_state_next = wrapper.obs
 
     while not terminated:
-        view_game_state = wrapper.obs
+        x_game_state = encode_batch_view_game_state([obs], device)
+        mask_batch = get_mask_batch([obs], device)
 
-        # Encode state
-        x_game_state = encode_batch_view_game_state([view_game_state], device)
-
-        # Get masks (route.py reads wrapper.is_awaiting_target so pass the wrapper)
-        mask_batch = get_mask_batch([wrapper], device)
-
-        # Forward pass
         output = model.forward_single(x_game_state, mask_batch, sample=True)
-
-        # Build action (may be a slai.Action.* or a buffering marker)
         action = output.to_action()
 
-        # Execute action
-        view_game_state_next, _engine_reward, terminated, _trunc, _info = wrapper.step(action)
+        prev = obs
+        obs, _engine_reward, terminated, _trunc, _info = env.step(action)
+        reward = compute_reward(prev, obs, terminated)
 
-        # Get reward
-        reward = compute_reward(view_game_state, view_game_state_next, terminated)
-
-        # Store transition
         result.log_probs.append(torch.unsqueeze(output.log_prob, 0))
         result.values.append(output.value.unsqueeze(0))
         result.rewards.append(reward)
-
-        # Compute entropy (simplified placeholder)
         result.entropies.append(torch.tensor([0.01], device=device))
 
-    final_floor = view_game_state_next.map.y_current or 0
+    final_floor = obs.map.y_current or 0
     return result, final_floor
 
 

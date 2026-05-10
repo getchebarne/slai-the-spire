@@ -47,18 +47,29 @@ MODIFIER_STACKS_MAX = {
 }
 
 # =============================================================================
-# Game-shape constants (mirror slai's Rust-side `consts.rs`; slai does not
-# expose these via the Python API today, so they're hardcoded here).
+# Game-shape constants — pulled from slai where it owns them; encoder-side
+# caps (deck / draw / disc piles) stay hardcoded since slai's piles are
+# unbounded.
 # =============================================================================
 
-MAP_HEIGHT = 15
-MAP_WIDTH = 7
-MAX_MONSTERS = 2  # RL-side cap; slai supports up to 5. See migration plan.
-MAX_SIZE_COMBAT_CARD_REWARD = 3
-MAX_SIZE_DECK = 25  # dynamic in slai; this is an encoder-side cap
-MAX_SIZE_DISC_PILE = 25
-MAX_SIZE_DRAW_PILE = 25
-MAX_SIZE_HAND = 10
+import slai as _slai
+
+MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
+MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
+MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
+MAX_SIZE_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
+MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
+
+# Encoder-side caps. slai's deck and draw/discard piles grow unboundedly;
+# these are the maximum sizes the encoder pads to. Bump if Silent decks
+# routinely exceed.
+MAX_SIZE_DECK = 50
+MAX_SIZE_DISC_PILE = 50
+MAX_SIZE_DRAW_PILE = 50
+
+# Maximum number of relic-reward offers per RELIC_REWARD halt. Today slai
+# emits at most 1 (post-Elite). Bump if that ever changes.
+MAX_RELIC_REWARDS = 1
 
 
 __all__ = [
