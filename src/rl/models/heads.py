@@ -315,6 +315,27 @@ class HeadCardUpgrade(HeadEntitySelection):
     pass
 
 
+class HeadCardSetup(HeadEntitySelection):
+    """Head for selecting a hand card to mark `free_to_play_once` (Setup card).
+
+    Same architecture as HeadCardDiscard but separate parameters — Setup
+    optimizes a different value function (which card most benefits from
+    a discount next play).
+    """
+
+    pass
+
+
+class HeadCardNightmare(HeadEntitySelection):
+    """Head for selecting a hand card to copy into next turn's draw (Nightmare).
+
+    Separate parameters from HeadCardDiscard / HeadCardSetup: Nightmare
+    is a "which card do I want to play three of next turn" decision.
+    """
+
+    pass
+
+
 class HeadMonsterSelect(nn.Module):
     """
     Head for selecting a monster to target.
@@ -429,6 +450,192 @@ class HeadMapSelect(nn.Module):
 # =============================================================================
 # Value Head (Critic)
 # =============================================================================
+
+
+# =============================================================================
+# Relic Selection Head
+# =============================================================================
+
+
+class HeadRelicSelect(nn.Module):
+    """Head for selecting which relic offer to take.
+
+    Today MAX_RELIC_REWARDS = 1, so this head's `select` decision is
+    degenerate (one valid slot). Wired up now so that bumping
+    MAX_RELIC_REWARDS later doesn't require model surgery — the head
+    learns a richer distribution as soon as multiple offers appear.
+
+    Operates on global context only; relic identity isn't yet plumbed
+    through the entity transformer.
+    """
+
+    def __init__(self, dim_global: int, dim_ff: int, num_relics: int):
+        super().__init__()
+
+        self._scorer = nn.Sequential(
+            nn.Linear(dim_global, dim_ff),
+            nn.ReLU(),
+            nn.Linear(dim_ff, num_relics),
+        )
+
+    def forward(
+        self,
+        x_entities: torch.Tensor,  # unused, kept for signature parity with HeadEntitySelection
+        x_global: torch.Tensor,
+        mask: torch.Tensor,
+        sample: bool = True,
+    ) -> HeadOutput:
+        del x_entities  # not used; relic embedding not yet plumbed
+        logits = self._scorer(x_global)
+        return sample_from_logits(logits, mask, sample)
+
+
+# =============================================================================
+# Multi-Pick Retain Head
+# =============================================================================
+
+
+@dataclass
+class MultiPickHeadOutput:
+    """Output of HeadCardMultiPick — multi-pick over hand."""
+
+    indices: torch.Tensor  # (B, MAX_K) int64; -1 for unused slots
+    log_prob: torch.Tensor  # (B,) sum of per-step log probs
+    entropy: torch.Tensor  # (B,) entropy of the *initial* (pre-mask) distribution
+
+
+# Backwards-compat alias (was the original name when only retain used this).
+RetainHeadOutput = MultiPickHeadOutput
+
+
+class HeadCardMultiPick(nn.Module):
+    """Multi-pick: pick `num` distinct hand cards.
+
+    Sequential sample-without-replacement under one logit pass:
+      1. Score each card with a per-card logit (from card+global features).
+      2. For each of `num` picks: softmax over still-valid cards, sample,
+         mask the picked card, repeat.
+      3. Total log_prob = sum of per-step log_probs.
+
+    Used by COMBAT_AWAIT_RETAIN (pick cards to retain across end-of-turn)
+    and COMBAT_CARD_DISCARD (slai's `CombatAwaitDiscard{num}` requires
+    exactly `num` indices in one action). Two separate instances live on
+    `ActorCritic` so retain and discard learn independent distributions.
+
+    PPO recompute follows the same procedure replaying the recorded picks
+    under the new policy.
+    """
+
+    def __init__(self, dim_entity: int, dim_global: int, dim_ff: int):
+        super().__init__()
+
+        self._scorer = nn.Sequential(
+            nn.Linear(dim_entity + dim_global, dim_ff),
+            nn.ReLU(),
+            nn.Linear(dim_ff, dim_ff),
+            nn.ReLU(),
+            nn.Linear(dim_ff, 1),
+        )
+
+    def _score(self, x_entities: torch.Tensor, x_global: torch.Tensor) -> torch.Tensor:
+        """Per-card logits. (B, N) from (B, N, dim_entity) + (B, dim_global)."""
+        _, num_entities, _ = x_entities.shape
+        x_global_exp = torch.unsqueeze(x_global, 1).expand(-1, num_entities, -1)
+        x_input = torch.cat([x_entities, x_global_exp], dim=-1)
+        return torch.squeeze(self._scorer(x_input), -1)
+
+    def forward(
+        self,
+        x_entities: torch.Tensor,  # (B, N, dim_entity)
+        x_global: torch.Tensor,  # (B, dim_global)
+        mask: torch.Tensor,  # (B, N) bool — initial validity (whole hand)
+        nums: torch.Tensor,  # (B,) int — count to pick per sample
+        sample: bool = True,
+    ) -> "MultiPickHeadOutput":
+        B, N, _ = x_entities.shape
+        device = x_entities.device
+
+        logits = self._score(x_entities, x_global)
+        picks = torch.full((B, N), -1, dtype=torch.long, device=device)
+        log_probs = torch.zeros(B, device=device)
+
+        # Mutable copy — masking out picked cards each step.
+        cur_mask = mask.clone()
+
+        # Single host sync to bound the loop.
+        max_num = int(nums.max().item()) if B > 0 else 0
+        for k in range(max_num):
+            # Only build the distribution + update masks for samples still
+            # picking. Done samples (nums <= k) might have over-exhausted
+            # their masks in prior iterations; constructing Categorical
+            # over an all-inf row produces NaN and corrupts everything
+            # downstream (the model NaNs out by epoch 2 of PPO).
+            sp_idx = torch.nonzero(nums > k, as_tuple=True)[0]
+            if sp_idx.numel() == 0:
+                break
+
+            sp_logits = logits[sp_idx].masked_fill(~cur_mask[sp_idx], float("-inf"))
+            dist = torch.distributions.Categorical(logits=sp_logits)
+            sp_pick = dist.sample() if sample else sp_logits.argmax(dim=-1)
+            sp_log_prob = dist.log_prob(sp_pick)
+
+            picks[sp_idx, k] = sp_pick
+            log_probs[sp_idx] = log_probs[sp_idx] + sp_log_prob
+
+            # Mask the picked card for the next iteration (only still-picking).
+            cur_mask[sp_idx, sp_pick] = False
+
+        # Entropy of the initial (pre-pick) distribution as a proxy.
+        # Exact joint entropy of without-replacement sampling is intractable;
+        # this captures "how indecisive was the model's first pick".
+        initial = logits.masked_fill(~mask, float("-inf"))
+        entropy = torch.distributions.Categorical(logits=initial).entropy()
+
+        return MultiPickHeadOutput(indices=picks, log_prob=log_probs, entropy=entropy)
+
+    def recompute_log_prob(
+        self,
+        x_entities: torch.Tensor,
+        x_global: torch.Tensor,
+        mask: torch.Tensor,
+        nums: torch.Tensor,
+        recorded_picks: torch.Tensor,  # (B, N) int64 — recorded picks, -1 for unused
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Replay the recorded picks under current logits to get
+        (log_prob, entropy) for PPO update.
+
+        Same still-picking-only structure as `forward` to avoid
+        constructing Categorical over rows whose mask is all-False
+        (which produces NaN softmax and silently NaNs the model).
+        """
+        B, N, _ = x_entities.shape
+        device = x_entities.device
+
+        logits = self._score(x_entities, x_global)
+        cur_mask = mask.clone()
+        log_probs = torch.zeros(B, device=device)
+
+        max_num = int(nums.max().item()) if B > 0 else 0
+        for k in range(max_num):
+            sp_idx = torch.nonzero(nums > k, as_tuple=True)[0]
+            if sp_idx.numel() == 0:
+                break
+
+            sp_picked = recorded_picks[sp_idx, k]
+            sp_logits = logits[sp_idx].masked_fill(~cur_mask[sp_idx], float("-inf"))
+            dist = torch.distributions.Categorical(logits=sp_logits)
+            sp_log_prob = dist.log_prob(sp_picked)
+            log_probs[sp_idx] = log_probs[sp_idx] + sp_log_prob
+
+            cur_mask[sp_idx, sp_picked] = False
+
+        initial = logits.masked_fill(~mask, float("-inf"))
+        entropy = torch.distributions.Categorical(logits=initial).entropy()
+        return log_probs, entropy
+
+
+# Legacy alias (was the original name when only retain used this head).
+HeadCardRetain = HeadCardMultiPick
 
 
 class HeadValue(nn.Module):

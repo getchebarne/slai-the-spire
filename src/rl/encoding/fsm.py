@@ -1,10 +1,7 @@
-"""One-hot encoder for the engine's phase (was FSM in the in-tree emulator).
+"""One-hot encoder for the engine's phase.
 
-slai's `Phase` is an "open" enum: `slai.Phase.<Variant>` are real classes
-that the runtime returns instances of. Use `isinstance` to dispatch. Phase
-variants beyond the listed ones (e.g. `CombatAwaitNightmare`,
-`CombatAwaitRetain`, `CombatAwaitSetup`) collapse to the all-zero "unknown"
-slot — they're out of scope for the current trainer.
+Each `slai.Phase.*` variant subclass occupies one slot. Order is stable;
+reordering invalidates trained models keyed by the resulting one-hot.
 """
 
 import numpy as np
@@ -12,13 +9,14 @@ import slai
 import torch
 
 
-# Phases the trainer can route. Order is stable; index into `_PHASE_CLASSES`
-# is the one-hot slot. Add a new entry only after wiring the new phase
-# through route.py / masks.py / heads.
+# 9 phase slots — one per slai.Phase variant.
 _PHASE_CLASSES: list[type] = [
     slai.Phase.Map,
     slai.Phase.CombatDefault,
     slai.Phase.CombatAwaitDiscard,
+    slai.Phase.CombatAwaitRetain,
+    slai.Phase.CombatAwaitNightmare,
+    slai.Phase.CombatAwaitSetup,
     slai.Phase.CombatReward,
     slai.Phase.RestSite,
     slai.Phase.GameOver,
@@ -35,6 +33,5 @@ def encode_batch_view_fsm(batch_view_phase: list[object], device: torch.device) 
             if isinstance(phase, phase_cls):
                 x_out[b, idx] = 1.0
                 break
-        # else: unknown phase (Nightmare/Retain/Setup) → all-zero slot
 
     return torch.from_numpy(x_out).to(device)
