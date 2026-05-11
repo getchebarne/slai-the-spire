@@ -37,6 +37,14 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_HAND
+from src.rl.encoding.card import card_identity_ids
+
+
+def is_card_playable(card: slai.Card, energy_current: int) -> bool:
+    """Single source of truth for whether a card can be played right now —
+    affordability + per-card play restriction (slai's `Card.playable` flag
+    captures Entangled, DrawPileEmpty, etc.)."""
+    return card.cost <= energy_current and card.playable
 
 
 # =============================================================================
@@ -74,9 +82,11 @@ class MaskBatch:
     """entity selection masks. selection_masks[htp] → (N_group, max_entities) or empty"""
 
     # ---- Per-sample auxiliary tensors (full batch B, sample-indexed) ----
-    target_required: torch.Tensor
+    target_required: torch.Tensor | None
     """(B, MAX_SIZE_HAND) bool — does hand[i] require a monster target?
-    Used by inline target dispatch in COMBAT_DEFAULT card-play."""
+    Used by inline target dispatch in COMBAT_DEFAULT card-play. None on
+    the PPO recompute path, which gates target replay on the recorded
+    `target_index >= 0` and never reads this field."""
 
     monster_alive_mask: torch.Tensor
     """(B, MAX_MONSTERS) bool — alive monster slots per sample. Used by
@@ -88,6 +98,21 @@ class MaskBatch:
     exactly `num` indices in one shot, same shape as Retain).
     Zero outside those two phases. Field name kept for backwards-compat."""
 
+    # ---- Per-pile group identity (for grouped sampling) ----
+    # Two slots with the same group_id hold cards interchangeable for the
+    # policy (same `_card_policy_features`). -1 marks padding/invalid slots.
+    # Heads use these to dedup identical cards when sampling, so the policy
+    # gradient is over CARD TYPES rather than slot positions.
+    hand_group_ids: torch.Tensor
+    """(B, MAX_SIZE_HAND) int — used by COMBAT_DEFAULT (card play),
+    COMBAT_CARD_DISCARD, COMBAT_AWAIT_RETAIN/NIGHTMARE/SETUP."""
+
+    deck_group_ids: torch.Tensor
+    """(B, MAX_SIZE_DECK) int — used by REST_SITE (card upgrade)."""
+
+    card_reward_group_ids: torch.Tensor
+    """(B, MAX_SIZE_COMBAT_CARD_REWARD) int — used by CARD_REWARD."""
+
 
 # =============================================================================
 # Per-state primary mask functions (decision primaries only)
@@ -96,9 +121,7 @@ class MaskBatch:
 
 def _get_primary_mask_combat_default(state: slai.GameState) -> list[bool]:
     """[end_turn, play_card]"""
-    has_playable = any(
-        card.cost <= state.energy.current and card.playable for card in state.hand
-    )
+    has_playable = any(is_card_playable(card, state.energy.current) for card in state.hand)
     return [True, has_playable]
 
 
@@ -137,7 +160,7 @@ def _get_selection_mask(htp: int, state: slai.GameState) -> list[bool]:
     if htp == HeadTypePrimary.COMBAT_DEFAULT:
         mask = [False] * MAX_SIZE_HAND
         for idx, card in enumerate(state.hand[:MAX_SIZE_HAND]):
-            mask[idx] = card.cost <= state.energy.current and card.playable
+            mask[idx] = is_card_playable(card, state.energy.current)
         return mask
 
     if htp == HeadTypePrimary.COMBAT_CARD_DISCARD:
@@ -314,14 +337,27 @@ def get_mask_batch(
     target_req_np = np.zeros((B, MAX_SIZE_HAND), dtype=bool)
     monster_alive_np = np.zeros((B, MAX_MONSTERS), dtype=bool)
     retain_nums_np = np.zeros(B, dtype=np.int64)
+    hand_gids_np = np.full((B, MAX_SIZE_HAND), -1, dtype=np.int64)
+    deck_gids_np = np.full((B, MAX_SIZE_DECK), -1, dtype=np.int64)
+    reward_gids_np = np.full((B, MAX_SIZE_COMBAT_CARD_REWARD), -1, dtype=np.int64)
     for i, state in enumerate(states):
         target_req_np[i] = _get_target_required(state)
         monster_alive_np[i] = _get_monster_alive_mask(state)
         retain_nums_np[i] = _get_retain_num(state)
 
+        hand_ids = card_identity_ids(state.hand[:MAX_SIZE_HAND])
+        hand_gids_np[i, : len(hand_ids)] = hand_ids
+        deck_ids = card_identity_ids(state.deck[:MAX_SIZE_DECK])
+        deck_gids_np[i, : len(deck_ids)] = deck_ids
+        reward_ids = card_identity_ids(state.card_rewards[:MAX_SIZE_COMBAT_CARD_REWARD])
+        reward_gids_np[i, : len(reward_ids)] = reward_ids
+
     target_required = torch.from_numpy(target_req_np).to(device)
     monster_alive_mask = torch.from_numpy(monster_alive_np).to(device)
     retain_nums = torch.from_numpy(retain_nums_np).to(device)
+    hand_group_ids = torch.from_numpy(hand_gids_np).to(device)
+    deck_group_ids = torch.from_numpy(deck_gids_np).to(device)
+    card_reward_group_ids = torch.from_numpy(reward_gids_np).to(device)
 
     return MaskBatch(
         route=route,
@@ -330,4 +366,7 @@ def get_mask_batch(
         target_required=target_required,
         monster_alive_mask=monster_alive_mask,
         retain_nums=retain_nums,
+        hand_group_ids=hand_group_ids,
+        deck_group_ids=deck_group_ids,
+        card_reward_group_ids=card_reward_group_ids,
     )

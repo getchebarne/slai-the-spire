@@ -14,6 +14,8 @@ import os
 import random
 import shutil
 from dataclasses import dataclass
+from dataclasses import fields
+from typing import Callable
 from typing import Iterator
 
 import slai
@@ -32,21 +34,14 @@ from src.rl.action_space.types import PRIMARY_NUM_CHOICES
 from src.rl.action_space.types import to_action
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_MONSTERS
-from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.state import XGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
-from src.rl.models.actor_critic import _build_entity_tensors
-from src.rl.models.heads import compute_grouped_log_prob_and_entropy
+from src.rl.models.actor_critic import iter_primary_groups
+from src.rl.models.heads import recompute_grouped_log_prob_and_entropy
 from src.rl.reward import compute_reward
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
-
-
-_HTP_COMBAT_DEFAULT = int(HeadTypePrimary.COMBAT_DEFAULT)
-_HTP_COMBAT_CARD_DISCARD = int(HeadTypePrimary.COMBAT_CARD_DISCARD)
-_HTP_COMBAT_AWAIT_RETAIN = int(HeadTypePrimary.COMBAT_AWAIT_RETAIN)
-_HTP_RELIC_REWARD = int(HeadTypePrimary.RELIC_REWARD)
 
 
 # =============================================================================
@@ -68,14 +63,20 @@ class Transition:
     selection_index: int  # -1 if terminal
     selection_log_prob: torch.Tensor
     # Inline target (for COMBAT_DEFAULT play-card-with-target):
-    target_index: int  # -1 if not a targeting card
+    target_index: int  # -1 if not a targeting card. Doubles as "did we
+                       # target?" gate for PPO recompute (no need to also
+                       # store the target_required mask — if target_index
+                       # < 0, no target was sampled, so nothing to replay).
     target_log_prob: torch.Tensor
-    target_required: torch.Tensor  # (1, MAX_SIZE_HAND) bool
     monster_alive_mask: torch.Tensor  # (1, MAX_MONSTERS) bool
     # Multi-pick retain (for COMBAT_AWAIT_RETAIN):
     retain_indices: torch.Tensor  # (1, MAX_SIZE_HAND) int64
     retain_log_prob: torch.Tensor
     retain_num: int
+    # Per-pile group ids for grouped sampling at PPO recompute
+    hand_group_ids: torch.Tensor  # (1, MAX_SIZE_HAND) int
+    deck_group_ids: torch.Tensor  # (1, MAX_SIZE_DECK) int
+    card_reward_group_ids: torch.Tensor  # (1, MAX_SIZE_COMBAT_CARD_REWARD) int
     value: torch.Tensor
     reward: float
     done: bool
@@ -95,11 +96,13 @@ class TrajectoryBatch:
     selection_log_probs: torch.Tensor
     target_indices: torch.Tensor  # (N,)
     target_log_probs: torch.Tensor
-    target_required: torch.Tensor  # (N, MAX_SIZE_HAND)
     monster_alive_mask: torch.Tensor  # (N, MAX_MONSTERS)
     retain_indices: torch.Tensor  # (N, MAX_SIZE_HAND)
     retain_log_probs: torch.Tensor
     retain_nums: torch.Tensor  # (N,)
+    hand_group_ids: torch.Tensor  # (N, MAX_SIZE_HAND)
+    deck_group_ids: torch.Tensor  # (N, MAX_SIZE_DECK)
+    card_reward_group_ids: torch.Tensor  # (N, MAX_SIZE_COMBAT_CARD_REWARD)
     values: torch.Tensor
     returns: torch.Tensor
     advantages: torch.Tensor
@@ -160,94 +163,25 @@ class EnvironmentManager:
 # =============================================================================
 
 
+def _map_xgs(x: XGameState, op: Callable[[torch.Tensor], torch.Tensor]) -> XGameState:
+    return XGameState(**{f.name: op(getattr(x, f.name)) for f in fields(XGameState)})
+
+
 def _move_x_game_state(x: XGameState, device: torch.device) -> XGameState:
-    return XGameState(
-        x_hand=x.x_hand.to(device),
-        x_hand_mask_pad=x.x_hand_mask_pad.to(device),
-        x_active_card_mask=x.x_active_card_mask.to(device),
-        x_draw=x.x_draw.to(device),
-        x_draw_mask_pad=x.x_draw_mask_pad.to(device),
-        x_disc=x.x_disc.to(device),
-        x_disc_mask_pad=x.x_disc_mask_pad.to(device),
-        x_deck=x.x_deck.to(device),
-        x_deck_mask_pad=x.x_deck_mask_pad.to(device),
-        x_combat_reward=x.x_combat_reward.to(device),
-        x_combat_reward_mask_pad=x.x_combat_reward_mask_pad.to(device),
-        x_monsters=x.x_monsters.to(device),
-        x_monsters_mask_pad=x.x_monsters_mask_pad.to(device),
-        x_monster_health_block=x.x_monster_health_block.to(device),
-        x_monster_modifiers=x.x_monster_modifiers.to(device),
-        x_character=x.x_character.to(device),
-        x_character_mask_pad=x.x_character_mask_pad.to(device),
-        x_character_health_block=x.x_character_health_block.to(device),
-        x_character_modifiers=x.x_character_modifiers.to(device),
-        x_energy=x.x_energy.to(device),
-        x_energy_mask_pad=x.x_energy_mask_pad.to(device),
-        x_map=x.x_map.to(device),
-        x_fsm=x.x_fsm.to(device),
-    )
+    return _map_xgs(x, lambda t: t.to(device))
 
 
 def _concat_x_game_states(x_game_states: list[XGameState]) -> XGameState:
     return XGameState(
-        x_hand=torch.cat([x.x_hand for x in x_game_states], dim=0),
-        x_hand_mask_pad=torch.cat([x.x_hand_mask_pad for x in x_game_states], dim=0),
-        x_active_card_mask=torch.cat([x.x_active_card_mask for x in x_game_states], dim=0),
-        x_draw=torch.cat([x.x_draw for x in x_game_states], dim=0),
-        x_draw_mask_pad=torch.cat([x.x_draw_mask_pad for x in x_game_states], dim=0),
-        x_disc=torch.cat([x.x_disc for x in x_game_states], dim=0),
-        x_disc_mask_pad=torch.cat([x.x_disc_mask_pad for x in x_game_states], dim=0),
-        x_deck=torch.cat([x.x_deck for x in x_game_states], dim=0),
-        x_deck_mask_pad=torch.cat([x.x_deck_mask_pad for x in x_game_states], dim=0),
-        x_combat_reward=torch.cat([x.x_combat_reward for x in x_game_states], dim=0),
-        x_combat_reward_mask_pad=torch.cat(
-            [x.x_combat_reward_mask_pad for x in x_game_states], dim=0
-        ),
-        x_monsters=torch.cat([x.x_monsters for x in x_game_states], dim=0),
-        x_monsters_mask_pad=torch.cat([x.x_monsters_mask_pad for x in x_game_states], dim=0),
-        x_monster_health_block=torch.cat(
-            [x.x_monster_health_block for x in x_game_states], dim=0
-        ),
-        x_monster_modifiers=torch.cat([x.x_monster_modifiers for x in x_game_states], dim=0),
-        x_character=torch.cat([x.x_character for x in x_game_states], dim=0),
-        x_character_mask_pad=torch.cat([x.x_character_mask_pad for x in x_game_states], dim=0),
-        x_character_health_block=torch.cat(
-            [x.x_character_health_block for x in x_game_states], dim=0
-        ),
-        x_character_modifiers=torch.cat([x.x_character_modifiers for x in x_game_states], dim=0),
-        x_energy=torch.cat([x.x_energy for x in x_game_states], dim=0),
-        x_energy_mask_pad=torch.cat([x.x_energy_mask_pad for x in x_game_states], dim=0),
-        x_map=torch.cat([x.x_map for x in x_game_states], dim=0),
-        x_fsm=torch.cat([x.x_fsm for x in x_game_states], dim=0),
+        **{
+            f.name: torch.cat([getattr(x, f.name) for x in x_game_states], dim=0)
+            for f in fields(XGameState)
+        }
     )
 
 
 def _slice_x_game_state(x_game_state: XGameState, idx: int) -> XGameState:
-    return XGameState(
-        x_hand=x_game_state.x_hand[idx : idx + 1],
-        x_hand_mask_pad=x_game_state.x_hand_mask_pad[idx : idx + 1],
-        x_active_card_mask=x_game_state.x_active_card_mask[idx : idx + 1],
-        x_draw=x_game_state.x_draw[idx : idx + 1],
-        x_draw_mask_pad=x_game_state.x_draw_mask_pad[idx : idx + 1],
-        x_disc=x_game_state.x_disc[idx : idx + 1],
-        x_disc_mask_pad=x_game_state.x_disc_mask_pad[idx : idx + 1],
-        x_deck=x_game_state.x_deck[idx : idx + 1],
-        x_deck_mask_pad=x_game_state.x_deck_mask_pad[idx : idx + 1],
-        x_combat_reward=x_game_state.x_combat_reward[idx : idx + 1],
-        x_combat_reward_mask_pad=x_game_state.x_combat_reward_mask_pad[idx : idx + 1],
-        x_monsters=x_game_state.x_monsters[idx : idx + 1],
-        x_monsters_mask_pad=x_game_state.x_monsters_mask_pad[idx : idx + 1],
-        x_monster_health_block=x_game_state.x_monster_health_block[idx : idx + 1],
-        x_monster_modifiers=x_game_state.x_monster_modifiers[idx : idx + 1],
-        x_character=x_game_state.x_character[idx : idx + 1],
-        x_character_mask_pad=x_game_state.x_character_mask_pad[idx : idx + 1],
-        x_character_health_block=x_game_state.x_character_health_block[idx : idx + 1],
-        x_character_modifiers=x_game_state.x_character_modifiers[idx : idx + 1],
-        x_energy=x_game_state.x_energy[idx : idx + 1],
-        x_energy_mask_pad=x_game_state.x_energy_mask_pad[idx : idx + 1],
-        x_map=x_game_state.x_map[idx : idx + 1],
-        x_fsm=x_game_state.x_fsm[idx : idx + 1],
-    )
+    return _map_xgs(x_game_state, lambda t: t[idx : idx + 1])
 
 
 # =============================================================================
@@ -284,12 +218,17 @@ def _build_mask_batch_from_samples(
     head_type_primaries: list[int],
     primary_masks: list[torch.Tensor | None],
     selection_masks: list[torch.Tensor],
-    target_required: torch.Tensor,  # (B, MAX_SIZE_HAND)
     monster_alive_mask: torch.Tensor,  # (B, MAX_MONSTERS)
     retain_nums: torch.Tensor,  # (B,)
+    hand_group_ids: torch.Tensor,  # (B, MAX_SIZE_HAND)
+    deck_group_ids: torch.Tensor,  # (B, MAX_SIZE_DECK)
+    card_reward_group_ids: torch.Tensor,  # (B, MAX_SIZE_COMBAT_CARD_REWARD)
     device: torch.device,
 ) -> MaskBatch:
-    """Rebuild MaskBatch from per-sample data for PPO recomputation."""
+    """Rebuild MaskBatch from per-sample data for PPO recomputation.
+
+    `target_required` is None: PPO recompute uses the recorded
+    `target_index >= 0` to gate target replay and never reads it."""
     route_lists: list[list[int]] = [[] for _ in range(NUM_PRIMARY_HEADS)]
     for i, htp in enumerate(head_type_primaries):
         route_lists[htp].append(i)
@@ -323,9 +262,12 @@ def _build_mask_batch_from_samples(
         route=route,
         primary_masks=pm_list,
         selection_masks=sm_list,
-        target_required=target_required.to(device),
+        target_required=None,
         monster_alive_mask=monster_alive_mask.to(device),
         retain_nums=retain_nums.to(device),
+        hand_group_ids=hand_group_ids.to(device),
+        deck_group_ids=deck_group_ids.to(device),
+        card_reward_group_ids=card_reward_group_ids.to(device),
     )
 
 
@@ -389,11 +331,13 @@ def _collect_rollout(
                         selection_log_prob=output.selection_log_probs[i],
                         target_index=tis[i],
                         target_log_prob=output.target_log_probs[i],
-                        target_required=mask_batch.target_required[i : i + 1],
                         monster_alive_mask=mask_batch.monster_alive_mask[i : i + 1],
                         retain_indices=output.retain_indices[i : i + 1],
                         retain_log_prob=output.retain_log_probs[i],
                         retain_num=int(mask_batch.retain_nums[i].item()),
+                        hand_group_ids=mask_batch.hand_group_ids[i : i + 1],
+                        deck_group_ids=mask_batch.deck_group_ids[i : i + 1],
+                        card_reward_group_ids=mask_batch.card_reward_group_ids[i : i + 1],
                         value=output.values[i],
                         reward=reward,
                         done=done,
@@ -498,11 +442,13 @@ def _create_batch(
     all_selection_log_probs = []
     all_target_indices = []
     all_target_log_probs = []
-    all_target_required = []
     all_monster_alive_mask = []
     all_retain_indices = []
     all_retain_log_probs = []
     all_retain_nums = []
+    all_hand_group_ids = []
+    all_deck_group_ids = []
+    all_card_reward_group_ids = []
     all_values = []
     all_returns = []
     all_advantages = []
@@ -529,11 +475,13 @@ def _create_batch(
             all_selection_log_probs.append(trans.selection_log_prob)
             all_target_indices.append(trans.target_index)
             all_target_log_probs.append(trans.target_log_prob)
-            all_target_required.append(trans.target_required)
             all_monster_alive_mask.append(trans.monster_alive_mask)
             all_retain_indices.append(trans.retain_indices)
             all_retain_log_probs.append(trans.retain_log_prob)
             all_retain_nums.append(trans.retain_num)
+            all_hand_group_ids.append(trans.hand_group_ids)
+            all_deck_group_ids.append(trans.deck_group_ids)
+            all_card_reward_group_ids.append(trans.card_reward_group_ids)
             all_values.append(trans.value)
             all_returns.append(ret[i])
             all_advantages.append(adv[i])
@@ -549,11 +497,13 @@ def _create_batch(
         selection_log_probs=torch.stack(all_selection_log_probs).detach().to(device),
         target_indices=torch.tensor(all_target_indices, dtype=torch.long, device=device),
         target_log_probs=torch.stack(all_target_log_probs).detach().to(device),
-        target_required=torch.cat(all_target_required, dim=0).to(device),
         monster_alive_mask=torch.cat(all_monster_alive_mask, dim=0).to(device),
         retain_indices=torch.cat(all_retain_indices, dim=0).to(device),
         retain_log_probs=torch.stack(all_retain_log_probs).detach().to(device),
         retain_nums=torch.tensor(all_retain_nums, dtype=torch.long, device=device),
+        hand_group_ids=torch.cat(all_hand_group_ids, dim=0).to(device),
+        deck_group_ids=torch.cat(all_deck_group_ids, dim=0).to(device),
+        card_reward_group_ids=torch.cat(all_card_reward_group_ids, dim=0).to(device),
         values=torch.cat(all_values, dim=0).detach(),
         returns=torch.tensor(all_returns, dtype=torch.float32, device=device).view(-1, 1),
         advantages=torch.tensor(all_advantages, dtype=torch.float32, device=device).view(-1, 1),
@@ -587,9 +537,11 @@ def _recompute_log_probs_batch(
     head_type_primaries: list[int],
     primary_masks: list[torch.Tensor | None],
     selection_masks: list[torch.Tensor],
-    target_required: torch.Tensor,  # (B, MAX_SIZE_HAND)
     monster_alive_mask: torch.Tensor,  # (B, MAX_MONSTERS)
     retain_nums: torch.Tensor,  # (B,)
+    hand_group_ids: torch.Tensor,  # (B, MAX_SIZE_HAND)
+    deck_group_ids: torch.Tensor,  # (B, MAX_SIZE_DECK)
+    card_reward_group_ids: torch.Tensor,  # (B, MAX_SIZE_COMBAT_CARD_REWARD)
     primary_indices: torch.Tensor,
     selection_indices: torch.Tensor,
     target_indices: torch.Tensor,
@@ -607,7 +559,8 @@ def _recompute_log_probs_batch(
 
     mask_batch = _build_mask_batch_from_samples(
         head_type_primaries, primary_masks, selection_masks,
-        target_required, monster_alive_mask, retain_nums,
+        monster_alive_mask, retain_nums,
+        hand_group_ids, deck_group_ids, card_reward_group_ids,
         device,
     )
 
@@ -618,40 +571,29 @@ def _recompute_log_probs_batch(
 
     core_out = model.core(x_game_state)
     values = model.head_value(core_out.x_global)
-    entity_tensors = _build_entity_tensors(core_out)
 
     total_log_probs = torch.zeros(B, device=device)
     total_entropies = torch.zeros(B, device=device)
 
-    for htp in range(NUM_PRIMARY_HEADS):
-        idx = mask_batch.route[htp]
-        if len(idx) == 0:
-            continue
+    for ctx in iter_primary_groups(core_out, mask_batch):
+        htp = ctx.htp
+        idx = ctx.idx
 
-        x_global_group = core_out.x_global[idx]
-
-        # ---- Multi-pick (retain + discard share machinery) ----
-        if htp == _HTP_COMBAT_AWAIT_RETAIN or htp == _HTP_COMBAT_CARD_DISCARD:
-            entities_group = core_out.x_hand[idx]
-            sel_mask = mask_batch.selection_masks[htp]
+        multi_head = model._multi_pick_heads[htp]
+        if multi_head is not None:
             nums = mask_batch.retain_nums[idx]
             recorded = retain_indices[idx]
-            multi_head = (
-                model.head_card_retain
-                if htp == _HTP_COMBAT_AWAIT_RETAIN
-                else model.head_card_discard_multi
-            )
             log_probs_group, entropy_group = multi_head.recompute_log_prob(
-                entities_group, x_global_group, sel_mask, nums, recorded
+                ctx.entities_group, ctx.x_global_group, ctx.selection_mask, nums, recorded,
+                group_ids=ctx.group_ids_group,
             )
             total_log_probs[idx] += log_probs_group
             total_entropies[idx] += entropy_group
             continue
 
         if IS_DECISION_PRIMARY[htp]:
-            primary_mask = mask_batch.primary_masks[htp]
             decision_head = model._decision_heads[htp]
-            out = decision_head(x_global_group, primary_mask, sample=False)
+            out = decision_head(ctx.x_global_group, ctx.primary_mask, sample=False)
 
             primary_dist = torch.distributions.Categorical(logits=out.logits)
             group_primary_idx = primary_indices[idx]
@@ -662,30 +604,33 @@ def _recompute_log_probs_batch(
             if torch.any(needs_secondary):
                 sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
                 sec_batch = idx[sec_local]
-                sec_x_global = x_global_group[sec_local]
-                sec_mask = mask_batch.selection_masks[htp][sec_local]
+                sec_x_global = ctx.x_global_group[sec_local]
+                sec_mask = ctx.selection_mask[sec_local]
+                sec_entities = (
+                    ctx.entities_group[sec_local]
+                    if ctx.entities_group is not None
+                    else None
+                )
+                sec_group_ids = (
+                    ctx.group_ids_group[sec_local]
+                    if ctx.group_ids_group is not None
+                    else None
+                )
                 sec_indices = selection_indices[sec_batch]
 
                 sel_head = model._selection_heads[htp]
-                sec_entities = (
-                    entity_tensors[htp][sec_batch]
-                    if entity_tensors[htp] is not None
-                    else None
+                sec_out = sel_head(
+                    sec_entities, sec_x_global, sec_mask, sample=False,
+                    group_ids=sec_group_ids,
                 )
-                if sec_entities is not None:
-                    sec_out = sel_head(sec_entities, sec_x_global, sec_mask, sample=False)
-                else:
-                    sec_out = sel_head(None, sec_x_global, sec_mask, sample=False)
 
-                sec_log_probs, sec_entropy = compute_grouped_log_prob_and_entropy(
-                    sec_out.logits, sec_indices
+                sec_log_probs, sec_entropy = recompute_grouped_log_prob_and_entropy(
+                    sec_out.logits, sec_indices, group_ids=sec_group_ids,
                 )
                 total_log_probs[sec_batch] += sec_log_probs
                 total_entropies[sec_batch] += sec_entropy
 
-                # ---- Inline target replay (COMBAT_DEFAULT only) ----
-                if htp == _HTP_COMBAT_DEFAULT:
-                    # Identify samples that used a target during rollout
+                if htp == HeadTypePrimary.COMBAT_DEFAULT:
                     sec_target_idx = target_indices[sec_batch]
                     has_target = sec_target_idx >= 0
                     if torch.any(has_target):
@@ -703,21 +648,20 @@ def _recompute_log_probs_batch(
                             tgt_monsters, tgt_x_global, tgt_mask, sample=False,
                             x_active_card=x_active_card,
                         )
-                        tgt_log_probs, tgt_entropy = compute_grouped_log_prob_and_entropy(
-                            tgt_out.logits, tgt_recorded
+                        tgt_log_probs, tgt_entropy = recompute_grouped_log_prob_and_entropy(
+                            tgt_out.logits, tgt_recorded,
                         )
                         total_log_probs[tgt_batch] += tgt_log_probs
                         total_entropies[tgt_batch] += tgt_entropy
         else:
-            entities_group = entity_tensors[htp][idx]
-            sel_mask = mask_batch.selection_masks[htp]
             sel_indices = selection_indices[idx]
-
             sel_head = model._selection_heads[htp]
-            sel_out = sel_head(entities_group, x_global_group, sel_mask, sample=False)
-
-            sel_log_probs, sel_entropy = compute_grouped_log_prob_and_entropy(
-                sel_out.logits, sel_indices
+            sel_out = sel_head(
+                ctx.entities_group, ctx.x_global_group, ctx.selection_mask, sample=False,
+                group_ids=ctx.group_ids_group,
+            )
+            sel_log_probs, sel_entropy = recompute_grouped_log_prob_and_entropy(
+                sel_out.logits, sel_indices, group_ids=ctx.group_ids_group,
             )
             total_log_probs[idx] += sel_log_probs
             total_entropies[idx] += sel_entropy
@@ -753,9 +697,11 @@ def _update_ppo(
             mb_selection_indices = batch.selection_indices[mb_idxs]
             mb_target_indices = batch.target_indices[mb_idxs]
             mb_retain_indices = batch.retain_indices[mb_idxs]
-            mb_target_required = batch.target_required[mb_idxs]
             mb_monster_alive = batch.monster_alive_mask[mb_idxs]
             mb_retain_nums = batch.retain_nums[mb_idxs]
+            mb_hand_group_ids = batch.hand_group_ids[mb_idxs]
+            mb_deck_group_ids = batch.deck_group_ids[mb_idxs]
+            mb_card_reward_group_ids = batch.card_reward_group_ids[mb_idxs]
 
             log_probs_new, entropies, values_new = _recompute_log_probs_batch(
                 model,
@@ -763,9 +709,11 @@ def _update_ppo(
                 mb_htps,
                 mb_primary_masks,
                 mb_selection_masks,
-                mb_target_required,
                 mb_monster_alive,
                 mb_retain_nums,
+                mb_hand_group_ids,
+                mb_deck_group_ids,
+                mb_card_reward_group_ids,
                 mb_primary_indices,
                 mb_selection_indices,
                 mb_target_indices,

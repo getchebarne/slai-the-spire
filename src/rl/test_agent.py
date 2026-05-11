@@ -16,6 +16,7 @@ import torch
 
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import get_mask_batch
+from src.rl.action_space.masks import is_card_playable
 from src.rl.action_space.types import HeadTypePrimary
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.encoding.state import XGameState
@@ -191,7 +192,7 @@ def _format_view(view: slai.GameState) -> str:
         lines.append("Hand:")
         for i, c in enumerate(view.hand):
             tgt = " (target)" if c.requires_target else ""
-            playable = "" if c.cost <= view.energy.current and c.playable else " (unplayable)"
+            playable = "" if is_card_playable(c, view.energy.current) else " (unplayable)"
             lines.append(f"  [{i}] {c.name} cost={c.cost}{tgt}{playable}")
 
     if view.card_rewards:
@@ -223,10 +224,14 @@ def get_card_probabilities(
     mask = mask_batch.selection_masks[int(HeadTypePrimary.COMBAT_DEFAULT)]  # (1, MAX_HAND_SIZE)
 
     # Run card play head without sampling to get logits
-    head_out = model.head_card_play(core_out.x_hand, core_out.x_global, mask, sample=False)
+    head_out = model.head_card_play(
+        core_out.x_hand, core_out.x_global, mask, sample=False,
+        group_ids=mask_batch.hand_group_ids,
+    )
 
-    # Get grouped probabilities (deduplicates identical cards)
-    probs = get_grouped_probs(head_out.logits)  # (1, MAX_HAND_SIZE)
+    # Get grouped probabilities (deduplicates identical cards via the
+    # same group_ids the policy uses for sampling).
+    probs = get_grouped_probs(head_out.logits, group_ids=mask_batch.hand_group_ids)
 
     return probs[0]  # Return first (only) batch item
 
@@ -244,7 +249,7 @@ def format_card_probabilities(
             prob = probs[idx].item()
             if prob != prob:  # NaN guard
                 prob = 0.0
-            playable = card.cost <= view.energy.current and card.playable
+            playable = is_card_playable(card, view.energy.current)
             seen[card.name] = {"prob": prob, "count": 1, "playable": playable}
             order.append(card.name)
         else:
@@ -284,9 +289,7 @@ def get_action_from_model(
         output = model.forward_single(x_game_state, mask_batch, sample=not greedy)
 
         card_probs_str = None
-        has_playable = any(
-            c.cost <= view.energy.current and c.playable for c in view.hand
-        )
+        has_playable = any(is_card_playable(c, view.energy.current) for c in view.hand)
         if (
             show_card_probs
             and isinstance(view.phase, slai.Phase.CombatDefault)

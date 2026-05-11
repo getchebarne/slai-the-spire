@@ -15,179 +15,188 @@ class HeadOutput:
 # Grouped Sampling
 # =============================================================================
 #
-# Identical cards produce identical logits (same encoding → same embedding
-# → same score). Rather than splitting probability mass across duplicates,
-# we deduplicate: softmax over one representative per unique logit value,
-# then randomly pick an instance within the chosen group.
+# When two slots hold semantically interchangeable entities (e.g., two
+# Strikes in hand), the policy gradient should treat them as a single
+# action choice — not two distinct slot picks. Otherwise raw per-slot
+# softmax inflates `P(type) ∝ N_type * exp(L_type)` (the multiplicity
+# enters the softmax denominator), spuriously biasing the policy toward
+# whichever type happens to have more copies.
 #
-# Example:
-#   Hand: [Strike, Strike, Defend]   logits: [0.5, 0.5, 0.8]
-#   Representatives: Strike(0.5), Defend(0.8)
-#   Grouped softmax: Strike=43%, Defend=57%
-#   If Strike is sampled → randomly pick one of the two Strikes.
+# Identity is supplied externally via `group_ids: (B, N) int` (same id =
+# interchangeable; -1 = invalid/padding). The mask layer computes group
+# ids per state from card attributes (see `card.card_identity_ids`).
+# Heads that don't need dedup (binary choice, monster select, map select,
+# relic select) pass `group_ids=None` to fall back to per-slot sampling.
 #
-# This gives cleaner gradients (the model learns "play Strike", not
-# "play card in slot 0") and consistent sampling/greedy behavior.
+# Sampling procedure: softmax over one representative per unique id →
+# sample a group → uniformly pick an instance within the chosen group.
+# log_prob = log(group_probability); the within-group uniform pick
+# carries no policy gradient.
 # =============================================================================
 
 
-def _get_representative_mask(masked_logits: torch.Tensor) -> torch.Tensor:
+def _singleton_group_ids(masked_logits: torch.Tensor) -> torch.Tensor:
+    """One-id-per-slot fallback for heads that don't need dedup."""
+    B, N = masked_logits.shape
+    return torch.arange(N, device=masked_logits.device).expand(B, -1)
+
+
+def _first_occurrence_mask(group_ids: torch.Tensor) -> torch.Tensor:
+    """For each row, mark the first occurrence of each non-(-1) group id.
+
+    group_ids: (B, N) int (-1 at invalid slots)
+    returns:   (B, N) bool — True at slot s iff no earlier slot in the
+               same row has the same group_id, and the slot is valid.
     """
-    For groups of identical valid logits, mark only the first occurrence.
-
-    Args:
-        masked_logits: (B, N) with -inf for invalid positions
-
-    Returns:
-        Boolean mask (B, N), True = first valid occurrence of its logit value
-    """
-    N = masked_logits.shape[1]
-    device = masked_logits.device
-
-    valid = masked_logits != float("-inf")  # (B, N)
-
-    # same_logit[b, i, j] = True if positions i and j share a logit value
-    same_logit = torch.unsqueeze(masked_logits, 2) == torch.unsqueeze(masked_logits, 1)
-
-    # earlier[i, j] = True if j < i (strict lower-triangular)
-    earlier = torch.tril(torch.ones(N, N, device=device, dtype=torch.bool), diagonal=-1)
-
-    # has_earlier_dup[b, i] = exists valid j < i with same logit as i
-    has_earlier_dup = torch.any(
-        same_logit & earlier.unsqueeze(0) & valid.unsqueeze(1),
-        dim=2,
+    B, N = group_ids.shape
+    device = group_ids.device
+    valid = group_ids >= 0
+    # same[b, i, j] = True if positions i and j share a group id
+    same = group_ids.unsqueeze(2) == group_ids.unsqueeze(1)
+    # earlier[i, j] = True if j < i (strict lower triangular)
+    earlier = torch.tril(
+        torch.ones(N, N, device=device, dtype=torch.bool), diagonal=-1
     )
-
+    # has_earlier_dup[b, i] = exists valid j < i with same group id
+    has_earlier_dup = (same & earlier.unsqueeze(0) & valid.unsqueeze(1)).any(dim=2)
     return valid & ~has_earlier_dup
 
 
-def _sample_grouped(masked_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Sample from groups of identical logits.
-
-    1. Deduplicate: keep one representative per unique logit value
-    2. Softmax over representatives → group probabilities
-    3. Sample a group
-    4. Uniformly pick an instance within the chosen group
-
-    log_prob = log(group_probability). The within-group uniform selection
-    is not part of the policy (identical cards are interchangeable).
-
-    Args:
-        masked_logits: (B, N) with -inf for invalid positions
-
-    Returns:
-        (indices, log_probs): selected position indices (B,) and group log probs (B,)
-    """
-    B = masked_logits.shape[0]
-    device = masked_logits.device
-
-    # Deduplicate: softmax over one representative per unique logit
-    is_rep = _get_representative_mask(masked_logits)
-    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
-
-    # Sample a group (via its representative)
-    group_dist = torch.distributions.Categorical(logits=rep_logits)
-    rep_idx = group_dist.sample()
-    log_probs = group_dist.log_prob(rep_idx)
-
-    # Find all valid members of the sampled group
-    rep_values = masked_logits[torch.arange(B, device=device), rep_idx]
-    valid = masked_logits != float("-inf")
-    in_group = (masked_logits == torch.unsqueeze(rep_values, 1)) & valid
-
-    # Uniformly pick one instance from the group
-    uniform_probs = in_group.float()
-    uniform_probs = uniform_probs / torch.sum(uniform_probs, dim=1, keepdim=True)
-    indices = torch.distributions.Categorical(probs=uniform_probs).sample()
-
-    return indices, log_probs
-
-
-def compute_grouped_log_prob_and_entropy(
-    masked_logits: torch.Tensor,
-    indices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute grouped log probability and entropy for given action indices.
-
-    Used during PPO recomputation to evaluate actions under the current policy.
-    Maps each index to its group's representative, then evaluates the grouped
-    distribution.
-
-    Args:
-        masked_logits: (B, N) with -inf for invalid positions
-        indices: (B,) position indices of actions taken
-
-    Returns:
-        (log_probs, entropy) of the grouped distribution, both (B,)
-    """
-    B = masked_logits.shape[0]
-    device = masked_logits.device
-
-    is_rep = _get_representative_mask(masked_logits)
-    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
-    group_dist = torch.distributions.Categorical(logits=rep_logits)
-
-    # Map each index to its group's representative
-    idx_logits = masked_logits[torch.arange(B, device=device), indices]
-    rep_for_idx = is_rep & (masked_logits == torch.unsqueeze(idx_logits, 1))
-    rep_indices = torch.argmax(rep_for_idx.int(), dim=1)
-
-    return group_dist.log_prob(rep_indices), group_dist.entropy()
-
-
-def get_grouped_probs(masked_logits: torch.Tensor) -> torch.Tensor:
-    """
-    Compute per-position probabilities from the grouped distribution.
-
-    Each position gets its group's probability. Identical cards (same logit)
-    share the same probability value.
-
-    Args:
-        masked_logits: (B, N) with -inf for invalid positions
-
-    Returns:
-        (B, N) probabilities
-    """
-    is_rep = _get_representative_mask(masked_logits)
-    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
-    rep_probs = torch.softmax(rep_logits, dim=-1)
-
-    # Propagate each representative's probability to all group members
-    same_logit = torch.unsqueeze(masked_logits, 2) == torch.unsqueeze(masked_logits, 1)
-    return torch.sum(same_logit.float() * torch.unsqueeze(rep_probs, 1), dim=2)
-
-
-def sample_from_logits(
+def sample_grouped(
     logits: torch.Tensor,
     mask: torch.Tensor,
     sample: bool,
+    group_ids: torch.Tensor | None = None,
 ) -> HeadOutput:
-    """
-    Apply mask to logits and optionally sample using grouped distribution.
-
-    Grouped sampling deduplicates identical logits (from identical cards)
-    so the model samples over card *types*, not card *slots*.
-
-    Args:
-        logits: Raw scores (B, num_options)
-        mask: Valid action mask (B, num_options), True = valid
-        sample: Whether to sample an action
-
-    Returns:
-        HeadOutput with masked logits, and optionally indices/log_probs
-    """
-    # Mask invalid actions
+    """Apply mask, then sample under the group distribution implied by
+    `group_ids`. If `group_ids` is None, every slot is its own group
+    (per-slot Categorical, behavior identical to a non-grouped head)."""
     masked_logits = logits.masked_fill(~mask, float("-inf"))
 
     if not sample:
         return HeadOutput(logits=masked_logits, indices=None, log_probs=None)
 
-    # Grouped sampling: deduplicate identical logits, sample group, pick instance
-    indices, log_probs = _sample_grouped(masked_logits)
+    if group_ids is None:
+        group_ids = _singleton_group_ids(masked_logits)
+    # Treat invalid slots as id=-1 even if the caller provided real ids
+    # (defensive — keeps the rep mask honest).
+    group_ids = torch.where(mask, group_ids, torch.full_like(group_ids, -1))
+
+    is_rep = _first_occurrence_mask(group_ids)
+    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
+
+    group_dist = torch.distributions.Categorical(logits=rep_logits)
+    rep_idx = group_dist.sample()
+    log_probs = group_dist.log_prob(rep_idx)
+
+    # Uniform within-group instance pick
+    chosen_group = group_ids.gather(1, rep_idx.unsqueeze(1)).squeeze(1)  # (B,)
+    in_group = (group_ids == chosen_group.unsqueeze(1)) & (group_ids >= 0)
+    uniform = in_group.float()
+    uniform = uniform / uniform.sum(dim=1, keepdim=True)
+    indices = torch.distributions.Categorical(probs=uniform).sample()
 
     return HeadOutput(logits=masked_logits, indices=indices, log_probs=log_probs)
+
+
+def _grouped_dist_and_rep_indices(
+    masked_logits: torch.Tensor,
+    indices: torch.Tensor,
+    group_ids: torch.Tensor | None,
+) -> tuple[torch.distributions.Categorical, torch.Tensor]:
+    if group_ids is None:
+        group_ids = _singleton_group_ids(masked_logits)
+    valid = masked_logits != float("-inf")
+    group_ids = torch.where(valid, group_ids, torch.full_like(group_ids, -1))
+
+    is_rep = _first_occurrence_mask(group_ids)
+    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
+    group_dist = torch.distributions.Categorical(logits=rep_logits)
+
+    chosen_group = group_ids.gather(1, indices.unsqueeze(1)).squeeze(1)
+    is_chosen_group = is_rep & (group_ids == chosen_group.unsqueeze(1))
+    rep_indices = is_chosen_group.int().argmax(dim=1)
+    return group_dist, rep_indices
+
+
+def recompute_grouped_log_prob_and_entropy(
+    masked_logits: torch.Tensor,
+    indices: torch.Tensor,
+    group_ids: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """For PPO: replay the recorded action under current logits.
+
+    `indices` is the recorded slot pick. We recover the group it belongs
+    to, then compute that group's log_prob and the distribution's
+    entropy. If `group_ids` is None, falls back to per-slot.
+    """
+    group_dist, rep_indices = _grouped_dist_and_rep_indices(
+        masked_logits, indices, group_ids
+    )
+    return group_dist.log_prob(rep_indices), group_dist.entropy()
+
+
+def _grouped_log_prob_only(
+    masked_logits: torch.Tensor,
+    indices: torch.Tensor,
+    group_ids: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Same as `recompute_grouped_log_prob_and_entropy` but skips entropy.
+    Used per-step inside multi-pick recompute, where the per-step entropy
+    is discarded in favor of an initial-distribution entropy proxy."""
+    group_dist, rep_indices = _grouped_dist_and_rep_indices(
+        masked_logits, indices, group_ids
+    )
+    return group_dist.log_prob(rep_indices)
+
+
+def _init_cur_group_ids(
+    mask: torch.Tensor,
+    group_ids: torch.Tensor | None,
+) -> torch.Tensor:
+    """Per-step state for sequential multi-pick: mutable group ids with
+    -1 at masked-out slots. Singleton groups when caller passes None.
+    `torch.where` returns a fresh tensor, safe to mutate."""
+    B, N = mask.shape
+    if group_ids is None:
+        group_ids = torch.arange(N, device=mask.device).expand(B, -1)
+    return torch.where(mask, group_ids, torch.full_like(group_ids, -1))
+
+
+def _initial_group_entropy(
+    logits: torch.Tensor,
+    mask: torch.Tensor,
+    group_ids: torch.Tensor | None,
+) -> torch.Tensor:
+    """Entropy of the pre-pick group distribution. Used as the multi-pick
+    head's entropy proxy — exact joint entropy of without-replacement
+    sampling is intractable; this captures "how indecisive was the
+    model's first pick"."""
+    init_group_ids = _init_cur_group_ids(mask, group_ids)
+    is_rep_init = _first_occurrence_mask(init_group_ids)
+    rep_logits_init = logits.masked_fill(~mask | ~is_rep_init, float("-inf"))
+    return torch.distributions.Categorical(logits=rep_logits_init).entropy()
+
+
+def get_grouped_probs(
+    masked_logits: torch.Tensor,
+    group_ids: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Per-slot probability under the grouped distribution. All members
+    of a group share the same probability. Used for visualization
+    (test_agent.py renders this)."""
+    if group_ids is None:
+        group_ids = _singleton_group_ids(masked_logits)
+    valid = masked_logits != float("-inf")
+    group_ids = torch.where(valid, group_ids, torch.full_like(group_ids, -1))
+
+    is_rep = _first_occurrence_mask(group_ids)
+    rep_logits = masked_logits.masked_fill(~is_rep, float("-inf"))
+    rep_probs = torch.softmax(rep_logits, dim=-1)
+
+    # Propagate each representative's probability to all members of its group
+    same = group_ids.unsqueeze(2) == group_ids.unsqueeze(1)  # (B, N, N)
+    return torch.sum(same.float() * rep_probs.unsqueeze(1), dim=2)
 
 
 # =============================================================================
@@ -229,7 +238,7 @@ class HeadBinaryChoice(nn.Module):
             HeadOutput with scores and optionally sampled indices
         """
         logits = self._scorer(x_global)
-        return sample_from_logits(logits, mask, sample)
+        return sample_grouped(logits, mask, sample, group_ids=None)
 
 
 # =============================================================================
@@ -266,19 +275,11 @@ class HeadEntitySelection(nn.Module):
         x_global: torch.Tensor,
         mask: torch.Tensor,
         sample: bool = True,
+        group_ids: torch.Tensor | None = None,
     ) -> HeadOutput:
-        """
-        Score and optionally sample from entities.
-
-        Args:
-            x_entities: Entity embeddings (B, N, dim_entity)
-            x_global: Global context vector (B, dim_global)
-            mask: Valid entity mask (B, N), True = valid
-            sample: Whether to sample an action
-
-        Returns:
-            HeadOutput with scores and optionally sampled indices
-        """
+        """Score entities; sample under the grouped distribution if
+        `group_ids` provided (interchangeable cards collapsed to a single
+        action choice). Pass `group_ids=None` to disable dedup."""
         _, num_entities, _ = x_entities.shape
 
         # Broadcast global context to each entity
@@ -288,7 +289,7 @@ class HeadEntitySelection(nn.Module):
         # Score each entity
         logits = torch.squeeze(self._scorer(x_input), -1)  # (B, N)
 
-        return sample_from_logits(logits, mask, sample)
+        return sample_grouped(logits, mask, sample, group_ids=group_ids)
 
 
 class HeadCardPlay(HeadEntitySelection):
@@ -388,7 +389,7 @@ class HeadMonsterSelect(nn.Module):
 
         logits = torch.squeeze(self._scorer(x_input), -1)  # (B, N)
 
-        return sample_from_logits(logits, mask, sample)
+        return sample_grouped(logits, mask, sample, group_ids=None)
 
 
 # =============================================================================
@@ -428,23 +429,15 @@ class HeadMapSelect(nn.Module):
         x_global: torch.Tensor,
         mask: torch.Tensor,
         sample: bool = True,
+        group_ids: torch.Tensor | None = None,
     ) -> HeadOutput:
-        """
-        Score and optionally sample map node.
-
-        Args:
-            x_map: Map encoding (B, dim_map)
-            x_global: Global context vector (B, dim_global)
-            mask: Valid node mask (B, num_columns), True = valid
-            sample: Whether to sample an action
-
-        Returns:
-            HeadOutput with scores and optionally sampled indices
-        """
+        """Score and optionally sample map node. `group_ids` accepted for
+        signature uniformity with HeadEntitySelection but ignored — map
+        positions aren't deduped (each column is a distinct path)."""
+        del group_ids
         x_input = torch.cat([x_map, x_global], dim=-1)
         logits = self._scorer(x_input)  # (B, num_columns)
-
-        return sample_from_logits(logits, mask, sample)
+        return sample_grouped(logits, mask, sample)
 
 
 # =============================================================================
@@ -484,10 +477,11 @@ class HeadRelicSelect(nn.Module):
         x_global: torch.Tensor,
         mask: torch.Tensor,
         sample: bool = True,
+        group_ids: torch.Tensor | None = None,
     ) -> HeadOutput:
-        del x_entities  # not used; relic embedding not yet plumbed
+        del x_entities, group_ids  # relic embedding not yet plumbed; no dedup
         logits = self._scorer(x_global)
-        return sample_from_logits(logits, mask, sample)
+        return sample_grouped(logits, mask, sample)
 
 
 # =============================================================================
@@ -551,7 +545,14 @@ class HeadCardMultiPick(nn.Module):
         mask: torch.Tensor,  # (B, N) bool — initial validity (whole hand)
         nums: torch.Tensor,  # (B,) int — count to pick per sample
         sample: bool = True,
+        group_ids: torch.Tensor | None = None,  # (B, N) int, -1 at invalid
     ) -> "MultiPickHeadOutput":
+        """Per-step grouped sampling. After each pick, the chosen slot is
+        marked invalid (mask=False, group_id=-1) so the next step's group
+        partition correctly drops it. The K-identical case (e.g. discard
+        3 of 3 Strikes) works: at step k, the remaining Strike slots
+        share their group id; the within-group uniform pick collapses to
+        whichever slot is left."""
         B, N, _ = x_entities.shape
         device = x_entities.device
 
@@ -559,38 +560,31 @@ class HeadCardMultiPick(nn.Module):
         picks = torch.full((B, N), -1, dtype=torch.long, device=device)
         log_probs = torch.zeros(B, device=device)
 
-        # Mutable copy — masking out picked cards each step.
         cur_mask = mask.clone()
+        cur_group_ids = _init_cur_group_ids(cur_mask, group_ids)
 
         # Single host sync to bound the loop.
         max_num = int(nums.max().item()) if B > 0 else 0
         for k in range(max_num):
-            # Only build the distribution + update masks for samples still
-            # picking. Done samples (nums <= k) might have over-exhausted
-            # their masks in prior iterations; constructing Categorical
-            # over an all-inf row produces NaN and corrupts everything
-            # downstream (the model NaNs out by epoch 2 of PPO).
+            # Only sample for samples still picking. Done samples (nums <= k)
+            # may have exhausted their masks; building a Categorical over an
+            # all-inf row would NaN.
             sp_idx = torch.nonzero(nums > k, as_tuple=True)[0]
             if sp_idx.numel() == 0:
                 break
 
-            sp_logits = logits[sp_idx].masked_fill(~cur_mask[sp_idx], float("-inf"))
-            dist = torch.distributions.Categorical(logits=sp_logits)
-            sp_pick = dist.sample() if sample else sp_logits.argmax(dim=-1)
-            sp_log_prob = dist.log_prob(sp_pick)
-
+            out = sample_grouped(
+                logits[sp_idx], cur_mask[sp_idx],
+                sample=True, group_ids=cur_group_ids[sp_idx],
+            )
+            sp_pick = out.indices
             picks[sp_idx, k] = sp_pick
-            log_probs[sp_idx] = log_probs[sp_idx] + sp_log_prob
+            log_probs[sp_idx] = log_probs[sp_idx] + out.log_probs
 
-            # Mask the picked card for the next iteration (only still-picking).
             cur_mask[sp_idx, sp_pick] = False
+            cur_group_ids[sp_idx, sp_pick] = -1
 
-        # Entropy of the initial (pre-pick) distribution as a proxy.
-        # Exact joint entropy of without-replacement sampling is intractable;
-        # this captures "how indecisive was the model's first pick".
-        initial = logits.masked_fill(~mask, float("-inf"))
-        entropy = torch.distributions.Categorical(logits=initial).entropy()
-
+        entropy = _initial_group_entropy(logits, mask, group_ids)
         return MultiPickHeadOutput(indices=picks, log_prob=log_probs, entropy=entropy)
 
     def recompute_log_prob(
@@ -600,19 +594,16 @@ class HeadCardMultiPick(nn.Module):
         mask: torch.Tensor,
         nums: torch.Tensor,
         recorded_picks: torch.Tensor,  # (B, N) int64 — recorded picks, -1 for unused
+        group_ids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Replay the recorded picks under current logits to get
-        (log_prob, entropy) for PPO update.
-
-        Same still-picking-only structure as `forward` to avoid
-        constructing Categorical over rows whose mask is all-False
-        (which produces NaN softmax and silently NaNs the model).
-        """
-        B, N, _ = x_entities.shape
+        """Replay recorded picks under current logits + group ids. Same
+        still-picking-only structure as `forward`."""
+        B = x_entities.shape[0]
         device = x_entities.device
 
         logits = self._score(x_entities, x_global)
         cur_mask = mask.clone()
+        cur_group_ids = _init_cur_group_ids(cur_mask, group_ids)
         log_probs = torch.zeros(B, device=device)
 
         max_num = int(nums.max().item()) if B > 0 else 0
@@ -623,14 +614,15 @@ class HeadCardMultiPick(nn.Module):
 
             sp_picked = recorded_picks[sp_idx, k]
             sp_logits = logits[sp_idx].masked_fill(~cur_mask[sp_idx], float("-inf"))
-            dist = torch.distributions.Categorical(logits=sp_logits)
-            sp_log_prob = dist.log_prob(sp_picked)
+            sp_log_prob = _grouped_log_prob_only(
+                sp_logits, sp_picked, group_ids=cur_group_ids[sp_idx],
+            )
             log_probs[sp_idx] = log_probs[sp_idx] + sp_log_prob
 
             cur_mask[sp_idx, sp_picked] = False
+            cur_group_ids[sp_idx, sp_picked] = -1
 
-        initial = logits.masked_fill(~mask, float("-inf"))
-        entropy = torch.distributions.Categorical(logits=initial).entropy()
+        entropy = _initial_group_entropy(logits, mask, group_ids)
         return log_probs, entropy
 
 
