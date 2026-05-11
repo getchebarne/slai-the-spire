@@ -19,6 +19,7 @@ Architecture (post-migration):
 """
 
 from dataclasses import dataclass
+from typing import Iterator
 from typing import NamedTuple
 
 import torch
@@ -142,31 +143,81 @@ class SingleOutput:
 # Helpers
 # =============================================================================
 
-# Cached HTP int values (avoid attribute lookup in hot loops)
-_HTP_CARD_REWARD = int(HeadTypePrimary.CARD_REWARD)
-_HTP_COMBAT_CARD_DISCARD = int(HeadTypePrimary.COMBAT_CARD_DISCARD)
-_HTP_COMBAT_DEFAULT = int(HeadTypePrimary.COMBAT_DEFAULT)
-_HTP_MAP_SELECT = int(HeadTypePrimary.MAP_SELECT)
-_HTP_REST_SITE = int(HeadTypePrimary.REST_SITE)
-_HTP_COMBAT_AWAIT_RETAIN = int(HeadTypePrimary.COMBAT_AWAIT_RETAIN)
-_HTP_COMBAT_AWAIT_NIGHTMARE = int(HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE)
-_HTP_COMBAT_AWAIT_SETUP = int(HeadTypePrimary.COMBAT_AWAIT_SETUP)
-_HTP_RELIC_REWARD = int(HeadTypePrimary.RELIC_REWARD)
-
 
 def _build_entity_tensors(core_out: CoreOutput) -> list[torch.Tensor | None]:
     """Per-head-type entity tensor (None where the head doesn't consume one)."""
     et: list[torch.Tensor | None] = [None] * NUM_PRIMARY_HEADS
-    et[_HTP_CARD_REWARD] = core_out.x_combat_reward
-    et[_HTP_COMBAT_DEFAULT] = core_out.x_hand
-    et[_HTP_MAP_SELECT] = core_out.x_map
-    et[_HTP_REST_SITE] = core_out.x_deck
-    et[_HTP_COMBAT_AWAIT_RETAIN] = core_out.x_hand
-    et[_HTP_COMBAT_CARD_DISCARD] = core_out.x_hand
-    et[_HTP_COMBAT_AWAIT_NIGHTMARE] = core_out.x_hand
-    et[_HTP_COMBAT_AWAIT_SETUP] = core_out.x_hand
-    # _HTP_RELIC_REWARD: HeadRelicSelect uses only x_global; entity tensor unused.
+    et[HeadTypePrimary.CARD_REWARD] = core_out.x_combat_reward
+    et[HeadTypePrimary.COMBAT_DEFAULT] = core_out.x_hand
+    et[HeadTypePrimary.MAP_SELECT] = core_out.x_map
+    et[HeadTypePrimary.REST_SITE] = core_out.x_deck
+    et[HeadTypePrimary.COMBAT_AWAIT_RETAIN] = core_out.x_hand
+    et[HeadTypePrimary.COMBAT_CARD_DISCARD] = core_out.x_hand
+    et[HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE] = core_out.x_hand
+    et[HeadTypePrimary.COMBAT_AWAIT_SETUP] = core_out.x_hand
+    # HeadTypePrimary.RELIC_REWARD: HeadRelicSelect uses only x_global; entity tensor unused.
     return et
+
+
+def _group_ids_for_htp(htp: int, mask_batch: MaskBatch) -> torch.Tensor | None:
+    """Full-batch (B, N) group_ids tensor for the pile this htp picks over,
+    or None if the head doesn't pick from a card pile (so no dedup needed)."""
+    if htp in (
+        HeadTypePrimary.COMBAT_DEFAULT,            # HeadCardPlay over hand
+        HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE,    # HeadCardNightmare over hand
+        HeadTypePrimary.COMBAT_AWAIT_SETUP,        # HeadCardSetup over hand
+        HeadTypePrimary.COMBAT_AWAIT_RETAIN,       # HeadCardMultiPick over hand
+        HeadTypePrimary.COMBAT_CARD_DISCARD,       # HeadCardMultiPick over hand
+    ):
+        return mask_batch.hand_group_ids
+    if htp == HeadTypePrimary.CARD_REWARD:
+        return mask_batch.card_reward_group_ids
+    if htp == HeadTypePrimary.REST_SITE:
+        return mask_batch.deck_group_ids
+    return None
+
+
+@dataclass
+class PrimaryGroupContext:
+    """Per-htp pre-sliced inputs shared by ActorCritic.forward and the
+    PPO recompute path. `idx` is the route — full-batch indices that
+    belong to this htp. Other tensors are pre-sliced to (|idx|, ...).
+    Secondary-head branches re-slice with `sec_local` indices into
+    these already-routed tensors."""
+    htp: int
+    idx: torch.Tensor                     # (G,) int64
+    x_global_group: torch.Tensor          # (G, dim_global)
+    entities_group: torch.Tensor | None   # (G, N, dim) or None
+    primary_mask: torch.Tensor | None     # (G, K) — only set for decision primaries
+    selection_mask: torch.Tensor          # (G, N)
+    group_ids_group: torch.Tensor | None  # (G, N) int — None if no dedup
+
+
+def iter_primary_groups(
+    core_out: CoreOutput,
+    mask_batch: MaskBatch,
+) -> Iterator[PrimaryGroupContext]:
+    """Yield one PrimaryGroupContext per htp that has any routed samples."""
+    entity_tensors = _build_entity_tensors(core_out)
+    for htp in range(NUM_PRIMARY_HEADS):
+        idx = mask_batch.route[htp]
+        if len(idx) == 0:
+            continue
+        ent = entity_tensors[htp]
+        gids_full = _group_ids_for_htp(htp, mask_batch)
+        yield PrimaryGroupContext(
+            htp=htp,
+            idx=idx,
+            x_global_group=core_out.x_global[idx],
+            entities_group=ent[idx] if ent is not None else None,
+            primary_mask=(
+                mask_batch.primary_masks[htp]
+                if IS_DECISION_PRIMARY[htp]
+                else None
+            ),
+            selection_mask=mask_batch.selection_masks[htp],
+            group_ids_group=gids_full[idx] if gids_full is not None else None,
+        )
 
 
 # =============================================================================
@@ -231,21 +282,23 @@ class ActorCritic(nn.Module):
         # ---- Registries: list-indexed by int(HeadTypePrimary) ----
 
         self._decision_heads: list[HeadBinaryChoice | None] = [None] * NUM_PRIMARY_HEADS
-        self._decision_heads[_HTP_COMBAT_DEFAULT] = self.head_combat_default
-        self._decision_heads[_HTP_CARD_REWARD] = self.head_card_reward
-        self._decision_heads[_HTP_REST_SITE] = self.head_rest_site
-        self._decision_heads[_HTP_RELIC_REWARD] = self.head_relic_reward_decide
+        self._decision_heads[HeadTypePrimary.COMBAT_DEFAULT] = self.head_combat_default
+        self._decision_heads[HeadTypePrimary.CARD_REWARD] = self.head_card_reward
+        self._decision_heads[HeadTypePrimary.REST_SITE] = self.head_rest_site
+        self._decision_heads[HeadTypePrimary.RELIC_REWARD] = self.head_relic_reward_decide
 
         self._selection_heads: list[nn.Module | None] = [None] * NUM_PRIMARY_HEADS
-        self._selection_heads[_HTP_COMBAT_DEFAULT] = self.head_card_play
-        self._selection_heads[_HTP_CARD_REWARD] = self.head_card_reward_select
-        self._selection_heads[_HTP_REST_SITE] = self.head_card_upgrade
-        self._selection_heads[_HTP_COMBAT_AWAIT_NIGHTMARE] = self.head_card_nightmare
-        self._selection_heads[_HTP_COMBAT_AWAIT_SETUP] = self.head_card_setup
-        self._selection_heads[_HTP_MAP_SELECT] = self.head_map_select
-        self._selection_heads[_HTP_RELIC_REWARD] = self.head_relic_select
-        # COMBAT_AWAIT_RETAIN and COMBAT_CARD_DISCARD use multi-pick heads
-        # (head_card_retain / head_card_discard_multi) via dedicated dispatch.
+        self._selection_heads[HeadTypePrimary.COMBAT_DEFAULT] = self.head_card_play
+        self._selection_heads[HeadTypePrimary.CARD_REWARD] = self.head_card_reward_select
+        self._selection_heads[HeadTypePrimary.REST_SITE] = self.head_card_upgrade
+        self._selection_heads[HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE] = self.head_card_nightmare
+        self._selection_heads[HeadTypePrimary.COMBAT_AWAIT_SETUP] = self.head_card_setup
+        self._selection_heads[HeadTypePrimary.MAP_SELECT] = self.head_map_select
+        self._selection_heads[HeadTypePrimary.RELIC_REWARD] = self.head_relic_select
+
+        self._multi_pick_heads: list[HeadCardMultiPick | None] = [None] * NUM_PRIMARY_HEADS
+        self._multi_pick_heads[HeadTypePrimary.COMBAT_AWAIT_RETAIN] = self.head_card_retain
+        self._multi_pick_heads[HeadTypePrimary.COMBAT_CARD_DISCARD] = self.head_card_discard_multi
 
     def forward(
         self,
@@ -273,40 +326,26 @@ class ActorCritic(nn.Module):
         retain_indices = torch.full((B, MAX_SIZE_HAND), -1, dtype=torch.long, device=device)
         retain_log_probs = torch.zeros(B, device=device)
 
-        # 4. Pre-extract entity tensors
-        entity_tensors = _build_entity_tensors(core_out)
-
-        # 5. Process each primary group
-        for htp in range(NUM_PRIMARY_HEADS):
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-
+        # 4. Process each primary group via shared iterator
+        for ctx in iter_primary_groups(core_out, mask_batch):
+            htp = ctx.htp
+            idx = ctx.idx
             head_type_primaries[idx] = htp
-            x_global_group = core_out.x_global[idx]
 
-            # ---- Multi-pick (retain + discard share machinery) ----
-            if htp == _HTP_COMBAT_AWAIT_RETAIN or htp == _HTP_COMBAT_CARD_DISCARD:
-                entities_group = core_out.x_hand[idx]
-                sel_mask = mask_batch.selection_masks[htp]
+            multi_head = self._multi_pick_heads[htp]
+            if multi_head is not None:
                 nums = mask_batch.retain_nums[idx]
-                multi_head = (
-                    self.head_card_retain
-                    if htp == _HTP_COMBAT_AWAIT_RETAIN
-                    else self.head_card_discard_multi
-                )
                 mp_out = multi_head(
-                    entities_group, x_global_group, sel_mask, nums, sample=sample
+                    ctx.entities_group, ctx.x_global_group, ctx.selection_mask, nums,
+                    sample=sample, group_ids=ctx.group_ids_group,
                 )
                 retain_indices[idx] = mp_out.indices
                 retain_log_probs[idx] = mp_out.log_prob
                 continue
 
             if IS_DECISION_PRIMARY[htp]:
-                # ---- Decision primary: binary head, then optional secondary ----
-                primary_mask = mask_batch.primary_masks[htp]
                 decision_head = self._decision_heads[htp]
-                out = decision_head(x_global_group, primary_mask, sample)
+                out = decision_head(ctx.x_global_group, ctx.primary_mask, sample)
 
                 if sample:
                     chosen = out.indices
@@ -316,27 +355,28 @@ class ActorCritic(nn.Module):
                     chosen = torch.argmax(out.logits, dim=-1)
                     primary_indices[idx] = chosen
 
-                # Run secondary head for samples that chose "select" (idx==1)
                 needs_secondary = chosen == 1
                 if torch.any(needs_secondary):
                     sec_local = torch.nonzero(needs_secondary, as_tuple=True)[0]
                     sec_batch = idx[sec_local]
-
-                    sec_x_global = x_global_group[sec_local]
-                    sec_mask = mask_batch.selection_masks[htp][sec_local]
-
+                    sec_x_global = ctx.x_global_group[sec_local]
+                    sec_mask = ctx.selection_mask[sec_local]
                     sec_entities = (
-                        entity_tensors[htp][sec_batch]
-                        if entity_tensors[htp] is not None
+                        ctx.entities_group[sec_local]
+                        if ctx.entities_group is not None
+                        else None
+                    )
+                    sec_group_ids = (
+                        ctx.group_ids_group[sec_local]
+                        if ctx.group_ids_group is not None
                         else None
                     )
 
                     sel_head = self._selection_heads[htp]
-                    if sec_entities is not None:
-                        sec_out = sel_head(sec_entities, sec_x_global, sec_mask, sample)
-                    else:
-                        # HeadRelicSelect: x_global only
-                        sec_out = sel_head(None, sec_x_global, sec_mask, sample)
+                    sec_out = sel_head(
+                        sec_entities, sec_x_global, sec_mask, sample,
+                        group_ids=sec_group_ids,
+                    )
 
                     if sample:
                         selection_indices[sec_batch] = sec_out.indices
@@ -344,23 +384,20 @@ class ActorCritic(nn.Module):
                     else:
                         selection_indices[sec_batch] = torch.argmax(sec_out.logits, dim=-1)
 
-                    # ---- Inline target dispatch: COMBAT_DEFAULT play-card with target ----
-                    if htp == _HTP_COMBAT_DEFAULT:
+                    if htp == HeadTypePrimary.COMBAT_DEFAULT:
                         chosen_idx_hand = (
                             sec_out.indices
                             if sample
                             else torch.argmax(sec_out.logits, dim=-1)
                         )
-                        # Look up target_required for the chosen card per sample
                         req = mask_batch.target_required[sec_batch, chosen_idx_hand]
                         if torch.any(req):
                             tgt_local = torch.nonzero(req, as_tuple=True)[0]
                             tgt_batch = sec_batch[tgt_local]
                             tgt_idx_hand = chosen_idx_hand[tgt_local]
 
-                            # Card embedding for the chosen hand index
                             x_active_card = core_out.x_hand[tgt_batch, tgt_idx_hand]
-                            tgt_x_global = x_global_group[sec_local][tgt_local]
+                            tgt_x_global = sec_x_global[tgt_local]
                             tgt_monsters = core_out.x_monsters[tgt_batch]
                             tgt_mask = mask_batch.monster_alive_mask[tgt_batch]
 
@@ -376,11 +413,11 @@ class ActorCritic(nn.Module):
                                 target_indices[tgt_batch] = torch.argmax(tgt_out.logits, dim=-1)
 
             else:
-                # ---- Direct primary: selection head only ----
-                entities_group = entity_tensors[htp][idx]
-                sel_mask = mask_batch.selection_masks[htp]
                 sel_head = self._selection_heads[htp]
-                sel_out = sel_head(entities_group, x_global_group, sel_mask, sample)
+                sel_out = sel_head(
+                    ctx.entities_group, ctx.x_global_group, ctx.selection_mask, sample,
+                    group_ids=ctx.group_ids_group,
+                )
 
                 if sample:
                     selection_indices[idx] = sel_out.indices
