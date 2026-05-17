@@ -140,7 +140,7 @@ class EnvironmentManager:
     @staticmethod
     def _make_env() -> tuple[slai.GameEnv, slai.GameState]:
         env = slai.GameEnv(ascension=ASCENSION_LEVEL)
-        obs, _ = env.reset(seed=random.randint(0, 2**31 - 1))
+        obs = env.reset(seed=random.randint(0, 2**31 - 1))
         return env, obs
 
     def get_view_states(self) -> list[slai.GameState]:
@@ -368,7 +368,7 @@ def _run_eval_episode(
 ) -> tuple[float, int]:
     """Run a single greedy evaluation episode."""
     env = slai.GameEnv(ascension=ASCENSION_LEVEL)
-    obs, _ = env.reset(seed=random.randint(0, 2**31 - 1))
+    obs = env.reset(seed=random.randint(0, 2**31 - 1))
 
     total_reward = 0.0
     length = 0
@@ -383,7 +383,7 @@ def _run_eval_episode(
             action = output.get_action(0)
 
             prev = obs
-            obs, _engine_reward, terminated, _trunc, _info = env.step(action)
+            obs, terminated = env.step(action)
             reward = compute_reward(prev, obs, terminated)
 
             total_reward += reward

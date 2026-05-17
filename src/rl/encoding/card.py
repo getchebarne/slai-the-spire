@@ -50,33 +50,37 @@ _CARD_PILE_TO_MAX_SIZE = {
 
 
 # ---------- Snapshot slai enum surfaces at module load ----------
+#
+# CardKind / CardColor / CardRarity / RoomKind / ModifierKind / IntentKind /
+# CandidatePool / CardName / MonsterName / RelicName / RelicTier / ActionType
+# are real `enum.IntEnum` types in slai's Python layer (see slai's
+# `_to_intenum` shim) — iterate the class directly.
+#
+# Effect / Selection / Phase / Target / CardCostKind are PyO3 complex enums
+# (parent class + nested variant classes); iterate via dir() filtered by
+# `isinstance(v, type)`.
 
-_CARD_KIND_NAMES = sorted(n for n in dir(slai.CardKind) if not n.startswith("_"))
-_CARD_KIND_TO_IDX = {getattr(slai.CardKind, n): i for i, n in enumerate(_CARD_KIND_NAMES)}
+_CARD_KIND_NAMES = [m.name for m in slai.CardKind]
+_CARD_KIND_TO_IDX = {m: i for i, m in enumerate(slai.CardKind)}
 
-_CARD_COLOR_NAMES = sorted(n for n in dir(slai.CardColor) if not n.startswith("_"))
-_CARD_COLOR_TO_IDX = {getattr(slai.CardColor, n): i for i, n in enumerate(_CARD_COLOR_NAMES)}
+_CARD_COLOR_NAMES = [m.name for m in slai.CardColor]
+_CARD_COLOR_TO_IDX = {m: i for i, m in enumerate(slai.CardColor)}
 
-_CARD_RARITY_NAMES = sorted(n for n in dir(slai.CardRarity) if not n.startswith("_"))
-_CARD_RARITY_TO_IDX = {getattr(slai.CardRarity, n): i for i, n in enumerate(_CARD_RARITY_NAMES)}
+_CARD_RARITY_NAMES = [m.name for m in slai.CardRarity]
+_CARD_RARITY_TO_IDX = {m: i for i, m in enumerate(slai.CardRarity)}
 
 _EFFECT_NAMES = sorted(n for n in dir(slai.Effect) if not n.startswith("_"))
 _EFFECT_CLASSES: list[type] = [getattr(slai.Effect, n) for n in _EFFECT_NAMES]
 
-_CANDIDATE_POOL_NAMES = sorted(n for n in dir(slai.CandidatePool) if not n.startswith("_"))
-_CANDIDATE_POOL_TO_IDX = {
-    getattr(slai.CandidatePool, n): i for i, n in enumerate(_CANDIDATE_POOL_NAMES)
-}
+_CANDIDATE_POOL_NAMES = [m.name for m in slai.CandidatePool]
+_CANDIDATE_POOL_TO_IDX = {m: i for i, m in enumerate(slai.CandidatePool)}
 
-_SELECTION_NAMES = sorted(n for n in dir(slai.Selection) if not n.startswith("_"))
-_SELECTION_CLASSES: list[type] = [getattr(slai.Selection, n) for n in _SELECTION_NAMES]
+_SELECTION_NAMES = sorted(n for n in dir(slai.SelectionKind) if not n.startswith("_"))
+_SELECTION_CLASSES: list[type] = [getattr(slai.SelectionKind, n) for n in _SELECTION_NAMES]
 
-# Per-card-name one-hot. CardName variants are integer-comparable (eq_int);
-# sort by int for a stable enumeration order.
-_CARD_NAMES = sorted(
-    (getattr(slai.CardName, n) for n in dir(slai.CardName) if not n.startswith("_")),
-    key=lambda c: int(c),
-)
+# Per-card-name one-hot. IntEnum members iterate in declaration order
+# (matches int discriminant) — that's a stable enumeration.
+_CARD_NAMES = list(slai.CardName)
 _CARD_NAME_TO_IDX = {n: i for i, n in enumerate(_CARD_NAMES)}
 _NUM_CARD_NAMES = len(_CARD_NAMES)
 
@@ -127,7 +131,7 @@ def _card_policy_features(card: slai.Card) -> tuple:
     `cost` (X-cost / dynamic-cost / free_to_play_once), `retain` (settable
     via Well Laid Plans), and `playable` (Entangled etc.)."""
     return (
-        card.card_name,
+        card.name,
         card.kind,
         card.color,
         card.rarity,
@@ -235,21 +239,13 @@ def _encode_view_card_into(out: np.ndarray, view_card: slai.Card) -> None:
             if isinstance(effect, eff_cls):
                 out[pos + idx] += 1.0
                 break
-        # Most Effect variants name their target slot `target: Optional[Target]`.
-        # `Effect.DrawUpTo` is the exception: its `target` is the draw count
-        # (int), and the actual Target lives on `target_field`. Normalize.
-        candidate = getattr(effect, "target", None)
-        target = (
-            candidate
-            if isinstance(candidate, slai.Target)
-            else getattr(effect, "target_field", None)
-        )
+        target = getattr(effect, "target", None)
         if target is not None:
-            cand_idx = _CANDIDATE_POOL_TO_IDX.get(target.candidates)
+            cand_idx = _CANDIDATE_POOL_TO_IDX.get(target.candidate_pool)
             if cand_idx is not None:
                 out[pos + len(_EFFECT_NAMES) + cand_idx] += 1.0
             for sel_idx, sel_cls in enumerate(_SELECTION_CLASSES):
-                if isinstance(target.selection, sel_cls):
+                if isinstance(target.selection_kind, sel_cls):
                     out[
                         pos + len(_EFFECT_NAMES) + len(_CANDIDATE_POOL_NAMES) + sel_idx
                     ] += 1.0

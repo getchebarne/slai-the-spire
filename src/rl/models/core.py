@@ -56,13 +56,6 @@ class CoreOutput:
     x_character: torch.Tensor  # (B, dim_entity)
     x_energy: torch.Tensor  # (B, dim_entity)
 
-    # Active card embedding (zeros if no card is active)
-    x_active_card: torch.Tensor  # (B, dim_entity)
-
-    # Concatenated entity tensor (for attention-based pooling if needed)
-    x_entity: torch.Tensor  # (B, total_entities, dim_entity)
-    x_entity_mask: torch.Tensor  # (B, total_entities)
-
     # Map encoding
     x_map: torch.Tensor  # (B, dim_map)
 
@@ -353,11 +346,6 @@ class Core(nn.Module):
             x_combat_reward_out,
         ) = _undo_card_concatenation(x_card_out)
 
-        # Extract active card embedding (zeros if no card is active)
-        # x_active_card_mask is (B, MAX_SIZE_HAND) bool — True for the active card
-        active_mask = x_game_state.x_active_card_mask.unsqueeze(-1).float()  # (B, H, 1)
-        x_active_card = (x_hand_out * active_mask).sum(dim=1)  # (B, dim_entity)
-
         # Encode map
         x_map = self._map_encoder(x_game_state.x_map)
 
@@ -422,9 +410,6 @@ class Core(nn.Module):
             x_monsters=x_monsters_out,
             x_character=x_character_out,
             x_energy=x_energy_out,
-            x_active_card=x_active_card,
-            x_entity=x_entity,
-            x_entity_mask=x_entity_mask,
             x_map=x_map,
             x_global=x_global,
         )

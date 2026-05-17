@@ -22,12 +22,3 @@ def load_config(config_path: str) -> dict[str, Any]:
 
 def init_optimizer(optimizer_name: str, model: nn.Module, **kwargs) -> torch.optim.Optimizer:
     return getattr(torch.optim, optimizer_name)(**kwargs, params=model.parameters())
-
-
-def encode_one_hot_list(value: int, value_min: int, value_max: int) -> list[float]:
-    value_clamp = max(min(value, value_max), value_min)
-    value_clamp_offset = value_clamp - value_min
-    ohe = [0.0] * (value_max - value_min + 1)
-    ohe[value_clamp_offset] = 1.0
-
-    return ohe

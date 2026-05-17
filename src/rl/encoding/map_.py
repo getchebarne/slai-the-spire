@@ -8,11 +8,9 @@ from src.rl.constants import MAP_WIDTH
 
 # Snapshot RoomKind variants at module load. slai exposes 4 today
 # (CombatMonster, CombatBoss, CombatElite, RestSite); slot count is fixed
-# at module load.
-_ROOM_KIND_NAMES: list[str] = sorted(n for n in dir(slai.RoomKind) if not n.startswith("_"))
-_ROOM_KIND_TO_IDX: dict[object, int] = {
-    getattr(slai.RoomKind, name): idx for idx, name in enumerate(_ROOM_KIND_NAMES)
-}
+# at module load. RoomKind is an enum.IntEnum (see slai's _to_intenum shim).
+_ROOM_KIND_NAMES: list[str] = [m.name for m in slai.RoomKind]
+_ROOM_KIND_TO_IDX: dict[object, int] = {m: idx for idx, m in enumerate(slai.RoomKind)}
 _ROOM_KIND_NUM = len(_ROOM_KIND_NAMES)
 _NUM_CHANNELS = _ROOM_KIND_NUM + MAP_WIDTH + 1  # room kind one-hot + edge multi-hot + cur-pos
 

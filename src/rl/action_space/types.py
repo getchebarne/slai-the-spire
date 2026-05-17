@@ -12,6 +12,7 @@ monster. There is no separate COMBAT_MONSTER_SELECT primary.
 from enum import IntEnum
 
 import slai
+from slai import Action, ActionType
 
 
 class HeadTypePrimary(IntEnum):
@@ -25,8 +26,8 @@ class HeadTypePrimary(IntEnum):
         RELIC_REWARD     [skip,        select]       → if select:    HeadRelicSelect
 
     Direct primaries (no binary, head fires immediately):
-        COMBAT_CARD_DISCARD     HeadCardDiscard      (single hand pick)
-        COMBAT_AWAIT_RETAIN     HeadCardRetain       (multi-pick over hand)
+        COMBAT_CARD_DISCARD     HeadCardMultiPick    (multi-pick over hand)
+        COMBAT_AWAIT_RETAIN     HeadCardMultiPick    (multi-pick over hand)
         COMBAT_AWAIT_NIGHTMARE  HeadCardNightmare    (single hand pick)
         COMBAT_AWAIT_SETUP      HeadCardSetup        (single hand pick)
         MAP_SELECT              HeadMapSelect        (single column pick)
@@ -41,15 +42,6 @@ class HeadTypePrimary(IntEnum):
     COMBAT_AWAIT_NIGHTMARE = 6
     COMBAT_AWAIT_SETUP = 7
     RELIC_REWARD = 8
-
-
-class HeadTypeSecondary(IntEnum):
-    """Secondary heads triggered by decision primaries."""
-
-    CARD_PLAY = 0
-    CARD_REWARD_SELECT = 1
-    CARD_UPGRADE = 2
-    RELIC_SELECT = 3
 
 
 # =========================================================================
@@ -89,7 +81,8 @@ def to_action(
     retain_indices: list[int] | None = None,
 ):
     """
-    Convert model output to a `slai.Action.*` instance.
+    Convert model output to a `slai.Action` instance with the appropriate
+    `ActionType` discriminant and positional `indices`.
 
     Args:
         head_type_primary: Which primary group this sample belongs to.
@@ -104,48 +97,48 @@ def to_action(
     match head_type_primary:
         case HeadTypePrimary.COMBAT_DEFAULT:
             if primary_index == 0:
-                return slai.Action.EndTurn()
-            return slai.Action.CardPlay(
-                idx_hand=selection_index,
-                idx_monster=target_index if target_index >= 0 else None,
-            )
+                return Action(ActionType.EndTurn, [])
+            indices = [selection_index]
+            if target_index >= 0:
+                indices.append(target_index)
+            return Action(ActionType.CardPlay, indices)
 
         case HeadTypePrimary.CARD_REWARD:
             if primary_index == 0:
-                return slai.Action.CardRewardSkip()
-            return slai.Action.CardRewardSelect(idx_reward=selection_index)
+                return Action(ActionType.CardRewardSkip, [])
+            return Action(ActionType.CardRewardSelect, [selection_index])
 
         case HeadTypePrimary.REST_SITE:
             if primary_index == 0:
-                return slai.Action.RestSiteRest()
-            return slai.Action.RestSiteCardUpgrade(idx_deck=selection_index)
+                return Action(ActionType.RestSiteRest, [])
+            return Action(ActionType.RestSiteCardUpgrade, [selection_index])
 
         case HeadTypePrimary.RELIC_REWARD:
             if primary_index == 0:
-                return slai.Action.RelicRewardSkip()
-            return slai.Action.RelicRewardSelect(idx_reward=selection_index)
+                return Action(ActionType.RelicRewardSkip, [])
+            return Action(ActionType.RelicRewardSelect, [selection_index])
 
         case HeadTypePrimary.COMBAT_CARD_DISCARD:
-            # slai's CardDiscard requires exactly `num` indices (matching
-            # the CombatAwaitDiscard.num count). Multi-pick output is in
+            # CardDiscard requires exactly `num` indices (matching
+            # CombatAwaitDiscard.num). Multi-pick output is in
             # `retain_indices` (shared multi-pick storage).
             assert retain_indices is not None, \
                 "COMBAT_CARD_DISCARD requires retain_indices (shared multi-pick storage)"
-            return slai.Action.CardDiscard(indices_hand=retain_indices)
+            return Action(ActionType.CardDiscard, retain_indices)
 
         case HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE:
-            return slai.Action.CardNightmare(idx_hand=selection_index)
+            return Action(ActionType.CardNightmare, [selection_index])
 
         case HeadTypePrimary.COMBAT_AWAIT_SETUP:
-            return slai.Action.CardSetup(idx_hand=selection_index)
+            return Action(ActionType.CardSetup, [selection_index])
 
         case HeadTypePrimary.COMBAT_AWAIT_RETAIN:
             assert retain_indices is not None, \
                 "COMBAT_AWAIT_RETAIN requires retain_indices"
-            return slai.Action.CardRetain(indices_hand=retain_indices)
+            return Action(ActionType.CardRetain, retain_indices)
 
         case HeadTypePrimary.MAP_SELECT:
-            return slai.Action.RoomSelect(idx_column=selection_index)
+            return Action(ActionType.RoomSelect, [selection_index])
 
         case _:
             raise ValueError(f"Unknown head type primary: {head_type_primary}")

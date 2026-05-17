@@ -13,7 +13,7 @@ Architecture (post-migration):
 5. **Inline targeting**: when COMBAT_DEFAULT picks "play_card" and the
    chosen card has `requires_target`, the same forward pass also runs
    HeadMonsterSelect to pick the monster. The output bundles `target_idx`.
-6. **Multi-pick retain**: COMBAT_AWAIT_RETAIN runs HeadCardRetain which
+6. **Multi-pick retain**: COMBAT_AWAIT_RETAIN runs HeadCardMultiPick which
    sequentially samples `num` distinct hand indices.
 7. Value head estimates state value.
 """
