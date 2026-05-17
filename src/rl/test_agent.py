@@ -13,6 +13,17 @@ import time
 import click
 import slai
 import torch
+from slai import IntentKind
+
+_INTENT_BLOCK_KINDS = frozenset(
+    {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
+)
+_INTENT_BUFF_KINDS = frozenset(
+    {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
+)
+_INTENT_DEBUFF_KINDS = frozenset(
+    {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
+)
 
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import get_mask_batch
@@ -111,30 +122,32 @@ def _fmt_modifiers(mods: list) -> str:
     )
 
 
-def _fmt_action(action: object) -> str:
-    """Per-variant action formatter — slai actions are frozen pyclasses
-    without `__dict__`, so we match on type to expose target / multi-pick
-    indices."""
-    if isinstance(action, slai.Action.CardPlay):
-        tgt = f", target={action.idx_monster}" if action.idx_monster is not None else ""
-        return f"CardPlay(hand={action.idx_hand}{tgt})"
-    if isinstance(action, slai.Action.CardDiscard):
-        return f"CardDiscard(indices={list(action.indices_hand)})"
-    if isinstance(action, slai.Action.CardRetain):
-        return f"CardRetain(indices={list(action.indices_hand)})"
-    if isinstance(action, slai.Action.CardSetup):
-        return f"CardSetup(hand={action.idx_hand})"
-    if isinstance(action, slai.Action.CardNightmare):
-        return f"CardNightmare(hand={action.idx_hand})"
-    if isinstance(action, slai.Action.RoomSelect):
-        return f"RoomSelect(col={action.idx_column})"
-    if isinstance(action, slai.Action.CardRewardSelect):
-        return f"CardRewardSelect(idx={action.idx_reward})"
-    if isinstance(action, slai.Action.RelicRewardSelect):
-        return f"RelicRewardSelect(idx={action.idx_reward})"
-    if isinstance(action, slai.Action.RestSiteCardUpgrade):
-        return f"RestSiteCardUpgrade(deck={action.idx_deck})"
-    return type(action).__name__  # EndTurn, *Skip, RestSiteRest
+def _fmt_action(action: slai.Action) -> str:
+    """Format a flat slai.Action for the log. Dispatches on
+    `action.action_type` and pulls fields by position from `action.idxs`
+    using the schema documented in `slai.ACTION_SPEC_REGISTRY`."""
+    at = action.action_type
+    i = action.idxs
+    if at == slai.ActionType.CardPlay:
+        tgt = f", target={i[1]}" if len(i) > 1 else ""
+        return f"CardPlay(hand={i[0]}{tgt})"
+    if at == slai.ActionType.CardDiscard:
+        return f"CardDiscard(indices={list(i)})"
+    if at == slai.ActionType.CardRetain:
+        return f"CardRetain(indices={list(i)})"
+    if at == slai.ActionType.CardSetup:
+        return f"CardSetup(hand={i[0]})"
+    if at == slai.ActionType.CardNightmare:
+        return f"CardNightmare(hand={i[0]})"
+    if at == slai.ActionType.RoomSelect:
+        return f"RoomSelect(col={i[0]})"
+    if at == slai.ActionType.CardRewardSelect:
+        return f"CardRewardSelect(idx={i[0]})"
+    if at == slai.ActionType.RelicRewardSelect:
+        return f"RelicRewardSelect(idx={i[0]})"
+    if at == slai.ActionType.RestSiteCardUpgrade:
+        return f"RestSiteCardUpgrade(deck={i[0]})"
+    return at.name  # EndTurn, *Skip, RestSiteRest
 
 
 def _enemy_row(i: int, m: slai.Monster) -> str:
@@ -142,17 +155,17 @@ def _enemy_row(i: int, m: slai.Monster) -> str:
     intent = m.intent
     if intent.damage:
         intent_str = f"ATK {intent.damage}x{intent.instances or 1}"
-    elif intent.block:
+    elif intent.kind in _INTENT_BLOCK_KINDS:
         intent_str = "BLOCK"
-    elif intent.buff:
+    elif intent.kind in _INTENT_BUFF_KINDS:
         intent_str = "BUFF"
-    elif intent.debuff:
+    elif intent.kind in _INTENT_DEBUFF_KINDS:
         intent_str = "DEBUFF"
     else:
         intent_str = ""
     hp = _hp(f"HP {m.health}/{m.health_max}")
     blk = f"  {_block(f'Block {m.block}')}" if m.block > 0 else ""
-    return f"[{i}] {m.name}: {hp}{blk}  → {intent_str}"
+    return f"[{i}] {m.display_name}: {hp}{blk}  → {intent_str}"
 
 
 def _format_view(view: slai.GameState) -> str:
@@ -193,12 +206,12 @@ def _format_view(view: slai.GameState) -> str:
         for i, c in enumerate(view.hand):
             tgt = " (target)" if c.requires_target else ""
             playable = "" if is_card_playable(c, view.energy.current) else " (unplayable)"
-            lines.append(f"  [{i}] {c.name} cost={c.cost}{tgt}{playable}")
+            lines.append(f"  [{i}] {c.display_name} cost={c.cost}{tgt}{playable}")
 
-    if view.card_rewards:
-        lines.append(f"Card rewards: {[c.name for c in view.card_rewards]}")
-    if view.relic_rewards:
-        lines.append(f"Relic rewards: {[_variant_name(r.name) for r in view.relic_rewards]}")
+    if view.rewards_card:
+        lines.append(f"Card rewards: {[c.display_name for c in view.rewards_card]}")
+    if view.rewards_relic:
+        lines.append(f"Relic rewards: {[_variant_name(r.name) for r in view.rewards_relic]}")
     return "\n".join(lines)
 
 
@@ -245,15 +258,16 @@ def format_card_probabilities(
     order: list[str] = []
 
     for idx, card in enumerate(view.hand):
-        if card.name not in seen:
+        display = card.display_name
+        if display not in seen:
             prob = probs[idx].item()
             if prob != prob:  # NaN guard
                 prob = 0.0
             playable = is_card_playable(card, view.energy.current)
-            seen[card.name] = {"prob": prob, "count": 1, "playable": playable}
-            order.append(card.name)
+            seen[display] = {"prob": prob, "count": 1, "playable": playable}
+            order.append(display)
         else:
-            seen[card.name]["count"] += 1
+            seen[display]["count"] += 1
 
     lines = ["Card Play Probabilities:"]
     for name in order:
@@ -280,7 +294,7 @@ def get_action_from_model(
         greedy: If True, use argmax instead of sampling (deterministic)
 
     Returns:
-        (action, card_probs_str). action is a `slai.Action.*` instance.
+        (action, card_probs_str). action is a `slai.Action` instance.
     """
     x_game_state = encode_batch_view_game_state([view], device)
     mask_batch = get_mask_batch([view], device)
@@ -317,7 +331,7 @@ def run_game(
         (final_floor, final_health)
     """
     env = slai.GameEnv(ascension=ASCENSION_LEVEL)
-    obs, _ = env.reset(seed=random.randint(0, 2**31 - 1))
+    obs = env.reset(seed=random.randint(0, 2**31 - 1))
 
     step_count = 0
     terminated = False
@@ -342,7 +356,7 @@ def run_game(
             print("-" * N_COL)
             time.sleep(delay)
 
-        obs, _, terminated, _, _ = env.step(action)
+        obs, terminated = env.step(action)
         step_count += 1
 
     final_floor = obs.map.y_current or 0

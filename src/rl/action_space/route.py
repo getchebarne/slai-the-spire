@@ -37,7 +37,7 @@ def _phase_to_htp(view: slai.GameState) -> HeadTypePrimary | None:
         # Relic rewards take precedence — slai bundles both offer types
         # into one CombatReward halt; the trainer resolves them serially
         # (relic first, then card on the next step).
-        if len(view.relic_rewards) > 0:
+        if len(view.rewards_relic) > 0:
             return HeadTypePrimary.RELIC_REWARD
         return HeadTypePrimary.CARD_REWARD
     if isinstance(phase, slai.Phase.GameOver):

@@ -298,12 +298,6 @@ class HeadCardPlay(HeadEntitySelection):
     pass
 
 
-class HeadCardDiscard(HeadEntitySelection):
-    """Head for selecting a card from hand to discard."""
-
-    pass
-
-
 class HeadCardRewardSelect(HeadEntitySelection):
     """Head for selecting a card from combat rewards."""
 
@@ -319,9 +313,8 @@ class HeadCardUpgrade(HeadEntitySelection):
 class HeadCardSetup(HeadEntitySelection):
     """Head for selecting a hand card to mark `free_to_play_once` (Setup card).
 
-    Same architecture as HeadCardDiscard but separate parameters — Setup
-    optimizes a different value function (which card most benefits from
-    a discount next play).
+    Separate parameters — Setup optimizes a different value function
+    (which card most benefits from a discount next play).
     """
 
     pass
@@ -330,8 +323,8 @@ class HeadCardSetup(HeadEntitySelection):
 class HeadCardNightmare(HeadEntitySelection):
     """Head for selecting a hand card to copy into next turn's draw (Nightmare).
 
-    Separate parameters from HeadCardDiscard / HeadCardSetup: Nightmare
-    is a "which card do I want to play three of next turn" decision.
+    Separate parameters — Nightmare is a "which card do I want to play
+    three of next turn" decision.
     """
 
     pass
@@ -498,10 +491,6 @@ class MultiPickHeadOutput:
     entropy: torch.Tensor  # (B,) entropy of the *initial* (pre-mask) distribution
 
 
-# Backwards-compat alias (was the original name when only retain used this).
-RetainHeadOutput = MultiPickHeadOutput
-
-
 class HeadCardMultiPick(nn.Module):
     """Multi-pick: pick `num` distinct hand cards.
 
@@ -624,10 +613,6 @@ class HeadCardMultiPick(nn.Module):
 
         entropy = _initial_group_entropy(logits, mask, group_ids)
         return log_probs, entropy
-
-
-# Legacy alias (was the original name when only retain used this head).
-HeadCardRetain = HeadCardMultiPick
 
 
 class HeadValue(nn.Module):

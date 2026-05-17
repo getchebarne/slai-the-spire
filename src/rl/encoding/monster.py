@@ -1,8 +1,19 @@
 import numpy as np
 import slai
 import torch
+from slai import IntentKind
 
 from src.rl.constants import MAX_MONSTERS
+
+_INTENT_BLOCK_KINDS = frozenset(
+    {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
+)
+_INTENT_BUFF_KINDS = frozenset(
+    {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
+)
+_INTENT_DEBUFF_KINDS = frozenset(
+    {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
+)
 from src.rl.encoding.actor import encode_view_actor_modifiers
 from src.rl.encoding.actor import get_encoding_dim_actor_modifiers
 from src.rl.encoding.health_block import _LINEAR_SQRT_THRESHOLD
@@ -19,12 +30,10 @@ _INSTANCES_MAX = 5  # was Whirlwind cap
 
 _DAMAGE_DIM = _get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
-# Per-monster-name one-hot. MonsterName variants are integer-comparable
-# (eq_int); sort by int for a stable enumeration order.
-_MONSTER_NAMES = sorted(
-    (getattr(slai.MonsterName, n) for n in dir(slai.MonsterName) if not n.startswith("_")),
-    key=lambda m: int(m),
-)
+# Per-monster-name one-hot. MonsterName is an enum.IntEnum (see slai's
+# _to_intenum shim); members iterate in declaration order which matches
+# the int discriminant — that's a stable enumeration.
+_MONSTER_NAMES = list(slai.MonsterName)
 _MONSTER_NAME_TO_IDX = {n: i for i, n in enumerate(_MONSTER_NAMES)}
 _NUM_MONSTER_NAMES = len(_MONSTER_NAMES)
 
@@ -46,7 +55,7 @@ def _encode_view_monster_into(out: np.ndarray, view_monster: slai.Monster) -> No
     pos = 0
 
     # Per-monster-name one-hot
-    idx_name = _MONSTER_NAME_TO_IDX.get(view_monster.monster_name)
+    idx_name = _MONSTER_NAME_TO_IDX.get(view_monster.name)
     if idx_name is not None:
         out[pos + idx_name] = 1.0
     pos += _NUM_MONSTER_NAMES
@@ -62,9 +71,9 @@ def _encode_view_monster_into(out: np.ndarray, view_monster: slai.Monster) -> No
     # Intent scalars
     out[pos] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
     out[pos + 1] = min(intent.instances or 0, _INSTANCES_MAX) / _INSTANCES_MAX
-    out[pos + 2] = float(intent.block)
-    out[pos + 3] = float(intent.buff)
-    out[pos + 4] = float(intent.debuff)
+    out[pos + 2] = float(intent.kind in _INTENT_BLOCK_KINDS)
+    out[pos + 3] = float(intent.kind in _INTENT_BUFF_KINDS)
+    out[pos + 4] = float(intent.kind in _INTENT_DEBUFF_KINDS)
 
 
 def encode_batch_view_monsters(

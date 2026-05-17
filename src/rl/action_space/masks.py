@@ -127,7 +127,7 @@ def _get_primary_mask_combat_default(state: slai.GameState) -> list[bool]:
 
 def _get_primary_mask_card_reward(state: slai.GameState) -> list[bool]:
     """[skip, select]"""
-    can_select = len(state.deck) < MAX_SIZE_DECK and len(state.card_rewards) > 0
+    can_select = len(state.deck) < MAX_SIZE_DECK and len(state.rewards_card) > 0
     return [True, can_select]
 
 
@@ -139,7 +139,7 @@ def _get_primary_mask_rest_site(state: slai.GameState) -> list[bool]:
 
 def _get_primary_mask_relic_reward(state: slai.GameState) -> list[bool]:
     """[skip, select]"""
-    can_select = len(state.relic_rewards) > 0
+    can_select = len(state.rewards_relic) > 0
     return [True, can_select]
 
 
@@ -189,13 +189,13 @@ def _get_selection_mask(htp: int, state: slai.GameState) -> list[bool]:
 
     if htp == HeadTypePrimary.CARD_REWARD:
         mask = [False] * MAX_SIZE_COMBAT_CARD_REWARD
-        for idx in range(min(len(state.card_rewards), MAX_SIZE_COMBAT_CARD_REWARD)):
+        for idx in range(min(len(state.rewards_card), MAX_SIZE_COMBAT_CARD_REWARD)):
             mask[idx] = True
         return mask
 
     if htp == HeadTypePrimary.RELIC_REWARD:
         mask = [False] * MAX_RELIC_REWARDS
-        for idx in range(min(len(state.relic_rewards), MAX_RELIC_REWARDS)):
+        for idx in range(min(len(state.rewards_relic), MAX_RELIC_REWARDS)):
             mask[idx] = True
         return mask
 
@@ -349,7 +349,7 @@ def get_mask_batch(
         hand_gids_np[i, : len(hand_ids)] = hand_ids
         deck_ids = card_identity_ids(state.deck[:MAX_SIZE_DECK])
         deck_gids_np[i, : len(deck_ids)] = deck_ids
-        reward_ids = card_identity_ids(state.card_rewards[:MAX_SIZE_COMBAT_CARD_REWARD])
+        reward_ids = card_identity_ids(state.rewards_card[:MAX_SIZE_COMBAT_CARD_REWARD])
         reward_gids_np[i, : len(reward_ids)] = reward_ids
 
     target_required = torch.from_numpy(target_req_np).to(device)

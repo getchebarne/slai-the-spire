@@ -4,7 +4,6 @@ import numpy as np
 import slai
 import torch
 
-from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.card import CardPile
 from src.rl.encoding.card import encode_batch_view_cards
 from src.rl.encoding.character import encode_batch_view_character
@@ -18,7 +17,6 @@ from src.rl.encoding.monster import encode_batch_view_monsters
 class XGameState:
     x_hand: torch.Tensor
     x_hand_mask_pad: torch.Tensor
-    x_active_card_mask: torch.Tensor  # (B, MAX_SIZE_HAND) bool, vestigial post-migration; always all-False
     x_draw: torch.Tensor
     x_draw_mask_pad: torch.Tensor
     x_disc: torch.Tensor
@@ -62,7 +60,7 @@ def encode_batch_view_game_state(
         batch_draw.append(view_game_state.pile_draw)
         batch_disc.append(view_game_state.pile_discard)
         batch_deck.append(view_game_state.deck)
-        batch_combat_reward.append(view_game_state.card_rewards)
+        batch_combat_reward.append(view_game_state.rewards_card)
         batch_monsters.append(view_game_state.monsters)
         batch_character.append(view_game_state.character)
         batch_energy.append(view_game_state.energy)
@@ -71,11 +69,6 @@ def encode_batch_view_game_state(
 
     # Cards (hand, draw pile, discard pile, deck, combat rewards)
     x_hand, x_hand_mask_pad = encode_batch_view_cards(batch_hand, CardPile.HAND, device)
-
-    # Active card mask: vestigial. slai bundles target into Action.CardPlay,
-    # so there's no in-flight "card awaiting target" state to highlight.
-    # Kept all-False for shape stability.
-    x_active_card_mask = torch.zeros(batch_size, MAX_SIZE_HAND, dtype=torch.bool, device=device)
 
     x_draw, x_draw_mask_pad = encode_batch_view_cards(batch_draw, CardPile.DRAW, device)
     x_disc, x_disc_mask_pad = encode_batch_view_cards(batch_disc, CardPile.DISC, device)
@@ -113,7 +106,6 @@ def encode_batch_view_game_state(
     return XGameState(
         x_hand,
         x_hand_mask_pad,
-        x_active_card_mask,
         x_draw,
         x_draw_mask_pad,
         x_disc,
