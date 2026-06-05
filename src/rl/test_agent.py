@@ -15,12 +15,9 @@ import slai
 import torch
 from slai import IntentKind
 
-_INTENT_BLOCK_KINDS = frozenset(
-    {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
-)
-_INTENT_BUFF_KINDS = frozenset(
-    {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
-)
+
+_INTENT_BLOCK_KINDS = frozenset({IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff})
+_INTENT_BUFF_KINDS = frozenset({IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff})
 _INTENT_DEBUFF_KINDS = frozenset(
     {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
 )
@@ -28,9 +25,10 @@ _INTENT_DEBUFF_KINDS = frozenset(
 from src.rl.action_space.masks import MaskBatch
 from src.rl.action_space.masks import get_mask_batch
 from src.rl.action_space.masks import is_card_playable
-from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import SelKey
 from src.rl.constants import ASCENSION_LEVEL
-from src.rl.encoding.state import XGameState
+from src.rl.constants import FAST_MODE
+from src.rl.encoding.state import TensorGameState
 from src.rl.encoding.state import encode_batch_view_game_state
 from src.rl.models import ActorCritic
 from src.rl.models.heads import get_grouped_probs
@@ -117,37 +115,31 @@ _MOD_ABBR = {
 
 def _fmt_modifiers(mods: list) -> str:
     return "  ".join(
-        f"{_MOD_ABBR.get(m.kind, _variant_name(m.kind).lower())} {m.stacks}"
-        for m in mods
+        f"{_MOD_ABBR.get(m.kind, _variant_name(m.kind).lower())} {m.stacks}" for m in mods
     )
 
 
 def _fmt_action(action: slai.Action) -> str:
-    """Format a flat slai.Action for the log. Dispatches on
-    `action.action_type` and pulls fields by position from `action.idxs`
-    using the schema documented in `slai.ACTION_SPEC_REGISTRY`."""
+    """Format a flat slai.Action for the log (idx meaning per ACTION_SPEC_REGISTRY)."""
     at = action.action_type
     i = action.idxs
+    name = _variant_name(at)
     if at == slai.ActionType.CardPlay:
         tgt = f", target={i[1]}" if len(i) > 1 else ""
         return f"CardPlay(hand={i[0]}{tgt})"
-    if at == slai.ActionType.CardDiscard:
-        return f"CardDiscard(indices={list(i)})"
-    if at == slai.ActionType.CardRetain:
-        return f"CardRetain(indices={list(i)})"
-    if at == slai.ActionType.CardSetup:
-        return f"CardSetup(hand={i[0]})"
-    if at == slai.ActionType.CardNightmare:
-        return f"CardNightmare(hand={i[0]})"
+    if at == slai.ActionType.PotionUse:
+        tgt = f", target={i[1]}" if len(i) > 1 else ""
+        return f"PotionUse(slot={i[0]}{tgt})"
+    if at in (slai.ActionType.CardDiscard, slai.ActionType.CardRetain):
+        return f"{name}(indices={list(i)})"
+    if at == slai.ActionType.PotionDiscard:
+        return f"PotionDiscard(slot={i[0]})"
     if at == slai.ActionType.RoomSelect:
         return f"RoomSelect(col={i[0]})"
-    if at == slai.ActionType.CardRewardSelect:
-        return f"CardRewardSelect(idx={i[0]})"
-    if at == slai.ActionType.RelicRewardSelect:
-        return f"RelicRewardSelect(idx={i[0]})"
-    if at == slai.ActionType.RestSiteCardUpgrade:
-        return f"RestSiteCardUpgrade(deck={i[0]})"
-    return at.name  # EndTurn, *Skip, RestSiteRest
+    # All remaining single-idx actions (card-pick, reward/shop selects, event option)
+    if i:
+        return f"{name}(idx={i[0]})"
+    return name  # TurnEnd, Rest, RoomExit, ChestOpen, RewardTakeRelic/Potion/Gold
 
 
 def _enemy_row(i: int, m: slai.Monster) -> str:
@@ -174,7 +166,13 @@ def _format_view(view: slai.GameState) -> str:
     Two-column layout: character/hand on the left, monsters right-padded
     so name/HP/intent columns line up vertically (mirrors `play/__main__.py`).
     """
-    lines = [f"Phase: {type(view.phase).__name__}"]
+    screen_name = slai.Screen(int(view.screen)).name
+    header = f"Screen: {screen_name}"
+    if view.pending is not None:
+        header += f"  pending={type(view.pending).__name__}"
+    if view.discover:
+        header += f"  discover={[c.display_name for c in view.discover]}"
+    lines = [header]
 
     char_line = (
         f"Char: {_hp(f'HP {view.character.health}/{view.character.health_max}')}"
@@ -200,24 +198,52 @@ def _format_view(view: slai.GameState) -> str:
             if m.modifiers:
                 lines.append(" " * left_pad + f"  modifiers: {_fmt_modifiers(m.modifiers)}")
 
-    lines.append(f"Energy: {view.energy.current}/{view.energy.max}")
+    lines.append(f"Energy: {view.energy.energy_current}/{view.energy.energy_max}")
     if view.hand:
         lines.append("Hand:")
         for i, c in enumerate(view.hand):
             tgt = " (target)" if c.requires_target else ""
-            playable = "" if is_card_playable(c, view.energy.current) else " (unplayable)"
+            playable = "" if is_card_playable(c, view.energy.energy_current) else " (unplayable)"
             lines.append(f"  [{i}] {c.display_name} cost={c.cost}{tgt}{playable}")
 
-    if view.rewards_card:
-        lines.append(f"Card rewards: {[c.display_name for c in view.rewards_card]}")
-    if view.rewards_relic:
-        lines.append(f"Relic rewards: {[_variant_name(r.name) for r in view.rewards_relic]}")
+    belt = [f"[{s}] {_variant_name(p.name)}" for s, p in enumerate(view.potions) if p is not None]
+    if belt:
+        lines.append(f"Potions: {'  '.join(belt)}")
+
+    if view.reward is not None:
+        r = view.reward
+        if r.cards:
+            lines.append(f"Reward cards: {[c.display_name for c in r.cards]}")
+        if r.relic is not None:
+            lines.append(f"Reward relic: {_variant_name(r.relic.name)}")
+        if r.potion is not None:
+            lines.append(f"Reward potion: {_variant_name(r.potion.name)}")
+        if r.gold is not None:
+            lines.append(f"Reward gold: {r.gold}")
+
+    if view.shop is not None:
+        s = view.shop
+        lines.append(f"Shop gold={view.character.gold} purge={s.purge_cost}")
+        lines.append(f"  cards: {[(c.display_name, p) for c, p in zip(s.cards, s.card_prices)]}")
+        lines.append(
+            f"  relics: {[(_variant_name(r.name), p) for r, p in zip(s.relics, s.relic_prices)]}"
+        )
+        lines.append(
+            f"  potions: {[(_variant_name(p.name), pr) for p, pr in zip(s.potions, s.potion_prices)]}"
+        )
+
+    if view.event is not None:
+        e = view.event
+        lines.append(f"Event: {e.display_name}")
+        for i, o in enumerate(e.options):
+            gate = " (gated)" if o.gated_out else ""
+            lines.append(f"  [{i}] {o.label}{gate}")
     return "\n".join(lines)
 
 
 def get_card_probabilities(
     model: ActorCritic,
-    x_game_state: XGameState,
+    x_game_state: TensorGameState,
     mask_batch: MaskBatch,
 ) -> torch.Tensor:
     """
@@ -230,23 +256,19 @@ def get_card_probabilities(
         Tensor of per-position grouped probabilities (MAX_HAND_SIZE,).
         Identical cards share the same probability value.
     """
-    # Run core encoder
     core_out = model.core(x_game_state)
+    mask = mask_batch.sel_masks[SelKey.CARD_PLAY]  # (1, MAX_SIZE_HAND)
+    group_ids = mask_batch.sel_group_ids[SelKey.CARD_PLAY]
 
-    # Get selection mask for COMBAT_DEFAULT (which is the card play mask)
-    mask = mask_batch.selection_masks[int(HeadTypePrimary.COMBAT_DEFAULT)]  # (1, MAX_HAND_SIZE)
-
-    # Run card play head without sampling to get logits
-    head_out = model.head_card_play(
-        core_out.x_hand, core_out.x_global, mask, sample=False,
-        group_ids=mask_batch.hand_group_ids,
+    head_out = model.sel_heads[str(int(SelKey.CARD_PLAY))](
+        core_out.x_hand,
+        core_out.x_global,
+        mask,
+        sample=False,
+        group_ids=group_ids,
     )
-
-    # Get grouped probabilities (deduplicates identical cards via the
-    # same group_ids the policy uses for sampling).
-    probs = get_grouped_probs(head_out.logits, group_ids=mask_batch.hand_group_ids)
-
-    return probs[0]  # Return first (only) batch item
+    probs = get_grouped_probs(head_out.logits, group_ids=group_ids)
+    return probs[0]
 
 
 def format_card_probabilities(
@@ -263,7 +285,7 @@ def format_card_probabilities(
             prob = probs[idx].item()
             if prob != prob:  # NaN guard
                 prob = 0.0
-            playable = is_card_playable(card, view.energy.current)
+            playable = is_card_playable(card, view.energy.energy_current)
             seen[display] = {"prob": prob, "count": 1, "playable": playable}
             order.append(display)
         else:
@@ -283,33 +305,23 @@ def format_card_probabilities(
 def get_action_from_model(
     model: ActorCritic,
     view: slai.GameState,
+    legal_actions: list,
     device: torch.device,
     show_card_probs: bool = False,
     greedy: bool = False,
 ) -> tuple[object, str | None]:
-    """
-    Get an action from the model for the given view.
-
-    Args:
-        greedy: If True, use argmax instead of sampling (deterministic)
-
-    Returns:
-        (action, card_probs_str). action is a `slai.Action` instance.
-    """
+    """Get an action from the model for the given view (masks come from the
+    engine's `legal_actions`). Returns (action, card_probs_str)."""
     x_game_state = encode_batch_view_game_state([view], device)
-    mask_batch = get_mask_batch([view], device)
+    mask_batch = get_mask_batch([view], [legal_actions], device)
 
     with torch.no_grad():
         output = model.forward_single(x_game_state, mask_batch, sample=not greedy)
 
         card_probs_str = None
-        has_playable = any(is_card_playable(c, view.energy.current) for c in view.hand)
-        if (
-            show_card_probs
-            and isinstance(view.phase, slai.Phase.CombatDefault)
-            and view.hand
-            and has_playable
-        ):
+        in_combat = view.screen == slai.Screen.Combat and view.pending is None
+        has_playable = any(is_card_playable(c, view.energy.energy_current) for c in view.hand)
+        if show_card_probs and in_combat and view.hand and has_playable:
             probs = get_card_probabilities(model, x_game_state, mask_batch)
             card_probs_str = format_card_probabilities(view, probs)
 
@@ -323,6 +335,7 @@ def run_game(
     verbose: bool = True,
     show_card_probs: bool = True,
     greedy: bool = False,
+    check_legal: bool = False,
 ) -> tuple[int, int]:
     """
     Run a single game with the trained model.
@@ -330,12 +343,16 @@ def run_game(
     Returns:
         (final_floor, final_health)
     """
-    env = slai.GameEnv(ascension=ASCENSION_LEVEL)
+    env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
     obs = env.reset(seed=random.randint(0, 2**31 - 1))
 
     step_count = 0
+    illegal = 0
     terminated = False
     while not terminated:
+        legal = env.get_legal_actions()
+        if not legal:
+            break
         if verbose:
             print(_format_view(obs))
             print("-" * N_COL)
@@ -343,10 +360,20 @@ def run_game(
         action, card_probs_str = get_action_from_model(
             model,
             obs,
+            legal,
             device,
             show_card_probs=verbose and show_card_probs,
             greedy=greedy,
         )
+
+        if check_legal:
+            legal_set = {(int(a.action_type), tuple(a.idxs)) for a in legal}
+            if (int(action.action_type), tuple(action.idxs)) not in legal_set:
+                illegal += 1
+                print(
+                    f"  !! ILLEGAL action {_fmt_action(action)} on screen "
+                    f"{slai.Screen(int(obs.screen)).name}"
+                )
 
         if verbose:
             if card_probs_str:
@@ -358,6 +385,9 @@ def run_game(
 
         obs, terminated = env.step(action)
         step_count += 1
+
+    if check_legal and illegal:
+        print(f"  WARNING: {illegal} illegal actions this game")
 
     final_floor = obs.map.y_current or 0
     final_health = obs.character.health
@@ -412,6 +442,17 @@ def run_game(
     is_flag=True,
     help="Use greedy (argmax) selection instead of sampling",
 )
+@click.option(
+    "--check-legal",
+    is_flag=True,
+    help="Assert every model action is in env.get_legal_actions()",
+)
+@click.option(
+    "--random",
+    "use_random",
+    is_flag=True,
+    help="Use a fresh untrained model (no checkpoint needed)",
+)
 def main(
     exp_path: str,
     delay: float,
@@ -420,17 +461,35 @@ def main(
     quiet: bool,
     no_probs: bool,
     greedy: bool,
+    check_legal: bool,
+    use_random: bool,
 ):
-    """Test a trained agent by running games."""
-    config = load_config(f"{exp_path}/config.yml")
-    model = ActorCritic(**config["model"])
-    model.load_state_dict(torch.load(f"{exp_path}/model.pth", weights_only=True))
+    """Test an agent by running games."""
+    if use_random:
+        model = ActorCritic(
+            dim_entity=32,
+            dim_global=64,
+            transformer_dim_ff=64,
+            transformer_num_heads=2,
+            transformer_num_blocks=1,
+            map_encoder_kernel_size=3,
+            map_encoder_dim=16,
+            dim_ff_primary=32,
+            dim_ff_card=32,
+            dim_ff_monster=32,
+            dim_ff_map=32,
+            dim_ff_value=32,
+        )
+    else:
+        config = load_config(f"{exp_path}/config.yml")
+        model = ActorCritic(**config["model"])
+        model.load_state_dict(torch.load(f"{exp_path}/model.pth", weights_only=True))
     model.eval()
 
     device = torch.device(device)
     model.to(device)
 
-    print(f"Loaded model from {exp_path}")
+    print("Using fresh random model" if use_random else f"Loaded model from {exp_path}")
 
     results = []
     for i in range(num_games):
@@ -444,6 +503,7 @@ def main(
             verbose=not quiet,
             show_card_probs=not no_probs,
             greedy=greedy,
+            check_legal=check_legal,
         )
         results.append((floor, health))
 

@@ -1,4 +1,4 @@
-exp_name: ppo/NEWERA
+exp_name: ppo/NEWERA-II
 num_iterations: 1.0e+6
 log_every: 10
 save_every: 100
