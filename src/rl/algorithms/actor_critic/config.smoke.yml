@@ -1,0 +1,36 @@
+exp_name: smoke/migration_check
+num_iterations: 2
+log_every: 1
+save_every: 1
+gamma: 0.99
+lam: 0.95
+coef_value: 0.500
+coef_entropy_max: 0.015
+coef_entropy_min: 0.010
+coef_entropy_elbow: 1
+max_grad_norm: 0.500
+num_envs: 4
+rollout_length: 32
+clip_eps: 0.20
+clip_value_loss: true
+minibatch_size: 64
+num_epochs: 2
+
+model:
+  dim_entity: 32
+  dim_global: 64
+  transformer_dim_ff: 64
+  transformer_num_heads: 2
+  transformer_num_blocks: 1
+  map_encoder_kernel_size: 3
+  map_encoder_dim: 16
+  dim_ff_primary: 32
+  dim_ff_card: 32
+  dim_ff_monster: 32
+  dim_ff_map: 32
+  dim_ff_value: 32
+
+optimizer:
+  name: Adam
+  kwargs:
+    lr: 1.0e-4

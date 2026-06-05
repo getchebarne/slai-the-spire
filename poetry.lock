@@ -92,6 +92,18 @@ files = [
 colorama = {version = "*", markers = "platform_system == \"Windows\""}
 
 [[package]]
+name = "cloudpickle"
+version = "3.1.2"
+description = "Pickler class to extend the standard pickle.Pickler functionality"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "cloudpickle-3.1.2-py3-none-any.whl", hash = "sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a"},
+    {file = "cloudpickle-3.1.2.tar.gz", hash = "sha256:7fda9eb655c9c230dab534f1983763de5835249750e85fbcef43aaa30a9a2414"},
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -1156,6 +1168,9 @@ groups = ["main"]
 files = []
 develop = true
 
+[package.extras]
+dev = ["mypy"]
+
 [package.source]
 type = "directory"
 url = "../slai"
@@ -1232,6 +1247,39 @@ files = [
     {file = "tensorboard_data_server-0.7.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60"},
     {file = "tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530"},
 ]
+
+[[package]]
+name = "tensordict"
+version = "0.4.0"
+description = ""
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "tensordict-0.4.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:e53f6db9071d2cd03ff8cfc4d48933aa9d387fb2f45d48a1a3d663bb2df2aa59"},
+    {file = "tensordict-0.4.0-cp310-cp310-manylinux1_x86_64.whl", hash = "sha256:4bc94bbc4847e907436f433ea889609b755f761b9c6bd695c8be692b83942ebb"},
+    {file = "tensordict-0.4.0-cp310-cp310-win_amd64.whl", hash = "sha256:5fc35bb00110a9c7fe20639b75066c48c1ca6ca3a0450fcfa1a9d4775b80abde"},
+    {file = "tensordict-0.4.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:44bb5adebcc198503122b559bd38d50048abef61a377ac0fa5741bf1fc68678a"},
+    {file = "tensordict-0.4.0-cp311-cp311-manylinux1_x86_64.whl", hash = "sha256:31a11a4740c28dda0f40302c6b234544fdcaf52e352a23802f7f8eaa383e1776"},
+    {file = "tensordict-0.4.0-cp311-cp311-win_amd64.whl", hash = "sha256:845b028686af73457572177a263aa06320468b284363c4c5d10598f84fbc68a5"},
+    {file = "tensordict-0.4.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:6ef4dc24caa4971d821988072c57e4a06912d1935503b745c5700615eb0d5c33"},
+    {file = "tensordict-0.4.0-cp38-cp38-macosx_11_0_arm64.whl", hash = "sha256:496ea5a11bf3e7a63548db7128f49b98914615001dd6c748012372acc5a10110"},
+    {file = "tensordict-0.4.0-cp38-cp38-manylinux1_x86_64.whl", hash = "sha256:7c33913d71e6e7d20140d3e13451eb6e7a8446e08522b3ccdbe7521dcc1f48a6"},
+    {file = "tensordict-0.4.0-cp38-cp38-win_amd64.whl", hash = "sha256:7e8bb793fda32c0ebbe15fbc1c81ff85a90de42d4f38ca4ca65d5116cbd31c3c"},
+    {file = "tensordict-0.4.0-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:78b33a6d6a87050a9a1c8b959914b8da8bb497755f1570818d62290c5523ed86"},
+    {file = "tensordict-0.4.0-cp39-cp39-manylinux1_x86_64.whl", hash = "sha256:14dda2db38b02f3362675de21c43148a60956209f5cb4cef2f0bf74f28cef7a4"},
+    {file = "tensordict-0.4.0-cp39-cp39-win_amd64.whl", hash = "sha256:aedc5cc205faf662830f9af3b9dad1b42fb12986ce6ab54dee4d409d31f6231b"},
+]
+
+[package.dependencies]
+cloudpickle = "*"
+numpy = "*"
+torch = ">=2.3.0"
+
+[package.extras]
+checkpointing = ["torchsnapshot-nightly"]
+h5 = ["h5py (>=3.8)"]
+tests = ["pytest", "pytest-benchmark", "pytest-instafail", "pytest-rerunfailures", "pyyaml"]
 
 [[package]]
 name = "torch"
@@ -1381,4 +1429,4 @@ watchdog = ["watchdog (>=2.3)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "5d2646251c1f55003aa6d72ab94837aaf74d28ac20807119604b40823fbce1e6"
+content-hash = "1f35000ceb3beb5fd0345a66bd9038107988751f4ec2c77ee6d86c4e9f3e7ac4"

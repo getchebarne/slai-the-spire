@@ -1,23 +1,17 @@
-"""
-Mask generation for the actor-critic model.
+"""Action masks, derived directly from the engine's `get_legal_actions()`.
 
-Operates on `list[slai.GameState]` (not the old `EnvWrapper`s — wrapper
-buffering for two-step targeting is gone, replaced by inline target
-dispatch in `model.forward`).
+Rather than re-implement the engine's per-screen legality rules in Python (which
+drifts — e.g. event-consumed and shop-purge-per-visit aren't derivable from the
+snapshot alone), we build masks from the authoritative legal-action list the
+engine emits for each state. This guarantees the policy can only choose legal
+actions and keeps routing/masking exactly in step with `recompute_legal_actions`.
 
-Per-HeadTypePrimary outputs:
-- `route[htp]`: int64 indices of samples in this primary group
-- `primary_masks[htp]`: binary decision masks for decision primaries
-- `selection_masks[htp]`: entity selection masks for all primaries
-
-Plus auxiliary full-batch tensors (sample-indexed, used by the model
-even for samples not in the corresponding primary group):
-- `target_required`: (B, MAX_SIZE_HAND) bool — does each hand card need
-  a target? Used for inline target dispatch in COMBAT_DEFAULT.
-- `monster_alive_mask`: (B, MAX_MONSTERS) bool — alive monsters per
-  sample. Used by inline HeadMonsterSelect.
-- `retain_nums`: (B,) int — count of cards to retain this turn (only
-  valid for samples in COMBAT_AWAIT_RETAIN).
+Each legal `Action` carries `action_type` + `idxs`. We fold them into:
+  - `option_masks[htp]`: which OptKinds are legal for each screen-head sample
+  - `sel_masks[selkey]`: which entity indices are legal for each selection head
+  - `target_required_*`: whether a CardPlay/PotionUse needs a monster target
+  - `multipick_mask` / `pick_nums`: hand mask + count for discard/retain
+  - `monster_alive_mask`: alive monster slots (the legal target set)
 """
 
 from dataclasses import dataclass
@@ -27,346 +21,262 @@ import slai
 import torch
 
 from src.rl.action_space.route import get_route_primary
-from src.rl.action_space.types import HeadTypePrimary
-from src.rl.action_space.types import IS_DECISION_PRIMARY
 from src.rl.action_space.types import NUM_PRIMARY_HEADS
+from src.rl.action_space.types import NUM_SEL_KEYS
+from src.rl.action_space.types import PEND_SINGLE_SELKEY
 from src.rl.action_space.types import PRIMARY_NUM_CHOICES
+from src.rl.action_space.types import SCREEN_OPTION_KINDS
+from src.rl.action_space.types import HeadTypePrimary
+from src.rl.action_space.types import OptKind
+from src.rl.action_space.types import SelKey
+from src.rl.action_space.types import opt_sel_key
 from src.rl.constants import MAP_WIDTH
+from src.rl.constants import MAX_EVENT_OPTIONS
 from src.rl.constants import MAX_MONSTERS
-from src.rl.constants import MAX_RELIC_REWARDS
+from src.rl.constants import MAX_POTION_SLOTS
+from src.rl.constants import MAX_SHOP_CARDS
+from src.rl.constants import MAX_SHOP_POTIONS
+from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
 from src.rl.constants import MAX_SIZE_DECK
+from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.card import card_identity_ids
 
 
 def is_card_playable(card: slai.Card, energy_current: int) -> bool:
-    """Single source of truth for whether a card can be played right now —
-    affordability + per-card play restriction (slai's `Card.playable` flag
-    captures Entangled, DrawPileEmpty, etc.)."""
+    """Affordability + per-card play restriction (kept for test_agent display)."""
     return card.cost <= energy_current and card.playable
 
 
 # =============================================================================
-# Constants (list-indexed by int(HeadTypePrimary))
+# Per-SelKey pool size + group-id source pile
 # =============================================================================
 
-_SELECTION_SIZES: list[int] = [0] * NUM_PRIMARY_HEADS
-_SELECTION_SIZES[HeadTypePrimary.COMBAT_DEFAULT] = MAX_SIZE_HAND
-_SELECTION_SIZES[HeadTypePrimary.CARD_REWARD] = MAX_SIZE_COMBAT_CARD_REWARD
-_SELECTION_SIZES[HeadTypePrimary.REST_SITE] = MAX_SIZE_DECK
-_SELECTION_SIZES[HeadTypePrimary.COMBAT_CARD_DISCARD] = MAX_SIZE_HAND
-_SELECTION_SIZES[HeadTypePrimary.MAP_SELECT] = MAP_WIDTH
-_SELECTION_SIZES[HeadTypePrimary.COMBAT_AWAIT_RETAIN] = MAX_SIZE_HAND
-_SELECTION_SIZES[HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE] = MAX_SIZE_HAND
-_SELECTION_SIZES[HeadTypePrimary.COMBAT_AWAIT_SETUP] = MAX_SIZE_HAND
-_SELECTION_SIZES[HeadTypePrimary.RELIC_REWARD] = MAX_RELIC_REWARDS
+SEL_POOL_SIZE: list[int] = [0] * NUM_SEL_KEYS
+SEL_POOL_SIZE[SelKey.CARD_PLAY] = MAX_SIZE_HAND
+SEL_POOL_SIZE[SelKey.POTION_USE] = MAX_POTION_SLOTS
+SEL_POOL_SIZE[SelKey.POTION_DISCARD] = MAX_POTION_SLOTS
+SEL_POOL_SIZE[SelKey.ROOM_SELECT] = MAP_WIDTH
+SEL_POOL_SIZE[SelKey.REST_UPGRADE] = MAX_SIZE_DECK
+SEL_POOL_SIZE[SelKey.REWARD_CARD] = MAX_SIZE_COMBAT_CARD_REWARD
+SEL_POOL_SIZE[SelKey.SHOP_CARD] = MAX_SHOP_CARDS
+SEL_POOL_SIZE[SelKey.SHOP_RELIC] = MAX_SHOP_RELICS
+SEL_POOL_SIZE[SelKey.SHOP_POTION] = MAX_SHOP_POTIONS
+SEL_POOL_SIZE[SelKey.SHOP_PURGE] = MAX_SIZE_DECK
+SEL_POOL_SIZE[SelKey.EVENT_OPTION] = MAX_EVENT_OPTIONS
+SEL_POOL_SIZE[SelKey.PEND_SETUP] = MAX_SIZE_HAND
+SEL_POOL_SIZE[SelKey.PEND_NIGHTMARE] = MAX_SIZE_HAND
+SEL_POOL_SIZE[SelKey.PEND_DISCOVER] = MAX_SIZE_DISCOVER
+SEL_POOL_SIZE[SelKey.PEND_PURGE] = MAX_SIZE_DECK
+SEL_POOL_SIZE[SelKey.PEND_UPGRADE] = MAX_SIZE_DECK
+SEL_POOL_SIZE[SelKey.PEND_DUPLICATE] = MAX_SIZE_DECK
+SEL_POOL_SIZE[SelKey.PEND_TRANSFORM] = MAX_SIZE_DECK
 
-SELECTION_SIZES: tuple[int, ...] = tuple(_SELECTION_SIZES)
+# Which card pile (for grouped sampling dedup) each SelKey draws from; None = no dedup.
+_PILE_HAND, _PILE_DECK, _PILE_REWARD, _PILE_DISCOVER, _PILE_SHOP_CARD = (
+    "hand",
+    "deck",
+    "reward",
+    "discover",
+    "shop_card",
+)
+SEL_GROUP_PILE: list = [None] * NUM_SEL_KEYS
+SEL_GROUP_PILE[SelKey.CARD_PLAY] = _PILE_HAND
+SEL_GROUP_PILE[SelKey.PEND_SETUP] = _PILE_HAND
+SEL_GROUP_PILE[SelKey.PEND_NIGHTMARE] = _PILE_HAND
+SEL_GROUP_PILE[SelKey.REST_UPGRADE] = _PILE_DECK
+SEL_GROUP_PILE[SelKey.SHOP_PURGE] = _PILE_DECK
+SEL_GROUP_PILE[SelKey.PEND_PURGE] = _PILE_DECK
+SEL_GROUP_PILE[SelKey.PEND_UPGRADE] = _PILE_DECK
+SEL_GROUP_PILE[SelKey.PEND_DUPLICATE] = _PILE_DECK
+SEL_GROUP_PILE[SelKey.PEND_TRANSFORM] = _PILE_DECK
+SEL_GROUP_PILE[SelKey.REWARD_CARD] = _PILE_REWARD
+SEL_GROUP_PILE[SelKey.PEND_DISCOVER] = _PILE_DISCOVER
+SEL_GROUP_PILE[SelKey.SHOP_CARD] = _PILE_SHOP_CARD
 
 
-# =============================================================================
-# MaskBatch
-# =============================================================================
+# ActionType (screen-context) → OptKind. CardUpgrade at a screen is the rest-site
+# upgrade (pending deck-upgrade is routed to a PEND head, handled separately).
+_AT = slai.ActionType
+_SCREEN_AT_TO_OPT = {
+    int(_AT.TurnEnd): OptKind.TURN_END,
+    int(_AT.CardPlay): OptKind.CARD_PLAY,
+    int(_AT.PotionUse): OptKind.USE_POTION,
+    int(_AT.PotionDiscard): OptKind.DISCARD_POTION,
+    int(_AT.RoomSelect): OptKind.ROOM_SELECT,
+    int(_AT.Rest): OptKind.REST,
+    int(_AT.CardUpgrade): OptKind.REST_UPGRADE,
+    int(_AT.RoomExit): OptKind.ROOM_EXIT,
+    int(_AT.ChestOpen): OptKind.CHEST_OPEN,
+    int(_AT.RewardTakeCard): OptKind.REWARD_TAKE_CARD,
+    int(_AT.RewardTakeRelic): OptKind.REWARD_TAKE_RELIC,
+    int(_AT.RewardTakePotion): OptKind.REWARD_TAKE_POTION,
+    int(_AT.RewardTakeGold): OptKind.REWARD_TAKE_GOLD,
+    int(_AT.ShopBuyCard): OptKind.SHOP_BUY_CARD,
+    int(_AT.ShopBuyRelic): OptKind.SHOP_BUY_RELIC,
+    int(_AT.ShopBuyPotion): OptKind.SHOP_BUY_POTION,
+    int(_AT.ShopPurge): OptKind.SHOP_PURGE,
+    int(_AT.EventOptionSelect): OptKind.EVENT_OPTION,
+}
+
+# Per-screen-htp: OptKind -> position in the option categorical.
+_OPT_POS: dict = {
+    htp: {opt: j for j, opt in enumerate(opts)} for htp, opts in SCREEN_OPTION_KINDS.items()
+}
 
 
 @dataclass
 class MaskBatch:
-    route: list[torch.Tensor]
-    """sample indices per primary group. route[htp] → (N_group,) int64"""
-
-    primary_masks: list[torch.Tensor]
-    """decision masks. primary_masks[htp] → (N_group, num_choices) or empty"""
-
-    selection_masks: list[torch.Tensor]
-    """entity selection masks. selection_masks[htp] → (N_group, max_entities) or empty"""
-
-    # ---- Per-sample auxiliary tensors (full batch B, sample-indexed) ----
-    target_required: torch.Tensor | None
-    """(B, MAX_SIZE_HAND) bool — does hand[i] require a monster target?
-    Used by inline target dispatch in COMBAT_DEFAULT card-play. None on
-    the PPO recompute path, which gates target replay on the recorded
-    `target_index >= 0` and never reads this field."""
-
-    monster_alive_mask: torch.Tensor
-    """(B, MAX_MONSTERS) bool — alive monster slots per sample. Used by
-    inline HeadMonsterSelect for COMBAT_DEFAULT targeting."""
-
-    retain_nums: torch.Tensor
-    """(B,) int — multi-pick count. Populated from `CombatAwaitRetain.num`
-    AND `CombatAwaitDiscard.num` (slai's CardDiscard action requires
-    exactly `num` indices in one shot, same shape as Retain).
-    Zero outside those two phases. Field name kept for backwards-compat."""
-
-    # ---- Per-pile group identity (for grouped sampling) ----
-    # Two slots with the same group_id hold cards interchangeable for the
-    # policy (same `_card_policy_features`). -1 marks padding/invalid slots.
-    # Heads use these to dedup identical cards when sampling, so the policy
-    # gradient is over CARD TYPES rather than slot positions.
-    hand_group_ids: torch.Tensor
-    """(B, MAX_SIZE_HAND) int — used by COMBAT_DEFAULT (card play),
-    COMBAT_CARD_DISCARD, COMBAT_AWAIT_RETAIN/NIGHTMARE/SETUP."""
-
-    deck_group_ids: torch.Tensor
-    """(B, MAX_SIZE_DECK) int — used by REST_SITE (card upgrade)."""
-
-    card_reward_group_ids: torch.Tensor
-    """(B, MAX_SIZE_COMBAT_CARD_REWARD) int — used by CARD_REWARD."""
+    route: list  # per htp: (N_htp,) int64 sample indices
+    option_masks: list  # per htp: (N_htp, K_htp) bool (empty for non-screen heads)
+    sel_masks: list  # per SelKey: (B, pool_size) bool
+    sel_group_ids: list  # per SelKey: (B, pool_size) int64 or None
+    monster_alive_mask: torch.Tensor  # (B, MAX_MONSTERS) bool
+    target_required_hand: torch.Tensor  # (B, MAX_SIZE_HAND) bool
+    target_required_potion: torch.Tensor  # (B, MAX_POTION_SLOTS) bool
+    multipick_mask: torch.Tensor  # (B, MAX_SIZE_HAND) bool — hand avail for discard/retain
+    multipick_group_ids: torch.Tensor  # (B, MAX_SIZE_HAND) int64
+    pick_nums: torch.Tensor  # (B,) int64 — discard/retain count
 
 
-# =============================================================================
-# Per-state primary mask functions (decision primaries only)
-# =============================================================================
-
-
-def _get_primary_mask_combat_default(state: slai.GameState) -> list[bool]:
-    """[end_turn, play_card]"""
-    has_playable = any(is_card_playable(card, state.energy.current) for card in state.hand)
-    return [True, has_playable]
-
-
-def _get_primary_mask_card_reward(state: slai.GameState) -> list[bool]:
-    """[skip, select]"""
-    can_select = len(state.deck) < MAX_SIZE_DECK and len(state.rewards_card) > 0
-    return [True, can_select]
-
-
-def _get_primary_mask_rest_site(state: slai.GameState) -> list[bool]:
-    """[rest, upgrade]"""
-    has_upgradable = any(not card.upgraded for card in state.deck)
-    return [True, has_upgradable]
-
-
-def _get_primary_mask_relic_reward(state: slai.GameState) -> list[bool]:
-    """[skip, select]"""
-    can_select = len(state.rewards_relic) > 0
-    return [True, can_select]
-
-
-_PRIMARY_MASK_FNS: list = [None] * NUM_PRIMARY_HEADS
-_PRIMARY_MASK_FNS[HeadTypePrimary.COMBAT_DEFAULT] = _get_primary_mask_combat_default
-_PRIMARY_MASK_FNS[HeadTypePrimary.CARD_REWARD] = _get_primary_mask_card_reward
-_PRIMARY_MASK_FNS[HeadTypePrimary.REST_SITE] = _get_primary_mask_rest_site
-_PRIMARY_MASK_FNS[HeadTypePrimary.RELIC_REWARD] = _get_primary_mask_relic_reward
-
-
-# =============================================================================
-# Per-state selection mask functions (all primaries)
-# =============================================================================
-
-
-def _get_selection_mask(htp: int, state: slai.GameState) -> list[bool]:
-    """Get entity selection mask for a primary type (int-indexed)."""
-    if htp == HeadTypePrimary.COMBAT_DEFAULT:
-        mask = [False] * MAX_SIZE_HAND
-        for idx, card in enumerate(state.hand[:MAX_SIZE_HAND]):
-            mask[idx] = is_card_playable(card, state.energy.current)
-        return mask
-
-    if htp == HeadTypePrimary.COMBAT_CARD_DISCARD:
-        mask = [False] * MAX_SIZE_HAND
-        for idx in range(min(len(state.hand), MAX_SIZE_HAND)):
-            mask[idx] = True
-        return mask
-
-    if htp == HeadTypePrimary.COMBAT_AWAIT_RETAIN:
-        mask = [False] * MAX_SIZE_HAND
-        for idx in range(min(len(state.hand), MAX_SIZE_HAND)):
-            mask[idx] = True
-        return mask
-
-    if htp == HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE:
-        mask = [False] * MAX_SIZE_HAND
-        for idx in range(min(len(state.hand), MAX_SIZE_HAND)):
-            mask[idx] = True
-        return mask
-
-    if htp == HeadTypePrimary.COMBAT_AWAIT_SETUP:
-        mask = [False] * MAX_SIZE_HAND
-        for idx in range(min(len(state.hand), MAX_SIZE_HAND)):
-            mask[idx] = True
-        return mask
-
-    if htp == HeadTypePrimary.CARD_REWARD:
-        mask = [False] * MAX_SIZE_COMBAT_CARD_REWARD
-        for idx in range(min(len(state.rewards_card), MAX_SIZE_COMBAT_CARD_REWARD)):
-            mask[idx] = True
-        return mask
-
-    if htp == HeadTypePrimary.RELIC_REWARD:
-        mask = [False] * MAX_RELIC_REWARDS
-        for idx in range(min(len(state.rewards_relic), MAX_RELIC_REWARDS)):
-            mask[idx] = True
-        return mask
-
-    if htp == HeadTypePrimary.REST_SITE:
-        mask = [False] * MAX_SIZE_DECK
-        for idx, card in enumerate(state.deck[:MAX_SIZE_DECK]):
-            mask[idx] = not card.upgraded
-        return mask
-
-    if htp == HeadTypePrimary.MAP_SELECT:
-        return _get_mask_map(state)
-
-    raise ValueError(f"Unknown head type: {htp}")
-
-
-def _get_mask_map(state: slai.GameState) -> list[bool]:
-    """Mask for selectable map nodes (next-row columns reachable from cur)."""
-    mask = [False] * MAP_WIDTH
-
-    if not state.map.rooms:
-        return mask
-
-    if state.map.x_current is None and state.map.y_current is None:
-        for x, room in enumerate(state.map.rooms[0][:MAP_WIDTH]):
-            if room is not None:
-                mask[x] = True
-    else:
-        y = state.map.y_current
-        x = state.map.x_current
-
-        if x is None or x < 0 or y is None or y >= len(state.map.rooms):
-            return mask
-
-        row = state.map.rooms[y]
-        if x >= len(row):
-            return mask
-
-        current_room = row[x]
-        if current_room is not None:
-            for x_next in current_room.edges:
-                if 0 <= x_next < MAP_WIDTH:
-                    mask[x_next] = True
-
-    return mask
-
-
-# =============================================================================
-# Per-sample auxiliary tensors
-# =============================================================================
-
-
-def _get_target_required(state: slai.GameState) -> list[bool]:
-    """Per-hand-slot: True if playing this card requires a monster target."""
-    mask = [False] * MAX_SIZE_HAND
-    for idx, card in enumerate(state.hand[:MAX_SIZE_HAND]):
-        mask[idx] = card.requires_target
-    return mask
-
-
-def _get_monster_alive_mask(state: slai.GameState) -> list[bool]:
-    """Per-monster-slot: True if monster at this slot is alive (i.e. exists
-    in the alive-only `state.monsters` list)."""
-    mask = [False] * MAX_MONSTERS
-    for idx in range(min(len(state.monsters), MAX_MONSTERS)):
-        mask[idx] = True
-    return mask
-
-
-def _get_retain_num(state: slai.GameState) -> int:
-    """Multi-pick count for samples in CombatAwaitRetain or CombatAwaitDiscard.
-    Both phases use the same multi-pick machinery — slai's CardDiscard
-    expects `num` indices in one shot, identical shape to CardRetain."""
-    if isinstance(state.phase, slai.Phase.CombatAwaitRetain):
-        return int(state.phase.num)
-    if isinstance(state.phase, slai.Phase.CombatAwaitDiscard):
-        return int(state.phase.num)
-    return 0
-
-
-# =============================================================================
-# Public API
-# =============================================================================
+def _pile_ids(state: slai.GameState, pile: str) -> list[int]:
+    if pile == _PILE_HAND:
+        return card_identity_ids(state.hand[:MAX_SIZE_HAND])
+    if pile == _PILE_DECK:
+        return card_identity_ids(state.deck[:MAX_SIZE_DECK])
+    if pile == _PILE_REWARD:
+        cards = state.reward.cards if state.reward is not None else []
+        return card_identity_ids(cards[:MAX_SIZE_COMBAT_CARD_REWARD])
+    if pile == _PILE_DISCOVER:
+        return card_identity_ids(state.discover[:MAX_SIZE_DISCOVER])
+    if pile == _PILE_SHOP_CARD:
+        cards = state.shop.cards if state.shop is not None else []
+        return card_identity_ids(cards[:MAX_SHOP_CARDS])
+    return []
 
 
 def get_mask_batch(
     states: list[slai.GameState],
+    legal_actions_batch: list[list],
     device: torch.device,
 ) -> MaskBatch:
-    """
-    Build MaskBatch for a list of slai.GameState.
-
-    Routes states by phase, then generates primary, selection, and
-    auxiliary masks.
-    """
+    """Build a MaskBatch from each state's engine-emitted legal actions."""
     B = len(states)
     route_lists = get_route_primary(states)
 
-    route: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
-    primary_masks: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
-    selection_masks: list[torch.Tensor] = [None] * NUM_PRIMARY_HEADS  # type: ignore
-
-    for htp in range(NUM_PRIMARY_HEADS):
-        indices = route_lists[htp]
-        route[htp] = torch.tensor(indices, dtype=torch.long, device=device)
-
-        n = len(indices)
-        sel_size = SELECTION_SIZES[htp]
-
-        if n == 0:
-            if IS_DECISION_PRIMARY[htp]:
-                primary_masks[htp] = torch.zeros(
-                    0, PRIMARY_NUM_CHOICES[htp], dtype=torch.bool, device=device
-                )
-            else:
-                primary_masks[htp] = torch.empty(0, dtype=torch.bool, device=device)
-            selection_masks[htp] = torch.zeros(0, sel_size, dtype=torch.bool, device=device)
-            continue
-
-        group_states = [states[i] for i in indices]
-
-        # Primary masks (decision primaries only)
-        if IS_DECISION_PRIMARY[htp]:
-            num_choices = PRIMARY_NUM_CHOICES[htp]
-            primary_fn = _PRIMARY_MASK_FNS[htp]
-            primary_np = np.zeros((n, num_choices), dtype=bool)
-            for b, state in enumerate(group_states):
-                primary_np[b] = primary_fn(state)
-            primary_masks[htp] = torch.from_numpy(primary_np).to(device)
-        else:
-            primary_masks[htp] = torch.empty(0, dtype=torch.bool, device=device)
-
-        # Selection masks (all groups)
-        sel_np = np.zeros((n, sel_size), dtype=bool)
-        for b, state in enumerate(group_states):
-            sel_np[b] = _get_selection_mask(htp, state)
-        selection_masks[htp] = torch.from_numpy(sel_np).to(device)
-
-    # Per-sample auxiliary tensors (full batch indexing)
-    target_req_np = np.zeros((B, MAX_SIZE_HAND), dtype=bool)
+    # Per-SelKey full-batch masks + group ids
+    sel_np = [np.zeros((B, SEL_POOL_SIZE[k]), dtype=bool) for k in range(NUM_SEL_KEYS)]
+    gid_np = [
+        np.full((B, SEL_POOL_SIZE[k]), -1, dtype=np.int64)
+        if SEL_GROUP_PILE[k] is not None
+        else None
+        for k in range(NUM_SEL_KEYS)
+    ]
     monster_alive_np = np.zeros((B, MAX_MONSTERS), dtype=bool)
-    retain_nums_np = np.zeros(B, dtype=np.int64)
-    hand_gids_np = np.full((B, MAX_SIZE_HAND), -1, dtype=np.int64)
-    deck_gids_np = np.full((B, MAX_SIZE_DECK), -1, dtype=np.int64)
-    reward_gids_np = np.full((B, MAX_SIZE_COMBAT_CARD_REWARD), -1, dtype=np.int64)
+    tgt_hand_np = np.zeros((B, MAX_SIZE_HAND), dtype=bool)
+    tgt_potion_np = np.zeros((B, MAX_POTION_SLOTS), dtype=bool)
+    multipick_np = np.zeros((B, MAX_SIZE_HAND), dtype=bool)
+    multipick_gid_np = np.full((B, MAX_SIZE_HAND), -1, dtype=np.int64)
+    pick_nums_np = np.zeros(B, dtype=np.int64)
+
+    # Per-sample option-mask rows (screen heads only)
+    option_rows: dict = {}
+
+    # htp lookup per sample
+    htp_of = [None] * B
+    for htp in range(NUM_PRIMARY_HEADS):
+        for i in route_lists[htp]:
+            htp_of[i] = htp
+
     for i, state in enumerate(states):
-        target_req_np[i] = _get_target_required(state)
-        monster_alive_np[i] = _get_monster_alive_mask(state)
-        retain_nums_np[i] = _get_retain_num(state)
+        htp = htp_of[i]
+        legal = legal_actions_batch[i]
 
-        hand_ids = card_identity_ids(state.hand[:MAX_SIZE_HAND])
-        hand_gids_np[i, : len(hand_ids)] = hand_ids
-        deck_ids = card_identity_ids(state.deck[:MAX_SIZE_DECK])
-        deck_gids_np[i, : len(deck_ids)] = deck_ids
-        reward_ids = card_identity_ids(state.rewards_card[:MAX_SIZE_COMBAT_CARD_REWARD])
-        reward_gids_np[i, : len(reward_ids)] = reward_ids
+        n_alive = min(len(state.monsters), MAX_MONSTERS)
+        monster_alive_np[i, :n_alive] = True
 
-    target_required = torch.from_numpy(target_req_np).to(device)
-    monster_alive_mask = torch.from_numpy(monster_alive_np).to(device)
-    retain_nums = torch.from_numpy(retain_nums_np).to(device)
-    hand_group_ids = torch.from_numpy(hand_gids_np).to(device)
-    deck_group_ids = torch.from_numpy(deck_gids_np).to(device)
-    card_reward_group_ids = torch.from_numpy(reward_gids_np).to(device)
+        # Fill group ids for every pile (cheap; only routed slots are read by heads)
+        for k in range(NUM_SEL_KEYS):
+            pile = SEL_GROUP_PILE[k]
+            if pile is None:
+                continue
+            ids = _pile_ids(state, pile)
+            n = min(len(ids), SEL_POOL_SIZE[k])
+            if n:
+                gid_np[k][i, :n] = ids[:n]
+
+        if htp in SCREEN_OPTION_KINDS:
+            opts = SCREEN_OPTION_KINDS[htp]
+            row = np.zeros(len(opts), dtype=bool)
+            pos = _OPT_POS[htp]
+            for action in legal:
+                opt = _SCREEN_AT_TO_OPT.get(int(action.action_type))
+                if opt is None or opt not in pos:
+                    continue
+                row[pos[opt]] = True
+                selkey = opt_sel_key(opt)
+                if selkey is None:
+                    continue
+                idxs = action.idxs
+                idx0 = idxs[0]
+                if idx0 < SEL_POOL_SIZE[selkey]:
+                    sel_np[selkey][i, idx0] = True
+                if opt == OptKind.CARD_PLAY and len(idxs) == 2 and idx0 < MAX_SIZE_HAND:
+                    tgt_hand_np[i, idx0] = True
+                if opt == OptKind.USE_POTION and len(idxs) == 2 and idx0 < MAX_POTION_SLOTS:
+                    tgt_potion_np[i, idx0] = True
+            option_rows[i] = row
+
+        elif htp in (HeadTypePrimary.PEND_DISCARD, HeadTypePrimary.PEND_RETAIN):
+            hand_ids = card_identity_ids(state.hand[:MAX_SIZE_HAND])
+            n = min(len(hand_ids), MAX_SIZE_HAND)
+            multipick_gid_np[i, :n] = hand_ids[:n]
+            for action in legal:
+                for idx in action.idxs:
+                    if idx < MAX_SIZE_HAND:
+                        multipick_np[i, idx] = True
+            if legal:
+                pick_nums_np[i] = len(legal[0].idxs)
+
+        else:
+            # Pending single-select
+            selkey = PEND_SINGLE_SELKEY[htp]
+            for action in legal:
+                idx0 = action.idxs[0]
+                if idx0 < SEL_POOL_SIZE[selkey]:
+                    sel_np[selkey][i, idx0] = True
+
+    # Assemble per-htp tensors
+    route = [
+        torch.tensor(route_lists[htp], dtype=torch.long, device=device)
+        for htp in range(NUM_PRIMARY_HEADS)
+    ]
+    option_masks = []
+    for htp in range(NUM_PRIMARY_HEADS):
+        idxs = route_lists[htp]
+        k = PRIMARY_NUM_CHOICES[htp]
+        if k == 0 or not idxs:
+            option_masks.append(torch.zeros(len(idxs), k, dtype=torch.bool, device=device))
+            continue
+        rows = np.stack([option_rows[i] for i in idxs], axis=0)
+        option_masks.append(torch.from_numpy(rows).to(device))
+
+    sel_masks = [torch.from_numpy(sel_np[k]).to(device) for k in range(NUM_SEL_KEYS)]
+    sel_group_ids = [
+        torch.from_numpy(gid_np[k]).to(device) if gid_np[k] is not None else None
+        for k in range(NUM_SEL_KEYS)
+    ]
 
     return MaskBatch(
         route=route,
-        primary_masks=primary_masks,
-        selection_masks=selection_masks,
-        target_required=target_required,
-        monster_alive_mask=monster_alive_mask,
-        retain_nums=retain_nums,
-        hand_group_ids=hand_group_ids,
-        deck_group_ids=deck_group_ids,
-        card_reward_group_ids=card_reward_group_ids,
+        option_masks=option_masks,
+        sel_masks=sel_masks,
+        sel_group_ids=sel_group_ids,
+        monster_alive_mask=torch.from_numpy(monster_alive_np).to(device),
+        target_required_hand=torch.from_numpy(tgt_hand_np).to(device),
+        target_required_potion=torch.from_numpy(tgt_potion_np).to(device),
+        multipick_mask=torch.from_numpy(multipick_np).to(device),
+        multipick_group_ids=torch.from_numpy(multipick_gid_np).to(device),
+        pick_nums=torch.from_numpy(pick_nums_np).to(device),
     )

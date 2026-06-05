@@ -1,68 +1,79 @@
 import numpy as np
-import slai
 import torch
+from slai import Character
 
-from src.rl.encoding.actor import encode_view_actor_modifiers
-from src.rl.encoding.actor import get_encoding_dim_actor_modifiers
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
+from src.rl.encoding.modifier import encode_modifiers_into
+from src.rl.encoding.modifier import get_encoding_dim_modifiers
+from src.rl.utils import get_piecewise_bucket
+from src.rl.utils import get_piecewise_dim
+from src.rl.utils import get_sqrt_norm
 
 
-# Damage normalization cap (was The Guardian's Fierce Bash asc-4). Hardcoded
-# rather than queried from slai; bump if encounters can deal more.
-_INCOMING_DAMAGE_MAX = 32
+_INCOMING_DAMAGE_MAX = 150  # summed multi-monster turn; sqrt-scaled
+_HEALTH_MAX = 80   # OHE bucket range (fixed for stable dim); the live max HP is a separate scalar
+_HEALTH_MAX_CAP = 200  # sqrt cap for the max-HP magnitude scalar
+_BLOCK_MAX = 30
+_GOLD_MIN = 0
+_GOLD_MAX = 499
+_GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN # Pure sqrt
+_GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
+_ENCODING_DIM_CHARACTER = (
+    get_encoding_dim_modifiers()                              # Modifiers OHE
+    + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
+    + _GOLD_DIM                                               # Gold OHE
+    + 1                                                       # Gold scalar
+    + 1                                                       # Incoming damage
+    + 1                                                       # Block >= incoming damage
+    + 1                                                       # Incoming damage is lethal
+    + 1                                                       # Health fraction of live max HP
+    + 1                                                       # Max HP magnitude
+    + 1                                                       # Net unblocked damage this turn
+)
 
-
-def get_encoding_dim_character() -> int:
-    """Calculate character encoding dimension (excludes modifiers and health/block)."""
-    return 2  # incoming_damage, blocked
-
-
-_ENCODING_DIM_CHARACTER = get_encoding_dim_character()
-
-
-def _encode_view_character_into(
-    out: np.ndarray, view_character: slai.Character, incoming_damage: int
+def _encode_character_into(
+    character: Character, incoming_damage: int, out: np.ndarray
 ) -> None:
-    """Encode character-specific features (survivability) into a pre-allocated numpy array."""
-    out[0] = min(incoming_damage, _INCOMING_DAMAGE_MAX) / _INCOMING_DAMAGE_MAX
-    out[1] = float(view_character.block >= incoming_damage)
+    # Initialize current position pointer
+    pos = 0
+
+    # Modifiers OHE
+    pos = encode_modifiers_into(character.modifiers, pos, out)
+
+    # Health and block OHE and scalars
+    pos = encode_health_block_into(
+        character.health, character.block, _HEALTH_MAX, _BLOCK_MAX, pos, out
+    )
+
+    # Gold OHE
+    gold_bucket = get_piecewise_bucket(character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
+    out[pos + gold_bucket] = 1.0
+    pos += _GOLD_DIM
+
+    # Scalars
+    out[pos] = character.gold / _GOLD_MAX
+    out[pos + 1] = get_sqrt_norm(incoming_damage, _INCOMING_DAMAGE_MAX)
+    out[pos + 2] = float(character.block >= incoming_damage)
+    out[pos + 3] = float(incoming_damage >= character.health + character.block)
+    out[pos + 4] = character.health / max(character.health_max, 1)
+    out[pos + 5] = get_sqrt_norm(character.health_max, _HEALTH_MAX_CAP)
+    out[pos + 6] = get_sqrt_norm(max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX)
 
 
-def encode_batch_view_character(
-    batch_view_character: list[slai.Character],
+def encode_batch_character(
+    batch_character: list[Character],
     batch_incoming_damage: list[int],
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Encode a batch of characters using NumPy pre-allocation.
+) -> torch.Tensor:
+    batch_size = len(batch_character)
 
-    Returns:
-        x_out: (B, dim_character) character-specific features (survivability)
-        x_health_block: (B, dim_health_block) shared health/block encoding
-        x_modifiers: (B, dim_modifiers) modifier vectors
-    """
-    batch_size = len(batch_view_character)
-    modifier_dim = get_encoding_dim_actor_modifiers()
-    health_block_dim = get_encoding_dim_health_block()
-
-    # Pre-allocate numpy arrays
+    # Pre-allocate NumPy array
     x_out = np.zeros((batch_size, _ENCODING_DIM_CHARACTER), dtype=np.float32)
-    x_health_block = np.zeros((batch_size, health_block_dim), dtype=np.float32)
-    x_modifiers = np.zeros((batch_size, modifier_dim), dtype=np.float32)
 
-    for b, (view_character, incoming_damage) in enumerate(
-        zip(batch_view_character, batch_incoming_damage)
+    for b, (character, incoming_damage) in enumerate(
+        zip(batch_character, batch_incoming_damage)
     ):
-        _encode_view_character_into(x_out[b], view_character, incoming_damage)
-        encode_health_block_into(
-            x_health_block[b],
-            view_character.health,
-            view_character.block,
-        )
-        x_modifiers[b] = encode_view_actor_modifiers(view_character.modifiers)
+        _encode_character_into(character, incoming_damage, x_out[b])
 
-    return (
-        torch.from_numpy(x_out).to(device),
-        torch.from_numpy(x_health_block).to(device),
-        torch.from_numpy(x_modifiers).to(device),
-    )
+    return torch.from_numpy(x_out).to(device)

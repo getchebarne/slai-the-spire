@@ -10,6 +10,10 @@ Centralizes magic numbers and configuration values used across the RL codebase.
 
 ASCENSION_LEVEL = 1
 
+# Skip trivial single-legal-action states in the engine (auto-advance). Used
+# for training and eval — env-construction flag, not a tunable hyperparameter.
+FAST_MODE = True
+
 # =============================================================================
 # Encoding Limits
 # =============================================================================
@@ -54,6 +58,7 @@ MODIFIER_STACKS_MAX = {
 
 import slai as _slai
 
+
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
@@ -70,6 +75,25 @@ MAX_SIZE_DRAW_PILE = 50
 # Maximum number of relic-reward offers per RELIC_REWARD halt. Today slai
 # emits at most 1 (post-Elite). Bump if that ever changes.
 MAX_RELIC_REWARDS = 1
+
+# Max owned relics encoded as entities. No duplicate relics, so the true
+# ceiling is RelicName::COUNT; sized with headroom, bump as content grows.
+MAX_RELICS = 16
+
+# New-screen encoder/selection caps. Sized to current slai content with a
+# little headroom; masks/encoders enumerate up to these. slai shops offer
+# 7 cards / 3 relics / 3 potions; events up to ~9 options; discover ~3.
+MAX_POTION_SLOTS = 3  # belt default (2 at A11+; extra slot masked empty)
+MAX_SHOP_CARDS = 8
+MAX_SHOP_RELICS = 4
+MAX_SHOP_POTIONS = 4
+MAX_EVENT_OPTIONS = 12
+MAX_SIZE_DISCOVER = 5
+
+# Normalization caps for new scalar features
+GOLD_CAP = 999
+SHOP_PRICE_CAP = 400
+EVENT_STATE_CAP = 10
 
 
 __all__ = [
@@ -92,4 +116,17 @@ __all__ = [
     "MAX_SIZE_DISC_PILE",
     "MAX_SIZE_DRAW_PILE",
     "MAX_SIZE_HAND",
+    "MAX_RELIC_REWARDS",
+    "MAX_RELICS",
+    # Training flags + new-screen caps
+    "FAST_MODE",
+    "MAX_POTION_SLOTS",
+    "MAX_SHOP_CARDS",
+    "MAX_SHOP_RELICS",
+    "MAX_SHOP_POTIONS",
+    "MAX_EVENT_OPTIONS",
+    "MAX_SIZE_DISCOVER",
+    "GOLD_CAP",
+    "SHOP_PRICE_CAP",
+    "EVENT_STATE_CAP",
 ]

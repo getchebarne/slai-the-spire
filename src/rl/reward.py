@@ -19,8 +19,7 @@ def compute_reward(
 
         # Win
         return (
-            1
-            + view_game_state_next.character.health / view_game_state_next.character.health_max
+            1 + view_game_state_next.character.health / view_game_state_next.character.health_max
         )
 
     # Floor climb
@@ -37,9 +36,7 @@ def compute_reward(
     diff_upgrades = num_upgrades_next - num_upgrades
 
     # Health difference
-    diff_health_char = (
-        view_game_state_next.character.health - view_game_state.character.health
-    )
+    diff_health_char = view_game_state_next.character.health - view_game_state.character.health
 
     return (
         _WEIGHT_HEALTH_CHAR * diff_health_char
