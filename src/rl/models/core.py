@@ -19,8 +19,18 @@ from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISC_PILE
 from src.rl.constants import MAX_SIZE_DRAW_PILE
 from src.rl.constants import MAX_SIZE_HAND
-from src.rl.encoding.fsm import FSM_DIM
-from src.rl.encoding.state import XGameState
+from src.rl.encoding.card import get_encoding_dim_card
+from src.rl.encoding.event import get_encoding_dim_event_meta
+from src.rl.encoding.event import get_encoding_dim_event_option
+from src.rl.encoding.potion import get_encoding_dim_potion
+from src.rl.encoding.relic import get_encoding_dim_relic
+from src.rl.encoding.reward import get_encoding_dim_reward_meta
+from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
+from src.rl.encoding.shop import get_encoding_dim_shop_card
+from src.rl.encoding.shop import get_encoding_dim_shop_meta
+from src.rl.encoding.shop import get_encoding_dim_shop_potion
+from src.rl.encoding.shop import get_encoding_dim_shop_relic
+from src.rl.encoding.state import TensorGameState
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapEncoder
@@ -227,14 +237,35 @@ class Core(nn.Module):
         # - 6 sequence entity types (hand, draw, disc, deck, reward, monsters): mean + max each = 12 * dim
         # - 2 singleton entities (character, energy): 2 * dim
         # - Map encoding: map_encoder_dim
-        # - FSM state: FSM_DIM
+        # - Screen state: _ENCODING_DIM_SCREEN
         _num_seq_entity_types = 6  # hand, draw, disc, deck, reward, monsters
         _num_singleton_entities = 2  # character, energy
+
+        # New screen/feature blocks pooled into the global context. Sequence
+        # pools (potion belt, shop cards/relics/potions, event options, discover)
+        # contribute mean+max of their raw per-item encodings; flat blocks
+        # (relics-owned, reward/shop/event meta) concat directly.
+        _new_seq_pool_dim = 2 * (
+            get_encoding_dim_potion()
+            + get_encoding_dim_shop_card()
+            + get_encoding_dim_shop_relic()
+            + get_encoding_dim_shop_potion()
+            + get_encoding_dim_event_option()
+            + get_encoding_dim_card()  # discover cards
+        )
+        _new_flat_dim = (
+            get_encoding_dim_relic()
+            + get_encoding_dim_reward_meta()
+            + get_encoding_dim_shop_meta()
+            + get_encoding_dim_event_meta()
+        )
         global_input_dim = (
             _num_seq_entity_types * 2 * dim_entity  # mean + max for each sequence type
             + _num_singleton_entities * dim_entity  # character + energy
             + map_encoder_dim
-            + FSM_DIM
+            + _ENCODING_DIM_SCREEN
+            + _new_seq_pool_dim
+            + _new_flat_dim
         )
         self._global_projection = nn.Sequential(
             nn.Linear(global_input_dim, dim_global),
@@ -267,7 +298,7 @@ class Core(nn.Module):
     def dim_global(self) -> int:
         return self._dim_global
 
-    def forward(self, x_game_state: XGameState) -> CoreOutput:
+    def forward(self, x_game_state: TensorGameState) -> CoreOutput:
         batch_size = x_game_state.x_hand.shape[0]
 
         # Concatenate all cards (and their masks)
@@ -373,6 +404,29 @@ class Core(nn.Module):
         x_monsters_mean = _calculate_masked_mean(x_monsters_out, x_game_state.x_monsters_mask_pad)
         x_monsters_max = _calculate_masked_max(x_monsters_out, x_game_state.x_monsters_mask_pad)
 
+        # New screen/feature pools (raw per-item encodings, masked mean + max)
+        def _pool(x, m):
+            return _calculate_masked_mean(x, m), _calculate_masked_max(x, m)
+
+        x_potions_mean, x_potions_max = _pool(
+            x_game_state.x_potions, x_game_state.x_potions_mask_pad
+        )
+        x_shop_cards_mean, x_shop_cards_max = _pool(
+            x_game_state.x_shop_cards, x_game_state.x_shop_cards_mask_pad
+        )
+        x_shop_relics_mean, x_shop_relics_max = _pool(
+            x_game_state.x_shop_relics, x_game_state.x_shop_relics_mask_pad
+        )
+        x_shop_potions_mean, x_shop_potions_max = _pool(
+            x_game_state.x_shop_potions, x_game_state.x_shop_potions_mask_pad
+        )
+        x_event_options_mean, x_event_options_max = _pool(
+            x_game_state.x_event_options, x_game_state.x_event_options_mask_pad
+        )
+        x_discover_mean, x_discover_max = _pool(
+            x_game_state.x_discover, x_game_state.x_discover_mask_pad
+        )
+
         # Concatenate all aggregated features
         x_global = self._global_projection(
             torch.cat(
@@ -393,9 +447,27 @@ class Core(nn.Module):
                     # Singleton entities
                     x_character_out,
                     x_energy_out,
-                    # Map and FSM
+                    # Map and screen
                     x_map,
-                    x_game_state.x_fsm,
+                    x_game_state.x_screen,
+                    # New screen/feature sequence pools (mean + max)
+                    x_potions_mean,
+                    x_potions_max,
+                    x_shop_cards_mean,
+                    x_shop_cards_max,
+                    x_shop_relics_mean,
+                    x_shop_relics_max,
+                    x_shop_potions_mean,
+                    x_shop_potions_max,
+                    x_event_options_mean,
+                    x_event_options_max,
+                    x_discover_mean,
+                    x_discover_max,
+                    # New flat blocks
+                    x_game_state.x_relics,
+                    x_game_state.x_reward_meta,
+                    x_game_state.x_shop_meta,
+                    x_game_state.x_event_meta,
                 ],
                 dim=1,
             )

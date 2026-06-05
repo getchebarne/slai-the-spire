@@ -54,9 +54,7 @@ def _first_occurrence_mask(group_ids: torch.Tensor) -> torch.Tensor:
     # same[b, i, j] = True if positions i and j share a group id
     same = group_ids.unsqueeze(2) == group_ids.unsqueeze(1)
     # earlier[i, j] = True if j < i (strict lower triangular)
-    earlier = torch.tril(
-        torch.ones(N, N, device=device, dtype=torch.bool), diagonal=-1
-    )
+    earlier = torch.tril(torch.ones(N, N, device=device, dtype=torch.bool), diagonal=-1)
     # has_earlier_dup[b, i] = exists valid j < i with same group id
     has_earlier_dup = (same & earlier.unsqueeze(0) & valid.unsqueeze(1)).any(dim=2)
     return valid & ~has_earlier_dup
@@ -130,9 +128,7 @@ def recompute_grouped_log_prob_and_entropy(
     to, then compute that group's log_prob and the distribution's
     entropy. If `group_ids` is None, falls back to per-slot.
     """
-    group_dist, rep_indices = _grouped_dist_and_rep_indices(
-        masked_logits, indices, group_ids
-    )
+    group_dist, rep_indices = _grouped_dist_and_rep_indices(masked_logits, indices, group_ids)
     return group_dist.log_prob(rep_indices), group_dist.entropy()
 
 
@@ -144,9 +140,7 @@ def _grouped_log_prob_only(
     """Same as `recompute_grouped_log_prob_and_entropy` but skips entropy.
     Used per-step inside multi-pick recompute, where the per-step entropy
     is discarded in favor of an initial-distribution entropy proxy."""
-    group_dist, rep_indices = _grouped_dist_and_rep_indices(
-        masked_logits, indices, group_ids
-    )
+    group_dist, rep_indices = _grouped_dist_and_rep_indices(masked_logits, indices, group_ids)
     return group_dist.log_prob(rep_indices)
 
 
@@ -563,8 +557,10 @@ class HeadCardMultiPick(nn.Module):
                 break
 
             out = sample_grouped(
-                logits[sp_idx], cur_mask[sp_idx],
-                sample=True, group_ids=cur_group_ids[sp_idx],
+                logits[sp_idx],
+                cur_mask[sp_idx],
+                sample=True,
+                group_ids=cur_group_ids[sp_idx],
             )
             sp_pick = out.indices
             picks[sp_idx, k] = sp_pick
@@ -604,7 +600,9 @@ class HeadCardMultiPick(nn.Module):
             sp_picked = recorded_picks[sp_idx, k]
             sp_logits = logits[sp_idx].masked_fill(~cur_mask[sp_idx], float("-inf"))
             sp_log_prob = _grouped_log_prob_only(
-                sp_logits, sp_picked, group_ids=cur_group_ids[sp_idx],
+                sp_logits,
+                sp_picked,
+                group_ids=cur_group_ids[sp_idx],
             )
             log_probs[sp_idx] = log_probs[sp_idx] + sp_log_prob
 

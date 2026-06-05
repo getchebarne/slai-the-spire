@@ -1,144 +1,311 @@
-"""Head-type taxonomy and model-output → slai action conversion.
+"""Head-type taxonomy + model-output → slai action conversion.
 
-Post-migration HeadTypePrimary slots (9 total). Order is stable —
-existing checkpoints break on this version anyway because new heads have
-new parameters. Don't reorder without bumping the model version.
+The engine's `recompute_legal_actions` is the source of truth this mirrors:
 
-Card-targeting is now inline: when COMBAT_DEFAULT picks "play_card" and
-the chosen card requires a target, the same forward pass also picks the
-monster. There is no separate COMBAT_MONSTER_SELECT primary.
+  - `game_over`                      → no actions
+  - `pending is not None`            → ONLY the pending card-pick (no potions)
+  - else dispatch on `screen`        → screen-native actions + potion use/discard
+
+So routing is by `(pending-effect-class | screen)`, and every NON-pending screen
+head is a categorical over that screen's legal *action-kinds* (OptKind), including
+USE_POTION / DISCARD_POTION (the engine appends `push_potion_actions` to every
+screen). An option-kind may carry a secondary entity selection and, for
+CARD_PLAY / USE_POTION, a tertiary inline monster target.
+
+Pending heads are direct: a multi-pick (discard/retain) or a single select
+(setup/nightmare/discover/deck-pick).
 """
 
 from enum import IntEnum
 
-import slai
-from slai import Action, ActionType
+from slai import Action
+from slai import ActionType
+
+
+# =============================================================================
+# Primary head taxonomy (screen heads + pending-pick heads)
+# =============================================================================
 
 
 class HeadTypePrimary(IntEnum):
-    """
-    Primary head types, one per phase that requires a decision.
+    # Screen heads (option-kind categorical + nested selection)
+    COMBAT = 0
+    MAP = 1
+    REST = 2
+    REWARD = 3
+    SHOP = 4
+    EVENT = 5
+    CHEST = 6
+    # Pending multi-pick heads (count from pending Input)
+    PEND_DISCARD = 7
+    PEND_RETAIN = 8
+    # Pending single-select heads
+    PEND_SETUP = 9
+    PEND_NIGHTMARE = 10
+    PEND_DISCOVER = 11
+    PEND_DECK_PURGE = 12
+    PEND_DECK_UPGRADE = 13
+    PEND_DECK_DUPLICATE = 14
+    PEND_DECK_TRANSFORM = 15
 
-    Decision primaries (binary skip/take + optional secondary selection):
-        COMBAT_DEFAULT   [end_turn,    play_card]    → if play_card: HeadCardPlay (+ inline target)
-        CARD_REWARD      [skip,        select]       → if select:    HeadCardRewardSelect
-        REST_SITE        [rest,        upgrade]      → if upgrade:   HeadCardUpgrade
-        RELIC_REWARD     [skip,        select]       → if select:    HeadRelicSelect
-
-    Direct primaries (no binary, head fires immediately):
-        COMBAT_CARD_DISCARD     HeadCardMultiPick    (multi-pick over hand)
-        COMBAT_AWAIT_RETAIN     HeadCardMultiPick    (multi-pick over hand)
-        COMBAT_AWAIT_NIGHTMARE  HeadCardNightmare    (single hand pick)
-        COMBAT_AWAIT_SETUP      HeadCardSetup        (single hand pick)
-        MAP_SELECT              HeadMapSelect        (single column pick)
-    """
-
-    CARD_REWARD = 0
-    COMBAT_CARD_DISCARD = 1
-    COMBAT_DEFAULT = 2
-    MAP_SELECT = 3
-    REST_SITE = 4
-    COMBAT_AWAIT_RETAIN = 5
-    COMBAT_AWAIT_NIGHTMARE = 6
-    COMBAT_AWAIT_SETUP = 7
-    RELIC_REWARD = 8
-
-
-# =========================================================================
-# Primary head classification (list-based for fast int-indexed lookup)
-# =========================================================================
 
 NUM_PRIMARY_HEADS: int = len(HeadTypePrimary)
 
-_DECISION_PRIMARIES = {
-    HeadTypePrimary.COMBAT_DEFAULT,
-    HeadTypePrimary.CARD_REWARD,
-    HeadTypePrimary.REST_SITE,
-    HeadTypePrimary.RELIC_REWARD,
+
+# =============================================================================
+# Option kinds (the per-screen categorical choices) and selection contexts
+# =============================================================================
+
+
+class OptKind(IntEnum):
+    TURN_END = 0
+    CARD_PLAY = 1
+    USE_POTION = 2
+    DISCARD_POTION = 3
+    ROOM_SELECT = 4
+    REST = 5
+    REST_UPGRADE = 6
+    ROOM_EXIT = 7
+    CHEST_OPEN = 8
+    REWARD_TAKE_CARD = 9
+    REWARD_TAKE_RELIC = 10
+    REWARD_TAKE_POTION = 11
+    REWARD_TAKE_GOLD = 12
+    SHOP_BUY_CARD = 13
+    SHOP_BUY_RELIC = 14
+    SHOP_BUY_POTION = 15
+    SHOP_PURGE = 16
+    EVENT_OPTION = 17
+
+
+class SelKey(IntEnum):
+    """A distinct entity-selection head. Each maps to a pool source tensor +
+    a per-sample selection mask (see masks.py SEL_SPECS)."""
+
+    CARD_PLAY = 0
+    POTION_USE = 1
+    POTION_DISCARD = 2
+    ROOM_SELECT = 3
+    REST_UPGRADE = 4
+    REWARD_CARD = 5
+    SHOP_CARD = 6
+    SHOP_RELIC = 7
+    SHOP_POTION = 8
+    SHOP_PURGE = 9
+    EVENT_OPTION = 10
+    PEND_SETUP = 11
+    PEND_NIGHTMARE = 12
+    PEND_DISCOVER = 13
+    PEND_PURGE = 14
+    PEND_UPGRADE = 15
+    PEND_DUPLICATE = 16
+    PEND_TRANSFORM = 17
+
+
+NUM_SEL_KEYS: int = len(SelKey)
+
+
+# Per-option-kind: (selection key or None, needs monster target). USE_POTION /
+# CARD_PLAY targeting is conditional (only when the chosen entity requires_target);
+# the flag here marks that the option *may* target.
+_OPT_META: dict[OptKind, tuple] = {
+    OptKind.TURN_END: (None, False),
+    OptKind.CARD_PLAY: (SelKey.CARD_PLAY, True),
+    OptKind.USE_POTION: (SelKey.POTION_USE, True),
+    OptKind.DISCARD_POTION: (SelKey.POTION_DISCARD, False),
+    OptKind.ROOM_SELECT: (SelKey.ROOM_SELECT, False),
+    OptKind.REST: (None, False),
+    OptKind.REST_UPGRADE: (SelKey.REST_UPGRADE, False),
+    OptKind.ROOM_EXIT: (None, False),
+    OptKind.CHEST_OPEN: (None, False),
+    OptKind.REWARD_TAKE_CARD: (SelKey.REWARD_CARD, False),
+    OptKind.REWARD_TAKE_RELIC: (None, False),
+    OptKind.REWARD_TAKE_POTION: (None, False),
+    OptKind.REWARD_TAKE_GOLD: (None, False),
+    OptKind.SHOP_BUY_CARD: (SelKey.SHOP_CARD, False),
+    OptKind.SHOP_BUY_RELIC: (SelKey.SHOP_RELIC, False),
+    OptKind.SHOP_BUY_POTION: (SelKey.SHOP_POTION, False),
+    OptKind.SHOP_PURGE: (SelKey.SHOP_PURGE, False),
+    OptKind.EVENT_OPTION: (SelKey.EVENT_OPTION, False),
 }
 
-# IS_DECISION_PRIMARY[int(htp)] → True if this is a decision primary
-IS_DECISION_PRIMARY: tuple[bool, ...] = tuple(
-    htp in _DECISION_PRIMARIES for htp in HeadTypePrimary
+
+def opt_sel_key(opt: OptKind) -> "SelKey | None":
+    return _OPT_META[opt][0]
+
+
+def opt_may_target(opt: OptKind) -> bool:
+    return _OPT_META[opt][1]
+
+
+# Per-screen ordered option-kind lists (the categorical). Order is STABLE —
+# reordering invalidates trained checkpoints. Potion kinds are appended to every
+# screen (the engine's push_potion_actions is unconditional).
+SCREEN_OPTION_KINDS: dict[HeadTypePrimary, tuple] = {
+    HeadTypePrimary.COMBAT: (
+        OptKind.TURN_END,
+        OptKind.CARD_PLAY,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+    HeadTypePrimary.MAP: (
+        OptKind.ROOM_SELECT,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+    HeadTypePrimary.REST: (
+        OptKind.REST,
+        OptKind.REST_UPGRADE,
+        OptKind.ROOM_EXIT,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+    HeadTypePrimary.REWARD: (
+        OptKind.REWARD_TAKE_CARD,
+        OptKind.REWARD_TAKE_RELIC,
+        OptKind.REWARD_TAKE_POTION,
+        OptKind.REWARD_TAKE_GOLD,
+        OptKind.ROOM_EXIT,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+    HeadTypePrimary.SHOP: (
+        OptKind.SHOP_BUY_CARD,
+        OptKind.SHOP_BUY_RELIC,
+        OptKind.SHOP_BUY_POTION,
+        OptKind.SHOP_PURGE,
+        OptKind.ROOM_EXIT,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+    HeadTypePrimary.EVENT: (
+        OptKind.EVENT_OPTION,
+        OptKind.ROOM_EXIT,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+    HeadTypePrimary.CHEST: (
+        OptKind.CHEST_OPEN,
+        OptKind.ROOM_EXIT,
+        OptKind.USE_POTION,
+        OptKind.DISCARD_POTION,
+    ),
+}
+
+# Screen heads are those with an option categorical.
+SCREEN_HEADS: tuple = tuple(SCREEN_OPTION_KINDS.keys())
+IS_SCREEN_HEAD: tuple = tuple(htp in SCREEN_OPTION_KINDS for htp in HeadTypePrimary)
+PRIMARY_NUM_CHOICES: tuple = tuple(
+    len(SCREEN_OPTION_KINDS[htp]) if htp in SCREEN_OPTION_KINDS else 0 for htp in HeadTypePrimary
 )
 
-# PRIMARY_NUM_CHOICES[int(htp)] → number of choices (0 for direct primaries)
-PRIMARY_NUM_CHOICES: tuple[int, ...] = tuple(
-    2 if htp in _DECISION_PRIMARIES else 0 for htp in HeadTypePrimary
-)
+# Pending multi-pick heads (hand k-subset; k from pending Input.count).
+MULTIPICK_HEADS: tuple = (HeadTypePrimary.PEND_DISCARD, HeadTypePrimary.PEND_RETAIN)
+IS_MULTIPICK: tuple = tuple(htp in MULTIPICK_HEADS for htp in HeadTypePrimary)
+
+# Pending single-select heads → their selection key.
+PEND_SINGLE_SELKEY: dict[HeadTypePrimary, SelKey] = {
+    HeadTypePrimary.PEND_SETUP: SelKey.PEND_SETUP,
+    HeadTypePrimary.PEND_NIGHTMARE: SelKey.PEND_NIGHTMARE,
+    HeadTypePrimary.PEND_DISCOVER: SelKey.PEND_DISCOVER,
+    HeadTypePrimary.PEND_DECK_PURGE: SelKey.PEND_PURGE,
+    HeadTypePrimary.PEND_DECK_UPGRADE: SelKey.PEND_UPGRADE,
+    HeadTypePrimary.PEND_DECK_DUPLICATE: SelKey.PEND_DUPLICATE,
+    HeadTypePrimary.PEND_DECK_TRANSFORM: SelKey.PEND_TRANSFORM,
+}
 
 
-# =========================================================================
+# =============================================================================
 # Model output → slai action conversion
-# =========================================================================
+# =============================================================================
 
 
 def to_action(
-    head_type_primary: HeadTypePrimary,
-    primary_index: int,
+    htp: HeadTypePrimary,
+    option_index: int,
     selection_index: int,
     target_index: int = -1,
-    retain_indices: list[int] | None = None,
-):
-    """
-    Convert model output to a `slai.Action` instance with the appropriate
-    `ActionType` discriminant and positional `indices`.
+    retain_indices: "list[int] | None" = None,
+) -> Action:
+    """Convert a model decision into a `slai.Action`.
 
     Args:
-        head_type_primary: Which primary group this sample belongs to.
-        primary_index: Index from the binary decision head (-1 for direct primaries,
-                       0 = terminal, 1 = select).
-        selection_index: Index from the per-entity selection head (-1 if terminal).
-        target_index: For COMBAT_DEFAULT play-card, the chosen monster idx (or -1
-                      if the card needs no target).
-        retain_indices: For COMBAT_AWAIT_RETAIN, the list of hand indices to retain
-                        (already truncated to `num`).
+        htp: routed primary head.
+        option_index: index into SCREEN_OPTION_KINDS[htp] (screen heads); -1 for
+            pending heads.
+        selection_index: chosen entity index (-1 if the option/head takes none).
+        target_index: chosen alive-monster index for CARD_PLAY / USE_POTION
+            targeting (-1 if untargeted).
+        retain_indices: hand indices for PEND_DISCARD / PEND_RETAIN multi-pick.
     """
-    match head_type_primary:
-        case HeadTypePrimary.COMBAT_DEFAULT:
-            if primary_index == 0:
-                return Action(ActionType.EndTurn, [])
-            indices = [selection_index]
-            if target_index >= 0:
-                indices.append(target_index)
-            return Action(ActionType.CardPlay, indices)
+    # Pending multi-pick
+    if htp == HeadTypePrimary.PEND_DISCARD:
+        assert retain_indices is not None
+        return Action(ActionType.CardDiscard, retain_indices)
+    if htp == HeadTypePrimary.PEND_RETAIN:
+        assert retain_indices is not None
+        return Action(ActionType.CardRetain, retain_indices)
+    # Pending single-select
+    if htp == HeadTypePrimary.PEND_SETUP:
+        return Action(ActionType.CardSetup, [selection_index])
+    if htp == HeadTypePrimary.PEND_NIGHTMARE:
+        return Action(ActionType.CardNightmare, [selection_index])
+    if htp == HeadTypePrimary.PEND_DISCOVER:
+        return Action(ActionType.CardDiscover, [selection_index])
+    if htp == HeadTypePrimary.PEND_DECK_PURGE:
+        return Action(ActionType.CardPurge, [selection_index])
+    if htp == HeadTypePrimary.PEND_DECK_UPGRADE:
+        return Action(ActionType.CardUpgrade, [selection_index])
+    if htp == HeadTypePrimary.PEND_DECK_DUPLICATE:
+        return Action(ActionType.CardDuplicate, [selection_index])
+    if htp == HeadTypePrimary.PEND_DECK_TRANSFORM:
+        return Action(ActionType.CardTransform, [selection_index])
 
-        case HeadTypePrimary.CARD_REWARD:
-            if primary_index == 0:
-                return Action(ActionType.CardRewardSkip, [])
-            return Action(ActionType.CardRewardSelect, [selection_index])
+    # Screen heads: resolve the chosen option-kind
+    opt = SCREEN_OPTION_KINDS[htp][option_index]
 
-        case HeadTypePrimary.REST_SITE:
-            if primary_index == 0:
-                return Action(ActionType.RestSiteRest, [])
-            return Action(ActionType.RestSiteCardUpgrade, [selection_index])
+    if opt == OptKind.TURN_END:
+        return Action(ActionType.TurnEnd, [])
+    if opt == OptKind.ROOM_EXIT:
+        return Action(ActionType.RoomExit, [])
+    if opt == OptKind.REST:
+        return Action(ActionType.Rest, [])
+    if opt == OptKind.CHEST_OPEN:
+        return Action(ActionType.ChestOpen, [])
+    if opt == OptKind.REWARD_TAKE_RELIC:
+        return Action(ActionType.RewardTakeRelic, [])
+    if opt == OptKind.REWARD_TAKE_POTION:
+        return Action(ActionType.RewardTakePotion, [])
+    if opt == OptKind.REWARD_TAKE_GOLD:
+        return Action(ActionType.RewardTakeGold, [])
 
-        case HeadTypePrimary.RELIC_REWARD:
-            if primary_index == 0:
-                return Action(ActionType.RelicRewardSkip, [])
-            return Action(ActionType.RelicRewardSelect, [selection_index])
+    if opt == OptKind.CARD_PLAY:
+        idxs = [selection_index]
+        if target_index >= 0:
+            idxs.append(target_index)
+        return Action(ActionType.CardPlay, idxs)
+    if opt == OptKind.USE_POTION:
+        idxs = [selection_index]
+        if target_index >= 0:
+            idxs.append(target_index)
+        return Action(ActionType.PotionUse, idxs)
+    if opt == OptKind.DISCARD_POTION:
+        return Action(ActionType.PotionDiscard, [selection_index])
+    if opt == OptKind.ROOM_SELECT:
+        return Action(ActionType.RoomSelect, [selection_index])
+    if opt == OptKind.REST_UPGRADE:
+        return Action(ActionType.CardUpgrade, [selection_index])
+    if opt == OptKind.REWARD_TAKE_CARD:
+        return Action(ActionType.RewardTakeCard, [selection_index])
+    if opt == OptKind.SHOP_BUY_CARD:
+        return Action(ActionType.ShopBuyCard, [selection_index])
+    if opt == OptKind.SHOP_BUY_RELIC:
+        return Action(ActionType.ShopBuyRelic, [selection_index])
+    if opt == OptKind.SHOP_BUY_POTION:
+        return Action(ActionType.ShopBuyPotion, [selection_index])
+    if opt == OptKind.SHOP_PURGE:
+        return Action(ActionType.ShopPurge, [selection_index])
+    if opt == OptKind.EVENT_OPTION:
+        return Action(ActionType.EventOptionSelect, [selection_index])
 
-        case HeadTypePrimary.COMBAT_CARD_DISCARD:
-            # CardDiscard requires exactly `num` indices (matching
-            # CombatAwaitDiscard.num). Multi-pick output is in
-            # `retain_indices` (shared multi-pick storage).
-            assert retain_indices is not None, \
-                "COMBAT_CARD_DISCARD requires retain_indices (shared multi-pick storage)"
-            return Action(ActionType.CardDiscard, retain_indices)
-
-        case HeadTypePrimary.COMBAT_AWAIT_NIGHTMARE:
-            return Action(ActionType.CardNightmare, [selection_index])
-
-        case HeadTypePrimary.COMBAT_AWAIT_SETUP:
-            return Action(ActionType.CardSetup, [selection_index])
-
-        case HeadTypePrimary.COMBAT_AWAIT_RETAIN:
-            assert retain_indices is not None, \
-                "COMBAT_AWAIT_RETAIN requires retain_indices"
-            return Action(ActionType.CardRetain, retain_indices)
-
-        case HeadTypePrimary.MAP_SELECT:
-            return Action(ActionType.RoomSelect, [selection_index])
-
-        case _:
-            raise ValueError(f"Unknown head type primary: {head_type_primary}")
+    raise ValueError(f"Unhandled option kind {opt} for htp {htp}")

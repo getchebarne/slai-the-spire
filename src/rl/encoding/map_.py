@@ -1,65 +1,82 @@
 import numpy as np
-import slai
 import torch
+from slai import Map
+from slai import RoomKind
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 
 
-# Snapshot RoomKind variants at module load. slai exposes 4 today
-# (CombatMonster, CombatBoss, CombatElite, RestSite); slot count is fixed
-# at module load. RoomKind is an enum.IntEnum (see slai's _to_intenum shim).
-_ROOM_KIND_NAMES: list[str] = [m.name for m in slai.RoomKind]
-_ROOM_KIND_TO_IDX: dict[object, int] = {m: idx for idx, m in enumerate(slai.RoomKind)}
-_ROOM_KIND_NUM = len(_ROOM_KIND_NAMES)
-_NUM_CHANNELS = _ROOM_KIND_NUM + MAP_WIDTH + 1  # room kind one-hot + edge multi-hot + cur-pos
+_ROOM_KIND_TO_IDX = {room_kind: i for i, room_kind in enumerate(RoomKind)}
+_NUM_CHANNELS = (
+    len(RoomKind)          # Room kind OHE
+    + MAP_WIDTH            # Outgoing-edge multi-hot
+    + 1                    # Current position
+)
+
+# Act-1 boss display names (MonsterEncounter::as_str); bump when adding acts
+_BOSS_NAME_TO_IDX = {"The Guardian": 0, "Hexaghost": 1, "Slime Boss": 2}
+
+# Flat map-global meta — bypasses the CNN/global-avg-pool that erases spatial info
+ENCODING_DIM_MAP_META = (
+    1                          # Floor depth (y_current / MAP_HEIGHT)
+    + 1                        # On-map sentinel (y_current is not None)
+    + len(_BOSS_NAME_TO_IDX)   # Act-boss identity OHE
+)
 
 
-def get_encoding_map_dim() -> tuple[int, int, int]:
-    return (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
-
-
-def _encode_view_map_into(out: np.ndarray, view_map: slai.Map) -> None:
-    """Encode a map directly into a pre-allocated numpy array.
-
-    out shape: (MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS)
-    """
-    # Populate room kind and edge channels
-    for y, row in enumerate(view_map.rooms[:MAP_HEIGHT]):
-        for x, room in enumerate(row[:MAP_WIDTH]):
+def _encode_map_into(map_: Map, out: np.ndarray) -> None:
+    # Room kind OHE + outgoing-edge multi-hot, per node
+    for y, row in enumerate(map_.rooms):
+        for x, room in enumerate(row):
             if room is None:
                 continue
 
-            # One-hot encode the room kind
-            idx_room_kind = _ROOM_KIND_TO_IDX.get(room.room_kind)
-            if idx_room_kind is not None:
-                out[y, x, idx_room_kind] = 1.0
-
-            # Multi-hot encode the outgoing edges/paths
+            idx_room_kind = _ROOM_KIND_TO_IDX[room.room_kind]
+            out[y, x, idx_room_kind] = 1.0
             for x_next in room.edges:
                 if 0 <= x_next < MAP_WIDTH:
-                    idx_edge = _ROOM_KIND_NUM + x_next
-                    out[y, x, idx_edge] = 1.0
+                    out[y, x, len(RoomKind) + x_next] = 1.0
 
-    # Populate the current position channel
+    # Current position
     if (
-        view_map.y_current is not None
-        and view_map.x_current is not None
-        and 0 <= view_map.y_current < MAP_HEIGHT
-        and 0 <= view_map.x_current < MAP_WIDTH
+        map_.y_current is not None
+        and map_.x_current is not None
     ):
-        idx_current_pos = _NUM_CHANNELS - 1
-        out[view_map.y_current, view_map.x_current, idx_current_pos] = 1.0
+        out[map_.y_current, map_.x_current, _NUM_CHANNELS - 1] = 1.0
 
 
-def encode_batch_view_map(batch_view_map: list[slai.Map], device: torch.device) -> torch.Tensor:
-    """Encode a batch of maps using NumPy pre-allocation."""
-    batch_size = len(batch_view_map)
+def encode_batch_map(batch_map: list[Map], device: torch.device) -> torch.Tensor:
+    batch_size = len(batch_map)
 
-    # Pre-allocate numpy array
+    # Pre-allocate NumPy array
     x_out = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, _NUM_CHANNELS), dtype=np.float32)
 
-    for b, view_map in enumerate(batch_view_map):
-        _encode_view_map_into(x_out[b], view_map)
+    for b, map_ in enumerate(batch_map):
+        _encode_map_into(map_, x_out[b])
+
+    return torch.from_numpy(x_out).to(device)
+
+
+def _encode_map_meta_into(map_: Map, out: np.ndarray) -> None:
+    # Floor depth + on-map sentinel
+    if map_.y_current is not None:
+        out[0] = map_.y_current / MAP_HEIGHT
+        out[1] = 1.0
+
+    # Act-boss identity OHE
+    idx_boss = _BOSS_NAME_TO_IDX.get(map_.boss_name)
+    if idx_boss is not None:
+        out[2 + idx_boss] = 1.0
+
+
+def encode_batch_map_meta(batch_map: list[Map], device: torch.device) -> torch.Tensor:
+    batch_size = len(batch_map)
+
+    # Pre-allocate NumPy array
+    x_out = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
+
+    for b, map_ in enumerate(batch_map):
+        _encode_map_meta_into(map_, x_out[b])
 
     return torch.from_numpy(x_out).to(device)
