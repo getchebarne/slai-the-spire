@@ -2,20 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.encoding.map_ import get_encoding_map_dim
-
-
-_, _, _NUM_CHANNELS = get_encoding_map_dim()
+from src.rl.encoding.map_ import _NUM_CHANNELS
 
 
 class MapEncoder(nn.Module):
     """
-    Lightweight CNN encoder for map state using Global Average Pooling.
+    Lightweight CNN encoder for the map grid, preserving per-column identity.
 
-    Architecture:
-    1. Two convolutional blocks with max pooling
-    2. Global Average Pooling (eliminates spatial dimensions)
-    3. Single linear projection to embedding_dim
+    The convolutions mix locally, pooling collapses height only, so each map
+    column keeps its own embedding (the map head scores columns individually).
+    Output: (B, MAP_WIDTH, embedding_dim). Width preservation assumes the convs
+    are shape-preserving (kernel_size=3 with pad=1, the configured values).
     """
 
     def __init__(self, kernel_size: int, embedding_dim: int = 128, pad: int = 1):
@@ -33,34 +30,40 @@ class MapEncoder(nn.Module):
             in_channels=16, out_channels=32, kernel_size=kernel_size, padding=pad
         )
 
-        # Pooling layer to downsample the spatial dimensions
-        self._max_pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        # Downsample height only — pooling width would merge columns
+        self._max_pool = nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1))
 
-        # Global average pooling eliminates spatial dimensions entirely
-        self._global_avg_pool = nn.AdaptiveAvgPool2d(1)
-
-        # Single projection from conv output channels to embedding
+        # Per-column projection from conv channels to embedding
         self._projection = nn.Linear(32, embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # PyTorch Conv2d expects (B, C, H, W), but encoding is (B, H, W, C)
-        x = x.permute(0, 3, 1, 2)
+        # Envs sit on one map node for many steps, so batches are grid-redundant
+        # (~2x in update minibatches): encode unique grids once and gather back —
+        # bitwise exact. The convs run as unfold+GEMM (same weights, same math),
+        # dodging the slow CPU convolution_backward path at these tiny shapes;
+        # measured together: 1.88x on the encoder, 1.20x on the full update step.
+        b = x.shape[0]
+        uniq, inverse = torch.unique(x.reshape(b, -1), dim=0, return_inverse=True)
+        # Conv2d expects (U, C, H, W), but the encoding is (H, W, C)
+        u = uniq.reshape(-1, *x.shape[1:]).permute(0, 3, 1, 2)
 
         # Convolutional block 1
-        x = F.relu(self._conv_1(x))
-        x = self._max_pool(x)
+        u = F.relu(self._conv_gemm(u, self._conv_1))
+        u = self._max_pool(u)
 
         # Convolutional block 2
-        x = F.relu(self._conv_2(x))
-        x = self._max_pool(x)
+        u = F.relu(self._conv_gemm(u, self._conv_2))
+        u = self._max_pool(u)
 
-        # Global average pooling: (B, 32, H', W') -> (B, 32, 1, 1)
-        x = self._global_avg_pool(x)
+        # Collapse the remaining height: (U, 32, H', W) -> (U, W, 32)
+        u = u.mean(dim=2).permute(0, 2, 1)
 
-        # Flatten: (B, 32, 1, 1) -> (B, 32)
-        x = torch.flatten(x, start_dim=1)
+        # Project each column to the embedding dimension, expand back to (B, W, E)
+        return self._projection(u)[inverse]
 
-        # Project to embedding dimension
-        x = self._projection(x)
-
-        return x
+    @staticmethod
+    def _conv_gemm(x: torch.Tensor, conv: nn.Conv2d) -> torch.Tensor:
+        b, _, h, w = x.shape
+        cols = F.unfold(x, kernel_size=conv.kernel_size, padding=conv.padding)
+        out = conv.weight.reshape(conv.out_channels, -1) @ cols
+        return (out + conv.bias.view(1, -1, 1)).view(b, conv.out_channels, h, w)

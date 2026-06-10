@@ -1,20 +1,25 @@
-exp_name: ppo/NEWERA-II
-num_iterations: 1.0e+6
+exp_name: ppo/NEWERA-VII
+seed: 0
+num_iterations: 5.0e+4
 log_every: 10
 save_every: 100
-gamma: 0.99
+gamma: 0.995
 lam: 0.95
 coef_value: 0.500
-coef_entropy_max: 0.015
-coef_entropy_min: 0.010
-coef_entropy_elbow: 2.5e+4
+coef_entropy_max: 0.010
+coef_entropy_min: 0.001
+entropy_decay_steps: 2.0e+7  # env steps (linear decay max -> min, then floor)
 max_grad_norm: 0.500
-num_envs: 24
-rollout_length: 256
+num_envs: 48
+rollout_length: 128
 clip_eps: 0.20
-clip_value_loss: true
+clip_value_loss: false
 minibatch_size: 512
 num_epochs: 4
+# Rollout(t+1) collected in a side process during update(t), staleness 1. Measured a
+# WASH on the 4-P-core M4 post-packing (hidden rollout reappears as update contention:
+# 10.5s either way); enable on boxes with spare cores or if rollout grows again.
+overlap_rollout: false
 
 model:
   # Core encoder

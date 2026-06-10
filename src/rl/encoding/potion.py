@@ -3,45 +3,48 @@ import torch
 from slai import Potion
 from slai import PotionName
 from slai import PotionRarity
+from slai import members
 
 from src.rl.constants import MAX_POTION_SLOTS
+from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
+from src.rl.encoding.effect import encode_effects_into
 
 
-_POTION_NAME_TO_IDX = {potion_name: i for i, potion_name in enumerate(PotionName)}
-_POTION_RARITY_TO_IDX = {potion_rarity: i for i, potion_rarity in enumerate(PotionRarity)}
+_POTION_NAME_TO_IDX = {potion_name: i for i, potion_name in enumerate(members(PotionName))}
+_POTION_RARITY_TO_IDX = {potion_rarity: i for i, potion_rarity in enumerate(members(PotionRarity))}
 
 ENCODING_DIM_POTION = (
-    len(PotionName)         # Name OHE
-    + len(PotionRarity)     # Rarity OHE
+    len(_POTION_NAME_TO_IDX)         # Name OHE
+    + len(_POTION_RARITY_TO_IDX)     # Rarity OHE
     + 1                     # Requires target
     + 1                     # Combat only
+    + ENCODING_DIM_EFFECTS  # Per-EffectKind effect blocks
 )
 
 
 def encode_potion_into(potion: Potion, pos: int, out: np.ndarray) -> int:
     # Name OHE
-    name_idx = _POTION_NAME_TO_IDX.get(int(potion.name))
-    if name_idx is not None:
-        out[pos + name_idx] = 1.0
-    pos += len(PotionName)
+    out[pos + _POTION_NAME_TO_IDX[potion.name]] = 1.0
+    pos += len(_POTION_NAME_TO_IDX)
 
     # Rarity OHE
-    rarity_idx = _POTION_RARITY_TO_IDX.get(int(potion.rarity))
-    if rarity_idx is not None:
-        out[pos + rarity_idx] = 1.0
-    pos += len(PotionRarity)
+    out[pos + _POTION_RARITY_TO_IDX[potion.rarity]] = 1.0
+    pos += len(_POTION_RARITY_TO_IDX)
 
     # Scalars
     out[pos] = float(potion.requires_target)
     out[pos + 1] = float(potion.combat_only)
     pos += 2
 
-    return pos
+    # Per-EffectKind effect blocks
+    return encode_effects_into(potion.effects, pos, out)
 
 
 def encode_batch_potions(
     batch_potions: list[list[Potion]], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Returns (encodings, padding mask) over the belt. Targeting is no longer derived
+    here — the L3 target mask comes from the engine's legal actions (masks.py)."""
     batch_size = len(batch_potions)
 
     # Pre-allocate NumPy arrays

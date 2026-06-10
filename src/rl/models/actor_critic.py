@@ -1,144 +1,105 @@
-"""Actor-Critic with screen/pending-routed hierarchical action heads.
+"""Actor-Critic with a mask-derived 3-level action hierarchy (no route module).
 
-Each sample is routed (by route.py) to a primary head:
-  - Screen heads (COMBAT/MAP/REST/REWARD/SHOP/EVENT/CHEST): an option-kind
-    categorical (HeadBinaryChoice with num_choices = #kinds), then for the chosen
-    kind a secondary entity selection (per SelKey), and for CARD_PLAY / USE_POTION
-    a tertiary inline monster target.
-  - Pending multi-pick (PEND_DISCARD/RETAIN): HeadCardMultiPick over hand.
-  - Pending single-select (setup/nightmare/discover/deck-pick): HeadEntitySelection.
+Routing + every mask come from the engine's legal actions (masks.py). Per (B,) batch:
+  - L1 option: ONE masked categorical over slai.ActionType (which action KIND), run for
+    every row. A halt is just a one-legal-kind state, so its forced pick contributes
+    log-prob 0 — no pending special case.
+  - L2 selection: ONE head per Pool (x_hand/x_deck/x_potions/...), shared across the
+    action types on that pool and conditioned on an ActionType embedding (AlphaStar-style).
+  - L3 target: the shared monster head, gated/masked by the per-entity legal target
+    set the engine enumerates (one CardPlay/PotionUse per monster).
 
-Selection heads over the engine's per-pile transformer embeddings (hand/deck/
-reward) consume CoreOutput; heads over screen-specific pools (potions/shop/event/
-discover) consume the raw TensorGameState encodings directly with their own input
-projection. The total action log-prob is option + selection + target + retain.
+The total action log-prob is option + selection + target.
 """
 
+import math
 from dataclasses import dataclass
-from typing import NamedTuple
+from operator import attrgetter
 
 import torch
 import torch.nn as nn
 
-from src.rl.action_space.masks import SEL_POOL_SIZE
-from src.rl.action_space.masks import MaskBatch
-from src.rl.action_space.types import MULTIPICK_HEADS
-from src.rl.action_space.types import NUM_SEL_KEYS
-from src.rl.action_space.types import PEND_SINGLE_SELKEY
-from src.rl.action_space.types import PRIMARY_NUM_CHOICES
-from src.rl.action_space.types import SCREEN_HEADS
-from src.rl.action_space.types import SCREEN_OPTION_KINDS
-from src.rl.action_space.types import HeadTypePrimary
-from src.rl.action_space.types import OptKind
-from src.rl.action_space.types import SelKey
-from src.rl.action_space.types import opt_may_target
-from src.rl.action_space.types import opt_sel_key
-from src.rl.action_space.types import to_action
-from src.rl.constants import MAP_WIDTH
-from src.rl.constants import MAX_SIZE_HAND
-from src.rl.encoding.card import get_encoding_dim_card
-from src.rl.encoding.event import get_encoding_dim_event_option
-from src.rl.encoding.potion import get_encoding_dim_potion
-from src.rl.encoding.shop import get_encoding_dim_shop_card
-from src.rl.encoding.shop import get_encoding_dim_shop_potion
-from src.rl.encoding.shop import get_encoding_dim_shop_relic
-from src.rl.encoding.state import TensorGameState
+from src.rl.types import TMask
+from src.rl.types import AT_MAY_TARGET
+from src.rl.types import AT_POOL
+from src.rl.types import NUM_ACTION_TYPES
+from src.rl.types import Pool
+from src.rl.types import action_from_actiontype
+from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
+from src.rl.encoding.shop import ENCODING_DIM_PRICE
+from src.rl.types import TGameState
 from src.rl.models.core import Core
-from src.rl.models.core import CoreOutput
 from src.rl.models.heads import HeadBinaryChoice
-from src.rl.models.heads import HeadCardMultiPick
 from src.rl.models.heads import HeadEntitySelection
 from src.rl.models.heads import HeadMapSelect
 from src.rl.models.heads import HeadMonsterSelect
 from src.rl.models.heads import HeadValue
-from src.rl.models.heads import recompute_grouped_log_prob_and_entropy
-
-
-# Per-SelKey pool source: ("core"|"xgs", attr) or ("map", None). Input dim filled
-# at model init (dim_entity for core piles; raw encoding dim for xgs pools).
-_SEL_SOURCE: dict = {
-    SelKey.CARD_PLAY: ("core", "x_hand"),
-    SelKey.POTION_USE: ("xgs", "x_potions"),
-    SelKey.POTION_DISCARD: ("xgs", "x_potions"),
-    SelKey.ROOM_SELECT: ("map", None),
-    SelKey.REST_UPGRADE: ("core", "x_deck"),
-    SelKey.REWARD_CARD: ("core", "x_combat_reward"),
-    SelKey.SHOP_CARD: ("xgs", "x_shop_cards"),
-    SelKey.SHOP_RELIC: ("xgs", "x_shop_relics"),
-    SelKey.SHOP_POTION: ("xgs", "x_shop_potions"),
-    SelKey.SHOP_PURGE: ("core", "x_deck"),
-    SelKey.EVENT_OPTION: ("xgs", "x_event_options"),
-    SelKey.PEND_SETUP: ("core", "x_hand"),
-    SelKey.PEND_NIGHTMARE: ("core", "x_hand"),
-    SelKey.PEND_DISCOVER: ("xgs", "x_discover"),
-    SelKey.PEND_PURGE: ("core", "x_deck"),
-    SelKey.PEND_UPGRADE: ("core", "x_deck"),
-    SelKey.PEND_DUPLICATE: ("core", "x_deck"),
-    SelKey.PEND_TRANSFORM: ("core", "x_deck"),
-}
-
-
-def _raw_pool_dim(attr: str) -> int:
-    return {
-        "x_potions": get_encoding_dim_potion(),
-        "x_shop_cards": get_encoding_dim_shop_card(),
-        "x_shop_relics": get_encoding_dim_shop_relic(),
-        "x_shop_potions": get_encoding_dim_shop_potion(),
-        "x_event_options": get_encoding_dim_event_option(),
-        "x_discover": get_encoding_dim_card(),
-    }[attr]
-
-
-class ForwardOutput(NamedTuple):
-    head_type_primaries: torch.Tensor  # (B,)
-    option_indices: torch.Tensor  # (B,) -1 for pending heads
-    option_log_probs: torch.Tensor  # (B,)
-    selection_indices: torch.Tensor  # (B,) -1 if none
-    selection_log_probs: torch.Tensor  # (B,)
-    sel_keys: torch.Tensor  # (B,) recorded SelKey int, -1 if none
-    target_indices: torch.Tensor  # (B,) -1 if untargeted
-    target_log_probs: torch.Tensor  # (B,)
-    retain_indices: torch.Tensor  # (B, MAX_SIZE_HAND) -1 in unused
-    retain_log_probs: torch.Tensor  # (B,)
-    values: torch.Tensor  # (B, 1)
-
-    def get_action(self, idx: int):
-        htp = HeadTypePrimary(int(self.head_type_primaries[idx].item()))
-        ri = [int(x) for x in self.retain_indices[idx].tolist() if x >= 0]
-        return to_action(
-            htp,
-            int(self.option_indices[idx].item()),
-            int(self.selection_indices[idx].item()),
-            target_index=int(self.target_indices[idx].item()),
-            retain_indices=ri,
-        )
-
-    def get_log_prob(self, idx: int) -> torch.Tensor:
-        return (
-            self.option_log_probs[idx]
-            + self.selection_log_probs[idx]
-            + self.target_log_probs[idx]
-            + self.retain_log_probs[idx]
-        )
 
 
 @dataclass
-class SingleOutput:
-    head_type_primary: HeadTypePrimary
-    option_index: int
-    selection_index: int
-    target_index: int
-    retain_indices: list
-    value: torch.Tensor
+class Pick:
+    """One sampled head-pick (option | selection | target) over the (B,) batch: the
+    index a masked Categorical chose, plus its log-prob and entropy. idx is -1 where
+    the pick doesn't apply to a row; log_prob/entropy are 0 there (sum-neutral).
+    `write` scatters an `_categorical_step` result, skipping None parts, so one call site serves
+    sampling (idx, lp), greedy (idx) and recompute (lp, ent)."""
 
-    def to_action(self):
-        return to_action(
-            self.head_type_primary,
-            self.option_index,
-            self.selection_index,
-            target_index=self.target_index,
-            retain_indices=self.retain_indices,
+    idx: torch.Tensor  # (B,) long, -1 where N/A
+    log_prob: torch.Tensor  # (B,) float, 0 where N/A
+    entropy: torch.Tensor  # (B,) float, 0 where N/A
+
+    @classmethod
+    def na(cls, B: int, device: torch.device) -> "Pick":
+        return cls(
+            torch.full((B,), -1, dtype=torch.long, device=device),
+            torch.zeros(B, device=device),
+            torch.zeros(B, device=device),
         )
+
+    def write(self, rows, idx, log_prob, entropy) -> None:
+        if idx is not None:
+            self.idx[rows] = idx
+        if log_prob is not None:
+            self.log_prob[rows] = log_prob
+        if entropy is not None:
+            self.entropy[rows] = entropy
+
+
+@dataclass
+class ActionBatch:
+    """One routing pass over a (B,) batch — the forward() return and the _run result.
+    Mirrors the action's structure: three sampled picks (option -> selection -> target),
+    each an (idx, log_prob, entropy) triple. `option.idx` is the chosen ActionType (L1
+    always runs, masked to the legal kinds), which alone determines emission. The action's
+    log-prob/entropy are the sums of the picks'. Shared by sampling (forward) and PPO
+    recompute (evaluate_actions)."""
+
+    values: torch.Tensor  # (B, 1) critic
+    option: Pick  # L1: chosen ActionType (idx), its log-prob, entropy
+    selection: Pick
+    target: Pick
+
+    @classmethod
+    def empty(cls, B: int, device: torch.device, values: torch.Tensor) -> "ActionBatch":
+        return cls(
+            values=values,
+            option=Pick.na(B, device),
+            selection=Pick.na(B, device),
+            target=Pick.na(B, device),
+        )
+
+    def total_log_prob(self) -> torch.Tensor:
+        return self.option.log_prob + self.selection.log_prob + self.target.log_prob
+
+    def get_action(self, i: int):
+        return action_from_actiontype(
+            int(self.option.idx[i].item()),  # the chosen ActionType
+            int(self.selection.idx[i].item()),
+            int(self.target.idx[i].item()),
+        )
+
+    def get_log_prob(self, i: int) -> torch.Tensor:
+        return self.option.log_prob[i] + self.selection.log_prob[i] + self.target.log_prob[i]
 
 
 class ActorCritic(nn.Module):
@@ -156,6 +117,7 @@ class ActorCritic(nn.Module):
         dim_ff_monster: int = 128,
         dim_ff_map: int = 128,
         dim_ff_value: int = 128,
+        dim_op: int = 32,
     ):
         super().__init__()
 
@@ -170,335 +132,178 @@ class ActorCritic(nn.Module):
         )
         dim_global = self.core.dim_global
         dim_map = self.core.dim_map
-        self._dim_entity = dim_entity
 
-        # Option-kind categorical heads, one per screen head (keyed by str(htp))
-        self.option_heads = nn.ModuleDict(
-            {
-                str(int(htp)): HeadBinaryChoice(
-                    dim_global, dim_ff_primary, num_choices=PRIMARY_NUM_CHOICES[htp]
-                )
-                for htp in SCREEN_HEADS
-            }
+        # L1: one masked categorical over ActionType (which action kind), screen-gated
+        # (GLU). Pending-only types are always masked here; a halt has an empty L1 mask.
+        self.option_head = HeadBinaryChoice(
+            dim_global, dim_ff_primary, num_choices=NUM_ACTION_TYPES, dim_context=_ENCODING_DIM_SCREEN
         )
 
-        # Selection heads, one per SelKey (keyed by str(selkey))
+        # L2: one selection head per Pool, conditioned on an ActionType embedding (shared
+        # across the action types on that pool). Shop pools append price; the map pool uses
+        # HeadMapSelect (single action type, no conditioning). The bound getter resolves
+        # each pool's CoreOutput tensor once, so scoring has no runtime getattr-by-string.
+        self.operation_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
         self.sel_heads = nn.ModuleDict()
-        for selkey in SelKey:
-            src, attr = _SEL_SOURCE[selkey]
-            if src == "map":
-                self.sel_heads[str(int(selkey))] = HeadMapSelect(
-                    dim_map, dim_global, dim_ff_map, MAP_WIDTH
-                )
-            elif src == "core":
-                self.sel_heads[str(int(selkey))] = HeadEntitySelection(
-                    dim_entity, dim_global, dim_ff_card
-                )
+        self._pool_get: dict = {}
+        for pool in Pool:
+            self._pool_get[pool] = attrgetter("x_" + pool.name.lower())  # CoreOutput tensor for this pool
+            if pool == Pool.MAP:
+                self.sel_heads[pool.name] = HeadMapSelect(dim_map, dim_global, dim_ff_map)
             else:
-                self.sel_heads[str(int(selkey))] = HeadEntitySelection(
-                    _raw_pool_dim(attr), dim_global, dim_ff_card
-                )
+                has_price = pool.name.startswith("SHOP")  # shop pools append price to the entity embedding
+                dim_in = dim_entity + ENCODING_DIM_PRICE if has_price else dim_entity
+                self.sel_heads[pool.name] = HeadEntitySelection(dim_in, dim_global, dim_op, dim_ff_card)
 
-        # Pending multi-pick heads (separate params per the existing convention)
-        self.multipick_heads = nn.ModuleDict(
-            {
-                str(int(htp)): HeadCardMultiPick(dim_entity, dim_global, dim_ff_card)
-                for htp in MULTIPICK_HEADS
-            }
-        )
-
-        # Inline monster target (shared by CARD_PLAY + USE_POTION)
+        # L3: inline monster target (shared by CardPlay + PotionUse)
         self.head_monster_select = HeadMonsterSelect(dim_entity, dim_global, dim_ff_monster)
 
         # Critic
         self.head_value = HeadValue(dim_global, dim_ff_value)
 
-    # ---- pool helpers ----
+        # PPO init: orthogonal everywhere (gain √2), then near-zero logit layers
+        # (initial policy ≈ uniform over the mask) and a unit-gain value output.
+        # Embeddings/LayerNorm/attention in_proj keep PyTorch defaults.
+        for m in self.modules():
+            if isinstance(m, (nn.Linear, nn.Conv2d)):
+                nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
+                nn.init.zeros_(m.bias)
+        for head in (self.option_head, self.head_monster_select, *self.sel_heads.values()):
+            nn.init.orthogonal_(head._scorer[-1].weight, gain=0.01)
+        nn.init.orthogonal_(self.head_value._network[-1].weight, gain=1.0)
 
-    def _pool(self, selkey: int, core_out: CoreOutput, xgs: TensorGameState) -> torch.Tensor:
-        src, attr = _SEL_SOURCE[selkey]
-        if src == "core":
-            return getattr(core_out, attr)
-        if src == "xgs":
-            return getattr(xgs, attr)
-        return core_out.x_map  # map (unused as a sequence)
+    # ---- One routing pass, shared by sampling and PPO recompute ----
 
-    def _run_selection(
-        self,
-        selkey: int,
-        sub: torch.Tensor,
-        core_out: CoreOutput,
-        xgs: TensorGameState,
-        mask_batch: MaskBatch,
-        sample: bool,
-    ):
-        """Run the SelKey's head on sub-batch `sub`. Returns (indices, log_probs).
-        log_probs is None when sample=False."""
-        xg = core_out.x_global[sub]
-        mask = mask_batch.sel_masks[selkey][sub]
-        gids_full = mask_batch.sel_group_ids[selkey]
-        gids = gids_full[sub] if gids_full is not None else None
-        head = self.sel_heads[str(int(selkey))]
+    def _categorical_step(self, logits, mask, sample, rec_idx=None):
+        """One masked-categorical step. Identity dedup is baked into `mask`, so this
+        is a plain Categorical (no grouped sampling).
 
-        src, _ = _SEL_SOURCE[selkey]
-        if src == "map":
-            out = head(core_out.x_map[sub], xg, mask, sample)
-        else:
-            pool = self._pool(selkey, core_out, xgs)[sub]
-            out = head(pool, xg, mask, sample, group_ids=gids)
-
+        rec_idx given -> recompute: (None, log_prob, entropy) of the recorded pick.
+        else sample   -> (sampled indices, log_prob, None).
+        else greedy   -> (argmax indices, None, None).
+        """
+        masked = logits.masked_fill(~mask, float("-inf"))
+        dist = torch.distributions.Categorical(logits=masked)
+        if rec_idx is not None:
+            return None, dist.log_prob(rec_idx), dist.entropy()
         if sample:
-            return out.indices, out.log_probs
-        return torch.argmax(out.logits, dim=-1), None
+            idx = dist.sample()
+            return idx, dist.log_prob(idx), None
+        return torch.argmax(masked, dim=-1), None, None
+
+    def _selection_step(self, at, rows, core_out, mask_batch, sample, rec_idx=None):
+        """Score + sample/recompute the selection for one action type `at` on `rows`.
+        The mask is per action type (legality differs per type); the head is per pool
+        (shared params), conditioned on the ActionType embedding (the map pool is a
+        single action type, no conditioning)."""
+        pool = Pool(AT_POOL[at])
+        mask = mask_batch.mask_action_idx[str(at)][rows]
+        pool_tensor = self._pool_get[pool](core_out)[rows]
+        if pool == Pool.MAP:
+            logits = self.sel_heads[pool.name](pool_tensor, core_out.x_global[rows], mask).logits
+        else:
+            x_op = self.operation_embedding(torch.full_like(rows, at))
+            logits = self.sel_heads[pool.name](
+                pool_tensor, core_out.x_global[rows], x_op, mask
+            ).logits
+        return self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
+
+    def _target_step(self, pool, rows, sel_idx, core_out, mask_batch, sample, rec_tgt=None):
+        """Inline monster target for a CardPlay (HAND) / PotionUse (POTIONS) group. The
+        legal-monster set is the engine-enumerated per-entity target mask; the gate is
+        that set being non-empty (sampling) or the recorded target's presence (recompute).
+        Returns None if no row needs a target, else (tsub, indices, log_prob, entropy)."""
+        tmask = mask_batch.mask_target_card if pool == Pool.HAND else mask_batch.mask_target_potion
+        monster_mask = tmask[rows, sel_idx]  # (len(rows), MAX_MONSTERS)
+        need = rec_tgt >= 0 if rec_tgt is not None else monster_mask.any(dim=-1)
+        tl = torch.nonzero(need, as_tuple=True)[0]
+        if tl.numel() == 0:
+            return None
+        tsub = rows[tl]
+        mask = monster_mask[tl]
+        if pool == Pool.HAND:
+            x_active = core_out.x_hand[tsub, sel_idx[tl]]
+        else:
+            x_active = core_out.x_potions[tsub, sel_idx[tl]]
+        logits = self.head_monster_select(
+            core_out.x_monsters[tsub], core_out.x_global[tsub], mask, x_active_card=x_active
+        ).logits
+        rec_idx = rec_tgt[tl] if rec_tgt is not None else None
+        idx, lp, ent = self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
+        return tsub, idx, lp, ent
+
+    def _run(self, core_out, mask_batch, sample, values,
+             rec_option=None, rec_selection=None, rec_target=None):
+        """Single mask-derived routing pass. rec_* = None -> sample/greedy; rec_* given ->
+        recompute the recorded action. L1 (over mask_action_type) runs for every row — a
+        halt is just a one-legal-kind state whose forced pick contributes log-prob 0. The
+        chosen ActionType selects the L2 group; L3 targets the may-target groups.
+        `_categorical_step` returns idx=None on recompute, so passing its result into
+        Pick.write skips the recorded index."""
+        recompute = rec_option is not None
+        B = core_out.x_global.shape[0]
+        device = core_out.x_global.device
+        s = ActionBatch.empty(B, device, values)
+
+        # ---- L1: which action kind (always; masked to the legal kinds) ----
+        logits = self.option_head(
+            core_out.x_global, core_out.x_screen, mask_batch.mask_action_type
+        ).logits
+        chosen, lp, ent = self._categorical_step(logits, mask_batch.mask_action_type, sample, rec_idx=rec_option)
+        s.option.write(torch.arange(B, device=device), chosen, lp, ent)
+        decided = rec_option if recompute else chosen  # (B,) chosen ActionType per row
+
+        # ---- L2: selection, grouped by ActionType (mask per type, head per pool) ----
+        # One stable argsort groups the rows by decided type (contiguous slices),
+        # replacing a nonzero scan per action type. Terminal types appear in
+        # `decided` too; iterating the L2 mask keys filters them out as before.
+        order = torch.argsort(decided, stable=True)
+        type_counts = torch.bincount(decided, minlength=NUM_ACTION_TYPES).tolist()
+        offsets = [0]
+        for count in type_counts:
+            offsets.append(offsets[-1] + count)
+        for key in mask_batch.mask_action_idx.keys():
+            at = int(key)
+            if type_counts[at] == 0:
+                continue
+            rows = order[offsets[at] : offsets[at + 1]]
+            rec_sel = rec_selection[rows] if recompute else None
+            s_i, s_lp, s_ent = self._selection_step(at, rows, core_out, mask_batch, sample, rec_idx=rec_sel)
+            s.selection.write(rows, s_i, s_lp, s_ent)
+
+            # ---- L3: monster target (CardPlay / PotionUse groups) ----
+            if AT_MAY_TARGET[at]:
+                sel_for_target = rec_sel if recompute else s_i
+                rec_tgt = rec_target[rows] if recompute else None
+                res = self._target_step(
+                    Pool(AT_POOL[at]), rows, sel_for_target, core_out, mask_batch, sample, rec_tgt=rec_tgt,
+                )
+                if res is not None:
+                    tsub, t_i, t_lp, t_ent = res
+                    s.target.write(tsub, t_i, t_lp, t_ent)
+
+        return s
 
     def forward(
-        self, x_game_state: TensorGameState, mask_batch: MaskBatch, sample: bool = True
-    ) -> ForwardOutput:
-        device = x_game_state.x_hand.device
+        self, x_game_state: TGameState, mask_batch: TMask, sample: bool = True
+    ) -> ActionBatch:
         core_out = self.core(x_game_state)
-        B = core_out.x_global.shape[0]
-
         values = self.head_value(core_out.x_global)
+        return self._run(core_out, mask_batch, sample, values)
 
-        htps = torch.full((B,), -1, dtype=torch.long, device=device)
-        opt_idx = torch.full((B,), -1, dtype=torch.long, device=device)
-        opt_lp = torch.zeros(B, device=device)
-        sel_idx = torch.full((B,), -1, dtype=torch.long, device=device)
-        sel_lp = torch.zeros(B, device=device)
-        sel_keys = torch.full((B,), -1, dtype=torch.long, device=device)
-        tgt_idx = torch.full((B,), -1, dtype=torch.long, device=device)
-        tgt_lp = torch.zeros(B, device=device)
-        retain_idx = torch.full((B, MAX_SIZE_HAND), -1, dtype=torch.long, device=device)
-        retain_lp = torch.zeros(B, device=device)
-
-        # ---- Screen heads ----
-        for htp in SCREEN_HEADS:
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-            htps[idx] = int(htp)
-            opt_head = self.option_heads[str(int(htp))]
-            out = opt_head(core_out.x_global[idx], mask_batch.option_masks[htp], sample)
-            if sample:
-                chosen = out.indices
-                opt_lp[idx] = out.log_probs
-            else:
-                chosen = torch.argmax(out.logits, dim=-1)
-            opt_idx[idx] = chosen
-
-            opts = SCREEN_OPTION_KINDS[htp]
-            for pos, opt in enumerate(opts):
-                selkey = opt_sel_key(opt)
-                if selkey is None:
-                    continue
-                local = torch.nonzero(chosen == pos, as_tuple=True)[0]
-                if local.numel() == 0:
-                    continue
-                sub = idx[local]
-                s_i, s_lp = self._run_selection(
-                    int(selkey), sub, core_out, x_game_state, mask_batch, sample
-                )
-                sel_idx[sub] = s_i
-                sel_keys[sub] = int(selkey)
-                if sample:
-                    sel_lp[sub] = s_lp
-
-                if opt_may_target(opt):
-                    self._maybe_target(
-                        opt, sub, s_i, core_out, mask_batch, sample, tgt_idx, tgt_lp
-                    )
-
-        # ---- Pending multi-pick ----
-        for htp in MULTIPICK_HEADS:
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-            htps[idx] = int(htp)
-            head = self.multipick_heads[str(int(htp))]
-            mp = head(
-                core_out.x_hand[idx],
-                core_out.x_global[idx],
-                mask_batch.multipick_mask[idx],
-                mask_batch.pick_nums[idx],
-                sample=sample,
-                group_ids=mask_batch.multipick_group_ids[idx],
-            )
-            retain_idx[idx] = mp.indices
-            if sample:
-                retain_lp[idx] = mp.log_prob
-
-        # ---- Pending single-select ----
-        for htp, selkey in PEND_SINGLE_SELKEY.items():
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-            htps[idx] = int(htp)
-            s_i, s_lp = self._run_selection(
-                int(selkey), idx, core_out, x_game_state, mask_batch, sample
-            )
-            sel_idx[idx] = s_i
-            sel_keys[idx] = int(selkey)
-            if sample:
-                sel_lp[idx] = s_lp
-
-        return ForwardOutput(
-            head_type_primaries=htps,
-            option_indices=opt_idx,
-            option_log_probs=opt_lp,
-            selection_indices=sel_idx,
-            selection_log_probs=sel_lp,
-            sel_keys=sel_keys,
-            target_indices=tgt_idx,
-            target_log_probs=tgt_lp,
-            retain_indices=retain_idx,
-            retain_log_probs=retain_lp,
-            values=values,
-        )
-
-    def _maybe_target(self, opt, sub, s_i, core_out, mask_batch, sample, tgt_idx, tgt_lp) -> None:
-        """Inline monster target for CARD_PLAY / USE_POTION when the chosen entity
-        requires a target. CARD_PLAY passes the played card embedding as the
-        active context; USE_POTION passes none (zeros)."""
-        if opt == OptKind.CARD_PLAY:
-            req = mask_batch.target_required_hand[sub, s_i]
-        else:
-            req = mask_batch.target_required_potion[sub, s_i]
-        tlocal = torch.nonzero(req, as_tuple=True)[0]
-        if tlocal.numel() == 0:
-            return
-        tsub = sub[tlocal]
-        x_active = None
-        if opt == OptKind.CARD_PLAY:
-            x_active = core_out.x_hand[tsub, s_i[tlocal]]
-        out = self.head_monster_select(
-            core_out.x_monsters[tsub],
-            core_out.x_global[tsub],
-            mask_batch.monster_alive_mask[tsub],
-            sample,
-            x_active_card=x_active,
-        )
-        if sample:
-            tgt_idx[tsub] = out.indices
-            tgt_lp[tsub] = out.log_probs
-        else:
-            tgt_idx[tsub] = torch.argmax(out.logits, dim=-1)
-
-    # ---- PPO recompute ----
-
-    def _eval_selection(self, selkey, sub, rec_idx_sub, core_out, xgs, mask_batch):
-        xg = core_out.x_global[sub]
-        mask = mask_batch.sel_masks[selkey][sub]
-        gids_full = mask_batch.sel_group_ids[selkey]
-        gids = gids_full[sub] if gids_full is not None else None
-        head = self.sel_heads[str(int(selkey))]
-        src, _ = _SEL_SOURCE[selkey]
-        if src == "map":
-            out = head(core_out.x_map[sub], xg, mask, sample=False)
-        else:
-            pool = self._pool(selkey, core_out, xgs)[sub]
-            out = head(pool, xg, mask, sample=False, group_ids=gids)
-        return recompute_grouped_log_prob_and_entropy(out.logits, rec_idx_sub, group_ids=gids)
-
-    def evaluate_actions(self, x_game_state, mask_batch, rec):
-        """Recompute log-probs/entropies of recorded actions under the current
-        policy, mirroring forward(). `rec` carries recorded
-        head_type_primaries/option_indices/selection_indices/target_indices/
-        retain_indices (all (B,) / (B,H)). Returns (log_probs, entropies, values)."""
+    def evaluate_actions(self, x_game_state, mask_batch, option_indices, selection_indices, target_indices):
+        """Recompute log-probs/entropies of the recorded (option, selection, target)
+        indices under the current policy, sharing forward()'s routing pass.
+        Returns (log_probs, entropies, values); entropies is a per-head (B, 3) stack
+        [option, selection, target] (0 where the pick doesn't apply), so the loss
+        sums it and logging can split it."""
         core_out = self.core(x_game_state)
-        xg = core_out.x_global
-        B = xg.shape[0]
-        device = xg.device
-        values = self.head_value(xg)
-        log_probs = torch.zeros(B, device=device)
-        entropies = torch.zeros(B, device=device)
-
-        for htp in SCREEN_HEADS:
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-            logits = self.option_heads[str(int(htp))](
-                xg[idx], mask_batch.option_masks[htp], sample=False
-            ).logits
-            dist = torch.distributions.Categorical(logits=logits)
-            rec_opt = rec.option_indices[idx]
-            log_probs[idx] += dist.log_prob(rec_opt)
-            entropies[idx] += dist.entropy()
-
-            opts = SCREEN_OPTION_KINDS[htp]
-            for pos, opt in enumerate(opts):
-                selkey = opt_sel_key(opt)
-                if selkey is None:
-                    continue
-                local = torch.nonzero(rec_opt == pos, as_tuple=True)[0]
-                if local.numel() == 0:
-                    continue
-                sub = idx[local]
-                rec_sel = rec.selection_indices[sub]
-                lp, e = self._eval_selection(
-                    int(selkey), sub, rec_sel, core_out, x_game_state, mask_batch
-                )
-                log_probs[sub] += lp
-                entropies[sub] += e
-
-                if opt_may_target(opt):
-                    rec_tgt = rec.target_indices[sub]
-                    has = rec_tgt >= 0
-                    tl = torch.nonzero(has, as_tuple=True)[0]
-                    if tl.numel() == 0:
-                        continue
-                    tsub = sub[tl]
-                    x_active = (
-                        core_out.x_hand[tsub, rec_sel[tl]] if opt == OptKind.CARD_PLAY else None
-                    )
-                    out = self.head_monster_select(
-                        core_out.x_monsters[tsub],
-                        xg[tsub],
-                        mask_batch.monster_alive_mask[tsub],
-                        sample=False,
-                        x_active_card=x_active,
-                    )
-                    lp, e = recompute_grouped_log_prob_and_entropy(out.logits, rec_tgt[tl])
-                    log_probs[tsub] += lp
-                    entropies[tsub] += e
-
-        for htp in MULTIPICK_HEADS:
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-            lp, e = self.multipick_heads[str(int(htp))].recompute_log_prob(
-                core_out.x_hand[idx],
-                xg[idx],
-                mask_batch.multipick_mask[idx],
-                mask_batch.pick_nums[idx],
-                rec.retain_indices[idx],
-                group_ids=mask_batch.multipick_group_ids[idx],
-            )
-            log_probs[idx] += lp
-            entropies[idx] += e
-
-        for htp, selkey in PEND_SINGLE_SELKEY.items():
-            idx = mask_batch.route[htp]
-            if len(idx) == 0:
-                continue
-            rec_sel = rec.selection_indices[idx]
-            lp, e = self._eval_selection(
-                int(selkey), idx, rec_sel, core_out, x_game_state, mask_batch
-            )
-            log_probs[idx] += lp
-            entropies[idx] += e
-
-        return log_probs, entropies, values
-
-    def forward_single(
-        self, x_game_state: TensorGameState, mask_batch: MaskBatch, sample: bool = True
-    ) -> SingleOutput:
-        out = self.forward(x_game_state, mask_batch, sample)
-        ri = [int(x) for x in out.retain_indices[0].tolist() if x >= 0]
-        return SingleOutput(
-            head_type_primary=HeadTypePrimary(int(out.head_type_primaries[0].item())),
-            option_index=int(out.option_indices[0].item()),
-            selection_index=int(out.selection_indices[0].item()),
-            target_index=int(out.target_indices[0].item()),
-            retain_indices=ri,
-            value=out.values[0],
+        values = self.head_value(core_out.x_global)
+        s = self._run(
+            core_out, mask_batch, sample=False, values=values,
+            rec_option=option_indices, rec_selection=selection_indices, rec_target=target_indices,
         )
+        entropies = torch.stack(
+            [s.option.entropy, s.selection.entropy, s.target.entropy], dim=-1
+        )
+        return s.total_log_prob(), entropies, values

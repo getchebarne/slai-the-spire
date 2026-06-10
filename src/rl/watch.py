@@ -3,7 +3,7 @@
 Reuses the engine `play/` renderer (so the agent plays in the same nice UI a
 human does) but replaces the human keypress with the model's greedy action —
 the exact inference path the trainer uses (encode → mask from legal actions →
-forward_single). Dependency direction stays trainer → engine.
+forward). Dependency direction stays trainer → engine.
 
 Controls: [space] pause/resume, [n] single step, [r] new run, [+/-] speed,
 [q] quit.
@@ -119,7 +119,7 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
 @click.option(
     "--exp-path",
     default="experiments/ppo/NEWERA",
-    help="Experiment dir with config.yml + model.pth",
+    help="Experiment dir with config.yml + checkpoint.pth",
 )
 @click.option(
     "--random", "use_random", is_flag=True, help="Use a fresh untrained model (no checkpoint)"
@@ -150,7 +150,8 @@ def main(exp_path, use_random, ascension, delay, device, no_fast_mode):
     else:
         config = load_config(f"{exp_path}/config.yml")
         model = ActorCritic(**config["model"])
-        model.load_state_dict(torch.load(f"{exp_path}/model.pth", weights_only=True))
+        ckpt = torch.load(f"{exp_path}/checkpoint.pth", weights_only=True)
+        model.load_state_dict(ckpt["model"])
     model.eval()
     dev = torch.device(device)
     model.to(dev)

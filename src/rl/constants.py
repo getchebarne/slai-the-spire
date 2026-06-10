@@ -66,15 +66,23 @@ MAX_SIZE_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
 
 # Encoder-side caps. slai's deck and draw/discard piles grow unboundedly;
-# these are the maximum sizes the encoder pads to. Bump if Silent decks
-# routinely exceed.
-MAX_SIZE_DECK = 50
-MAX_SIZE_DISC_PILE = 50
-MAX_SIZE_DRAW_PILE = 50
+# these are the maximum sizes the encoder pads to (overflow warns + drops the
+# affected actions, see masks.py/card.py). Draw/discard must hold a full deck,
+# so all three move together. Bump if Silent decks routinely exceed.
+MAX_SIZE_DECK = 35
+MAX_SIZE_DISC_PILE = 35
+MAX_SIZE_DRAW_PILE = 35
+
+# Exhausted cards stay few in Act 1; tokens are costly, so this cap is tighter.
+MAX_SIZE_EXHAUST = 20
 
 # Maximum number of relic-reward offers per RELIC_REWARD halt. Today slai
 # emits at most 1 (post-Elite). Bump if that ever changes.
 MAX_RELIC_REWARDS = 1
+
+# Combat/Elite/chest rewards offer at most one potion; sized as a 1-slot
+# sequence for representation uniformity with the relic reward.
+MAX_POTION_REWARDS = 1
 
 # Max owned relics encoded as entities. No duplicate relics, so the true
 # ceiling is RelicName::COUNT; sized with headroom, bump as content grows.
@@ -115,8 +123,10 @@ __all__ = [
     "MAX_SIZE_DECK",
     "MAX_SIZE_DISC_PILE",
     "MAX_SIZE_DRAW_PILE",
+    "MAX_SIZE_EXHAUST",
     "MAX_SIZE_HAND",
     "MAX_RELIC_REWARDS",
+    "MAX_POTION_REWARDS",
     "MAX_RELICS",
     # Training flags + new-screen caps
     "FAST_MODE",
