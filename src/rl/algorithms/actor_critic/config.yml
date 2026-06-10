@@ -1,4 +1,4 @@
-exp_name: ppo/NEWERA-VII
+exp_name: ppo/NEWERA-VIII  # value decomposition changes the checkpoint shape — fresh run
 seed: 0
 num_iterations: 5.0e+4
 log_every: 10
