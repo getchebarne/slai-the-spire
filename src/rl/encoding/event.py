@@ -2,34 +2,45 @@ import numpy as np
 import torch
 from slai import Event
 from slai import EventName
+from slai import members
 
 from src.rl.constants import EVENT_STATE_CAP
 from src.rl.constants import MAX_EVENT_OPTIONS
+from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
+from src.rl.encoding.effect import encode_effects_into
 
 
-_EVENT_NAME_TO_IDX = {event_name: i for i, event_name in enumerate(EventName)}
+_EVENT_NAME_TO_IDX = {event_name: i for i, event_name in enumerate(members(EventName))}
 _ENCODING_DIM_EVENT_META = (
-    len(EventName)             # Name OHE
+    len(_EVENT_NAME_TO_IDX)             # Name OHE
     + 1                        # State scalar
 )
 _ENCODING_DIM_EVENT_OPTION = (
-    1                          # Gated out
+    MAX_EVENT_OPTIONS          # Slot-index OHE
+    + 1                        # Gated out
+    + ENCODING_DIM_EFFECTS     # Per-EffectKind effect blocks
 )
 
 
 def _encode_event_meta_into(event: Event, out: np.ndarray) -> None:
     # Name OHE
-    name_idx = _EVENT_NAME_TO_IDX.get(int(event.name))
-    if name_idx is not None:
-        out[name_idx] = 1.0
+    out[_EVENT_NAME_TO_IDX[event.name]] = 1.0
 
     # State scalar
-    out[len(EventName)] = min(event.state, EVENT_STATE_CAP) / EVENT_STATE_CAP
+    out[len(_EVENT_NAME_TO_IDX)] = min(event.state, EVENT_STATE_CAP) / EVENT_STATE_CAP
 
 
-def _encode_event_option_into(option, out: np.ndarray) -> None:
-    # Gated flags
-    out[0] = float(option.gated_out)
+def _encode_event_option_into(option, slot: int, out: np.ndarray) -> None:
+    # Slot-index OHE — the event name lives in the meta block, so (event, slot)
+    # uniquely identifies the option; without it every legal option is the same
+    # token and the selection head's gradient is exactly zero.
+    out[slot] = 1.0
+
+    # Gated flag
+    out[MAX_EVENT_OPTIONS] = float(option.gated_out)
+
+    # Per-EffectKind effect blocks (what the option actually does)
+    encode_effects_into(option.effects, MAX_EVENT_OPTIONS + 1, out)
 
 
 def encode_batch_events(
@@ -47,8 +58,8 @@ def encode_batch_events(
             continue
 
         _encode_event_meta_into(event, x_meta[b])
-        for i, option in enumerate(event.options):
-            _encode_event_option_into(option, x_opts[b, i])
+        for i, option in enumerate(event.options[:MAX_EVENT_OPTIONS]):
+            _encode_event_option_into(option, i, x_opts[b, i])
             x_pad[b, i] = True
 
     return (

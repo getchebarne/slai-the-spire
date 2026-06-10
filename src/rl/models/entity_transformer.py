@@ -33,14 +33,9 @@ class EntityTransformer(nn.Module):
         Returns:
             Transformed entity tensor (B, S, D)
         """
-        # Pass all entities through entity transformer
-        # Input shape:
-        #   `x_entity`: (B, S, D) (float)
-        #   `x_entity_mask_pad`: (B, S) (bool)
         for entity_transformer_block in self._entity_transformer_blocks:
             x_entity = entity_transformer_block(x_entity, x_entity_mask_pad)
 
-        # Output shape: (B, S, D)
         return x_entity
 
 

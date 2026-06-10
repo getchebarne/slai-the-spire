@@ -1,192 +1,122 @@
-"""
-Core encoder module that processes game state into embeddings.
-
-The core takes raw game state encodings and produces:
-1. Entity embeddings (cards, monsters, character, energy) via transformer
-2. Map encoding
-3. A global context vector (pooled entity embeddings)
-"""
-
 from dataclasses import dataclass
 from enum import IntEnum
 
 import torch
 import torch.nn as nn
 
+from src.rl.constants import MAX_EVENT_OPTIONS
 from src.rl.constants import MAX_MONSTERS
+from src.rl.constants import MAX_POTION_REWARDS
+from src.rl.constants import MAX_POTION_SLOTS
+from src.rl.constants import MAX_RELIC_REWARDS
+from src.rl.constants import MAX_RELICS
+from src.rl.constants import MAX_SHOP_CARDS
+from src.rl.constants import MAX_SHOP_POTIONS
+from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISC_PILE
+from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_DRAW_PILE
+from src.rl.constants import MAX_SIZE_EXHAUST
 from src.rl.constants import MAX_SIZE_HAND
-from src.rl.encoding.card import get_encoding_dim_card
-from src.rl.encoding.event import get_encoding_dim_event_meta
-from src.rl.encoding.event import get_encoding_dim_event_option
-from src.rl.encoding.potion import get_encoding_dim_potion
-from src.rl.encoding.relic import get_encoding_dim_relic
-from src.rl.encoding.reward import get_encoding_dim_reward_meta
+from src.rl.encoding.energy import _ENCODING_DIM_ENERGY
+from src.rl.encoding.event import _ENCODING_DIM_EVENT_META
+from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
+from src.rl.encoding.reward import _ENCODING_DIM_REWARD_META
 from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
-from src.rl.encoding.shop import get_encoding_dim_shop_card
-from src.rl.encoding.shop import get_encoding_dim_shop_meta
-from src.rl.encoding.shop import get_encoding_dim_shop_potion
-from src.rl.encoding.shop import get_encoding_dim_shop_relic
-from src.rl.encoding.state import TensorGameState
+from src.rl.encoding.shop import _DIM_SHOP_META
+from src.rl.types import TGameState
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapEncoder
 
 
-class EntityType(IntEnum):
-    """Entity type indices for type embeddings."""
+class Group(IntEnum):
+    """Token group, also the per-group type-embedding index."""
 
     HAND = 0
-    DRAW = 1
-    DISC = 2
-    DECK = 3
-    COMBAT_REWARD = 4
-    MONSTER = 5
-    CHARACTER = 6
-    ENERGY = 7
+    MONSTERS = 1
+    CHARACTER = 2
+    DISCOVER = 3
+    RELICS = 4
+    DECK = 5
+    REWARD_CARDS = 6
+    REWARD_RELIC = 7
+    REWARD_POTION = 8
+    SHOP_CARDS = 9
+    SHOP_RELICS = 10
+    SHOP_POTIONS = 11
+    POTIONS = 12
+    EVENT_OPTIONS = 13
+    DRAW = 14
+    DISCARD = 15
+    EXHAUST = 16
 
 
-_NUM_ENTITY_TYPES = len(EntityType)
+# Fixed token order: drives the transformer cat/split and the type-index buffer
+ENTITY_LAYOUT: tuple[tuple[Group, int], ...] = (
+    (Group.HAND, MAX_SIZE_HAND),
+    (Group.MONSTERS, MAX_MONSTERS),
+    (Group.CHARACTER, 1),
+    (Group.DISCOVER, MAX_SIZE_DISCOVER),
+    (Group.RELICS, MAX_RELICS),
+    (Group.DECK, MAX_SIZE_DECK),
+    (Group.REWARD_CARDS, MAX_SIZE_COMBAT_CARD_REWARD),
+    (Group.REWARD_RELIC, MAX_RELIC_REWARDS),
+    (Group.REWARD_POTION, MAX_POTION_REWARDS),
+    (Group.SHOP_CARDS, MAX_SHOP_CARDS),
+    (Group.SHOP_RELICS, MAX_SHOP_RELICS),
+    (Group.SHOP_POTIONS, MAX_SHOP_POTIONS),
+    (Group.POTIONS, MAX_POTION_SLOTS),
+    (Group.EVENT_OPTIONS, MAX_EVENT_OPTIONS),
+    (Group.DRAW, MAX_SIZE_DRAW_PILE),
+    (Group.DISCARD, MAX_SIZE_DISC_PILE),
+    (Group.EXHAUST, MAX_SIZE_EXHAUST),
+)
+
+_NUM_TOKENS = sum(size for _, size in ENTITY_LAYOUT) + 1  # + the learned global token
+
+# Packing buckets for the transformer's token dim: measured occupancy is ~17 valid
+# tokens of _NUM_TOKENS=199 (p90 ~21), so the transformer runs on a compacted prefix
+# padded up to the smallest covering bucket (few distinct shapes keeps kernels and
+# torch.compile happy); the last bucket is the unpacked width, so packing never
+# truncates.
+_PACK_BUCKETS = (32, 40, 48, 56, 64, 80, 96, 112, 128, _NUM_TOKENS)
 
 
 @dataclass
 class CoreOutput:
-    """Output from the core encoder."""
+    """Per-entity embeddings + global context for the action/value heads.
 
-    # Individual entity embeddings (after transformer)
-    x_hand: torch.Tensor  # (B, MAX_SIZE_HAND, dim_entity)
-    x_draw: torch.Tensor  # (B, MAX_SIZE_DRAW_PILE, dim_entity)
-    x_disc: torch.Tensor  # (B, MAX_SIZE_DISC_PILE, dim_entity)
-    x_deck: torch.Tensor  # (B, MAX_SIZE_DECK, dim_entity)
-    x_combat_reward: torch.Tensor  # (B, MAX_SIZE_COMBAT_CARD_REWARD, dim_entity)
-    x_monsters: torch.Tensor  # (B, MAX_MONSTERS, dim_entity)
-    x_character: torch.Tensor  # (B, dim_entity)
-    x_energy: torch.Tensor  # (B, dim_entity)
-
-    # Map encoding
-    x_map: torch.Tensor  # (B, dim_map)
-
-    # Global context (pooled entities + map)
-    x_global: torch.Tensor  # (B, dim_global)
-
-
-def _calculate_masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    Every selectable/context entity is refined by the single entity transformer.
+    The shop piles carry their per-item price concatenated. Context-only groups
+    (relics, reward relic/potion, draw/discard/exhaust) reach x_global via
+    attention into the learned global token and are not surfaced.
     """
-    Calculate mean over sequence dimension, respecting padding mask.
 
-    Args:
-        x: Tensor of shape (B, S, D)
-        mask: Boolean mask of shape (B, S), True = valid
-
-    Returns:
-        Mean tensor (B, D)
-    """
-    # Zero out padded positions
-    x_masked = x * torch.unsqueeze(mask, -1)
-
-    # Sum and divide by actual length
-    x_sum = torch.sum(x_masked, dim=1)
-    x_len = torch.clamp(torch.sum(mask, dim=1, keepdim=True).float(), min=1.0)
-    x_mean = x_sum / x_len
-
-    return x_mean
-
-
-def _calculate_masked_max(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """
-    Calculate max over sequence dimension, respecting padding mask.
-
-    Args:
-        x: Tensor of shape (B, S, D)
-        mask: Mask of shape (B, S), True/1.0 = valid
-
-    Returns:
-        Max tensor (B, D)
-    """
-    mask_bool = mask.bool()
-
-    # Set padded positions to -inf so they don't affect max
-    mask_expanded = torch.unsqueeze(mask_bool, -1)  # (B, S, 1)
-    x_masked = torch.where(mask_expanded, x, torch.full_like(x, float("-inf")))
-
-    # Max over sequence dimension
-    x_max, _ = torch.max(x_masked, dim=1)
-
-    # Handle empty sequences: if all positions masked, return zeros instead of -inf
-    all_masked = ~torch.any(mask_bool, dim=1, keepdim=True)  # (B, 1)
-    x_max = torch.where(all_masked, torch.zeros_like(x_max), x_max)
-
-    return x_max
-
-
-def _undo_entity_concatenation(
-    x_entity: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Split concatenated entity tensor back into components."""
-    total_card_len = (
-        MAX_SIZE_HAND
-        + MAX_SIZE_DRAW_PILE
-        + MAX_SIZE_DISC_PILE
-        + MAX_SIZE_DECK
-        + MAX_SIZE_COMBAT_CARD_REWARD
-    )
-
-    idx = 0
-
-    # Cards
-    x_card = x_entity[:, idx : idx + total_card_len, :]
-    idx += total_card_len
-
-    # Monsters
-    x_monsters = x_entity[:, idx : idx + MAX_MONSTERS, :]
-    idx += MAX_MONSTERS
-
-    # Character (single entity)
-    x_character = x_entity[:, idx, :]
-    idx += 1
-
-    # Energy (single entity)
-    x_energy = x_entity[:, idx, :]
-
-    return x_card, x_monsters, x_character, x_energy
-
-
-def _undo_card_concatenation(
-    x_card: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Split concatenated card tensor back into piles."""
-    idx = 0
-
-    x_hand = x_card[:, idx : idx + MAX_SIZE_HAND, :]
-    idx += MAX_SIZE_HAND
-
-    x_draw = x_card[:, idx : idx + MAX_SIZE_DRAW_PILE, :]
-    idx += MAX_SIZE_DRAW_PILE
-
-    x_disc = x_card[:, idx : idx + MAX_SIZE_DISC_PILE, :]
-    idx += MAX_SIZE_DISC_PILE
-
-    x_deck = x_card[:, idx : idx + MAX_SIZE_DECK, :]
-    idx += MAX_SIZE_DECK
-
-    x_combat_reward = x_card[:, idx : idx + MAX_SIZE_COMBAT_CARD_REWARD, :]
-
-    return x_hand, x_draw, x_disc, x_deck, x_combat_reward
+    x_global: torch.Tensor          # (B, dim_global)
+    x_screen: torch.Tensor          # (B, _ENCODING_DIM_SCREEN) raw flats — L1 GLU context
+    x_map: torch.Tensor             # (B, MAP_WIDTH, dim_map) — per-column embeddings
+    x_hand: torch.Tensor            # (B, MAX_SIZE_HAND, dim_entity)
+    x_monsters: torch.Tensor        # (B, MAX_MONSTERS, dim_entity)
+    x_discover: torch.Tensor        # (B, MAX_SIZE_DISCOVER, dim_entity)
+    x_deck: torch.Tensor            # (B, MAX_SIZE_DECK, dim_entity)
+    x_reward_cards: torch.Tensor    # (B, MAX_SIZE_COMBAT_CARD_REWARD, dim_entity)
+    x_shop_cards: torch.Tensor      # (B, MAX_SHOP_CARDS, dim_entity + ENCODING_DIM_PRICE)
+    x_shop_relics: torch.Tensor     # (B, MAX_SHOP_RELICS, dim_entity + ENCODING_DIM_PRICE)
+    x_shop_potions: torch.Tensor    # (B, MAX_SHOP_POTIONS, dim_entity + ENCODING_DIM_PRICE)
+    x_potions: torch.Tensor         # (B, MAX_POTION_SLOTS, dim_entity)
+    x_event_options: torch.Tensor   # (B, MAX_EVENT_OPTIONS, dim_entity)
 
 
 class Core(nn.Module):
-    """
-    Core encoder that processes game state into embeddings.
+    """Shared encoder: game state -> per-entity embeddings + global context.
 
-    Architecture:
-    1. Project each entity type (cards, monsters, character, energy) to shared dimension
-    2. Add learned type embeddings to distinguish entity sources
-    3. Pass all entities through transformer for cross-entity attention
-    4. Encode map separately
-    5. Pool entities per-type (mean + max for each) into global context vector
+    One entity transformer over all 17 entity groups (ENTITY_LAYOUT order) plus a
+    learned global token, padding-masked; the map has its own per-column CNN. The
+    global context combines the refined global token (attention-aggregated
+    entities) with per-group counts and the raw flat blocks.
     """
 
     def __init__(
@@ -199,73 +129,38 @@ class Core(nn.Module):
         map_encoder_kernel_size: int,
         map_encoder_dim: int,
     ):
-        """
-        Args:
-            dim_entity: Embedding dimension for all entities
-            dim_global: Dimension of the global context vector (output of pooling projection)
-            transformer_dim_ff: Feedforward dimension in transformer blocks
-            transformer_num_heads: Number of attention heads
-            transformer_num_blocks: Number of transformer blocks
-            map_encoder_kernel_size: Kernel size for map CNN encoder
-            map_encoder_dim: Output dimension of map encoder
-        """
         super().__init__()
 
         self._dim_entity = dim_entity
         self._dim_global = dim_global
         self._map_encoder_dim = map_encoder_dim
 
-        # Entity projector: project each entity type to shared dimension
         self._entity_projector = EntityProjector(dim_entity)
-
-        # Type embeddings: learnable embeddings for each entity type
-        # Allows transformer to distinguish hand cards from draw pile cards, etc.
-        self._type_embeddings = nn.Embedding(_NUM_ENTITY_TYPES, dim_entity)
-
-        # Entity transformer: cross-entity attention
         self._entity_transformer = EntityTransformer(
-            dim_entity,
-            transformer_dim_ff,
-            transformer_num_heads,
-            transformer_num_blocks,
+            dim_entity, transformer_dim_ff, transformer_num_heads, transformer_num_blocks
         )
-
-        # Map encoder
+        self.last_pack_width = _NUM_TOKENS  # observability: bucket chosen by the last forward
+        self._type_emb = nn.Embedding(len(Group), dim_entity)
         self._map_encoder = MapEncoder(map_encoder_kernel_size, map_encoder_dim)
 
-        # Global context projection with discriminated entity aggregation:
-        # - 6 sequence entity types (hand, draw, disc, deck, reward, monsters): mean + max each = 12 * dim
-        # - 2 singleton entities (character, energy): 2 * dim
-        # - Map encoding: map_encoder_dim
-        # - Screen state: _ENCODING_DIM_SCREEN
-        _num_seq_entity_types = 6  # hand, draw, disc, deck, reward, monsters
-        _num_singleton_entities = 2  # character, energy
+        # Learned global token, refined by the transformer alongside the entities —
+        # replaces per-group mean/max pooling as the entity -> global pathway.
+        self._global_token = nn.Parameter(torch.empty(1, 1, dim_entity))
+        nn.init.normal_(self._global_token, std=0.02)
 
-        # New screen/feature blocks pooled into the global context. Sequence
-        # pools (potion belt, shop cards/relics/potions, event options, discover)
-        # contribute mean+max of their raw per-item encodings; flat blocks
-        # (relics-owned, reward/shop/event meta) concat directly.
-        _new_seq_pool_dim = 2 * (
-            get_encoding_dim_potion()
-            + get_encoding_dim_shop_card()
-            + get_encoding_dim_shop_relic()
-            + get_encoding_dim_shop_potion()
-            + get_encoding_dim_event_option()
-            + get_encoding_dim_card()  # discover cards
-        )
-        _new_flat_dim = (
-            get_encoding_dim_relic()
-            + get_encoding_dim_reward_meta()
-            + get_encoding_dim_shop_meta()
-            + get_encoding_dim_event_meta()
-        )
+        # Global context = refined global token + character + map summary
+        # + per-group counts + raw flats.
         global_input_dim = (
-            _num_seq_entity_types * 2 * dim_entity  # mean + max for each sequence type
-            + _num_singleton_entities * dim_entity  # character + energy
-            + map_encoder_dim
-            + _ENCODING_DIM_SCREEN
-            + _new_seq_pool_dim
-            + _new_flat_dim
+            dim_entity                    # global token (attention-aggregated entities)
+            + dim_entity                  # character (refined singleton)
+            + map_encoder_dim             # map CNN (column-mean summary)
+            + len(ENTITY_LAYOUT)          # per-group counts (mask.sum / size)
+            + _ENCODING_DIM_ENERGY        # energy (raw)
+            + _ENCODING_DIM_SCREEN        # screen state
+            + ENCODING_DIM_MAP_META       # floor depth + act-boss + next-row kinds
+            + _ENCODING_DIM_REWARD_META
+            + _DIM_SHOP_META
+            + _ENCODING_DIM_EVENT_META
         )
         self._global_projection = nn.Sequential(
             nn.Linear(global_input_dim, dim_global),
@@ -273,22 +168,9 @@ class Core(nn.Module):
             nn.Linear(dim_global, dim_global),
         )
 
-        # Pre-build type indices (fixed structure, batch-independent)
-        # Shape (1, total_entities) — expanded to (B, total_entities) in forward
-        _type_indices = torch.cat(
-            [
-                torch.full((1, MAX_SIZE_HAND), EntityType.HAND),
-                torch.full((1, MAX_SIZE_DRAW_PILE), EntityType.DRAW),
-                torch.full((1, MAX_SIZE_DISC_PILE), EntityType.DISC),
-                torch.full((1, MAX_SIZE_DECK), EntityType.DECK),
-                torch.full((1, MAX_SIZE_COMBAT_CARD_REWARD), EntityType.COMBAT_REWARD),
-                torch.full((1, MAX_MONSTERS), EntityType.MONSTER),
-                torch.full((1, 1), EntityType.CHARACTER),
-                torch.full((1, 1), EntityType.ENERGY),
-            ],
-            dim=1,
-        )
-        self.register_buffer("_type_indices", _type_indices)
+        # token -> group type-embedding index (1, N), expanded to (B, N) in forward
+        type_idx = torch.cat([torch.full((1, size), int(g)) for g, size in ENTITY_LAYOUT], dim=1)
+        self.register_buffer("_type_idx", type_idx)
 
     @property
     def dim_map(self) -> int:
@@ -298,190 +180,171 @@ class Core(nn.Module):
     def dim_global(self) -> int:
         return self._dim_global
 
-    def forward(self, x_game_state: TensorGameState) -> CoreOutput:
-        batch_size = x_game_state.x_hand.shape[0]
+    def forward(self, x: TGameState) -> CoreOutput:
+        p = self._entity_projector(x)
+        b = x.batch_size[0]
+        device = x.character.device
+        char_valid = torch.ones(b, 1, dtype=torch.bool, device=device)
 
-        # Concatenate all cards (and their masks)
-        x_card = torch.cat(
+        # ---- Single entity transformer (cat in ENTITY_LAYOUT order) ----
+        tokens = torch.cat(
             [
-                x_game_state.x_hand,
-                x_game_state.x_draw,
-                x_game_state.x_disc,
-                x_game_state.x_deck,
-                x_game_state.x_combat_reward,
+                p.hand.x,
+                p.monsters.x,
+                torch.unsqueeze(p.character, 1),
+                p.discover.x,
+                p.relics.x,
+                p.deck.x,
+                p.reward_cards.x,
+                p.reward_relic.x,
+                p.reward_potion.x,
+                p.shop_cards.x,
+                p.shop_relics.x,
+                p.shop_potions.x,
+                p.potions.x,
+                p.event_options.x,
+                p.draw.x,
+                p.discard.x,
+                p.exhaust.x,
             ],
             dim=1,
         )
-        # Project entities to shared dimension
-        # Health/block and modifiers projected via shared weights
-        x_card_proj, x_monsters_proj, x_character_proj, x_energy_proj = self._entity_projector(
-            x_card,
-            x_game_state.x_monsters,
-            x_game_state.x_monster_health_block,
-            x_game_state.x_monster_modifiers,
-            x_game_state.x_character,
-            x_game_state.x_character_health_block,
-            x_game_state.x_character_modifiers,
-            x_game_state.x_energy,
-        )
-
-        # Expand cached type indices to batch size (no memory allocation)
-        type_indices = self._type_indices.expand(batch_size, -1)  # (B, total_entities)
-
-        # Get type embeddings for all positions
-        type_emb = self._type_embeddings(type_indices)  # (B, total_entities, dim_entity)
-
-        # Concatenate all entities and their masks
-        x_entity_cat = torch.cat(
+        valid = torch.cat(
             [
-                x_card_proj,
-                x_monsters_proj,
-                torch.unsqueeze(x_character_proj, 1),
-                torch.unsqueeze(x_energy_proj, 1),
+                p.hand.mask,
+                p.monsters.mask,
+                char_valid,
+                p.discover.mask,
+                p.relics.mask,
+                p.deck.mask,
+                p.reward_cards.mask,
+                p.reward_relic.mask,
+                p.reward_potion.mask,
+                p.shop_cards.mask,
+                p.shop_relics.mask,
+                p.shop_potions.mask,
+                p.potions.mask,
+                p.event_options.mask,
+                p.draw.mask,
+                p.discard.mask,
+                p.exhaust.mask,
             ],
             dim=1,
         )
-        x_entity_mask = torch.cat(
-            [
-                x_game_state.x_hand_mask_pad,
-                x_game_state.x_draw_mask_pad,
-                x_game_state.x_disc_mask_pad,
-                x_game_state.x_deck_mask_pad,
-                x_game_state.x_combat_reward_mask_pad,
-                x_game_state.x_monsters_mask_pad,
-                x_game_state.x_character_mask_pad,
-                x_game_state.x_energy_mask_pad,
-            ],
-            dim=1,
-        )
+        tokens = tokens + self._type_emb(self._type_idx.expand(b, -1))
 
-        # Add type embeddings to entity embeddings. Similar to adding positional encodings
-        # in Attention Is All You Need
-        x_entity_cat = x_entity_cat + type_emb
+        # Learned global token appended after the type embeddings (its parameter
+        # plays that role); always valid.
+        tokens = torch.cat([tokens, self._global_token.expand(b, -1, -1)], dim=1)
+        valid = torch.cat([valid, char_valid], dim=1)
 
-        # Pass through entity transformer
-        # Invert mask: encoding uses True=valid, but PyTorch MHA key_padding_mask expects True=padded
-        x_entity_mask = x_entity_mask.bool()
-        x_entity_mask = ~x_entity_mask
-        x_entity = self._entity_transformer(x_entity_cat, x_entity_mask)
+        # ---- Token packing: run the transformer on a compacted prefix ----
+        # Exact: masked keys contribute nothing to valid rows, and pad-slot outputs
+        # are only ever read behind selection masks (subsets of `valid`), so
+        # replacing them with zeros changes no logit, value, or log-prob.
+        order = torch.argsort(~valid, dim=1, stable=True)  # valid tokens first
+        n_valid = int(valid.sum(dim=1).max())
+        s_pack = next(s for s in _PACK_BUCKETS if s >= n_valid)
+        self.last_pack_width = s_pack
+        pack_idx = order[:, :s_pack].unsqueeze(-1).expand(-1, -1, tokens.shape[-1])
+        packed_tokens = tokens.gather(1, pack_idx)
+        packed_valid = valid.gather(1, order[:, :s_pack])
 
-        # Undo concatenations to get individual tensors
-        x_card_out, x_monsters_out, x_character_out, x_energy_out = _undo_entity_concatenation(
-            x_entity
-        )
+        refined_packed = self._entity_transformer(packed_tokens, ~packed_valid)
+
+        refined = torch.zeros_like(tokens).scatter(1, pack_idx, refined_packed)
+
         (
-            x_hand_out,
-            x_draw_out,
-            x_disc_out,
-            x_deck_out,
-            x_combat_reward_out,
-        ) = _undo_card_concatenation(x_card_out)
+            x_hand,
+            x_monsters,
+            x_character,
+            x_discover,
+            x_relics,
+            x_deck,
+            x_reward_cards,
+            x_reward_relic,
+            x_reward_potion,
+            x_shop_cards,
+            x_shop_relics,
+            x_shop_potions,
+            x_potions,
+            x_event_options,
+            x_draw,
+            x_discard,
+            x_exhaust,
+            x_global_token,
+        ) = torch.split(refined, [*(size for _, size in ENTITY_LAYOUT), 1], dim=1)
+        x_character = torch.squeeze(x_character, 1)
+        x_global_token = torch.squeeze(x_global_token, 1)
 
-        # Encode map
-        x_map = self._map_encoder(x_game_state.x_map)
+        # Per-item price concatenated onto the refined shop embeddings (for buy heads)
+        x_shop_cards = torch.cat([x_shop_cards, x.shop.card_prices], dim=-1)
+        x_shop_relics = torch.cat([x_shop_relics, x.shop.relic_prices], dim=-1)
+        x_shop_potions = torch.cat([x_shop_potions, x.shop.potion_prices], dim=-1)
 
-        # Create global context with discriminated entity aggregation
-        # Compute mean + max for each entity type separately
-        x_hand_mean = _calculate_masked_mean(x_hand_out, x_game_state.x_hand_mask_pad)
-        x_hand_max = _calculate_masked_max(x_hand_out, x_game_state.x_hand_mask_pad)
+        # ---- Map: per-column embeddings (B, MAP_WIDTH, dim_map) ----
+        x_map = self._map_encoder(x.map_grid)
 
-        x_draw_mean = _calculate_masked_mean(x_draw_out, x_game_state.x_draw_mask_pad)
-        x_draw_max = _calculate_masked_max(x_draw_out, x_game_state.x_draw_mask_pad)
-
-        x_disc_mean = _calculate_masked_mean(x_disc_out, x_game_state.x_disc_mask_pad)
-        x_disc_max = _calculate_masked_max(x_disc_out, x_game_state.x_disc_mask_pad)
-
-        x_deck_mean = _calculate_masked_mean(x_deck_out, x_game_state.x_deck_mask_pad)
-        x_deck_max = _calculate_masked_max(x_deck_out, x_game_state.x_deck_mask_pad)
-
-        x_reward_mean = _calculate_masked_mean(
-            x_combat_reward_out, x_game_state.x_combat_reward_mask_pad
+        # ---- Global context ----
+        # The global token carries entity content via attention; counts carry the
+        # cardinalities (deck size, pile sizes, ...) that attention/pooling blur.
+        group_masks = [
+            p.hand.mask,
+            p.monsters.mask,
+            char_valid,
+            p.discover.mask,
+            p.relics.mask,
+            p.deck.mask,
+            p.reward_cards.mask,
+            p.reward_relic.mask,
+            p.reward_potion.mask,
+            p.shop_cards.mask,
+            p.shop_relics.mask,
+            p.shop_potions.mask,
+            p.potions.mask,
+            p.event_options.mask,
+            p.draw.mask,
+            p.discard.mask,
+            p.exhaust.mask,
+        ]
+        counts = torch.cat(
+            [
+                mask.sum(dim=1, keepdim=True).float() / size
+                for mask, (_, size) in zip(group_masks, ENTITY_LAYOUT, strict=True)
+            ],
+            dim=1,
         )
-        x_reward_max = _calculate_masked_max(
-            x_combat_reward_out, x_game_state.x_combat_reward_mask_pad
-        )
 
-        x_monsters_mean = _calculate_masked_mean(x_monsters_out, x_game_state.x_monsters_mask_pad)
-        x_monsters_max = _calculate_masked_max(x_monsters_out, x_game_state.x_monsters_mask_pad)
-
-        # New screen/feature pools (raw per-item encodings, masked mean + max)
-        def _pool(x, m):
-            return _calculate_masked_mean(x, m), _calculate_masked_max(x, m)
-
-        x_potions_mean, x_potions_max = _pool(
-            x_game_state.x_potions, x_game_state.x_potions_mask_pad
-        )
-        x_shop_cards_mean, x_shop_cards_max = _pool(
-            x_game_state.x_shop_cards, x_game_state.x_shop_cards_mask_pad
-        )
-        x_shop_relics_mean, x_shop_relics_max = _pool(
-            x_game_state.x_shop_relics, x_game_state.x_shop_relics_mask_pad
-        )
-        x_shop_potions_mean, x_shop_potions_max = _pool(
-            x_game_state.x_shop_potions, x_game_state.x_shop_potions_mask_pad
-        )
-        x_event_options_mean, x_event_options_max = _pool(
-            x_game_state.x_event_options, x_game_state.x_event_options_mask_pad
-        )
-        x_discover_mean, x_discover_max = _pool(
-            x_game_state.x_discover, x_game_state.x_discover_mask_pad
-        )
-
-        # Concatenate all aggregated features
         x_global = self._global_projection(
             torch.cat(
                 [
-                    # Sequence entity aggregations (mean + max)
-                    x_hand_mean,
-                    x_hand_max,
-                    x_draw_mean,
-                    x_draw_max,
-                    x_disc_mean,
-                    x_disc_max,
-                    x_deck_mean,
-                    x_deck_max,
-                    x_reward_mean,
-                    x_reward_max,
-                    x_monsters_mean,
-                    x_monsters_max,
-                    # Singleton entities
-                    x_character_out,
-                    x_energy_out,
-                    # Map and screen
-                    x_map,
-                    x_game_state.x_screen,
-                    # New screen/feature sequence pools (mean + max)
-                    x_potions_mean,
-                    x_potions_max,
-                    x_shop_cards_mean,
-                    x_shop_cards_max,
-                    x_shop_relics_mean,
-                    x_shop_relics_max,
-                    x_shop_potions_mean,
-                    x_shop_potions_max,
-                    x_event_options_mean,
-                    x_event_options_max,
-                    x_discover_mean,
-                    x_discover_max,
-                    # New flat blocks
-                    x_game_state.x_relics,
-                    x_game_state.x_reward_meta,
-                    x_game_state.x_shop_meta,
-                    x_game_state.x_event_meta,
+                    x_global_token,
+                    x_character,
+                    x_map.mean(dim=1),
+                    counts,
+                    x.combat.energy,
+                    x.screen,
+                    x.map_meta,
+                    x.reward.meta,
+                    x.shop.meta,
+                    x.event.meta,
                 ],
                 dim=1,
             )
         )
 
         return CoreOutput(
-            x_hand=x_hand_out,
-            x_draw=x_draw_out,
-            x_disc=x_disc_out,
-            x_deck=x_deck_out,
-            x_combat_reward=x_combat_reward_out,
-            x_monsters=x_monsters_out,
-            x_character=x_character_out,
-            x_energy=x_energy_out,
-            x_map=x_map,
             x_global=x_global,
+            x_screen=x.screen,
+            x_map=x_map,
+            x_hand=x_hand,
+            x_monsters=x_monsters,
+            x_discover=x_discover,
+            x_deck=x_deck,
+            x_reward_cards=x_reward_cards,
+            x_shop_cards=x_shop_cards,
+            x_shop_relics=x_shop_relics,
+            x_shop_potions=x_shop_potions,
+            x_potions=x_potions,
+            x_event_options=x_event_options,
         )

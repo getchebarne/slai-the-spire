@@ -1,13 +1,14 @@
 exp_name: smoke/migration_check
+seed: 0
 num_iterations: 2
 log_every: 1
 save_every: 1
 gamma: 0.99
 lam: 0.95
 coef_value: 0.500
-coef_entropy_max: 0.015
-coef_entropy_min: 0.010
-coef_entropy_elbow: 1
+coef_entropy_max: 0.010
+coef_entropy_min: 0.001
+entropy_decay_steps: 2.0e+7
 max_grad_norm: 0.500
 num_envs: 4
 rollout_length: 32
@@ -15,6 +16,7 @@ clip_eps: 0.20
 clip_value_loss: true
 minibatch_size: 64
 num_epochs: 2
+overlap_rollout: true
 
 model:
   dim_entity: 32
