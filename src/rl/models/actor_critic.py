@@ -34,6 +34,7 @@ from src.rl.models.heads import HeadEntitySelection
 from src.rl.models.heads import HeadMapSelect
 from src.rl.models.heads import HeadMonsterSelect
 from src.rl.models.heads import HeadValue
+from src.rl.reward import REWARD_STREAMS
 
 
 @dataclass
@@ -74,7 +75,7 @@ class ActionBatch:
     log-prob/entropy are the sums of the picks'. Shared by sampling (forward) and PPO
     recompute (evaluate_actions)."""
 
-    values: torch.Tensor  # (B, 1) critic
+    values: torch.Tensor  # (B, len(REWARD_STREAMS)) critic, one output per reward stream
     option: Pick  # L1: chosen ActionType (idx), its log-prob, entropy
     selection: Pick
     target: Pick
@@ -158,8 +159,8 @@ class ActorCritic(nn.Module):
         # L3: inline monster target (shared by CardPlay + PotionUse)
         self.head_monster_select = HeadMonsterSelect(dim_entity, dim_global, dim_ff_monster)
 
-        # Critic
-        self.head_value = HeadValue(dim_global, dim_ff_value)
+        # Critic: one output per reward stream (value decomposition)
+        self.head_value = HeadValue(dim_global, dim_ff_value, len(REWARD_STREAMS))
 
         # PPO init: orthogonal everywhere (gain √2), then near-zero logit layers
         # (initial policy ≈ uniform over the mask) and a unit-gain value output.
@@ -296,7 +297,7 @@ class ActorCritic(nn.Module):
         indices under the current policy, sharing forward()'s routing pass.
         Returns (log_probs, entropies, values); entropies is a per-head (B, 3) stack
         [option, selection, target] (0 where the pick doesn't apply), so the loss
-        sums it and logging can split it."""
+        sums it and logging can split it; values is (B, len(REWARD_STREAMS))."""
         core_out = self.core(x_game_state)
         values = self.head_value(core_out.x_global)
         s = self._run(
