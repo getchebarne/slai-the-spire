@@ -2,31 +2,36 @@ import numpy as np
 import torch
 from slai import Relic
 from slai import RelicName
+from slai import members
 
 from src.rl.constants import MAX_RELICS
+from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
+from src.rl.encoding.effect import encode_effects_into
 
 
-_RELIC_NAME_TO_IDX = {relic_name: i for i, relic_name in enumerate(RelicName)}
+_RELIC_NAME_TO_IDX = {relic_name: i for i, relic_name in enumerate(members(RelicName))}
 _COUNTER_MAX = 9
 
 ENCODING_DIM_RELIC = (
-    len(RelicName)         # Name OHE
+    len(_RELIC_NAME_TO_IDX)         # Name OHE
     + 1                    # Used up
     + 1                    # Counter scalar
+    + ENCODING_DIM_EFFECTS  # Combat-start effect blocks (trigger timing rides on the name)
 )
 
 
 def encode_relic_into(relic: Relic, pos: int, out: np.ndarray) -> int:
     # Name OHE
-    idx = _RELIC_NAME_TO_IDX.get(int(relic.name))
-    if idx is not None:
-        out[pos + idx] = 1.0
+    out[pos + _RELIC_NAME_TO_IDX[relic.name]] = 1.0
+    pos += len(_RELIC_NAME_TO_IDX)
 
     # Scalars
-    out[pos + len(RelicName)] = float(relic.used_up)
-    out[pos + len(RelicName) + 1] = min(relic.counter, _COUNTER_MAX) / _COUNTER_MAX
+    out[pos] = float(relic.used_up)
+    out[pos + 1] = min(relic.counter, _COUNTER_MAX) / _COUNTER_MAX
+    pos += 2
 
-    return pos + ENCODING_DIM_RELIC
+    # Per-EffectKind effect blocks
+    return encode_effects_into(relic.effects_on_combat_start, pos, out)
 
 
 def encode_batch_relics(

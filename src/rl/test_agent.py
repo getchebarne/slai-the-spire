@@ -22,16 +22,15 @@ _INTENT_DEBUFF_KINDS = frozenset(
     {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
 )
 
-from src.rl.action_space.masks import MaskBatch
-from src.rl.action_space.masks import get_mask_batch
+from src.rl.types import TMask
+from src.rl.action_space.masks import build_masks
 from src.rl.action_space.masks import is_card_playable
-from src.rl.action_space.types import SelKey
+from src.rl.types import Pool
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
-from src.rl.encoding.state import TensorGameState
-from src.rl.encoding.state import encode_batch_view_game_state
+from src.rl.types import TGameState
+from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
-from src.rl.models.heads import get_grouped_probs
 from src.rl.utils import load_config
 
 
@@ -166,7 +165,7 @@ def _format_view(view: slai.GameState) -> str:
     Two-column layout: character/hand on the left, monsters right-padded
     so name/HP/intent columns line up vertically (mirrors `play/__main__.py`).
     """
-    screen_name = slai.Screen(int(view.screen)).name
+    screen_name = _variant_name(view.screen)
     header = f"Screen: {screen_name}"
     if view.pending is not None:
         header += f"  pending={type(view.pending).__name__}"
@@ -243,8 +242,8 @@ def _format_view(view: slai.GameState) -> str:
 
 def get_card_probabilities(
     model: ActorCritic,
-    x_game_state: TensorGameState,
-    mask_batch: MaskBatch,
+    x_game_state: TGameState,
+    mask_batch: TMask,
 ) -> torch.Tensor:
     """
     Get grouped probabilities for cards in hand from the card play head.
@@ -253,21 +252,23 @@ def get_card_probabilities(
     gets a single probability (not split across duplicates).
 
     Returns:
-        Tensor of per-position grouped probabilities (MAX_HAND_SIZE,).
-        Identical cards share the same probability value.
+        Tensor of per-position play probabilities (MAX_HAND_SIZE,). The mask is
+        identity-deduped, so the first copy of each card carries the type's
+        probability and later copies show 0.
     """
     core_out = model.core(x_game_state)
-    mask = mask_batch.sel_masks[SelKey.CARD_PLAY]  # (1, MAX_SIZE_HAND)
-    group_ids = mask_batch.sel_group_ids[SelKey.CARD_PLAY]
-
-    head_out = model.sel_heads[str(int(SelKey.CARD_PLAY))](
+    mask = mask_batch.mask_action_idx[str(int(slai.ActionType.CardPlay))]  # (1, MAX_SIZE_HAND), deduped
+    x_op = model.operation_embedding(
+        torch.tensor([int(slai.ActionType.CardPlay)], device=mask.device)
+    )
+    head_out = model.sel_heads[Pool.HAND.name](
         core_out.x_hand,
         core_out.x_global,
+        x_op,
         mask,
-        sample=False,
-        group_ids=group_ids,
     )
-    probs = get_grouped_probs(head_out.logits, group_ids=group_ids)
+    masked = head_out.logits.masked_fill(~mask, float("-inf"))
+    probs = torch.softmax(masked, dim=-1)
     return probs[0]
 
 
@@ -312,11 +313,11 @@ def get_action_from_model(
 ) -> tuple[object, str | None]:
     """Get an action from the model for the given view (masks come from the
     engine's `legal_actions`). Returns (action, card_probs_str)."""
-    x_game_state = encode_batch_view_game_state([view], device)
-    mask_batch = get_mask_batch([view], [legal_actions], device)
+    x_game_state = encode_batch_game_state([view], device)
+    mask_batch = build_masks([view], [legal_actions], device)
 
     with torch.no_grad():
-        output = model.forward_single(x_game_state, mask_batch, sample=not greedy)
+        output = model.forward(x_game_state, mask_batch, sample=not greedy)
 
         card_probs_str = None
         in_combat = view.screen == slai.Screen.Combat and view.pending is None
@@ -325,7 +326,7 @@ def get_action_from_model(
             probs = get_card_probabilities(model, x_game_state, mask_batch)
             card_probs_str = format_card_probabilities(view, probs)
 
-    return output.to_action(), card_probs_str
+    return output.get_action(0), card_probs_str
 
 
 def run_game(
@@ -372,7 +373,7 @@ def run_game(
                 illegal += 1
                 print(
                     f"  !! ILLEGAL action {_fmt_action(action)} on screen "
-                    f"{slai.Screen(int(obs.screen)).name}"
+                    f"{_variant_name(obs.screen)}"
                 )
 
         if verbose:
@@ -483,7 +484,8 @@ def main(
     else:
         config = load_config(f"{exp_path}/config.yml")
         model = ActorCritic(**config["model"])
-        model.load_state_dict(torch.load(f"{exp_path}/model.pth", weights_only=True))
+        ckpt = torch.load(f"{exp_path}/checkpoint.pth", weights_only=True)
+        model.load_state_dict(ckpt["model"])
     model.eval()
 
     device = torch.device(device)

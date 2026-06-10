@@ -3,6 +3,7 @@ import torch
 from slai import IntentKind
 from slai import Monster
 from slai import MonsterName
+from slai import members
 
 from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.health_block import encode_health_block_into
@@ -11,8 +12,10 @@ from src.rl.encoding.modifier import encode_modifiers_into
 from src.rl.encoding.modifier import get_encoding_dim_modifiers
 from src.rl.utils import get_piecewise_bucket
 from src.rl.utils import get_piecewise_dim
+from src.rl.utils import get_sqrt_norm
 
 
+_INTENT_KIND_TO_IDX = {kind: i for i, kind in enumerate(members(IntentKind))}
 _INTENT_BLOCK_KINDS = {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
 _INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
 _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
@@ -25,12 +28,12 @@ _BLOCK_MAX = 35
 
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
-_MONSTER_NAME_TO_IDX = {name: i for i, name in enumerate(MonsterName)}
+_MONSTER_NAME_TO_IDX = {name: i for i, name in enumerate(members(MonsterName))}
 
-_ENCODING_DIM_MONSTER = (
+ENCODING_DIM_MONSTER = (
     get_encoding_dim_modifiers()                              # Modifiers OHE
     + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
-    + len(MonsterName)                                        # Name OHE
+    + len(_MONSTER_NAME_TO_IDX)                               # Name OHE
     + _DAMAGE_DIM                                             # Intent damage OHE
     + 1                                                       # Intent damage scalar
     + 1                                                       # Intent instances
@@ -39,6 +42,9 @@ _ENCODING_DIM_MONSTER = (
     + 1                                                       # Intent has debuff
     + 1                                                       # Hit fully blocked
     + 1                                                       # Hit is lethal
+    + 1                                                       # Max-HP magnitude
+    + 1                                                       # Health fraction of max
+    + len(_INTENT_KIND_TO_IDX)                                # Intent kind OHE
 )
 
 
@@ -57,10 +63,8 @@ def _encode_monster_into(
     )
 
     # Per-monster-name one-hot
-    idx_name = _MONSTER_NAME_TO_IDX.get(monster.name)
-    if idx_name is not None:
-        out[pos + idx_name] = 1.0
-    pos += len(MonsterName)
+    out[pos + _MONSTER_NAME_TO_IDX[monster.name]] = 1.0
+    pos += len(_MONSTER_NAME_TO_IDX)
 
     # Intent damage OHE
     damage = monster.intent.damage or 0
@@ -77,6 +81,12 @@ def _encode_monster_into(
     out[pos + 4] = float(monster.intent.kind in _INTENT_DEBUFF_KINDS)
     out[pos + 5] = float(total_damage <= char_block)
     out[pos + 6] = float(total_damage >= char_health + char_block)
+    out[pos + 7] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
+    out[pos + 8] = monster.health / max(monster.health_max, 1)
+    pos += 9
+
+    # Intent kind OHE (the category flags above miss Escape/Sleep/Stunned/Unknown)
+    out[pos + _INTENT_KIND_TO_IDX[monster.intent.kind]] = 1.0
 
 
 def encode_batch_monsters(
@@ -88,7 +98,7 @@ def encode_batch_monsters(
     batch_size = len(batch_monster)
 
     # Pre-allocate NumPy arrays
-    x_out = np.zeros((batch_size, MAX_MONSTERS, _ENCODING_DIM_MONSTER), dtype=np.float32)
+    x_out = np.zeros((batch_size, MAX_MONSTERS, ENCODING_DIM_MONSTER), dtype=np.float32)
     x_pad = np.zeros((batch_size, MAX_MONSTERS), dtype=bool)
     outgoing_damages = []
 
