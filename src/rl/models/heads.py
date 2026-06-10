@@ -181,14 +181,16 @@ class HeadValue(nn.Module):
     """
     Value head for estimating state value (critic in actor-critic).
 
-    Outputs a single scalar value estimate for the current state.
+    One output per reward stream (value decomposition): each output fits its own
+    stream's return, and the total state value is the sum over outputs.
     """
 
-    def __init__(self, dim_global: int, dim_ff: int):
+    def __init__(self, dim_global: int, dim_ff: int, num_streams: int):
         """
         Args:
             dim_global: Dimension of the global context vector
             dim_ff: Hidden dimension of the feedforward network
+            num_streams: Number of reward streams (len(REWARD_STREAMS))
         """
         super().__init__()
 
@@ -197,17 +199,17 @@ class HeadValue(nn.Module):
             nn.ReLU(),
             nn.Linear(dim_ff, dim_ff),
             nn.ReLU(),
-            nn.Linear(dim_ff, 1),
+            nn.Linear(dim_ff, num_streams),
         )
 
     def forward(self, x_global: torch.Tensor) -> torch.Tensor:
         """
-        Estimate state value.
+        Estimate per-stream state values.
 
         Args:
             x_global: Global context vector (B, dim_global)
 
         Returns:
-            Value estimate (B, 1)
+            Value estimates (B, num_streams)
         """
         return self._network(x_global)

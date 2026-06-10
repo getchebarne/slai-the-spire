@@ -36,6 +36,7 @@ from src.rl.constants import FAST_MODE
 from src.rl.types import TGameState
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
+from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
@@ -49,7 +50,9 @@ from src.rl.utils import load_config
 @dataclass
 class RolloutBuffer:
     """Columnar rollout (N = rollout_length * num_envs rows). The full-batch masks are
-    stored once and row-sliced per minibatch; GAE returns/advantages are precomputed."""
+    stored once and row-sliced per minibatch; GAE returns/advantages are precomputed.
+    Values/returns are per reward stream (K = len(REWARD_STREAMS)); the policy
+    advantage is the per-stream advantages summed, then normalized."""
 
     x_game_state: TGameState  # (N, ...)
     mask_batch: TMask  # (N, ...) — row-sliced per minibatch (mask_batch[rows])
@@ -57,9 +60,9 @@ class RolloutBuffer:
     selection_idx: torch.Tensor  # (N,) recorded L2 entity pick
     target_idx: torch.Tensor  # (N,) recorded L3 monster pick (-1 if none)
     log_probs_old: torch.Tensor  # (N,)
-    values: torch.Tensor  # (N, 1)
-    returns: torch.Tensor  # (N, 1)
-    advantages: torch.Tensor  # (N, 1), normalized
+    values: torch.Tensor  # (N, K)
+    returns: torch.Tensor  # (N, K)
+    advantages: torch.Tensor  # (N, 1), summed over streams, normalized
 
     def __len__(self) -> int:
         return self.log_probs_old.shape[0]
@@ -67,10 +70,14 @@ class RolloutBuffer:
 
 @dataclass
 class EpisodeStats:
-    total_reward: float
+    stream_rewards: np.ndarray  # (K,) per-stream episode totals
     length: int
     won: bool
     floor: int
+
+    @property
+    def total_reward(self) -> float:
+        return float(self.stream_rewards.sum())
 
 
 # =============================================================================
@@ -86,7 +93,7 @@ class EnvironmentManager:
         self._obs: list[slai.GameState] = []
         # Episode stats live here (not in _collect_rollout) so episodes spanning
         # rollout boundaries report true totals.
-        self._ep_rewards = [0.0] * num_envs
+        self._ep_rewards = [np.zeros(len(REWARD_STREAMS)) for _ in range(num_envs)]
         self._ep_lengths = [0] * num_envs
         self._completed: list[EpisodeStats] = []
         for _ in range(num_envs):
@@ -106,10 +113,10 @@ class EnvironmentManager:
     def get_legal_actions(self) -> list[list]:
         return [env.get_legal_actions() for env in self._envs]
 
-    def step(self, env_idx: int, action) -> tuple[float, bool]:
+    def step(self, env_idx: int, action) -> tuple[np.ndarray, bool]:
         prev = self._obs[env_idx]
         nxt, terminated = self._envs[env_idx].step(action)
-        reward = compute_reward(prev, nxt, terminated, action, self._gamma)
+        reward = compute_reward(prev, nxt, terminated, action, self._gamma)  # (K,)
         self._ep_rewards[env_idx] += reward
         self._ep_lengths[env_idx] += 1
         if terminated:
@@ -122,7 +129,7 @@ class EnvironmentManager:
                     floor=nxt.map.y_current or 0,
                 )
             )
-            self._ep_rewards[env_idx] = 0.0
+            self._ep_rewards[env_idx] = np.zeros(len(REWARD_STREAMS))
             self._ep_lengths[env_idx] = 0
             env, nxt = self._make_env()
             self._envs[env_idx] = env
@@ -140,12 +147,14 @@ class EnvironmentManager:
 
 
 def _compute_gae(rewards, values, dones, bootstrap, gamma, lam):
-    """Vectorized GAE over E parallel envs. Inputs are (T, E); `bootstrap` is (E,).
-    Each env's column is an independent trajectory and `dones` cut episodes within it —
-    a terminal step zeroes the next-value term, so nothing leaks across an episode
-    boundary (including when an env reset mid-rollout). Returns (returns, advantages),
-    each (T, E)."""
-    T, _ = rewards.shape
+    """Vectorized GAE over E parallel envs. Rewards/values are (T, E, K) with one GAE
+    recursion per reward stream (GAE is linear in rewards, so the per-stream advantages
+    sum to the single-critic advantage on the summed reward); `bootstrap` is (E, K) and
+    `dones` is (T, E, 1), broadcast over streams. Each env's column is an independent
+    trajectory and `dones` cut episodes within it — a terminal step zeroes the
+    next-value term, so nothing leaks across an episode boundary (including when an env
+    reset mid-rollout). Returns (returns, advantages), each (T, E, K)."""
+    T = rewards.shape[0]
     advantages = torch.zeros_like(rewards)
     gae = torch.zeros_like(bootstrap)
     for t in reversed(range(T)):
@@ -177,13 +186,14 @@ def _collect_rollout(
     E = env_mgr.num_envs
     T = rollout_length
     N = T * E
+    K = len(REWARD_STREAMS)
     buf_x = buf_mb = None  # allocated from the first step's shapes
     opt_idx = torch.empty(N, dtype=torch.long, device=device)
     sel_idx = torch.empty(N, dtype=torch.long, device=device)
     tgt_idx = torch.empty(N, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
-    values = torch.empty(T, E, device=device)
-    rewards = torch.empty(T, E, device=device)
+    values = torch.empty(T, E, K, device=device)
+    rewards = torch.empty(T, E, K, device=device)
     dones = torch.empty(T, E, device=device)
 
     model.eval()
@@ -205,7 +215,7 @@ def _collect_rollout(
             sel_idx[rows] = out.selection.idx
             tgt_idx[rows] = out.target.idx
             log_probs[rows] = out.total_log_prob()
-            values[t] = out.values.squeeze(-1)
+            values[t] = out.values  # (E, K)
 
             # Extract the action ints once (not per-env .item()), then step each env.
             ops, sels, tgts = torch.stack(
@@ -213,7 +223,7 @@ def _collect_rollout(
             ).tolist()
             for i in range(E):
                 reward, done = env_mgr.step(i, action_from_actiontype(ops[i], sels[i], tgts[i]))
-                rewards[t, i] = reward
+                rewards[t, i] = torch.from_numpy(reward)
                 dones[t, i] = float(done)
 
         # Bootstrap value V(s_T) per env (a fresh env's value if it reset on the last step;
@@ -223,10 +233,15 @@ def _collect_rollout(
         boot_out = model(
             encode_batch_game_state(views, device), build_masks(views, legal, device), sample=False
         )
-        bootstrap = boot_out.values.squeeze(-1)  # (E,)
+        bootstrap = boot_out.values  # (E, K)
     model.train()
 
-    returns, advantages = _compute_gae(rewards, values, dones, bootstrap, gamma, lam)
+    returns, advantages = _compute_gae(
+        rewards, values, dones.unsqueeze(-1), bootstrap, gamma, lam
+    )
+    # Policy advantage: per-stream advantages summed (≡ single-critic GAE on the
+    # summed reward, by linearity), then normalized as before.
+    advantages = advantages.sum(-1)
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     return (
@@ -237,8 +252,8 @@ def _collect_rollout(
             selection_idx=sel_idx,
             target_idx=tgt_idx,
             log_probs_old=log_probs,
-            values=values.reshape(-1, 1),
-            returns=returns.reshape(-1, 1),
+            values=values.reshape(-1, K),
+            returns=returns.reshape(-1, K),
             advantages=advantages.reshape(-1, 1),
         ),
         env_mgr.drain_completed(),
@@ -269,7 +284,7 @@ def _run_eval_episode(
             action = out.get_action(0)
             prev = obs
             obs, terminated = env.step(action)
-            total_reward += compute_reward(prev, obs, terminated, action, gamma)
+            total_reward += float(compute_reward(prev, obs, terminated, action, gamma).sum())
             length += 1
     model.train()
     return total_reward, length
@@ -349,6 +364,11 @@ def _update_ppo(
     advantages = buffer.advantages.squeeze(-1)  # (N,)
     totals: dict[str, float] = defaultdict(float)
     n = 0
+
+    # The decomposition's instrumentation: per-stream explained variance from
+    # rollout-time values — which return stream the critic can predict (EV → 1)
+    # and which carries the residual noise (typically the outcome stream).
+    ev = 1.0 - (buffer.returns - buffer.values).var(dim=0) / (buffer.returns.var(dim=0) + 1e-8)
     for _ in range(num_epochs):
         # Shuffle the whole buffer once per epoch (nested-tensorclass indexing costs
         # ~25 ms per call); minibatches are then cheap contiguous slice views.
@@ -377,15 +397,18 @@ def _update_ppo(
             surr2 = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * adv
             loss_policy = -torch.mean(torch.min(surr1, surr2))
 
+            # Value loss: summed over streams, mean over the batch — keeps each
+            # stream's gradient at the single-critic scale (a mean over K would
+            # implicitly divide coef_value by K).
             if clip_value_loss:
                 values_clipped = values_old + torch.clamp(
                     values_new - values_old, -clip_eps, clip_eps
                 )
                 lv_unclipped = torch.pow(values_new - returns, 2)
                 lv_clipped = torch.pow(values_clipped - returns, 2)
-                loss_value = 0.5 * torch.mean(torch.max(lv_unclipped, lv_clipped))
+                loss_value = 0.5 * torch.max(lv_unclipped, lv_clipped).sum(dim=-1).mean()
             else:
-                loss_value = F.mse_loss(values_new, returns)
+                loss_value = F.mse_loss(values_new, returns, reduction="none").sum(dim=-1).mean()
 
             loss_entropy = -torch.mean(entropies.sum(dim=-1))
             loss = loss_policy + coef_value * loss_value + coef_entropy * loss_entropy
@@ -406,7 +429,10 @@ def _update_ppo(
             totals["Update/approx_kl"] += ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item()
             totals["Update/clip_fraction"] += ((ratio - 1).abs() > clip_eps).float().mean().item()
             n += 1
-    return {k: v / n for k, v in totals.items()}
+    metrics = {k: v / n for k, v in totals.items()}
+    for k, name in enumerate(REWARD_STREAMS):
+        metrics[f"Value/ev_{name}"] = ev[k].item()
+    return metrics
 
 
 # =============================================================================
@@ -531,6 +557,12 @@ def train(
                     avg_r = sum(e.total_reward for e in completed) / len(completed)
                     avg_l = sum(e.length for e in completed) / len(completed)
                     writer.add_scalar("Episode/avg_reward", avg_r, iteration)
+                    for k, name in enumerate(REWARD_STREAMS):
+                        writer.add_scalar(
+                            f"Episode/avg_reward_{name}",
+                            sum(e.stream_rewards[k] for e in completed) / len(completed),
+                            iteration,
+                        )
                     writer.add_scalar("Episode/avg_length", avg_l, iteration)
                     writer.add_scalar("Episode/completed_count", len(completed), iteration)
                     writer.add_scalar(
