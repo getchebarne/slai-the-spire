@@ -58,8 +58,9 @@ MODIFIER_IS_BUFF: dict[ModifierKind, bool] = {
     ModifierKind.Weak: False,
     ModifierKind.WraithForm: False,
 }
-assert set(MODIFIER_IS_BUFF) == set(members(ModifierKind)), \
-    "MODIFIER_IS_BUFF must cover every ModifierKind (sync with slai modifier.rs)"
+assert set(MODIFIER_IS_BUFF) == set(
+    members(ModifierKind)
+), "MODIFIER_IS_BUFF must cover every ModifierKind (sync with slai modifier.rs)"
 
 
 def get_encoding_dim_modifiers() -> int:

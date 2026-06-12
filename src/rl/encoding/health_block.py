@@ -14,10 +14,12 @@ def get_encoding_dim_health_block(health_max: int, block_max: int) -> int:
     return (
         get_piecewise_dim(_HEALTH_MIN, health_max, _LINEAR_SQRT_THRESHOLD)
         + get_piecewise_dim(_BLOCK_MIN, block_max, _LINEAR_SQRT_THRESHOLD)
-        + get_piecewise_dim(_HEALTH_MIN + _BLOCK_MIN, health_max + block_max, _LINEAR_SQRT_THRESHOLD)
-        + 1                     # Health scalar
-        + 1                     # Block scalar
-        + 1                     # Health + block scalar
+        + get_piecewise_dim(
+            _HEALTH_MIN + _BLOCK_MIN, health_max + block_max, _LINEAR_SQRT_THRESHOLD
+        )
+        + 1  # Health scalar
+        + 1  # Block scalar
+        + 1  # Health + block scalar
     )
 
 
@@ -28,7 +30,9 @@ def encode_health_block_into(
     health_block_max = health_max + block_max
     health_dim = get_piecewise_dim(_HEALTH_MIN, health_max, _LINEAR_SQRT_THRESHOLD)
     block_dim = get_piecewise_dim(_BLOCK_MIN, block_max, _LINEAR_SQRT_THRESHOLD)
-    health_block_dim = get_piecewise_dim(health_block_min, health_block_max, _LINEAR_SQRT_THRESHOLD)
+    health_block_dim = get_piecewise_dim(
+        health_block_min, health_block_max, _LINEAR_SQRT_THRESHOLD
+    )
 
     # Health piecewise one-hot
     health_bucket = get_piecewise_bucket(health, _HEALTH_MIN, health_max, _LINEAR_SQRT_THRESHOLD)

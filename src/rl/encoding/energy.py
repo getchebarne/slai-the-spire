@@ -6,10 +6,7 @@ from slai import Energy
 _ENERGY_MIN = 0
 _ENERGY_MAX = 5
 
-_ENCODING_DIM_ENERGY = (
-    _ENERGY_MAX - _ENERGY_MIN + 1    # Energy OHE
-    + 1                              # Energy scalar
-)
+_ENCODING_DIM_ENERGY = _ENERGY_MAX - _ENERGY_MIN + 1 + 1  # Energy OHE  # Energy scalar
 
 
 def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
@@ -21,9 +18,7 @@ def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
     out[_ENERGY_MAX - _ENERGY_MIN + 1] = energy.energy_current / _ENERGY_MAX
 
 
-def encode_batch_energy(
-    batch_energy: list[Energy], device: torch.device
-) -> torch.Tensor:
+def encode_batch_energy(batch_energy: list[Energy], device: torch.device) -> torch.Tensor:
     batch_size = len(batch_energy)
 
     # Pre-allocate NumPy array

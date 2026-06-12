@@ -12,9 +12,9 @@ from src.rl.constants import MAP_WIDTH
 _ROOM_KIND_TO_IDX = {room_kind: i for i, room_kind in enumerate(members(RoomKind))}
 _CHEST_KIND_TO_IDX = {chest_kind: i for i, chest_kind in enumerate(members(ChestKind))}
 _NUM_CHANNELS = (
-    len(_ROOM_KIND_TO_IDX)          # Room kind OHE
-    + MAP_WIDTH            # Outgoing-edge multi-hot
-    + 1                    # Current position
+    len(_ROOM_KIND_TO_IDX)  # Room kind OHE
+    + MAP_WIDTH  # Outgoing-edge multi-hot
+    + 1  # Current position
 )
 
 # Act-1 boss display names (MonsterEncounter::as_str); bump when adding acts
@@ -22,10 +22,10 @@ _BOSS_NAME_TO_IDX = {"The Guardian": 0, "Hexaghost": 1, "Slime Boss": 2}
 
 # Flat map-global meta — position-anchored facts the pooled CNN summary can't carry
 ENCODING_DIM_MAP_META = (
-    1                          # Floor depth (y_current / MAP_HEIGHT)
-    + 1                        # On-map sentinel (y_current is not None)
-    + len(_BOSS_NAME_TO_IDX)   # Act-boss identity OHE
-    + len(_ROOM_KIND_TO_IDX)   # Current room kind OHE
+    1  # Floor depth (y_current / MAP_HEIGHT)
+    + 1  # On-map sentinel (y_current is not None)
+    + len(_BOSS_NAME_TO_IDX)  # Act-boss identity OHE
+    + len(_ROOM_KIND_TO_IDX)  # Current room kind OHE
     + len(_CHEST_KIND_TO_IDX)  # Current chest kind OHE
     + MAP_WIDTH * len(_ROOM_KIND_TO_IDX)  # Next-row room kind OHE per column
 )
@@ -45,11 +45,7 @@ def _encode_map_into(map_: Map, out: np.ndarray) -> None:
                     out[y, x, len(_ROOM_KIND_TO_IDX) + x_next] = 1.0
 
     # Current position (the act boss sits off-grid at y_current == MAP_HEIGHT; skip it)
-    if (
-        map_.y_current is not None
-        and map_.x_current is not None
-        and map_.y_current < MAP_HEIGHT
-    ):
+    if map_.y_current is not None and map_.x_current is not None and map_.y_current < MAP_HEIGHT:
         out[map_.y_current, map_.x_current, _NUM_CHANNELS - 1] = 1.0
 
 

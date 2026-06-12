@@ -14,8 +14,8 @@ from src.rl.utils import get_piecewise_bucket
 from src.rl.utils import get_piecewise_dim
 from src.rl.utils import get_sqrt_norm
 
-
-_INTENT_KIND_TO_IDX = {kind: i for i, kind in enumerate(members(IntentKind))}
+_MAP_MONSTER_NAME = {name: i for i, name in enumerate(members(MonsterName))}
+_MAP_INTENT_KIND = {intent_kind: i for i, intent_kind in enumerate(members(IntentKind))}
 _INTENT_BLOCK_KINDS = {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
 _INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
 _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
@@ -28,23 +28,22 @@ _BLOCK_MAX = 35
 
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
-_MONSTER_NAME_TO_IDX = {name: i for i, name in enumerate(members(MonsterName))}
 
 ENCODING_DIM_MONSTER = (
-    get_encoding_dim_modifiers()                              # Modifiers OHE
+    get_encoding_dim_modifiers()  # Modifiers OHE
     + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
-    + len(_MONSTER_NAME_TO_IDX)                               # Name OHE
-    + _DAMAGE_DIM                                             # Intent damage OHE
-    + 1                                                       # Intent damage scalar
-    + 1                                                       # Intent instances
-    + 1                                                       # Intent has block
-    + 1                                                       # Intent has buff
-    + 1                                                       # Intent has debuff
-    + 1                                                       # Hit fully blocked
-    + 1                                                       # Hit is lethal
-    + 1                                                       # Max-HP magnitude
-    + 1                                                       # Health fraction of max
-    + len(_INTENT_KIND_TO_IDX)                                # Intent kind OHE
+    + len(_MAP_MONSTER_NAME)  # Name OHE
+    + _DAMAGE_DIM  # Intent damage OHE
+    + 1  # Intent damage scalar
+    + 1  # Intent instances
+    + 1  # Intent has block
+    + 1  # Intent has buff
+    + 1  # Intent has debuff
+    + 1  # Hit fully blocked
+    + 1  # Hit is lethal
+    + 1  # Max-HP magnitude
+    + 1  # Health fraction of max
+    + len(_MAP_INTENT_KIND)  # Intent kind OHE
 )
 
 
@@ -63,8 +62,8 @@ def _encode_monster_into(
     )
 
     # Per-monster-name one-hot
-    out[pos + _MONSTER_NAME_TO_IDX[monster.name]] = 1.0
-    pos += len(_MONSTER_NAME_TO_IDX)
+    out[pos + _MAP_MONSTER_NAME[monster.name]] = 1.0
+    pos += len(_MAP_MONSTER_NAME)
 
     # Intent damage OHE
     damage = monster.intent.damage or 0
@@ -86,7 +85,7 @@ def _encode_monster_into(
     pos += 9
 
     # Intent kind OHE (the category flags above miss Escape/Sleep/Stunned/Unknown)
-    out[pos + _INTENT_KIND_TO_IDX[monster.intent.kind]] = 1.0
+    out[pos + _MAP_INTENT_KIND[monster.intent.kind]] = 1.0
 
 
 def encode_batch_monsters(
@@ -108,10 +107,8 @@ def encode_batch_monsters(
         for i, monster in enumerate(monsters):
             _encode_monster_into(monster, batch_health[b], batch_block[b], x_out[b, i])
             x_pad[b, i] = True
-            outgoing_damage += (monster.intent.damage or 0.0) * (
-                monster.intent.instances or 1.0
-            )
-        
+            outgoing_damage += (monster.intent.damage or 0.0) * (monster.intent.instances or 1.0)
+
         outgoing_damages.append(outgoing_damage)
 
     return (

@@ -118,7 +118,9 @@ class TMask:
     mask_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1: which action kinds are legal
     mask_action_idx: TensorDict  # {str(int(ActionType)): (B, pool_size) bool} — L2, deduped; selecting types only
     mask_target_card: torch.Tensor  # (B, MAX_SIZE_HAND, MAX_MONSTERS) bool — L3 card targets
-    mask_target_potion: torch.Tensor  # (B, MAX_POTION_SLOTS, MAX_MONSTERS) bool — L3 potion targets
+    mask_target_potion: (
+        torch.Tensor
+    )  # (B, MAX_POTION_SLOTS, MAX_MONSTERS) bool — L3 potion targets
 
 
 # =============================================================================
@@ -155,16 +157,16 @@ class Pool(IntEnum):
 # the pool name: the head's CoreOutput tensor is `x_<pool>` and shop pools carry a price
 # (both resolved in actor_critic), and the dedup source pile lives in masks._pile_ids.
 POOL_SIZE: list[int] = [
-    MAX_SIZE_HAND,                # HAND
-    MAX_SIZE_DECK,                # DECK
-    MAX_POTION_SLOTS,             # POTIONS
-    MAP_WIDTH,                    # MAP
-    MAX_SIZE_DISCOVER,            # DISCOVER
+    MAX_SIZE_HAND,  # HAND
+    MAX_SIZE_DECK,  # DECK
+    MAX_POTION_SLOTS,  # POTIONS
+    MAP_WIDTH,  # MAP
+    MAX_SIZE_DISCOVER,  # DISCOVER
     MAX_SIZE_COMBAT_CARD_REWARD,  # REWARD_CARDS
-    MAX_SHOP_CARDS,               # SHOP_CARDS
-    MAX_SHOP_RELICS,              # SHOP_RELICS
-    MAX_SHOP_POTIONS,             # SHOP_POTIONS
-    MAX_EVENT_OPTIONS,            # EVENT_OPTIONS
+    MAX_SHOP_CARDS,  # SHOP_CARDS
+    MAX_SHOP_RELICS,  # SHOP_RELICS
+    MAX_SHOP_POTIONS,  # SHOP_POTIONS
+    MAX_EVENT_OPTIONS,  # EVENT_OPTIONS
 ]
 assert len(POOL_SIZE) == len(Pool), "POOL_SIZE must cover every Pool"
 
@@ -200,12 +202,15 @@ ACTION_POOL: dict[ActionType, Pool] = {
 # arg-shape change fails loudly here rather than silently emitting invalid actions.
 _AT_ARITY: list = [ACTION_SPEC_REGISTRY[m].arity for m in _AT_BY_INT]  # (min, max) per ActionType
 assert len(ACTION_SPEC_REGISTRY) == NUM_ACTION_TYPES, "registry must cover every ActionType"
-assert {int(a) for a in ACTION_POOL} == {at for at in range(NUM_ACTION_TYPES) if _AT_ARITY[at] != (0, 0)}, \
-    "ACTION_POOL must cover exactly the engine's index-taking actions"
+assert {int(a) for a in ACTION_POOL} == {
+    at for at in range(NUM_ACTION_TYPES) if _AT_ARITY[at] != (0, 0)
+}, "ACTION_POOL must cover exactly the engine's index-taking actions"
 
 # Int-indexed views over ActionType for the hot paths (-1 pool = terminal, no selection).
 AT_POOL: list[int] = [int(ACTION_POOL[m]) if m in ACTION_POOL else -1 for m in _AT_BY_INT]
-AT_MAY_TARGET: list[bool] = [a[1] == 2 for a in _AT_ARITY]  # optional trailing monster (CardPlay / PotionUse)
+AT_MAY_TARGET: list[bool] = [
+    a[1] == 2 for a in _AT_ARITY
+]  # optional trailing monster (CardPlay / PotionUse)
 SELECTING_ACTION_TYPES: list[int] = [at for at in range(NUM_ACTION_TYPES) if AT_POOL[at] >= 0]
 
 

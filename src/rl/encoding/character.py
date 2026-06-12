@@ -14,27 +14,28 @@ from src.rl.utils import get_sqrt_norm
 
 
 _INCOMING_DAMAGE_MAX = 150  # summed multi-monster turn; sqrt-scaled
-_HEALTH_MAX = 80   # OHE bucket range (fixed for stable dim); the live max HP is a separate scalar
+_HEALTH_MAX = 80  # OHE bucket range (fixed for stable dim); the live max HP is a separate scalar
 _HEALTH_MAX_CAP = 200  # sqrt cap for the max-HP magnitude scalar
 _BLOCK_MAX = 35  # matches the monster cap
 _GOLD_MIN = 0
 _GOLD_MAX = 499
-_GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN # Pure sqrt
+_GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 ENCODING_DIM_CHARACTER = (
-    get_encoding_dim_modifiers()                              # Modifiers OHE
+    get_encoding_dim_modifiers()  # Modifiers OHE
     + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
-    + _GOLD_DIM                                               # Gold OHE
-    + 1                                                       # Gold scalar
-    + 1                                                       # Incoming damage
-    + 1                                                       # Block >= incoming damage
-    + 1                                                       # Incoming damage is lethal
-    + 1                                                       # Health fraction of live max HP
-    + 1                                                       # Max HP magnitude
-    + 1                                                       # Net unblocked damage this turn
-    + 1                                                       # Deck size
-    + 1                                                       # Deck upgraded fraction
+    + _GOLD_DIM  # Gold OHE
+    + 1  # Gold scalar
+    + 1  # Incoming damage
+    + 1  # Block >= incoming damage
+    + 1  # Incoming damage is lethal
+    + 1  # Health fraction of live max HP
+    + 1  # Max HP magnitude
+    + 1  # Net unblocked damage this turn
+    + 1  # Deck size
+    + 1  # Deck upgraded fraction
 )
+
 
 def _encode_character_into(
     character: Character, incoming_damage: int, deck: list[Card], out: np.ndarray
@@ -51,7 +52,9 @@ def _encode_character_into(
     )
 
     # Gold OHE
-    gold_bucket = get_piecewise_bucket(character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
+    gold_bucket = get_piecewise_bucket(
+        character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD
+    )
     out[pos + gold_bucket] = 1.0
     pos += _GOLD_DIM
 

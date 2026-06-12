@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 import torch
@@ -44,131 +45,74 @@ class HeadBinaryChoice(nn.Module):
 
 
 # =============================================================================
-# Entity Selection Heads (Secondary)
+# Pointer Selection Heads (Secondary + Target)
 # =============================================================================
 
 
-class HeadEntitySelection(nn.Module):
+class PointerKeys(nn.Module):
     """
-    Selects one entity from a sequence (cards, relics, ...). One instance per Pool,
-    shared across the operations on that pool and conditioned on an operation
-    embedding (AlphaStar-style: shared selection network, per-operation conditioning).
+    Entity-class key projection for pointer selection (AlphaStar PointerLogits
+    keys net, 1 layer: LayerNorm -> ReLU -> Linear). One instance per entity
+    class (cards, potions, ...), shared by every pool of that class, so the same
+    entity maps to the same key in every selection context.
     """
 
-    def __init__(self, dim_entity: int, dim_global: int, dim_op: int, dim_ff: int):
+    def __init__(self, dim_in: int, dim_key: int):
+        super().__init__()
+
+        self._net = nn.Sequential(
+            nn.LayerNorm(dim_in),
+            nn.ReLU(),
+            nn.Linear(dim_in, dim_key),
+        )
+
+    def forward(self, x_entities: torch.Tensor) -> torch.Tensor:
+        """Project entity embeddings (B, N, dim_in) to pointer keys (B, N, dim_key)."""
+        return self._net(x_entities)
+
+
+class HeadPointerSelect(nn.Module):
+    """
+    Pointer-network selection head (AlphaStar PointerLogits): the decision context
+    projects to a query (1 layer: LayerNorm -> ReLU -> Linear), and each entity's
+    logit is the key·query dot product scaled by 1/√dim_key. The scaling deviates
+    from AlphaStar (raw dot products) deliberately: the dot product sums dim_key
+    unit-scale terms, so unscaled logits move ~√dim_key faster per weight step
+    than the concat-MLP heads the entropy/clip budget was tuned on — measured as
+    2× approx_kl and 2× faster entropy collapse on NEWERA-VIII. Selection is
+    retrieval in the shared key space: keys encode entity qualities once, the
+    query encodes what the current decision wants.
+    """
+
+    def __init__(self, dim_global: int, dim_cond: int, dim_key: int):
         """
         Args:
-            dim_entity: Dimension of each entity embedding
             dim_global: Dimension of the global context vector
-            dim_op: Dimension of the operation-conditioning embedding
-            dim_ff: Hidden dimension of the feedforward network
+            dim_cond: Dimension of the conditioning vector (operation embedding
+                for L2, active-entity embedding for L3)
+            dim_key: Dimension of the pointer keys/query
         """
         super().__init__()
 
-        self._scorer = nn.Sequential(
-            nn.Linear(dim_entity + dim_global + dim_op, dim_ff),
+        self._scale = 1.0 / math.sqrt(dim_key)
+        self._query_net = nn.Sequential(
+            nn.LayerNorm(dim_global + dim_cond),
             nn.ReLU(),
-            nn.Linear(dim_ff, dim_ff),
-            nn.ReLU(),
-            nn.Linear(dim_ff, 1),
+            nn.Linear(dim_global + dim_cond, dim_key),
         )
 
     def forward(
         self,
-        x_entities: torch.Tensor,
+        keys: torch.Tensor,
         x_global: torch.Tensor,
-        x_op: torch.Tensor,
+        cond: torch.Tensor,
         mask: torch.Tensor,
     ) -> HeadOutput:
-        """Score each entity conditioned on the operation; returns masked logits.
-        Identity dedup is baked into `mask` (masks.py); sampling is the caller's job."""
-        _, num_entities, _ = x_entities.shape
-        x_global_exp = torch.unsqueeze(x_global, 1).expand(-1, num_entities, -1)
-        x_op_exp = torch.unsqueeze(x_op, 1).expand(-1, num_entities, -1)
-        x_input = torch.cat([x_entities, x_global_exp, x_op_exp], dim=-1)
-        logits = torch.squeeze(self._scorer(x_input), -1)  # (B, N)
-        return HeadOutput(logits.masked_fill(~mask, float("-inf")), None, None)
-
-
-class HeadMonsterSelect(nn.Module):
-    """
-    Head for selecting a monster to target.
-
-    Unlike other entity selection heads, this receives the active entity embedding
-    (the played card or thrown potion) as an additional input so the model can make
-    source-dependent targeting decisions.
-    Input per monster: [monster_emb, global, active_emb].
-    """
-
-    def __init__(self, dim_entity: int, dim_global: int, dim_ff: int):
-        super().__init__()
-
-        self._scorer = nn.Sequential(
-            nn.Linear(dim_entity + dim_global + dim_entity, dim_ff),
-            nn.ReLU(),
-            nn.Linear(dim_ff, dim_ff),
-            nn.ReLU(),
-            nn.Linear(dim_ff, 1),
-        )
-
-    def forward(
-        self,
-        x_entities: torch.Tensor,
-        x_global: torch.Tensor,
-        mask: torch.Tensor,
-        x_active_card: torch.Tensor,
-    ) -> HeadOutput:
-        """Score each monster conditioned on the active entity; returns masked logits.
-        `x_active_card` is the played card for CardPlay, the thrown potion for PotionUse."""
-        _, num_entities, _ = x_entities.shape
-        x_global_exp = torch.unsqueeze(x_global, 1).expand(-1, num_entities, -1)
-        x_active_exp = torch.unsqueeze(x_active_card, 1).expand(-1, num_entities, -1)
-        x_input = torch.cat([x_entities, x_global_exp, x_active_exp], dim=-1)
-        logits = torch.squeeze(self._scorer(x_input), -1)  # (B, N)
-        return HeadOutput(logits.masked_fill(~mask, float("-inf")), None, None)
-
-
-# =============================================================================
-# Map Selection Head
-# =============================================================================
-
-
-class HeadMapSelect(nn.Module):
-    """
-    Head for selecting the next map node: one logit per map column, scored from
-    that column's embedding (weight-shared across columns, like the entity heads).
-    """
-
-    def __init__(self, dim_map: int, dim_global: int, dim_ff: int):
-        """
-        Args:
-            dim_map: Dimension of each per-column map embedding
-            dim_global: Dimension of the global context vector
-            dim_ff: Hidden dimension of the feedforward network
-        """
-        super().__init__()
-
-        self._scorer = nn.Sequential(
-            nn.Linear(dim_map + dim_global, dim_ff),
-            nn.ReLU(),
-            nn.Linear(dim_ff, dim_ff),
-            nn.ReLU(),
-            nn.Linear(dim_ff, 1),
-        )
-
-    def forward(
-        self,
-        x_map: torch.Tensor,
-        x_global: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> HeadOutput:
-        """Score each map column; returns masked logits (no dedup — columns are
-        distinct paths). `x_map` is (B, MAP_WIDTH, dim_map); sampling/recompute
-        is the caller's job."""
-        _, num_columns, _ = x_map.shape
-        x_global_exp = torch.unsqueeze(x_global, 1).expand(-1, num_columns, -1)
-        x_input = torch.cat([x_map, x_global_exp], dim=-1)
-        logits = torch.squeeze(self._scorer(x_input), -1)  # (B, num_columns)
+        """Score entities by scaled key·query; returns masked logits. `keys` is
+        (B, N, dim_key) from PointerKeys; identity dedup is baked into `mask`
+        (masks.py); sampling is the caller's job."""
+        query = self._query_net(torch.cat([x_global, cond], dim=-1))  # (B, dim_key)
+        logits = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1) * self._scale  # (B, N)
         return HeadOutput(logits.masked_fill(~mask, float("-inf")), None, None)
 
 

@@ -36,9 +36,7 @@ _DECK_SCREENS = frozenset(
 )
 
 
-def encode_batch_game_state(
-    batch_game_state: list[GameState], device: torch.device
-) -> TGameState:
+def encode_batch_game_state(batch_game_state: list[GameState], device: torch.device) -> TGameState:
     # tensorclass batch dim shared by every field
     batch_size = [len(batch_game_state)]
 
@@ -85,7 +83,6 @@ def encode_batch_game_state(
         batch_block.append(game_state.character.block)
         batch_gold.append(game_state.character.gold)
 
-
     # Monsters
     x_monsters, monsters_mask, incoming_damages = encode_batch_monsters(
         batch_monsters, batch_health, batch_block, device
@@ -121,7 +118,9 @@ def encode_batch_game_state(
 
     # Deck cards: only a valid token in deck-building screens (see _DECK_SCREENS)
     deck_x, deck_mask = encode_batch_cards(batch_deck, batch_energy_current, MAX_SIZE_DECK, device)
-    deck_screen = torch.tensor([gs.screen in _DECK_SCREENS for gs in batch_game_state], device=device)
+    deck_screen = torch.tensor(
+        [gs.screen in _DECK_SCREENS for gs in batch_game_state], device=device
+    )
     deck_mask = deck_mask & deck_screen.unsqueeze(1)
 
     hand_x, hand_pad = encode_batch_cards(batch_hand, batch_energy_current, MAX_SIZE_HAND, device)
@@ -136,13 +135,27 @@ def encode_batch_game_state(
         screen=encode_batch_screen(batch_game_state, device),
         combat=TCombat(
             hand=TPadded(hand_x, hand_pad, batch_size=batch_size),
-            draw=TPadded(*encode_batch_cards(batch_draw, batch_energy_current, MAX_SIZE_DRAW_PILE, device), batch_size=batch_size),
-            discard=TPadded(*encode_batch_cards(batch_disc, batch_energy_current, MAX_SIZE_DISC_PILE, device), batch_size=batch_size),
-            exhaust=TPadded(*encode_batch_cards(batch_exhaust, batch_energy_current, MAX_SIZE_EXHAUST, device), batch_size=batch_size),
+            draw=TPadded(
+                *encode_batch_cards(batch_draw, batch_energy_current, MAX_SIZE_DRAW_PILE, device),
+                batch_size=batch_size
+            ),
+            discard=TPadded(
+                *encode_batch_cards(batch_disc, batch_energy_current, MAX_SIZE_DISC_PILE, device),
+                batch_size=batch_size
+            ),
+            exhaust=TPadded(
+                *encode_batch_cards(batch_exhaust, batch_energy_current, MAX_SIZE_EXHAUST, device),
+                batch_size=batch_size
+            ),
             deck=TPadded(deck_x, deck_mask, batch_size=batch_size),
             monsters=TPadded(x_monsters, monsters_mask, batch_size=batch_size),
             energy=encode_batch_energy(batch_energy, device),
-            discover=TPadded(*encode_batch_cards(batch_discover, batch_energy_current, MAX_SIZE_DISCOVER, device), batch_size=batch_size),
+            discover=TPadded(
+                *encode_batch_cards(
+                    batch_discover, batch_energy_current, MAX_SIZE_DISCOVER, device
+                ),
+                batch_size=batch_size
+            ),
             batch_size=batch_size,
         ),
         reward=TReward(

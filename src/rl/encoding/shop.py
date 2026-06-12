@@ -15,15 +15,8 @@ from src.rl.encoding.relic import encode_relic_into
 
 
 # Price feats, encoded alongside (not inside) each item's entity encoding
-ENCODING_DIM_PRICE = (
-    1   # Price scalar
-    + 1  # Affordable
-    + 1  # abs(gold - price)
-)
-_DIM_SHOP_META = (
-    1   # Purge cost scalar
-    + 1  # Purge affordable
-)
+ENCODING_DIM_PRICE = 1 + 1 + 1  # Price scalar  # Affordable  # abs(gold - price)
+_DIM_SHOP_META = 1 + 1  # Purge cost scalar  # Purge affordable
 
 
 def _encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
@@ -59,7 +52,9 @@ def encode_batch_shop(
     x_relic_prices = np.zeros((batch_size, MAX_SHOP_RELICS, ENCODING_DIM_PRICE), dtype=np.float32)
     x_potions = np.zeros((batch_size, MAX_SHOP_POTIONS, ENCODING_DIM_POTION), dtype=np.float32)
     x_potions_pad = np.zeros((batch_size, MAX_SHOP_POTIONS), dtype=bool)
-    x_potion_prices = np.zeros((batch_size, MAX_SHOP_POTIONS, ENCODING_DIM_PRICE), dtype=np.float32)
+    x_potion_prices = np.zeros(
+        (batch_size, MAX_SHOP_POTIONS, ENCODING_DIM_PRICE), dtype=np.float32
+    )
     x_meta = np.zeros((batch_size, _DIM_SHOP_META), dtype=np.float32)
 
     for b, (shop, gold) in enumerate(zip(batch_shop, batch_gold)):
