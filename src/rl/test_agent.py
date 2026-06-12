@@ -15,7 +15,6 @@ import slai
 import torch
 from slai import IntentKind
 
-
 _INTENT_BLOCK_KINDS = frozenset({IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff})
 _INTENT_BUFF_KINDS = frozenset({IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff})
 _INTENT_DEBUFF_KINDS = frozenset(
@@ -24,15 +23,12 @@ _INTENT_DEBUFF_KINDS = frozenset(
 
 from src.rl.types import TMask
 from src.rl.action_space.masks import build_masks
-from src.rl.action_space.masks import is_card_playable
-from src.rl.types import Pool
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.types import TGameState
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
 from src.rl.utils import load_config
-
 
 try:
     N_COL, _ = os.get_terminal_size()
@@ -64,6 +60,10 @@ def _variant_name(value: object) -> str:
     """`ModifierKind.Strength` → `Strength` (slai pyclass enums repr that way)."""
     s = repr(value)
     return s.rsplit(".", 1)[-1] if "." in s else s
+
+
+def is_card_playable(card, e) -> bool:
+    return card.cost <= e and card.playable
 
 
 # Modifier abbreviations — copied from play/__main__.py::MOD_ABBR.
@@ -139,6 +139,92 @@ def _fmt_action(action: slai.Action) -> str:
     if i:
         return f"{name}(idx={i[0]})"
     return name  # TurnEnd, Rest, RoomExit, ChestOpen, RewardTakeRelic/Potion/Gold
+
+
+def _describe_action(view: slai.GameState, action: slai.Action) -> str:
+    """Human-readable description of `action`, resolved against the PRE-step view
+    (the action's idxs reference entities of the state it was chosen in)."""
+    at = action.action_type
+    i = action.idxs
+    AT = slai.ActionType
+
+    def card(pile, k):
+        return pile[k].display_name if k < len(pile) else f"card #{k}"
+
+    def potion(pile, k):
+        return _variant_name(pile[k].name) if k < len(pile) else f"potion #{k}"
+
+    def target(s: str) -> str:
+        if len(i) > 1 and i[1] < len(view.monsters):
+            return f"{s} targeting {view.monsters[i[1]].display_name}"
+        return s
+
+    if at == AT.CardPlay:
+        return target(f"played {card(view.hand, i[0])}")
+    if at == AT.TurnEnd:
+        return "ended turn"
+    if at == AT.PotionUse:
+        return target(f"drank {potion(view.potions, i[0])}")
+    if at == AT.PotionDiscard:
+        return f"discarded potion {potion(view.potions, i[0])}"
+    if at in (AT.CardDiscard, AT.CardRetain):
+        verb = "discarded" if at == AT.CardDiscard else "retained"
+        names = ", ".join(card(view.hand, k) for k in i)
+        return f"{verb} {names or 'nothing'}"
+    if at == AT.CardSetup:
+        return f"set aside {card(view.hand, i[0])} (Setup)"
+    if at == AT.CardNightmare:
+        return f"copied {card(view.hand, i[0])} (Nightmare)"
+    if at == AT.CardDiscover:
+        return f"discovered {card(view.discover, i[0])}"
+    if at == AT.RoomSelect:
+        y = 0 if view.map.y_current is None else view.map.y_current + 1
+        rooms = view.map.rooms
+        kind = ""
+        if y < len(rooms) and i[0] < len(rooms[y]) and rooms[y][i[0]] is not None:
+            kind = f" ({_variant_name(rooms[y][i[0]].room_kind)})"
+        return f"moved to column {i[0]}{kind} on floor {y}"
+    if at == AT.RoomExit:
+        return "left the room"
+    if at == AT.ChestOpen:
+        return "opened the chest"
+    if at == AT.Rest:
+        return "rested"
+    if at == AT.CardUpgrade:
+        return f"upgraded {card(view.deck, i[0])}"
+    if at == AT.CardPurge:
+        return f"purged {card(view.deck, i[0])}"
+    if at == AT.CardTransform:
+        return f"transformed {card(view.deck, i[0])}"
+    if at == AT.CardDuplicate:
+        return f"duplicated {card(view.deck, i[0])}"
+    if at == AT.RewardTakeCard:
+        return f"added {card(view.reward.cards, i[0])} to the deck"
+    if at == AT.RewardTakeGold:
+        gold = view.reward.gold
+        return f"took {gold} gold" if gold is not None else "took the gold"
+    if at == AT.RewardTakeRelic:
+        relic = view.reward.relic
+        return f"took relic {_variant_name(relic.name)}" if relic is not None else "took the relic"
+    if at == AT.RewardTakePotion:
+        pot = view.reward.potion
+        return f"took potion {_variant_name(pot.name)}" if pot is not None else "took the potion"
+    if at == AT.ShopBuyCard:
+        return f"bought {card(view.shop.cards, i[0])} for {view.shop.card_prices[i[0]]}g"
+    if at == AT.ShopBuyRelic:
+        name = _variant_name(view.shop.relics[i[0]].name)
+        return f"bought relic {name} for {view.shop.relic_prices[i[0]]}g"
+    if at == AT.ShopBuyPotion:
+        name = _variant_name(view.shop.potions[i[0]].name)
+        return f"bought potion {name} for {view.shop.potion_prices[i[0]]}g"
+    if at == AT.ShopPurge:
+        return f"purged {card(view.deck, i[0])} at the shop for {view.shop.purge_cost}g"
+    if at == AT.EventOptionSelect:
+        ev = view.event
+        if ev is not None and i and i[0] < len(ev.options):
+            return f'chose "{ev.options[i[0]].label}" ({ev.display_name})'
+        return f"chose event option {i[0]}"
+    return _fmt_action(action)  # unmapped kinds fall back to the raw form
 
 
 def _enemy_row(i: int, m: slai.Monster) -> str:
@@ -257,16 +343,14 @@ def get_card_probabilities(
         probability and later copies show 0.
     """
     core_out = model.core(x_game_state)
-    mask = mask_batch.mask_action_idx[str(int(slai.ActionType.CardPlay))]  # (1, MAX_SIZE_HAND), deduped
+    mask = mask_batch.mask_action_idx[
+        str(int(slai.ActionType.CardPlay))
+    ]  # (1, MAX_SIZE_HAND), deduped
     x_op = model.operation_embedding(
         torch.tensor([int(slai.ActionType.CardPlay)], device=mask.device)
     )
-    head_out = model.sel_heads[Pool.HAND.name](
-        core_out.x_hand,
-        core_out.x_global,
-        x_op,
-        mask,
-    )
+    keys = model.pointer_keys["CARD"](core_out.x_hand)
+    head_out = model.query_l2(keys, core_out.x_global, x_op, mask)
     masked = head_out.logits.masked_fill(~mask, float("-inf"))
     probs = torch.softmax(masked, dim=-1)
     return probs[0]
@@ -380,7 +464,7 @@ def run_game(
             if card_probs_str:
                 print(card_probs_str)
                 print("-" * N_COL)
-            print(f"Action: {_fmt_action(action)}")
+            print(f"Action: {_describe_action(obs, action)}")
             print("-" * N_COL)
             time.sleep(delay)
 
@@ -476,10 +560,8 @@ def main(
             map_encoder_kernel_size=3,
             map_encoder_dim=16,
             dim_ff_primary=32,
-            dim_ff_card=32,
-            dim_ff_monster=32,
-            dim_ff_map=32,
             dim_ff_value=32,
+            dim_key=16,
         )
     else:
         config = load_config(f"{exp_path}/config.yml")

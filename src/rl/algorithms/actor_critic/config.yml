@@ -1,4 +1,4 @@
-exp_name: ppo/NEWERA-VIII  # value decomposition changes the checkpoint shape — fresh run
+exp_name: ppo/NEWERA-X  # dim_key 32->64 (fallback rung a: IX showed shared-space interference, win gap vs VII)
 seed: 0
 num_iterations: 5.0e+4
 log_every: 10
@@ -33,10 +33,8 @@ model:
 
   # Head dimensions
   dim_ff_primary: 64
-  dim_ff_card: 64
-  dim_ff_monster: 64
-  dim_ff_map: 64
   dim_ff_value: 64
+  dim_key: 64  # pointer key/query dim (AlphaStar full-config size; 32 underperformed = IX)
 
 optimizer:
   name: Adam

@@ -4,10 +4,12 @@ Routing + every mask come from the engine's legal actions (masks.py). Per (B,) b
   - L1 option: ONE masked categorical over slai.ActionType (which action KIND), run for
     every row. A halt is just a one-legal-kind state, so its forced pick contributes
     log-prob 0 — no pending special case.
-  - L2 selection: ONE head per Pool (x_hand/x_deck/x_potions/...), shared across the
-    action types on that pool and conditioned on an ActionType embedding (AlphaStar-style).
-  - L3 target: the shared monster head, gated/masked by the per-entity legal target
-    set the engine enumerates (one CardPlay/PotionUse per monster).
+  - L2 selection: pointer network (AlphaStar-style) — entity-class key projections
+    (shared across the pools of a class) dotted with a query from ONE shared query net
+    over [x_global, ActionType embedding]; shop pools add a price-key term.
+  - L3 target: the same pointer geometry over monsters, query conditioned on the
+    active entity (played card / thrown potion), masked by the per-entity legal
+    target set the engine enumerates (one CardPlay/PotionUse per monster).
 
 The total action log-prob is option + selection + target.
 """
@@ -30,11 +32,27 @@ from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.types import TGameState
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadBinaryChoice
-from src.rl.models.heads import HeadEntitySelection
-from src.rl.models.heads import HeadMapSelect
-from src.rl.models.heads import HeadMonsterSelect
+from src.rl.models.heads import HeadPointerSelect
 from src.rl.models.heads import HeadValue
+from src.rl.models.heads import PointerKeys
 from src.rl.reward import REWARD_STREAMS
+
+
+# Pointer-key entity class per pool: pools of one class share a key projection,
+# so the same entity gets the same base key in every selection context (shop
+# pools add a separate price-key term on top).
+POOL_KEY_CLASS: dict[Pool, str] = {
+    Pool.HAND: "CARD",
+    Pool.DECK: "CARD",
+    Pool.DISCOVER: "CARD",
+    Pool.REWARD_CARDS: "CARD",
+    Pool.SHOP_CARDS: "CARD",
+    Pool.POTIONS: "POTION",
+    Pool.SHOP_POTIONS: "POTION",
+    Pool.SHOP_RELICS: "RELIC",
+    Pool.EVENT_OPTIONS: "EVENT",
+    Pool.MAP: "MAP",
+}
 
 
 @dataclass
@@ -114,11 +132,9 @@ class ActorCritic(nn.Module):
         map_encoder_kernel_size: int = 3,
         map_encoder_dim: int = 32,
         dim_ff_primary: int = 128,
-        dim_ff_card: int = 128,
-        dim_ff_monster: int = 128,
-        dim_ff_map: int = 128,
         dim_ff_value: int = 128,
         dim_op: int = 32,
+        dim_key: int = 32,
     ):
         super().__init__()
 
@@ -137,40 +153,54 @@ class ActorCritic(nn.Module):
         # L1: one masked categorical over ActionType (which action kind), screen-gated
         # (GLU). Pending-only types are always masked here; a halt has an empty L1 mask.
         self.option_head = HeadBinaryChoice(
-            dim_global, dim_ff_primary, num_choices=NUM_ACTION_TYPES, dim_context=_ENCODING_DIM_SCREEN
+            dim_global,
+            dim_ff_primary,
+            num_choices=NUM_ACTION_TYPES,
+            dim_context=_ENCODING_DIM_SCREEN,
         )
 
-        # L2: one selection head per Pool, conditioned on an ActionType embedding (shared
-        # across the action types on that pool). Shop pools append price; the map pool uses
-        # HeadMapSelect (single action type, no conditioning). The bound getter resolves
+        # L2/L3: pointer selection — per-entity-class key projections (POOL_KEY_CLASS;
+        # MONSTER serves L3) + one shared query net per level. Shop pools' CoreOutput
+        # tensors carry [entity ‖ price]; the entity part goes through its class keys
+        # and the price through an additive price-key term. The bound getter resolves
         # each pool's CoreOutput tensor once, so scoring has no runtime getattr-by-string.
         self.operation_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
-        self.sel_heads = nn.ModuleDict()
+        self._dim_entity = dim_entity
         self._pool_get: dict = {}
         for pool in Pool:
-            self._pool_get[pool] = attrgetter("x_" + pool.name.lower())  # CoreOutput tensor for this pool
-            if pool == Pool.MAP:
-                self.sel_heads[pool.name] = HeadMapSelect(dim_map, dim_global, dim_ff_map)
-            else:
-                has_price = pool.name.startswith("SHOP")  # shop pools append price to the entity embedding
-                dim_in = dim_entity + ENCODING_DIM_PRICE if has_price else dim_entity
-                self.sel_heads[pool.name] = HeadEntitySelection(dim_in, dim_global, dim_op, dim_ff_card)
-
-        # L3: inline monster target (shared by CardPlay + PotionUse)
-        self.head_monster_select = HeadMonsterSelect(dim_entity, dim_global, dim_ff_monster)
+            self._pool_get[pool] = attrgetter(
+                "x_" + pool.name.lower()
+            )  # CoreOutput tensor for this pool
+        self.pointer_keys = nn.ModuleDict(
+            {
+                "CARD": PointerKeys(dim_entity, dim_key),
+                "POTION": PointerKeys(dim_entity, dim_key),
+                "RELIC": PointerKeys(dim_entity, dim_key),
+                "EVENT": PointerKeys(dim_entity, dim_key),
+                "MONSTER": PointerKeys(dim_entity, dim_key),
+                "MAP": PointerKeys(dim_map, dim_key),
+            }
+        )
+        self.price_keys = nn.Linear(ENCODING_DIM_PRICE, dim_key, bias=False)
+        self.query_l2 = HeadPointerSelect(dim_global, dim_op, dim_key)
+        self.query_l3 = HeadPointerSelect(dim_global, dim_entity, dim_key)
 
         # Critic: one output per reward stream (value decomposition)
         self.head_value = HeadValue(dim_global, dim_ff_value, len(REWARD_STREAMS))
 
         # PPO init: orthogonal everywhere (gain √2), then near-zero logit layers
         # (initial policy ≈ uniform over the mask) and a unit-gain value output.
+        # For the pointer heads the logit-producing layer is the query output (small
+        # query -> logits ≈ 0); keys keep gain √2.
         # Embeddings/LayerNorm/attention in_proj keep PyTorch defaults.
         for m in self.modules():
             if isinstance(m, (nn.Linear, nn.Conv2d)):
                 nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
-                nn.init.zeros_(m.bias)
-        for head in (self.option_head, self.head_monster_select, *self.sel_heads.values()):
-            nn.init.orthogonal_(head._scorer[-1].weight, gain=0.01)
+                if m.bias is not None:  # price_keys is bias-free
+                    nn.init.zeros_(m.bias)
+        nn.init.orthogonal_(self.option_head._scorer[-1].weight, gain=0.01)
+        nn.init.orthogonal_(self.query_l2._query_net[-1].weight, gain=0.01)
+        nn.init.orthogonal_(self.query_l3._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self.head_value._network[-1].weight, gain=1.0)
 
     # ---- One routing pass, shared by sampling and PPO recompute ----
@@ -194,19 +224,21 @@ class ActorCritic(nn.Module):
 
     def _selection_step(self, at, rows, core_out, mask_batch, sample, rec_idx=None):
         """Score + sample/recompute the selection for one action type `at` on `rows`.
-        The mask is per action type (legality differs per type); the head is per pool
-        (shared params), conditioned on the ActionType embedding (the map pool is a
-        single action type, no conditioning)."""
+        The mask is per action type (legality differs per type); keys come from the
+        pool's entity-class projection (shared across that class's pools), the query
+        from the shared L2 query net conditioned on the ActionType embedding."""
         pool = Pool(AT_POOL[at])
         mask = mask_batch.mask_action_idx[str(at)][rows]
         pool_tensor = self._pool_get[pool](core_out)[rows]
-        if pool == Pool.MAP:
-            logits = self.sel_heads[pool.name](pool_tensor, core_out.x_global[rows], mask).logits
+        key_proj = self.pointer_keys[POOL_KEY_CLASS[pool]]
+        if pool.name.startswith("SHOP"):  # CoreOutput shop tensors are [entity ‖ price]
+            keys = key_proj(pool_tensor[..., : self._dim_entity]) + self.price_keys(
+                pool_tensor[..., self._dim_entity:]
+            )
         else:
-            x_op = self.operation_embedding(torch.full_like(rows, at))
-            logits = self.sel_heads[pool.name](
-                pool_tensor, core_out.x_global[rows], x_op, mask
-            ).logits
+            keys = key_proj(pool_tensor)
+        x_op = self.operation_embedding(torch.full_like(rows, at))
+        logits = self.query_l2(keys, core_out.x_global[rows], x_op, mask).logits
         return self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
 
     def _target_step(self, pool, rows, sel_idx, core_out, mask_batch, sample, rec_tgt=None):
@@ -226,15 +258,22 @@ class ActorCritic(nn.Module):
             x_active = core_out.x_hand[tsub, sel_idx[tl]]
         else:
             x_active = core_out.x_potions[tsub, sel_idx[tl]]
-        logits = self.head_monster_select(
-            core_out.x_monsters[tsub], core_out.x_global[tsub], mask, x_active_card=x_active
-        ).logits
+        keys = self.pointer_keys["MONSTER"](core_out.x_monsters[tsub])
+        logits = self.query_l3(keys, core_out.x_global[tsub], x_active, mask).logits
         rec_idx = rec_tgt[tl] if rec_tgt is not None else None
         idx, lp, ent = self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
         return tsub, idx, lp, ent
 
-    def _run(self, core_out, mask_batch, sample, values,
-             rec_option=None, rec_selection=None, rec_target=None):
+    def _run(
+        self,
+        core_out,
+        mask_batch,
+        sample,
+        values,
+        rec_option=None,
+        rec_selection=None,
+        rec_target=None,
+    ):
         """Single mask-derived routing pass. rec_* = None -> sample/greedy; rec_* given ->
         recompute the recorded action. L1 (over mask_action_type) runs for every row — a
         halt is just a one-legal-kind state whose forced pick contributes log-prob 0. The
@@ -250,7 +289,9 @@ class ActorCritic(nn.Module):
         logits = self.option_head(
             core_out.x_global, core_out.x_screen, mask_batch.mask_action_type
         ).logits
-        chosen, lp, ent = self._categorical_step(logits, mask_batch.mask_action_type, sample, rec_idx=rec_option)
+        chosen, lp, ent = self._categorical_step(
+            logits, mask_batch.mask_action_type, sample, rec_idx=rec_option
+        )
         s.option.write(torch.arange(B, device=device), chosen, lp, ent)
         decided = rec_option if recompute else chosen  # (B,) chosen ActionType per row
 
@@ -269,7 +310,9 @@ class ActorCritic(nn.Module):
                 continue
             rows = order[offsets[at] : offsets[at + 1]]
             rec_sel = rec_selection[rows] if recompute else None
-            s_i, s_lp, s_ent = self._selection_step(at, rows, core_out, mask_batch, sample, rec_idx=rec_sel)
+            s_i, s_lp, s_ent = self._selection_step(
+                at, rows, core_out, mask_batch, sample, rec_idx=rec_sel
+            )
             s.selection.write(rows, s_i, s_lp, s_ent)
 
             # ---- L3: monster target (CardPlay / PotionUse groups) ----
@@ -277,7 +320,13 @@ class ActorCritic(nn.Module):
                 sel_for_target = rec_sel if recompute else s_i
                 rec_tgt = rec_target[rows] if recompute else None
                 res = self._target_step(
-                    Pool(AT_POOL[at]), rows, sel_for_target, core_out, mask_batch, sample, rec_tgt=rec_tgt,
+                    Pool(AT_POOL[at]),
+                    rows,
+                    sel_for_target,
+                    core_out,
+                    mask_batch,
+                    sample,
+                    rec_tgt=rec_tgt,
                 )
                 if res is not None:
                     tsub, t_i, t_lp, t_ent = res
@@ -292,7 +341,9 @@ class ActorCritic(nn.Module):
         values = self.head_value(core_out.x_global)
         return self._run(core_out, mask_batch, sample, values)
 
-    def evaluate_actions(self, x_game_state, mask_batch, option_indices, selection_indices, target_indices):
+    def evaluate_actions(
+        self, x_game_state, mask_batch, option_indices, selection_indices, target_indices
+    ):
         """Recompute log-probs/entropies of the recorded (option, selection, target)
         indices under the current policy, sharing forward()'s routing pass.
         Returns (log_probs, entropies, values); entropies is a per-head (B, 3) stack
@@ -301,10 +352,13 @@ class ActorCritic(nn.Module):
         core_out = self.core(x_game_state)
         values = self.head_value(core_out.x_global)
         s = self._run(
-            core_out, mask_batch, sample=False, values=values,
-            rec_option=option_indices, rec_selection=selection_indices, rec_target=target_indices,
+            core_out,
+            mask_batch,
+            sample=False,
+            values=values,
+            rec_option=option_indices,
+            rec_selection=selection_indices,
+            rec_target=target_indices,
         )
-        entropies = torch.stack(
-            [s.option.entropy, s.selection.entropy, s.target.entropy], dim=-1
-        )
+        entropies = torch.stack([s.option.entropy, s.selection.entropy, s.target.entropy], dim=-1)
         return s.total_log_prob(), entropies, values

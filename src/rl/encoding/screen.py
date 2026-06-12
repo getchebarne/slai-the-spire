@@ -43,9 +43,7 @@ def _encode_screen_into(state: GameState, out: np.ndarray) -> None:
             out[_COUNT_IDX] = sk.count / MAX_SIZE_HAND
 
 
-def encode_batch_screen(
-    batch_state: list[GameState], device: torch.device
-) -> torch.Tensor:
+def encode_batch_screen(batch_state: list[GameState], device: torch.device) -> torch.Tensor:
     batch_size = len(batch_state)
 
     # Pre-allocate NumPy array

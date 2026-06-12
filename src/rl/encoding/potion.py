@@ -14,10 +14,10 @@ _POTION_NAME_TO_IDX = {potion_name: i for i, potion_name in enumerate(members(Po
 _POTION_RARITY_TO_IDX = {potion_rarity: i for i, potion_rarity in enumerate(members(PotionRarity))}
 
 ENCODING_DIM_POTION = (
-    len(_POTION_NAME_TO_IDX)         # Name OHE
-    + len(_POTION_RARITY_TO_IDX)     # Rarity OHE
-    + 1                     # Requires target
-    + 1                     # Combat only
+    len(_POTION_NAME_TO_IDX)  # Name OHE
+    + len(_POTION_RARITY_TO_IDX)  # Rarity OHE
+    + 1  # Requires target
+    + 1  # Combat only
     + ENCODING_DIM_EFFECTS  # Per-EffectKind effect blocks
 )
 

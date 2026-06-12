@@ -41,7 +41,6 @@ from src.rl.reward import compute_reward
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 
-
 # =============================================================================
 # Data structures
 # =============================================================================
@@ -236,9 +235,7 @@ def _collect_rollout(
         bootstrap = boot_out.values  # (E, K)
     model.train()
 
-    returns, advantages = _compute_gae(
-        rewards, values, dones.unsqueeze(-1), bootstrap, gamma, lam
-    )
+    returns, advantages = _compute_gae(rewards, values, dones.unsqueeze(-1), bootstrap, gamma, lam)
     # Policy advantage: per-stream advantages summed (≡ single-critic GAE on the
     # summed reward, by linearity), then normalized as before.
     advantages = advantages.sum(-1)
@@ -264,9 +261,7 @@ def _collect_rollout(
 _EVAL_MAX_STEPS = 1000
 
 
-def _run_eval_episode(
-    model: ActorCritic, device: torch.device, gamma: float
-) -> tuple[float, int]:
+def _run_eval_episode(model: ActorCritic, device: torch.device, gamma: float) -> tuple[float, int]:
     env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
     obs = env.reset(seed=random.randint(0, 2**31 - 1))
     total_reward = 0.0
@@ -426,7 +421,9 @@ def _update_ppo(
             totals["Entropy/selection"] += ent_mean[1].item()
             totals["Entropy/target"] += ent_mean[2].item()
             # Schulman's approx-KL estimator; clip fraction = share of moved-off ratios
-            totals["Update/approx_kl"] += ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item()
+            totals["Update/approx_kl"] += (
+                ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item()
+            )
             totals["Update/clip_fraction"] += ((ratio - 1).abs() > clip_eps).float().mean().item()
             n += 1
     metrics = {k: v / n for k, v in totals.items()}
@@ -495,8 +492,15 @@ def train(
         worker_conn, child_conn = eval_ctx.Pipe()
         rollout_worker = eval_ctx.Process(
             target=_rollout_worker,
-            args=(child_conn, model_config, num_envs, rollout_length, gamma, lam,
-                  random.randint(0, 2**31 - 1)),
+            args=(
+                child_conn,
+                model_config,
+                num_envs,
+                rollout_length,
+                gamma,
+                lam,
+                random.randint(0, 2**31 - 1),
+            ),
             daemon=True,
         )
         rollout_worker.start()
@@ -566,10 +570,14 @@ def train(
                     writer.add_scalar("Episode/avg_length", avg_l, iteration)
                     writer.add_scalar("Episode/completed_count", len(completed), iteration)
                     writer.add_scalar(
-                        "Episode/win_rate", sum(e.won for e in completed) / len(completed), iteration
+                        "Episode/win_rate",
+                        sum(e.won for e in completed) / len(completed),
+                        iteration,
                     )
                     writer.add_scalar(
-                        "Episode/avg_floor", sum(e.floor for e in completed) / len(completed), iteration
+                        "Episode/avg_floor",
+                        sum(e.floor for e in completed) / len(completed),
+                        iteration,
                     )
                 while not eval_queue.empty():
                     eval_iter, eval_reward, eval_length = eval_queue.get_nowait()

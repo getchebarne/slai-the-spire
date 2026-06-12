@@ -1,20 +1,3 @@
-"""Action masks, derived directly from the engine's `get_legal_actions()`.
-
-The engine emits the authoritative legal-action list for each state; we fold it into
-three masks (no separate route module, no `state.pending`, no `operation` — a halt is
-just a state where one action type is legal, which the L1 mask already encodes):
-  - `mask_action_type` (B, NUM_ACTION_TYPES): L1 — which action KINDs are legal. EVERY
-    legal action type is folded in (incl. pending picks); a halt has exactly one bit set.
-  - `mask_action_idx` (TensorDict {str(int(ActionType)): (B, pool_size) bool}): L2 — which
-    entities are legal for THAT action type, identity-deduped. Keyed per action type (not Pool)
-    because legality is per-type (PotionUse vs PotionDiscard share the POTIONS pool but
-    differ — a combat-only potion outside combat is discardable but not usable). Absent
-    for terminal types (no selection).
-  - `mask_target_card` / `mask_target_potion` (B, N, MAX_MONSTERS): L3 — legal
-    (entity, monster) pairs, from the engine's per-monster CardPlay/PotionUse variants.
-    `requires_target(entity)` is just that row's `.any()` over monsters.
-"""
-
 import warnings
 
 import numpy as np
@@ -35,12 +18,6 @@ from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_HAND
-from src.rl.encoding.card import card_identity_key
-
-
-def is_card_playable(card: slai.Card, energy_current: int) -> bool:
-    """Affordability + per-card play restriction (kept for test_agent display)."""
-    return card.cost <= energy_current and card.playable
 
 
 def card_identity_ids(cards: list[slai.Card]) -> list[int]:
@@ -48,7 +25,7 @@ def card_identity_ids(cards: list[slai.Card]) -> list[int]:
     key share an id (selection dedup). One id per card; the caller pads
     truncated/empty slots with -1."""
     seen: dict[tuple, int] = {}
-    return [seen.setdefault(card_identity_key(card), len(seen)) for card in cards]
+    return [seen.setdefault(card.identity_hash, len(seen)) for card in cards]
 
 
 def _pile_ids(state: slai.GameState, pool: int) -> list[int]:
@@ -87,7 +64,9 @@ def build_masks(
     legal entities go in its own L2 mask (legality is per type, deduped per pool)."""
     B = len(states)
     action_type_np = np.zeros((B, NUM_ACTION_TYPES), dtype=bool)
-    sel_np = {at: np.zeros((B, POOL_SIZE[AT_POOL[at]]), dtype=bool) for at in SELECTING_ACTION_TYPES}
+    sel_np = {
+        at: np.zeros((B, POOL_SIZE[AT_POOL[at]]), dtype=bool) for at in SELECTING_ACTION_TYPES
+    }
     card_tgt_np = np.zeros((B, MAX_SIZE_HAND, MAX_MONSTERS), dtype=bool)
     potion_tgt_np = np.zeros((B, MAX_POTION_SLOTS, MAX_MONSTERS), dtype=bool)
 
@@ -146,7 +125,8 @@ def build_masks(
     return TMask(
         mask_action_type=torch.from_numpy(action_type_np),
         mask_action_idx=TensorDict(
-            {str(at): torch.from_numpy(sel_np[at]) for at in SELECTING_ACTION_TYPES}, batch_size=[B]
+            {str(at): torch.from_numpy(sel_np[at]) for at in SELECTING_ACTION_TYPES},
+            batch_size=[B],
         ),
         mask_target_card=torch.from_numpy(card_tgt_np),
         mask_target_potion=torch.from_numpy(potion_tgt_np),

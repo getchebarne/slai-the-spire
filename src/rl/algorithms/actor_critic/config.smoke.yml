@@ -27,10 +27,8 @@ model:
   map_encoder_kernel_size: 3
   map_encoder_dim: 16
   dim_ff_primary: 32
-  dim_ff_card: 32
-  dim_ff_monster: 32
-  dim_ff_map: 32
   dim_ff_value: 32
+  dim_key: 16
 
 optimizer:
   name: Adam

@@ -12,68 +12,61 @@ from src.rl.types import TGameState
 from src.rl.types import TPadded
 
 
-def _projection(dim_in: int, dim_embedding: int) -> nn.Sequential:
-    return nn.Sequential(
-        nn.Linear(dim_in, dim_embedding),
-        nn.ReLU(),
-        nn.Linear(dim_embedding, dim_embedding),
-    )
-
-
 class EntityProjector(nn.Module):
-    """Project each entity type's packed encoding to the shared embedding dim.
-
-    The card projection is shared across every card pile, and the card/relic/potion
-    projections are reused for the offered reward relic/potion and the shop items
-    (those entity encodings are stored pure; price lives in separate
-    x.shop.*_prices fields for the buy heads).
-    """
-
     def __init__(self, dim_embedding: int):
         super().__init__()
 
         self._dim_embedding = dim_embedding
-        self._projection_card = _projection(ENCODING_DIM_CARD, dim_embedding)
-        self._projection_monster = _projection(ENCODING_DIM_MONSTER, dim_embedding)
-        self._projection_character = _projection(ENCODING_DIM_CHARACTER, dim_embedding)
-        self._projection_relic = _projection(ENCODING_DIM_RELIC, dim_embedding)
-        self._projection_potion = _projection(ENCODING_DIM_POTION, dim_embedding)
-        self._projection_event_option = _projection(_ENCODING_DIM_EVENT_OPTION, dim_embedding)
 
-        self._layer_norm = nn.LayerNorm(dim_embedding)
+        # Projection blocks
+        self._proj_card = _get_projection(ENCODING_DIM_CARD, dim_embedding)
+        self._proj_monster = _get_projection(ENCODING_DIM_MONSTER, dim_embedding)
+        self._proj_character = _get_projection(ENCODING_DIM_CHARACTER, dim_embedding)
+        self._proj_relic = _get_projection(ENCODING_DIM_RELIC, dim_embedding)
+        self._proj_potion = _get_projection(ENCODING_DIM_POTION, dim_embedding)
+        self._proj_event_option = _get_projection(_ENCODING_DIM_EVENT_OPTION, dim_embedding)
+
+        self._norm = nn.LayerNorm(dim_embedding)
 
     def forward(self, x: TGameState) -> TEntityProjection:
         batch_size = x.batch_size
-        norm = self._layer_norm
 
-        def grouped(projection, srcs: list[TPadded]) -> list[TPadded]:
-            # One cat'd GEMM per shared projection, over VALID rows only (occupancy
-            # is ~10% — pad-slot projections are dead compute: their outputs are
-            # gathered out before attention and zeros are never read downstream).
-            x = torch.cat([s.x for s in srcs], dim=1)
-            mask = torch.cat([s.mask for s in srcs], dim=1)
-            b, s_total, d = x.shape
-            rows = mask.reshape(-1).nonzero(as_tuple=True)[0]
-            out = x.new_zeros(b * s_total, self._dim_embedding)
-            if rows.numel():  # a group can be entirely empty for the batch (e.g. shop in combat)
-                out[rows] = norm(projection(x.reshape(b * s_total, d)[rows]))
-            out = out.reshape(b, s_total, self._dim_embedding)
-            splits = torch.split(out, [s.x.shape[1] for s in srcs], dim=1)
-            return [TPadded(o, s.mask, batch_size=batch_size) for o, s in zip(splits, srcs)]
+        hand, draw, discard, exhaust, deck, discover, reward_cards, shop_cards = _forward_grouped(
+            self._proj_card,
+            self._norm,
+            [
+                x.combat.hand,
+                x.combat.draw,
+                x.combat.discard,
+                x.combat.exhaust,
+                x.combat.deck,
+                x.combat.discover,
+                x.reward.cards,
+                x.shop.cards,
+            ],
+            self._dim_embedding,
+        )
+        relics, reward_relic, shop_relics = _forward_grouped(
+            self._proj_relic,
+            self._norm,
+            [x.relics, x.reward.relic, x.shop.relics],
+            self._dim_embedding,
+        )
+        potions, reward_potion, shop_potions = _forward_grouped(
+            self._proj_potion,
+            self._norm,
+            [x.potions, x.reward.potion, x.shop.potions],
+            self._dim_embedding,
+        )
+        monsters = _project_sparse(
+            self._proj_monster, self._norm, x.combat.monsters, self._dim_embedding
+        )
+        event_options = _project_sparse(
+            self._proj_event_option, self._norm, x.event.options, self._dim_embedding
+        )
 
-        c = x.combat
-        hand, draw, discard, exhaust, deck, discover, reward_cards, shop_cards = grouped(
-            self._projection_card,
-            [c.hand, c.draw, c.discard, c.exhaust, c.deck, c.discover, x.reward.cards, x.shop.cards],
-        )
-        relics, reward_relic, shop_relics = grouped(
-            self._projection_relic, [x.relics, x.reward.relic, x.shop.relics]
-        )
-        potions, reward_potion, shop_potions = grouped(
-            self._projection_potion, [x.potions, x.reward.potion, x.shop.potions]
-        )
-        (monsters,) = grouped(self._projection_monster, [c.monsters])
-        (event_options,) = grouped(self._projection_event_option, [x.event.options])
+        # Character is the only singleton entity
+        character = self._norm(self._proj_character(x.character))
 
         return TEntityProjection(
             # Card piles
@@ -85,7 +78,7 @@ class EntityProjector(nn.Module):
             discover=discover,
             # Combat actors
             monsters=monsters,
-            character=norm(self._projection_character(x.character)),
+            character=character,
             # Reward
             reward_cards=reward_cards,
             reward_relic=reward_relic,
@@ -100,4 +93,69 @@ class EntityProjector(nn.Module):
             # Event
             event_options=event_options,
             batch_size=batch_size,
+            # TODO: add `all`, contained all concatenated entities and their masks
         )
+
+
+def _get_projection(dim_in: int, dim_embedding: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(dim_in, dim_embedding),
+        nn.ReLU(),
+        nn.Linear(dim_embedding, dim_embedding),
+    )
+
+
+# Project only the valid (non-pad) rows of a padded entity tensor
+def _project_sparse(
+    proj: nn.Module,
+    norm: nn.Module,
+    tensor_padded: TPadded,
+    dim_embedding: int,
+) -> TPadded:
+    x = tensor_padded.x
+    mask = tensor_padded.mask
+
+    # Initialize empty result tensor w/ one row per batch-entity
+    batch_size, num_entities, dim_entity = x.shape
+    x_out = torch.zeros(batch_size * num_entities, dim_embedding, dtype=x.dtype)
+
+    # Compute which rows actually need to be projected
+    row_idxs = torch.nonzero(torch.flatten(mask), as_tuple=True)[0]
+
+    # Compute projection
+    if row_idxs.numel():
+        x_out[row_idxs] = norm(proj(x.reshape(batch_size * num_entities, dim_entity)[row_idxs]))
+
+    # Reshape to original (B, S, D)
+    x_out = x_out.reshape(batch_size, num_entities, dim_embedding)
+    return TPadded(x_out, mask)
+
+
+# TODO: also return concatenated `x_out`. Return tensor of all projected entities
+def _forward_grouped(
+    proj: nn.Module,
+    norm: nn.Module,
+    tensors_padded: list[TPadded],
+    dim_embedding: int,
+) -> list[TPadded]:
+    # Concatenate all tensors and their masks preserving order
+    xs = []
+    masks = []
+    for tensor_padded in tensors_padded:
+        xs.append(tensor_padded.x)
+        masks.append(tensor_padded.mask)
+
+    x_cat = torch.cat(xs, dim=1)
+    mask_cat = torch.cat(masks, dim=1)
+
+    # Project valid rows over the concatenated group
+    x_out = _project_sparse(proj, norm, TPadded(x_cat, mask_cat), dim_embedding).x
+
+    # Split back into the original per-source sequences
+    x_out_splits = torch.split(
+        x_out, [tensor_padded.x.shape[1] for tensor_padded in tensors_padded], dim=1
+    )
+    return [
+        TPadded(x_out_split, tensor_padded.mask)
+        for x_out_split, tensor_padded in zip(x_out_splits, tensors_padded)
+    ]
