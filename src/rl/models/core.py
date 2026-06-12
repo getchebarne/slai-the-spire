@@ -95,19 +95,19 @@ class CoreOutput:
     attention into the learned global token and are not surfaced.
     """
 
-    x_global: torch.Tensor          # (B, dim_global)
-    x_screen: torch.Tensor          # (B, _ENCODING_DIM_SCREEN) raw flats — L1 GLU context
-    x_map: torch.Tensor             # (B, MAP_WIDTH, dim_map) — per-column embeddings
-    x_hand: torch.Tensor            # (B, MAX_SIZE_HAND, dim_entity)
-    x_monsters: torch.Tensor        # (B, MAX_MONSTERS, dim_entity)
-    x_discover: torch.Tensor        # (B, MAX_SIZE_DISCOVER, dim_entity)
-    x_deck: torch.Tensor            # (B, MAX_SIZE_DECK, dim_entity)
-    x_reward_cards: torch.Tensor    # (B, MAX_SIZE_COMBAT_CARD_REWARD, dim_entity)
-    x_shop_cards: torch.Tensor      # (B, MAX_SHOP_CARDS, dim_entity + ENCODING_DIM_PRICE)
-    x_shop_relics: torch.Tensor     # (B, MAX_SHOP_RELICS, dim_entity + ENCODING_DIM_PRICE)
-    x_shop_potions: torch.Tensor    # (B, MAX_SHOP_POTIONS, dim_entity + ENCODING_DIM_PRICE)
-    x_potions: torch.Tensor         # (B, MAX_POTION_SLOTS, dim_entity)
-    x_event_options: torch.Tensor   # (B, MAX_EVENT_OPTIONS, dim_entity)
+    x_global: torch.Tensor  # (B, dim_global)
+    x_screen: torch.Tensor  # (B, _ENCODING_DIM_SCREEN) raw flats — L1 GLU context
+    x_map: torch.Tensor  # (B, MAP_WIDTH, dim_map) — per-column embeddings
+    x_hand: torch.Tensor  # (B, MAX_SIZE_HAND, dim_entity)
+    x_monsters: torch.Tensor  # (B, MAX_MONSTERS, dim_entity)
+    x_discover: torch.Tensor  # (B, MAX_SIZE_DISCOVER, dim_entity)
+    x_deck: torch.Tensor  # (B, MAX_SIZE_DECK, dim_entity)
+    x_reward_cards: torch.Tensor  # (B, MAX_SIZE_COMBAT_CARD_REWARD, dim_entity)
+    x_shop_cards: torch.Tensor  # (B, MAX_SHOP_CARDS, dim_entity + ENCODING_DIM_PRICE)
+    x_shop_relics: torch.Tensor  # (B, MAX_SHOP_RELICS, dim_entity + ENCODING_DIM_PRICE)
+    x_shop_potions: torch.Tensor  # (B, MAX_SHOP_POTIONS, dim_entity + ENCODING_DIM_PRICE)
+    x_potions: torch.Tensor  # (B, MAX_POTION_SLOTS, dim_entity)
+    x_event_options: torch.Tensor  # (B, MAX_EVENT_OPTIONS, dim_entity)
 
 
 class Core(nn.Module):
@@ -151,13 +151,13 @@ class Core(nn.Module):
         # Global context = refined global token + character + map summary
         # + per-group counts + raw flats.
         global_input_dim = (
-            dim_entity                    # global token (attention-aggregated entities)
-            + dim_entity                  # character (refined singleton)
-            + map_encoder_dim             # map CNN (column-mean summary)
-            + len(ENTITY_LAYOUT)          # per-group counts (mask.sum / size)
-            + _ENCODING_DIM_ENERGY        # energy (raw)
-            + _ENCODING_DIM_SCREEN        # screen state
-            + ENCODING_DIM_MAP_META       # floor depth + act-boss + next-row kinds
+            dim_entity  # global token (attention-aggregated entities)
+            + dim_entity  # character (refined singleton)
+            + map_encoder_dim  # map CNN (column-mean summary)
+            + len(ENTITY_LAYOUT)  # per-group counts (mask.sum / size)
+            + _ENCODING_DIM_ENERGY  # energy (raw)
+            + _ENCODING_DIM_SCREEN  # screen state
+            + ENCODING_DIM_MAP_META  # floor depth + act-boss + next-row kinds
             + _ENCODING_DIM_REWARD_META
             + _DIM_SHOP_META
             + _ENCODING_DIM_EVENT_META

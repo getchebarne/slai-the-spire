@@ -13,9 +13,9 @@ _RELIC_NAME_TO_IDX = {relic_name: i for i, relic_name in enumerate(members(Relic
 _COUNTER_MAX = 9
 
 ENCODING_DIM_RELIC = (
-    len(_RELIC_NAME_TO_IDX)         # Name OHE
-    + 1                    # Used up
-    + 1                    # Counter scalar
+    len(_RELIC_NAME_TO_IDX)  # Name OHE
+    + 1  # Used up
+    + 1  # Counter scalar
     + ENCODING_DIM_EFFECTS  # Combat-start effect blocks (trigger timing rides on the name)
 )
 

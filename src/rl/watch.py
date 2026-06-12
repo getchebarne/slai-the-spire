@@ -5,8 +5,9 @@ human does) but replaces the human keypress with the model's greedy action —
 the exact inference path the trainer uses (encode → mask from legal actions →
 forward). Dependency direction stays trainer → engine.
 
-Controls: [space] pause/resume, [n] single step, [r] new run, [+/-] speed,
-[q] quit.
+Starts paused. Controls: [n] single step (pauses if running), [space] run/pause,
+[r] new run, [+/-] speed, [q] quit. The status bar shows the last action taken
+and the agent's pending next action.
 
 Usage:
     python -m src.rl.watch --exp-path experiments/ppo/NEWERA
@@ -35,11 +36,11 @@ from play.__main__ import _probe_acs  # noqa: E402
 from play.__main__ import init_colors  # noqa: E402
 from play.__main__ import render  # noqa: E402
 from play.__main__ import reset_if_phase_changed  # noqa: E402
-from play.__main__ import write_segments  # noqa: E402
+from play.__main__ import write  # noqa: E402
 
 from src.rl.constants import FAST_MODE  # noqa: E402
 from src.rl.models import ActorCritic  # noqa: E402
-from src.rl.test_agent import _fmt_action  # noqa: E402
+from src.rl.test_agent import _describe_action  # noqa: E402
 from src.rl.test_agent import get_action_from_model  # noqa: E402
 from src.rl.utils import load_config  # noqa: E402
 
@@ -59,8 +60,9 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
     env = slai.GameEnv(ascension, fast_mode=fast_mode)
     view = env.reset(seed=seed)
     cursor = Cursor()
-    paused = False
+    paused = True  # start paused: [n] steps, [space] runs
     pending = None  # cached agent action for the current state
+    last_act = "—"
 
     while True:
         reset_if_phase_changed(cursor, view)
@@ -71,14 +73,17 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
 
         stdscr.erase()
         render(stdscr, view, cursor, legal, ascension)
-        _maxy, maxx = stdscr.getmaxyx()
+        maxy, maxx = stdscr.getmaxyx()
         state = "PAUSED" if paused else f"{delay:.2f}s"
-        act = _fmt_action(pending) if pending is not None else "—"
+        nxt = _describe_action(view, pending) if pending is not None else "—"
+        # Replace the play renderer's human-keys footer with the watch status,
+        # left-aligned and padded to the full row (essentials leftmost so they
+        # survive narrow terminals).
         status = (
-            f" agent: {act}   [{state}]   "
-            f"[space]pause [n]step [+/-]speed [r]run [q]quit   seed {seed} "
+            f" last: {last_act}  |  next: {nxt}  [{state}]  "
+            f"[n]step [space]run [+/-]speed [r]eset [q]uit  seed {seed}"
         )
-        write_segments(stdscr, 0, maxx - 1, [(status, {"dim": True})])
+        write(stdscr, maxy - 1, 0, status.ljust(maxx - 1)[: maxx - 1], dim=True)
         stdscr.refresh()
 
         key = stdscr.getch()
@@ -89,6 +94,7 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
             view = env.reset(seed=seed)
             cursor = Cursor()
             pending = None
+            last_act = "—"
             continue
         if key == ord(" "):
             paused = not paused
@@ -97,6 +103,8 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
         if key in (ord("-"), ord("_")):
             delay = min(5.0, delay + 0.1)
         step_now = key in (ord("n"), ord("N"))
+        if step_now:
+            paused = True  # stepping implies pausing (n while running = freeze + 1 step)
 
         if view.game_over or pending is None:
             time.sleep(0.05)
@@ -106,6 +114,7 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
             continue
 
         try:
+            last_act = _describe_action(view, pending)
             view, _terminated = env.step(pending)
             cursor.error = None
         except Exception as e:  # surface engine rejection in the UI
@@ -142,10 +151,8 @@ def main(exp_path, use_random, ascension, delay, device, no_fast_mode):
             map_encoder_kernel_size=3,
             map_encoder_dim=16,
             dim_ff_primary=32,
-            dim_ff_card=32,
-            dim_ff_monster=32,
-            dim_ff_map=32,
             dim_ff_value=32,
+            dim_key=16,
         )
     else:
         config = load_config(f"{exp_path}/config.yml")

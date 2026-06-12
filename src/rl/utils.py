@@ -15,7 +15,7 @@ def get_piecewise_dim(val_min: int, val_max: int, threshold: int) -> int:
 
     # Linear piece: val_min..threshold inclusive
     dim_linear = threshold - val_min + 1
-    
+
     # Square root piece: floor(sqrt(threshold+1))..floor(sqrt(val_max))
     dim_sqrt = int(math.sqrt(val_max)) - int(math.sqrt(threshold))
     return dim_linear + dim_sqrt
