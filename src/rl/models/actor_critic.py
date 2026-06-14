@@ -21,16 +21,16 @@ import torch
 import torch.nn as nn
 
 from src.rl.index import GLOBAL_SLICE
-from src.rl.index import POOL_PRICE_FIELD
-from src.rl.index import POOL_SEGMENT
-from src.rl.index import SPEC
-from src.rl.index import Segment
+from src.rl.index import Token
+from src.rl.index import TokenContext
+from src.rl.index import TokenKind
 from src.rl.types import TMask
 from src.rl.types import AT_MAY_TARGET
-from src.rl.types import AT_POOL
+from src.rl.types import AT_TARGET
+from src.rl.types import MAP_TARGET
 from src.rl.types import NUM_ACTION_TYPES
-from src.rl.types import Pool
 from src.rl.types import action_from_actiontype
+from src.rl.encoding.map_ import MAP_NUM_ROOM_KINDS
 from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.types import TGameState
@@ -42,13 +42,13 @@ from src.rl.models.heads import PointerKeys
 from src.rl.reward import REWARD_STREAMS
 
 
-# Pointer-key entity class per pool: pools of one class share a key projection,
-# so the same entity gets the same base key in every selection context (shop
-# pools add a separate price-key term on top). Derived from the registry; MAP is
-# not a token segment and keys off the map encoder's columns.
-POOL_KEY_CLASS: dict[Pool, str] = {
-    pool: SPEC[segment].entity_class.name for pool, segment in POOL_SEGMENT.items()
-} | {Pool.MAP: "MAP"}
+# Shop price tensor per token kind: a SHOP-context selection adds an additive price-key
+# term over the matching per-item price tensor on TCoreOutput.
+_SHOP_PRICE_FIELD: dict[TokenKind, str] = {
+    TokenKind.CARD: "shop_card_prices",
+    TokenKind.RELIC: "shop_relic_prices",
+    TokenKind.POTION: "shop_potion_prices",
+}
 
 
 @dataclass
@@ -155,10 +155,10 @@ class ActorCritic(nn.Module):
             dim_context=_ENCODING_DIM_SCREEN,
         )
 
-        # L2/L3: pointer selection — per-entity-class key projections (POOL_KEY_CLASS;
-        # MONSTER serves L3) + one shared query net per level. Every pool except MAP
-        # is a segment slice of the refined token tensor (index.POOL_SEGMENT); shop
-        # pools add an additive price-key term over their price tensors.
+        # L2/L3: pointer selection — one key projection per TokenKind (keyed by
+        # kind name; MONSTER serves L3) + one shared query net per level. Every target
+        # except MAP is a slice of the refined token tensor (index.GLOBAL_SLICE[token]);
+        # SHOP-context targets add an additive price-key term over their price tensors.
         self.operation_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
         self.pointer_keys = nn.ModuleDict(
             {
@@ -167,7 +167,7 @@ class ActorCritic(nn.Module):
                 "RELIC": PointerKeys(dim_entity, dim_key),
                 "EVENT": PointerKeys(dim_entity, dim_key),
                 "MONSTER": PointerKeys(dim_entity, dim_key),
-                "MAP": PointerKeys(dim_map, dim_key),
+                "MAP": PointerKeys(dim_map + MAP_NUM_ROOM_KINDS, dim_key),
             }
         )
         self.price_keys = nn.Linear(ENCODING_DIM_PRICE, dim_key, bias=False)
@@ -214,27 +214,37 @@ class ActorCritic(nn.Module):
     def _selection_step(self, at, rows, core_out, mask_batch, sample, rec_idx=None):
         """Score + sample/recompute the selection for one action type `at` on `rows`.
         The mask is per action type (legality differs per type); keys come from the
-        pool's entity-class projection (shared across that class's pools), the query
-        from the shared L2 query net conditioned on the ActionType embedding."""
-        pool = Pool(AT_POOL[at])
+        target kind's projection (shared across that kind's tokens), the query from the
+        shared L2 query net conditioned on the ActionType embedding."""
+        target = AT_TARGET[at]
         mask = mask_batch.mask_action_idx[str(at)][rows]
-        if pool is Pool.MAP:
-            pool_tensor = core_out.x_map[rows]
+        if target is MAP_TARGET:
+            # Concat per-column next-row room kinds onto the column embeddings so the
+            # pointer keys (not just the shared query) can tell the columns apart.
+            pool_tensor = torch.cat(
+                [core_out.x_map[rows], core_out.x_map_candidates[rows]], dim=-1
+            )
+            keys = self.pointer_keys["MAP"](pool_tensor)
         else:
-            pool_tensor = core_out.tokens.x[:, GLOBAL_SLICE[POOL_SEGMENT[pool]]][rows]
-        keys = self.pointer_keys[POOL_KEY_CLASS[pool]](pool_tensor)
-        if pool in POOL_PRICE_FIELD:  # shop pools: additive price-key term
-            keys = keys + self.price_keys(getattr(core_out, POOL_PRICE_FIELD[pool])[rows])
+            pool_tensor = core_out.tokens.x[:, GLOBAL_SLICE[target]][rows]
+            keys = self.pointer_keys[target.kind.name](pool_tensor)
+            if target.context is TokenContext.SHOP:  # shop tokens: additive price-key term
+                price = getattr(core_out, _SHOP_PRICE_FIELD[target.kind])
+                keys = keys + self.price_keys(price[rows])
         x_op = self.operation_embedding(torch.full_like(rows, at))
         logits = self.query_l2(keys, core_out.x_global[rows], x_op, mask).logits
         return self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
 
-    def _target_step(self, pool, rows, sel_idx, core_out, mask_batch, sample, rec_tgt=None):
-        """Inline monster target for a CardPlay (HAND) / PotionUse (POTIONS) group. The
+    def _target_step(self, target, rows, sel_idx, core_out, mask_batch, sample, rec_tgt=None):
+        """Inline monster target for a CardPlay (CARD/HAND) / PotionUse (POTION) group. The
         legal-monster set is the engine-enumerated per-entity target mask; the gate is
         that set being non-empty (sampling) or the recorded target's presence (recompute).
         Returns None if no row needs a target, else (tsub, indices, log_prob, entropy)."""
-        tmask = mask_batch.mask_target_card if pool == Pool.HAND else mask_batch.mask_target_potion
+        tmask = (
+            mask_batch.mask_target_card
+            if target.kind == TokenKind.CARD
+            else mask_batch.mask_target_potion
+        )
         monster_mask = tmask[rows, sel_idx]  # (len(rows), MAX_MONSTERS)
         need = rec_tgt >= 0 if rec_tgt is not None else monster_mask.any(dim=-1)
         tl = torch.nonzero(need, as_tuple=True)[0]
@@ -242,9 +252,11 @@ class ActorCritic(nn.Module):
             return None
         tsub = rows[tl]
         mask = monster_mask[tl]
-        x_active = core_out.tokens.x[:, GLOBAL_SLICE[POOL_SEGMENT[pool]]][tsub, sel_idx[tl]]
+        x_active = core_out.tokens.x[:, GLOBAL_SLICE[target]][tsub, sel_idx[tl]]
         keys = self.pointer_keys["MONSTER"](
-            core_out.tokens.x[:, GLOBAL_SLICE[Segment.MONSTERS]][tsub]
+            core_out.tokens.x[:, GLOBAL_SLICE[Token(TokenKind.MONSTER, TokenContext.ENEMIES)]][
+                tsub
+            ]
         )
         logits = self.query_l3(keys, core_out.x_global[tsub], x_active, mask).logits
         rec_idx = rec_tgt[tl] if rec_tgt is not None else None
@@ -307,7 +319,7 @@ class ActorCritic(nn.Module):
                 sel_for_target = rec_sel if recompute else s_i
                 rec_tgt = rec_target[rows] if recompute else None
                 res = self._target_step(
-                    Pool(AT_POOL[at]),
+                    AT_TARGET[at],
                     rows,
                     sel_for_target,
                     core_out,

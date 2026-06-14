@@ -1,17 +1,22 @@
 import torch
 import torch.nn as nn
 
+from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.energy import _ENCODING_DIM_ENERGY
 from src.rl.encoding.event import _ENCODING_DIM_EVENT_META
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
+from src.rl.encoding.map_ import MAP_NUM_ROOM_KINDS
 from src.rl.encoding.reward import _ENCODING_DIM_REWARD_META
 from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
 from src.rl.encoding.shop import _DIM_SHOP_META
 from src.rl.index import GLOBAL_SLICE
 from src.rl.index import NUM_TOKENS
+from src.rl.index import TOKENS
 from src.rl.index import TYPE_IDX
-from src.rl.index import Segment
-from src.rl.index import segment_counts
+from src.rl.index import Token
+from src.rl.index import TokenContext
+from src.rl.index import TokenKind
+from src.rl.index import token_counts
 from src.rl.types import TCoreOutput
 from src.rl.types import TGameState
 from src.rl.types import TPadded
@@ -60,7 +65,7 @@ class Core(nn.Module):
             dim_entity, transformer_dim_ff, transformer_num_heads, transformer_num_blocks
         )
         self.last_pack_width = _NUM_TOKENS  # observability: bucket chosen by the last forward
-        self._type_emb = nn.Embedding(len(Segment), dim_entity)
+        self._type_emb = nn.Embedding(len(TOKENS), dim_entity)
         self._map_encoder = MapEncoder(map_encoder_kernel_size, map_encoder_dim)
 
         # Learned global token, refined by the transformer alongside the entities —
@@ -74,7 +79,7 @@ class Core(nn.Module):
             dim_entity  # global token (attention-aggregated entities)
             + dim_entity  # character (refined singleton)
             + map_encoder_dim  # map CNN (column-mean summary)
-            + len(Segment)  # per-segment counts (mask.sum / size)
+            + len(TOKENS)  # per-token counts (mask.sum / size)
             + _ENCODING_DIM_ENERGY  # energy (raw)
             + _ENCODING_DIM_SCREEN  # screen state
             + ENCODING_DIM_MAP_META  # floor depth + act-boss + next-row kinds
@@ -134,10 +139,18 @@ class Core(nn.Module):
         # Strip the global token back off; entity tokens keep registry positions
         x_global_token = refined[:, -1]
         refined = refined[:, :-1]
-        x_character = torch.squeeze(refined[:, GLOBAL_SLICE[Segment.CHARACTER]], 1)
+        x_character = torch.squeeze(
+            refined[:, GLOBAL_SLICE[Token(TokenKind.CHARACTER, TokenContext.SELF)]], 1
+        )
 
         # ---- Map: per-column embeddings (B, MAP_WIDTH, dim_map) ----
         x_map = self._map_encoder(x.map_grid)
+        # Per-column next-row room kinds, sliced from the (column-shared) map_meta tail and
+        # reshaped (B, MAP_WIDTH, MAP_NUM_ROOM_KINDS) — fed to the MAP pointer KEYS so the
+        # RoomSelect logits discriminate per column (audit P3 fix).
+        x_map_candidates = x.map_meta[:, -MAP_WIDTH * MAP_NUM_ROOM_KINDS :].reshape(
+            b, MAP_WIDTH, MAP_NUM_ROOM_KINDS
+        )
 
         # ---- Global context ----
         # The global token carries entity content via attention; counts carry the
@@ -148,7 +161,7 @@ class Core(nn.Module):
                     x_global_token,
                     x_character,
                     x_map.mean(dim=1),
-                    segment_counts(p.mask),
+                    token_counts(p.mask),
                     x.energy,
                     x.screen,
                     x.map_meta,
@@ -164,6 +177,7 @@ class Core(nn.Module):
             x_global=x_global,
             x_screen=x.screen,
             x_map=x_map,
+            x_map_candidates=x_map_candidates,
             tokens=TPadded(refined, p.mask),
             shop_card_prices=x.shop_card_prices,
             shop_relic_prices=x.shop_relic_prices,

@@ -13,9 +13,14 @@ from src.rl.constants import MAP_WIDTH
 
 _ROOM_KIND_TO_IDX = {room_kind: i for i, room_kind in enumerate(members(RoomKind))}
 _CHEST_KIND_TO_IDX = {chest_kind: i for i, chest_kind in enumerate(members(ChestKind))}
+MAP_NUM_ROOM_KINDS = len(_ROOM_KIND_TO_IDX)  # per-column key-side feature dim (item 9)
+# Relative outgoing edges {-1, 0, +1}: engine map edges are always within ±1 column, so
+# 3 translation-equivariant channels replace the 7 absolute-column channels (restores the
+# conv's translation equivariance the audit flagged).
+_NUM_EDGE_CHANNELS = 3
 _NUM_CHANNELS = (
-    len(_ROOM_KIND_TO_IDX)  # Room kind OHE
-    + MAP_WIDTH  # Outgoing-edge multi-hot
+    MAP_NUM_ROOM_KINDS  # Room kind OHE
+    + _NUM_EDGE_CHANNELS  # Outgoing-edge multi-hot (relative {-1, 0, +1})
     + 1  # Current position
 )
 
@@ -44,8 +49,9 @@ def _encode_map_into(map_: Map, out: np.ndarray) -> None:
             idx_room_kind = _ROOM_KIND_TO_IDX[room.room_kind]
             out[y, x, idx_room_kind] = 1.0
             for x_next in room.edges:
-                if 0 <= x_next < MAP_WIDTH:
-                    out[y, x, len(_ROOM_KIND_TO_IDX) + x_next] = 1.0
+                delta = x_next - x  # engine edges stay within ±1 column
+                if 0 <= x_next < MAP_WIDTH and -1 <= delta <= 1:
+                    out[y, x, MAP_NUM_ROOM_KINDS + delta + 1] = 1.0
 
     # Current position (the act boss sits off-grid at y_current == MAP_HEIGHT; skip it)
     if map_.y_current is not None and map_.x_current is not None and map_.y_current < MAP_HEIGHT:

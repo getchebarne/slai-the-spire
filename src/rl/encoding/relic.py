@@ -7,10 +7,11 @@ from slai import members
 
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
-from src.rl.index import CLASS_SEGMENTS
-from src.rl.index import CLASS_SLICE
-from src.rl.index import NUM_CLASS_TOKENS
-from src.rl.index import EntityClass
+from src.rl.index import KIND_TOKENS
+from src.rl.index import LOCAL_SLICE
+from src.rl.index import NUM_KIND_TOKENS
+from src.rl.index import TokenKind
+from src.rl.index import token_entities
 
 
 _RELIC_NAME_TO_IDX = {relic_name: i for i, relic_name in enumerate(members(RelicName))}
@@ -42,19 +43,19 @@ def encode_batch_relics(
     batch_game_state: list[GameState], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Encode every relic segment (registry RELIC class) into one concatenated
-    (B, N_RELICS, ENCODING_DIM_RELIC) tensor + mask; segments live at their
-    index.CLASS_SLICE positions."""
+    (B, N_RELICS, ENCODING_DIM_RELIC) tensor + mask; tokens live at their
+    index.LOCAL_SLICE positions."""
     batch_size = len(batch_game_state)
-    num_tokens = NUM_CLASS_TOKENS[EntityClass.RELIC]
+    num_tokens = NUM_KIND_TOKENS[TokenKind.RELIC]
 
     # Pre-allocate NumPy arrays
     x_out = np.zeros((batch_size, num_tokens, ENCODING_DIM_RELIC), dtype=np.float32)
     x_pad = np.zeros((batch_size, num_tokens), dtype=bool)
 
     for b, game_state in enumerate(batch_game_state):
-        for spec in CLASS_SEGMENTS[EntityClass.RELIC]:
-            offset = CLASS_SLICE[spec.segment].start
-            for i, relic in enumerate(spec.getter(game_state)):
+        for token in KIND_TOKENS[TokenKind.RELIC]:
+            offset = LOCAL_SLICE[token].start
+            for i, relic in enumerate(token_entities(token, game_state)):
                 encode_relic_into(relic, 0, x_out[b, offset + i])
                 x_pad[b, offset + i] = True
 

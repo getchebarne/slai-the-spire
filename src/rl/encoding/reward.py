@@ -10,9 +10,8 @@ _ENCODING_DIM_REWARD_META = 1 + 1  # Gold scalar  # Gold after taking (wallet + 
 
 
 def _encode_reward_meta_into(reward: Reward, character_gold: int, out: np.ndarray) -> None:
-    gold = reward.gold
-    out[0] = get_sqrt_norm(gold, _GOLD_MAX) if gold is not None else 0.0
-    out[1] = get_sqrt_norm(character_gold + (gold or 0), GOLD_CAP)
+    out[0] = get_sqrt_norm(reward.gold, _GOLD_MAX) if reward.gold is not None else 0.0
+    out[1] = get_sqrt_norm(character_gold + (reward.gold or 0), GOLD_CAP)
 
 
 def encode_batch_rewards(
