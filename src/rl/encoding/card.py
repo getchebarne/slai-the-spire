@@ -51,9 +51,10 @@ ENCODING_DIM_CARD = (
     + 1  # Retain
     + 1  # Requires target
     + 1  # Playable
-    + 1  # abs(energy_current - cost)
+    + 1  # Signed energy delta (energy_current - cost)
     + 1  # Cost base scalar
     + 1  # Cost zero-once (free-to-play-once)
+    + 1  # Affordable (cost <= energy_current)
 )
 
 # Encoding cache: a card's encoding depends only on (card.identity_hash, energy_current)
@@ -102,10 +103,13 @@ def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray
     out[pos + 5] = float(card.retain)
     out[pos + 6] = float(card.requires_target)
     out[pos + 7] = float(card.playable)
-    out[pos + 8] = min(abs(energy_current - card.cost), _COST_MAX) / _COST_MAX
+    # Signed energy headroom: >0 surplus, <0 shortfall (abs() destroyed direction)
+    out[pos + 8] = max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
     out[pos + 9] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
     out[pos + 10] = float(card.cost_zero_once)
-    pos += 11
+    # Affordable bit (engine `playable` excludes energy; mirrors shop.py's flag)
+    out[pos + 11] = float(card.cost <= energy_current)
+    pos += 12
 
     return pos
 

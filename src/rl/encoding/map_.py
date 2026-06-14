@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import torch
 from slai import ChestKind
@@ -19,6 +21,7 @@ _NUM_CHANNELS = (
 
 # Act-1 boss display names (MonsterEncounter::as_str); bump when adding acts
 _BOSS_NAME_TO_IDX = {"The Guardian": 0, "Hexaghost": 1, "Slime Boss": 2}
+_WARNED_UNKNOWN_BOSS: set[str] = set()
 
 # Flat map-global meta — position-anchored facts the pooled CNN summary can't carry
 ENCODING_DIM_MAP_META = (
@@ -71,6 +74,9 @@ def _encode_map_meta_into(map_: Map, out: np.ndarray) -> None:
     idx_boss = _BOSS_NAME_TO_IDX.get(map_.boss_name)
     if idx_boss is not None:
         out[2 + idx_boss] = 1.0
+    elif map_.boss_name and map_.boss_name not in _WARNED_UNKNOWN_BOSS:
+        _WARNED_UNKNOWN_BOSS.add(map_.boss_name)
+        warnings.warn(f"Unknown boss_name {map_.boss_name!r} → zero OHE; add to _BOSS_NAME_TO_IDX")
 
     # Current room + chest kind OHE.
     # Skip the off-grid boss row (y_current == MAP_HEIGHT); act-boss identity above covers it.

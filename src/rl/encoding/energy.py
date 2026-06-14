@@ -14,8 +14,8 @@ def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
     energy_clamp = min(max(energy.energy_current, _ENERGY_MIN), _ENERGY_MAX)
     out[energy_clamp - _ENERGY_MIN] = 1.0
 
-    # Energy scalar
-    out[_ENERGY_MAX - _ENERGY_MIN + 1] = energy.energy_current / _ENERGY_MAX
+    # Energy scalar (clamped — energy_current can exceed _ENERGY_MAX via relics)
+    out[_ENERGY_MAX - _ENERGY_MIN + 1] = min(energy.energy_current / _ENERGY_MAX, 1.0)
 
 
 def encode_batch_energy(batch_energy: list[Energy], device: torch.device) -> torch.Tensor:
