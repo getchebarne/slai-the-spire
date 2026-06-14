@@ -52,10 +52,10 @@ def encode_health_block_into(
     out[pos + health_block_bucket] = 1.0
     pos += health_block_dim
 
-    # Scalars
-    out[pos] = health / health_max
-    out[pos + 1] = block / block_max
-    out[pos + 2] = health_block / health_block_max
+    # Scalars (clamped to [0, 1] — block can exceed block_max, e.g. 60 block vs cap 20)
+    out[pos] = min(health / health_max, 1.0)
+    out[pos + 1] = min(block / block_max, 1.0)
+    out[pos + 2] = min(health_block / health_block_max, 1.0)
     pos += 3
 
     return pos

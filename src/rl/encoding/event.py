@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import torch
 from slai import Event
@@ -17,6 +19,9 @@ _ENCODING_DIM_EVENT_OPTION = (
     + 1  # Gated out
     + ENCODING_DIM_EFFECTS  # Per-EffectKind effect blocks
 )
+
+# Event names whose option list overflowed the cap (warn-once per name)
+_WARNED_EVENT_TRUNCATED: set = set()
 
 
 def _encode_event_meta_into(event: Event, out: np.ndarray) -> None:
@@ -53,6 +58,13 @@ def encode_batch_events(
     for b, event in enumerate(batch_event):
         if event is None:
             continue
+
+        if len(event.options) > MAX_EVENT_OPTIONS and event.name not in _WARNED_EVENT_TRUNCATED:
+            _WARNED_EVENT_TRUNCATED.add(event.name)
+            warnings.warn(
+                f"Event {event.name!r} has {len(event.options)} options, truncated to"
+                f" encoder cap ({MAX_EVENT_OPTIONS})"
+            )
 
         _encode_event_meta_into(event, x_meta[b])
         for i, option in enumerate(event.options[:MAX_EVENT_OPTIONS]):

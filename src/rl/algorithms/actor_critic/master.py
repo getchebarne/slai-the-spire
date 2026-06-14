@@ -34,6 +34,7 @@ from src.rl.types import action_from_actiontype
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.types import TGameState
+from src.rl.types import NUM_ACTION_TYPES
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
@@ -77,6 +78,67 @@ class EpisodeStats:
     @property
     def total_reward(self) -> float:
         return float(self.stream_rewards.sum())
+
+
+# =============================================================================
+# Behavioral telemetry
+# =============================================================================
+
+# Behaviorally-loaded ActionTypes surfaced to TensorBoard (option_idx value ==
+# int(ActionType)). Names are resolved against the engine enum at import, so a
+# rename/removal in slai fails loudly here instead of silently mislabeling a tag.
+_TELEMETRY_ACTION_NAMES = (
+    "CardPurge",
+    "ShopPurge",  # P4 deck thinning
+    "ShopBuyCard",
+    "ShopBuyRelic",
+    "ShopBuyPotion",  # P3 shop spend
+    "RewardTakeGold",
+    "RewardTakePotion",
+    "RewardTakeCard",
+    "RewardTakeRelic",  # P2 loot
+    "PotionUse",
+    "PotionDiscard",  # P2 potions
+    "Rest",
+    "CardUpgrade",  # P1/P3 rest vs upgrade
+    "RoomSelect",
+    "TurnEnd",  # P3 routing / P5 turn end
+)
+_TELEMETRY_AT_IDX = {n: int(getattr(slai.ActionType, n)) for n in _TELEMETRY_ACTION_NAMES}
+_REWARD_TAKE_IDX = [
+    int(getattr(slai.ActionType, n))
+    for n in ("RewardTakeGold", "RewardTakePotion", "RewardTakeCard", "RewardTakeRelic")
+]
+_ROOM_EXIT_IDX = int(slai.ActionType.RoomExit)
+_POTION_AT_IDX = [int(slai.ActionType.PotionUse), int(slai.ActionType.PotionDiscard)]
+
+
+def _behavioral_metrics(buffer: "RolloutBuffer") -> dict[str, float]:
+    """Per-ActionType behavioral rates over a rollout (P1-P5 observability), all
+    derived from already-stored buffer fields. These are SAMPLED actions, so noisy;
+    the low-variance signal is the greedy eval battery. `cond_rate` = when the kind
+    was legal, how often it was chosen; `avail_rate` = how often the choice arose."""
+    opt = buffer.option_idx  # (N,) chosen L1 ActionType
+    avail = buffer.mask_batch.mask_action_type  # (N, NUM_ACTION_TYPES) bool legality
+    n = float(opt.shape[0])
+    chosen = torch.bincount(opt, minlength=NUM_ACTION_TYPES).float()
+    available = avail.sum(0).float()
+
+    metrics: dict[str, float] = {}
+    for name, idx in _TELEMETRY_AT_IDX.items():
+        a = available[idx].item()
+        metrics[f"Actions/avail_rate/{name}"] = a / n
+        metrics[f"Actions/cond_rate/{name}"] = chosen[idx].item() / a if a > 0 else 0.0
+
+    # Reward-skip: among steps where a RewardTake* was legal, fraction choosing RoomExit.
+    reward_avail = avail[:, _REWARD_TAKE_IDX].any(dim=1)
+    n_reward = reward_avail.sum().item()
+    if n_reward > 0:
+        skipped = ((opt == _ROOM_EXIT_IDX) & reward_avail).sum().item()
+        metrics["Actions/reward_skip_rate"] = skipped / n_reward
+    # Potion-held fraction: PotionUse/PotionDiscard are legal iff a potion is held.
+    metrics["Actions/potion_held_frac"] = avail[:, _POTION_AT_IDX].any(dim=1).float().mean().item()
+    return metrics
 
 
 # =============================================================================
@@ -241,6 +303,13 @@ def _collect_rollout(
     advantages = advantages.sum(-1)
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
+    # Surface the termination vs rollout-boundary-bootstrap split (the GAE truncation
+    # path): how many envs were still mid-episode at T and relied on V(s_T).
+    rollout_info = {
+        "Rollout/terminations": dones.sum().item(),
+        "Rollout/boundary_truncations": float(E) - dones[T - 1].sum().item(),
+    }
+
     return (
         RolloutBuffer(
             x_game_state=buf_x,
@@ -254,44 +323,91 @@ def _collect_rollout(
             advantages=advantages.reshape(-1, 1),
         ),
         env_mgr.drain_completed(),
+        rollout_info,
     )
 
 
 # Greedy deterministic play can loop; cap so a hung eval can't wedge its worker
 _EVAL_MAX_STEPS = 1000
+_EVAL_NUM_EPISODES = 64
+_EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance trend
 
 
-def _run_eval_episode(model: ActorCritic, device: torch.device, gamma: float) -> tuple[float, int]:
-    env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
-    obs = env.reset(seed=random.randint(0, 2**31 - 1))
-    total_reward = 0.0
-    length = 0
-    terminated = False
-    model.eval()
+def _run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) -> dict[str, float]:
+    """Greedy battery over a fixed seed set; returns outcome + behavioral metrics. Same
+    encode->mask->forward path as training/watch. Fixed seeds make it a consistent test
+    set across checkpoints (paired comparison; std/sqrt(N) variance, not the old 1/sqrt(1))."""
+    rewards: list[float] = []
+    lengths: list[int] = []
+    wins: list[bool] = []
+    floors: list[int] = []
+    chosen = torch.zeros(NUM_ACTION_TYPES)
+    available = torch.zeros(NUM_ACTION_TYPES)
+    n_reward = 0
+    n_reward_skip = 0
     with torch.no_grad():
-        while not terminated and length < _EVAL_MAX_STEPS:
-            legal = env.get_legal_actions()
-            if not legal:
-                break
-            x = encode_batch_game_state([obs], device)
-            mb = build_masks([obs], [legal], device)
-            out = model(x, mb, sample=False)
-            action = out.get_action(0)
-            prev = obs
-            obs, terminated = env.step(action)
-            total_reward += float(compute_reward(prev, obs, terminated, action, gamma).sum())
-            length += 1
-    model.train()
-    return total_reward, length
+        for seed in _EVAL_SEEDS:
+            env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
+            obs = env.reset(seed=seed)
+            total_reward = 0.0
+            length = 0
+            terminated = False
+            while not terminated and length < _EVAL_MAX_STEPS:
+                legal = env.get_legal_actions()
+                if not legal:
+                    break
+                x = encode_batch_game_state([obs], device)
+                mb = build_masks([obs], [legal], device)
+                out = model(x, mb, sample=False)
+                m = mb.mask_action_type[0]
+                at = int(out.option.idx[0].item())
+                chosen[at] += 1.0
+                available += m.float()
+                if m[_REWARD_TAKE_IDX].any():
+                    n_reward += 1
+                    if at == _ROOM_EXIT_IDX:
+                        n_reward_skip += 1
+                action = out.get_action(0)
+                prev = obs
+                obs, terminated = env.step(action)
+                total_reward += float(compute_reward(prev, obs, terminated, action, gamma).sum())
+                length += 1
+            rewards.append(total_reward)
+            lengths.append(length)
+            wins.append(bool(terminated and obs.character.health > 0))
+            floors.append(obs.map.y_current or 0)
+
+    n = len(rewards)
+    metrics: dict[str, float] = {
+        "Eval/win_rate": sum(wins) / n,
+        "Eval/avg_floor": sum(floors) / n,
+        "Eval/avg_length": sum(lengths) / n,
+        "Eval/reward_mean": float(np.mean(rewards)),
+        "Eval/reward_std": float(np.std(rewards)),
+    }
+    for name, idx in _TELEMETRY_AT_IDX.items():
+        a = available[idx].item()
+        metrics[f"Eval/cond_rate/{name}"] = chosen[idx].item() / a if a > 0 else 0.0
+    if n_reward > 0:
+        metrics["Eval/reward_skip_rate"] = n_reward_skip / n_reward
+    return metrics
 
 
-def _eval_worker(queue, model_config, state_dict, gamma, iteration) -> None:
-    """Run one greedy eval episode off the training critical path (spawned process)."""
+def _eval_battery_worker(conn, model_config, gamma) -> None:
+    """Persistent eval worker (mirrors _rollout_worker's lifecycle): receive (weights,
+    iteration), run the fixed-seed greedy battery, reply with metrics. `None` stops it.
+    One thread, so it rides the spare core off the training critical path."""
     torch.set_num_threads(1)
+    device = torch.device("cpu")
     model = ActorCritic(**model_config)
-    model.load_state_dict(state_dict)
-    reward, length = _run_eval_episode(model, torch.device("cpu"), gamma)
-    queue.put((iteration, reward, length))
+    model.eval()
+    while True:
+        msg = conn.recv()
+        if msg is None:
+            return
+        state_dict, iteration = msg
+        model.load_state_dict(state_dict)
+        conn.send((iteration, _run_eval_battery(model, device, gamma)))
 
 
 # =============================================================================
@@ -322,18 +438,20 @@ def _rollout_worker(conn, model_config, num_envs, rollout_length, gamma, lam, se
         if state_dict is None:
             return
         model.load_state_dict(state_dict)
-        buf, completed = _collect_rollout(model, env_mgr, rollout_length, gamma, lam, device)
+        buf, completed, rollout_info = _collect_rollout(
+            model, env_mgr, rollout_length, gamma, lam, device
+        )
         if shared is None:
             # First rollout defines the shared storage; the master keeps the handles
             # and clones out of them each iteration.
             for f in fields(RolloutBuffer):
                 getattr(buf, f.name).share_memory_()
             shared = buf
-            conn.send(("buffer", shared, completed))
+            conn.send(("buffer", shared, completed, rollout_info))
         else:
             for f in fields(RolloutBuffer):
                 getattr(shared, f.name).copy_(getattr(buf, f.name))
-            conn.send(("done", None, completed))
+            conn.send(("done", None, completed, rollout_info))
 
 
 # =============================================================================
@@ -403,14 +521,16 @@ def _update_ppo(
                 lv_clipped = torch.pow(values_clipped - returns, 2)
                 loss_value = 0.5 * torch.max(lv_unclipped, lv_clipped).sum(dim=-1).mean()
             else:
-                loss_value = F.mse_loss(values_new, returns, reduction="none").sum(dim=-1).mean()
+                # 0.5·MSE to match the clipped branch's canonical PPO scale; without it,
+                # toggling clip_value_loss silently 2x'd the effective critic weight.
+                loss_value = 0.5 * F.mse_loss(values_new, returns, reduction="none").sum(-1).mean()
 
             loss_entropy = -torch.mean(entropies.sum(dim=-1))
             loss = loss_policy + coef_value * loss_value + coef_entropy * loss_entropy
 
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
 
             totals["Loss/policy"] += loss_policy.item()
@@ -425,6 +545,7 @@ def _update_ppo(
                 ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item()
             )
             totals["Update/clip_fraction"] += ((ratio - 1).abs() > clip_eps).float().mean().item()
+            totals["Grad/norm_preclip"] += grad_norm.item()  # pre-clip total norm (else discarded)
             n += 1
     metrics = {k: v / n for k, v in totals.items()}
     for k, name in enumerate(REWARD_STREAMS):
@@ -480,11 +601,16 @@ def train(
     ckpt_path = f"experiments/{exp_name}/checkpoint.pth"
     iteration = start_iteration  # for the interrupt save, if it fires pre-loop
 
-    # Eval runs in a spawned side process (a greedy episode at B=1 can take minutes);
-    # results are drained and logged at their own iteration tags, one eval in flight.
+    # Eval runs a fixed-seed greedy battery in a persistent side process (mirrors the
+    # rollout worker): weights are sent on the save cadence and the aggregate metrics
+    # drained when ready, never blocking the training loop.
     eval_ctx = mp.get_context("spawn")
-    eval_queue = eval_ctx.Queue()
-    eval_proc = None
+    eval_conn, eval_child = eval_ctx.Pipe()
+    eval_proc = eval_ctx.Process(
+        target=_eval_battery_worker, args=(eval_child, model_config, gamma), daemon=True
+    )
+    eval_proc.start()
+    eval_busy = False
 
     # Overlapped mode: a worker collects rollout(t+1) while we update on rollout(t);
     # serial mode keeps the envs in-process (the A/B reference for the overlap flag).
@@ -519,13 +645,13 @@ def train(
             if overlap_rollout:
                 # Wait out whatever rollout time the update didn't hide, clone the
                 # shared buffer, and immediately restart the worker on fresh weights.
-                kind, payload, completed = worker_conn.recv()
+                kind, payload, completed, rollout_info = worker_conn.recv()
                 if kind == "buffer":
                     shared_buffer = payload
                 buffer = _buffer_clone(shared_buffer)
                 worker_conn.send(model.state_dict())
             else:
-                buffer, completed = _collect_rollout(
+                buffer, completed, rollout_info = _collect_rollout(
                     model, env_mgr, rollout_length, gamma, lam, device
                 )
             t_rollout = time.perf_counter()
@@ -544,6 +670,21 @@ def train(
                 device,
             )
             t_update = time.perf_counter()
+            # Eval battery (persistent worker): drain a finished one and, on the save
+            # cadence when idle, launch a new one - both non-blocking. Logged at eval_iter.
+            if eval_busy and eval_conn.poll():
+                eval_iter, eval_metrics = eval_conn.recv()
+                eval_busy = False
+                for key, value in eval_metrics.items():
+                    writer.add_scalar(key, value, eval_iter)
+                print(
+                    f"  eval@{eval_iter}: win_rate={eval_metrics['Eval/win_rate']:.3f} "
+                    f"floor={eval_metrics['Eval/avg_floor']:.2f} "
+                    f"reward={eval_metrics['Eval/reward_mean']:.4f}"
+                )
+            if iteration % save_every == 0 and not eval_busy:
+                eval_conn.send((model.state_dict(), iteration))
+                eval_busy = True
             if iteration % log_every == 0:
                 print(
                     f"Iter {iteration} | steps={total_steps} | "
@@ -557,6 +698,10 @@ def train(
                 writer.add_scalar("Time/rollout", t_rollout - t_start, iteration)
                 writer.add_scalar("Time/update", t_update - t_rollout, iteration)
                 writer.add_scalar("Pack/width", model.core.last_pack_width, iteration)
+                for key, value in _behavioral_metrics(buffer).items():
+                    writer.add_scalar(key, value, iteration)
+                for key, value in rollout_info.items():
+                    writer.add_scalar(key, value, iteration)
                 if completed:
                     avg_r = sum(e.total_reward for e in completed) / len(completed)
                     avg_l = sum(e.length for e in completed) / len(completed)
@@ -579,18 +724,6 @@ def train(
                         sum(e.floor for e in completed) / len(completed),
                         iteration,
                     )
-                while not eval_queue.empty():
-                    eval_iter, eval_reward, eval_length = eval_queue.get_nowait()
-                    print(f"  eval@{eval_iter}: reward={eval_reward:.4f}, length={eval_length}")
-                    writer.add_scalar("Eval/reward", eval_reward, eval_iter)
-                    writer.add_scalar("Eval/length", eval_length, eval_iter)
-                if eval_proc is None or not eval_proc.is_alive():
-                    eval_proc = eval_ctx.Process(
-                        target=_eval_worker,
-                        args=(eval_queue, model_config, model.state_dict(), gamma, iteration),
-                        daemon=True,
-                    )
-                    eval_proc.start()
             if iteration % save_every == 0:
                 _save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps)
     except KeyboardInterrupt:
@@ -600,6 +733,11 @@ def train(
         if overlap_rollout and rollout_worker.is_alive():
             try:
                 worker_conn.send(None)
+            except (BrokenPipeError, OSError):
+                pass
+        if eval_proc.is_alive():
+            try:
+                eval_conn.send(None)
             except (BrokenPipeError, OSError):
                 pass
     writer.close()

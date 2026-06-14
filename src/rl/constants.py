@@ -28,28 +28,6 @@ HEALTH_MAX_MONSTER = 250  # From The Guardian at Ascension 9+
 ENERGY_MIN = 0
 ENERGY_MAX = 5
 
-# Modifier stack limits (for normalization)
-MODIFIER_STACKS_MAX = {
-    "STRENGTH": 20,
-    "WEAK": 5,
-    "MODE_SHIFT": 60,
-    "RITUAL": 20,
-    "SHARP_HIDE": 3,
-    "SPORE_CLOUD": 2,
-    "VULNERABLE": 4,
-    "ACCURACY": 16,
-    "NEXT_TURN_BLOCK": 20,
-    "NEXT_TURN_ENERGY": 5,
-    "BLUR": 5,
-    "DEXTERITY": 12,
-    "INFINITE_BLADES": 5,
-    "AFTER_IMAGE": 3,
-    "PHANTASMAL": 2,
-    "DOUBLE_DAMAGE": 1,
-    "THOUSAND_CUTS": 4,
-    "BURST": 4,
-}
-
 
 import slai as _slai
 
@@ -108,7 +86,6 @@ __all__ = [
     "HEALTH_MAX_MONSTER",
     "ENERGY_MIN",
     "ENERGY_MAX",
-    "MODIFIER_STACKS_MAX",
     # Game constants
     "MAP_HEIGHT",
     "MAP_WIDTH",
