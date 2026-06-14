@@ -50,19 +50,13 @@ MODIFIER_STACKS_MAX = {
     "BURST": 4,
 }
 
-# =============================================================================
-# Game-shape constants — pulled from slai where it owns them; encoder-side
-# caps (deck / draw / disc piles) stay hardcoded since slai's piles are
-# unbounded.
-# =============================================================================
 
 import slai as _slai
-
 
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
-MAX_SIZE_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
+MAX_SIZE_REWARD_CARDS = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
 
 # Encoder-side caps. slai's deck and draw/discard piles grow unboundedly;
@@ -92,7 +86,7 @@ MAX_RELICS = 16
 # little headroom; masks/encoders enumerate up to these. slai shops offer
 # 7 cards / 3 relics / 3 potions; events up to ~9 options; discover ~3.
 MAX_POTION_SLOTS = 3  # belt default (2 at A11+; extra slot masked empty)
-MAX_SHOP_CARDS = 8
+MAX_SIZE_SHOP_CARDS = 8
 MAX_SHOP_RELICS = 4
 MAX_SHOP_POTIONS = 4
 MAX_EVENT_OPTIONS = 12
@@ -119,7 +113,7 @@ __all__ = [
     "MAP_HEIGHT",
     "MAP_WIDTH",
     "MAX_MONSTERS",
-    "MAX_SIZE_COMBAT_CARD_REWARD",
+    "MAX_SIZE_REWARD_CARDS",
     "MAX_SIZE_DECK",
     "MAX_SIZE_DISC_PILE",
     "MAX_SIZE_DRAW_PILE",
@@ -131,7 +125,7 @@ __all__ = [
     # Training flags + new-screen caps
     "FAST_MODE",
     "MAX_POTION_SLOTS",
-    "MAX_SHOP_CARDS",
+    "MAX_SIZE_SHOP_CARDS",
     "MAX_SHOP_RELICS",
     "MAX_SHOP_POTIONS",
     "MAX_EVENT_OPTIONS",

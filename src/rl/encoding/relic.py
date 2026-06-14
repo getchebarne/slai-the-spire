@@ -1,12 +1,16 @@
 import numpy as np
 import torch
+from slai import GameState
 from slai import Relic
 from slai import RelicName
 from slai import members
 
-from src.rl.constants import MAX_RELICS
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
+from src.rl.index import CLASS_SEGMENTS
+from src.rl.index import CLASS_SLICE
+from src.rl.index import NUM_CLASS_TOKENS
+from src.rl.index import EntityClass
 
 
 _RELIC_NAME_TO_IDX = {relic_name: i for i, relic_name in enumerate(members(RelicName))}
@@ -35,18 +39,24 @@ def encode_relic_into(relic: Relic, pos: int, out: np.ndarray) -> int:
 
 
 def encode_batch_relics(
-    batch_relics: list[list[Relic]], device: torch.device
+    batch_game_state: list[GameState], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    batch_size = len(batch_relics)
+    """Encode every relic segment (registry RELIC class) into one concatenated
+    (B, N_RELICS, ENCODING_DIM_RELIC) tensor + mask; segments live at their
+    index.CLASS_SLICE positions."""
+    batch_size = len(batch_game_state)
+    num_tokens = NUM_CLASS_TOKENS[EntityClass.RELIC]
 
     # Pre-allocate NumPy arrays
-    x_out = np.zeros((batch_size, MAX_RELICS, ENCODING_DIM_RELIC), dtype=np.float32)
-    x_pad = np.zeros((batch_size, MAX_RELICS), dtype=bool)
+    x_out = np.zeros((batch_size, num_tokens, ENCODING_DIM_RELIC), dtype=np.float32)
+    x_pad = np.zeros((batch_size, num_tokens), dtype=bool)
 
-    for b, relics in enumerate(batch_relics):
-        for i, relic in enumerate(relics):
-            encode_relic_into(relic, 0, x_out[b, i])
-            x_pad[b, i] = True
+    for b, game_state in enumerate(batch_game_state):
+        for spec in CLASS_SEGMENTS[EntityClass.RELIC]:
+            offset = CLASS_SLICE[spec.segment].start
+            for i, relic in enumerate(spec.getter(game_state)):
+                encode_relic_into(relic, 0, x_out[b, offset + i])
+                x_pad[b, offset + i] = True
 
     return (
         torch.from_numpy(x_out).to(device),

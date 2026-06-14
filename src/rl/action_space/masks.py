@@ -5,16 +5,16 @@ import slai
 import torch
 from tensordict import TensorDict
 
+from src.rl.index import POOL_SIZE
 from src.rl.types import AT_POOL
 from src.rl.types import NUM_ACTION_TYPES
-from src.rl.types import POOL_SIZE
 from src.rl.types import Pool
 from src.rl.types import SELECTING_ACTION_TYPES
 from src.rl.types import TMask
 from src.rl.constants import MAX_MONSTERS
 from src.rl.constants import MAX_POTION_SLOTS
-from src.rl.constants import MAX_SHOP_CARDS
-from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
+from src.rl.constants import MAX_SIZE_SHOP_CARDS
+from src.rl.constants import MAX_SIZE_REWARD_CARDS
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_HAND
@@ -37,12 +37,12 @@ def _pile_ids(state: slai.GameState, pool: int) -> list[int]:
         return card_identity_ids(state.deck[:MAX_SIZE_DECK])
     if pool == Pool.REWARD_CARDS:
         cards = state.reward.cards if state.reward is not None else []
-        return card_identity_ids(cards[:MAX_SIZE_COMBAT_CARD_REWARD])
+        return card_identity_ids(cards[:MAX_SIZE_REWARD_CARDS])
     if pool == Pool.DISCOVER:
         return card_identity_ids(state.discover[:MAX_SIZE_DISCOVER])
     if pool == Pool.SHOP_CARDS:
         cards = state.shop.cards if state.shop is not None else []
-        return card_identity_ids(cards[:MAX_SHOP_CARDS])
+        return card_identity_ids(cards[:MAX_SIZE_SHOP_CARDS])
     return []
 
 

@@ -10,12 +10,10 @@ Main exports:
 from src.rl.models.actor_critic import ActionBatch
 from src.rl.models.actor_critic import ActorCritic
 from src.rl.models.core import Core
-from src.rl.models.core import CoreOutput
 
 
 __all__ = [
     "ActorCritic",
     "ActionBatch",
     "Core",
-    "CoreOutput",
 ]

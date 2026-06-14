@@ -8,18 +8,6 @@ from slai import members
 from tensordict import TensorDict
 from tensordict import tensorclass
 
-from src.rl.constants import MAP_WIDTH
-from src.rl.constants import MAX_EVENT_OPTIONS
-from src.rl.constants import MAX_POTION_SLOTS
-from src.rl.constants import MAX_SHOP_CARDS
-from src.rl.constants import MAX_SHOP_POTIONS
-from src.rl.constants import MAX_SHOP_RELICS
-from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
-from src.rl.constants import MAX_SIZE_DECK
-from src.rl.constants import MAX_SIZE_DISCOVER
-from src.rl.constants import MAX_SIZE_HAND
-
-
 @tensorclass
 class TPadded:
     x: torch.Tensor  # (B, S, D) per-item features
@@ -27,88 +15,49 @@ class TPadded:
 
 
 @tensorclass
-class TCombat:
-    hand: TPadded
-    draw: TPadded
-    discard: TPadded
-    exhaust: TPadded
-    deck: TPadded
-    monsters: TPadded
-    energy: torch.Tensor
-    discover: TPadded
-
-
-@tensorclass
-class TReward:
-    cards: TPadded
-    relic: TPadded
-    potion: TPadded
-    meta: torch.Tensor
-
-
-@tensorclass
-class TShop:
-    cards: TPadded
-    card_prices: torch.Tensor
-    relics: TPadded
-    relic_prices: torch.Tensor
-    potions: TPadded
-    potion_prices: torch.Tensor
-    meta: torch.Tensor
-
-
-@tensorclass
-class TEvent:
-    meta: torch.Tensor
-    options: TPadded
-
-
-@tensorclass
 class TGameState:
-    # Persistent / cross-screen
-    character: torch.Tensor
+    """Encoded game state: one tensor per entity class (segments = the class-local
+    slices in index.CLASS_SLICE) + flat context blocks."""
+
+    # Per-class entity tensors, segment layout per src.rl.index
+    cards: TPadded
     relics: TPadded
     potions: TPadded
+    monsters: TPadded
+    event_options: TPadded
+    character: torch.Tensor  # flat singleton, always present
+    # Flat context
+    energy: torch.Tensor
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
     map_meta: torch.Tensor
     screen: torch.Tensor
-    # Per-screen
-    combat: TCombat
-    reward: TReward
-    shop: TShop
-    event: TEvent
+    reward_meta: torch.Tensor
+    shop_meta: torch.Tensor
+    event_meta: torch.Tensor
+    # Per-item shop prices, aligned with the shop segments (index.POOL_PRICE_FIELD)
+    shop_card_prices: torch.Tensor
+    shop_relic_prices: torch.Tensor
+    shop_potion_prices: torch.Tensor
 
 
 @tensorclass
-class TEntityProjection:
-    # Card piles
-    hand: TPadded
-    draw: TPadded
-    discard: TPadded
-    exhaust: TPadded
-    deck: TPadded
-    discover: TPadded
+class TCoreOutput:
+    """Core encoder output: refined entity tokens + global context for the heads.
 
-    # Combat actors
-    monsters: TPadded
-    character: torch.Tensor
+    `tokens` holds every entity token (B, index.NUM_TOKENS, dim_entity) in registry
+    order — consumers slice it with index.GLOBAL_SLICE; the learned global token is
+    stripped (its content lives in x_global). Context-only segments (relics piles,
+    draw/discard/exhaust, ...) reach x_global via attention and are simply never
+    sliced for selection. Shop prices pass through for the pointer price keys.
+    """
 
-    # Reward
-    reward_cards: TPadded
-    reward_relic: TPadded
-    reward_potion: TPadded
-
-    # Owned
-    relics: TPadded
-    potions: TPadded
-
-    # Shop items
-    shop_cards: TPadded
-    shop_relics: TPadded
-    shop_potions: TPadded
-
-    # Event
-    event_options: TPadded
+    x_global: torch.Tensor  # (B, dim_global)
+    x_screen: torch.Tensor  # (B, _ENCODING_DIM_SCREEN) raw flats — L1 GLU context
+    x_map: torch.Tensor  # (B, MAP_WIDTH, dim_map) — per-column embeddings
+    tokens: TPadded  # (B, NUM_TOKENS, dim_entity) refined entity tokens
+    shop_card_prices: torch.Tensor
+    shop_relic_prices: torch.Tensor
+    shop_potion_prices: torch.Tensor
 
 
 @tensorclass
@@ -151,24 +100,6 @@ class Pool(IntEnum):
     SHOP_RELICS = 7
     SHOP_POTIONS = 8
     EVENT_OPTIONS = 9
-
-
-# Max entities per pool, indexed by Pool. The only per-pool fact that isn't derivable from
-# the pool name: the head's CoreOutput tensor is `x_<pool>` and shop pools carry a price
-# (both resolved in actor_critic), and the dedup source pile lives in masks._pile_ids.
-POOL_SIZE: list[int] = [
-    MAX_SIZE_HAND,  # HAND
-    MAX_SIZE_DECK,  # DECK
-    MAX_POTION_SLOTS,  # POTIONS
-    MAP_WIDTH,  # MAP
-    MAX_SIZE_DISCOVER,  # DISCOVER
-    MAX_SIZE_COMBAT_CARD_REWARD,  # REWARD_CARDS
-    MAX_SHOP_CARDS,  # SHOP_CARDS
-    MAX_SHOP_RELICS,  # SHOP_RELICS
-    MAX_SHOP_POTIONS,  # SHOP_POTIONS
-    MAX_EVENT_OPTIONS,  # EVENT_OPTIONS
-]
-assert len(POOL_SIZE) == len(Pool), "POOL_SIZE must cover every Pool"
 
 
 # L2 selection pool per action type; types absent here are terminal (no selection). Keyed

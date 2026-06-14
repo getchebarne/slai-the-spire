@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 import torch
 from slai import Card
+from slai import GameState
 from slai import CardColor
 from slai import CardCostKind
 from slai import CardKind
@@ -12,6 +13,11 @@ from slai import members
 
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
+from src.rl.index import CLASS_SEGMENTS
+from src.rl.index import CLASS_SLICE
+from src.rl.index import NUM_CLASS_TOKENS
+from src.rl.index import EntityClass
+from src.rl.index import Segment
 
 # Enum maps
 _MAP_CARD_NAME = {card_name: i for i, card_name in enumerate(members(CardName))}
@@ -54,11 +60,11 @@ ENCODING_DIM_CARD = (
 _CARD_ROW_CACHE: dict[tuple[int, int], np.ndarray] = {}
 _CARD_ROW_CACHE_MAX = 100_000
 
-# Set tracking pile sizes that have triggered truncation warnings
-_WARNED_TRUNCATED: set[int] = set()
+# Set tracking card segments that have triggered truncation warnings
+_WARNED_TRUNCATED: set[Segment] = set()
 
 
-def encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray) -> int:
+def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray) -> int:
     # Name OHE
     out[pos + _MAP_CARD_NAME[card.name]] = 1.0
     pos += len(_MAP_CARD_NAME)
@@ -104,52 +110,61 @@ def encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray)
     return pos
 
 
-def encode_card_row(card: Card, energy_current: int, out_row: np.ndarray) -> None:
+def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -> None:
     cache_key = (card.identity_hash, energy_current)
     card_encoding = _CARD_ROW_CACHE.get(cache_key)
     if card_encoding is None:
         # Encode
-        encode_card_into(card, energy_current, 0, out_row)
+        _encode_card_into(card, energy_current, 0, out)
 
         # Guard the cached master copy against potential writes
-        out_row_copy = out_row.copy()
-        out_row_copy.flags.writeable = False
+        out_copy = out.copy()
+        out_copy.flags.writeable = False
 
         # Store master copy in the cache
         if len(_CARD_ROW_CACHE) >= _CARD_ROW_CACHE_MAX:
             _CARD_ROW_CACHE.clear()
 
-        _CARD_ROW_CACHE[cache_key] = out_row_copy
+        _CARD_ROW_CACHE[cache_key] = out_copy
     else:
-        out_row[:] = card_encoding
+        out[:] = card_encoding
 
 
 def encode_batch_cards(
-    batch_cards: list[list[Card]],
-    batch_energy_current: list[int],
-    max_size: int,
+    batch_game_state: list[GameState],
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    batch_size = len(batch_cards)
+    """Encode every card segment (registry CARD class) into one concatenated
+    (B, N_CARDS, ENCODING_DIM_CARD) tensor + mask; segments live at their
+    index.CLASS_SLICE positions."""
+    batch_size = len(batch_game_state)
+    num_tokens = NUM_CLASS_TOKENS[EntityClass.CARD]
 
     # Allocate arrays
-    x_out = np.zeros((batch_size, max_size, ENCODING_DIM_CARD), dtype=np.float32)
-    x_pad = np.zeros((batch_size, max_size), dtype=bool)
+    x_out = np.zeros((batch_size, num_tokens, ENCODING_DIM_CARD), dtype=np.float32)
+    x_pad = np.zeros((batch_size, num_tokens), dtype=bool)
 
-    for b, (cards, energy_current) in enumerate(zip(batch_cards, batch_energy_current)):
-        if len(cards) > max_size:
-            # Truncate
-            if max_size not in _WARNED_TRUNCATED:
-                _WARNED_TRUNCATED.add(max_size)
-                warnings.warn(f"Pile of {len(cards)} cards truncated to encoder cap ({max_size})")
+    for b, game_state in enumerate(batch_game_state):
+        for spec in CLASS_SEGMENTS[EntityClass.CARD]:
+            cards = spec.getter(game_state)
+            energy_current = spec.energy(game_state)
+            if len(cards) > spec.size:
+                # Truncate
+                if spec.segment not in _WARNED_TRUNCATED:
+                    _WARNED_TRUNCATED.add(spec.segment)
+                    warnings.warn(
+                        f"{spec.segment.name} pile of {len(cards)} cards truncated to"
+                        f" encoder cap ({spec.size})"
+                    )
 
-            cards = cards[:max_size]
+                cards = cards[: spec.size]
 
-        for i, card in enumerate(cards):
-            encode_card_row(card, energy_current, x_out[b, i])
+            offset = CLASS_SLICE[spec.segment].start
+            for i, card in enumerate(cards):
+                encode_card_into_w_cache(card, energy_current, x_out[b, offset + i])
 
-            # Tag mask
-            x_pad[b, i] = True
+                # Tag mask
+                x_pad[b, offset + i] = True
 
     return (
         torch.from_numpy(x_out).to(device),
