@@ -3,15 +3,6 @@ import torch
 from slai import Reward
 
 from src.rl.constants import GOLD_CAP
-from src.rl.constants import MAX_POTION_REWARDS
-from src.rl.constants import MAX_RELIC_REWARDS
-from src.rl.constants import MAX_SIZE_COMBAT_CARD_REWARD
-from src.rl.encoding.card import ENCODING_DIM_CARD
-from src.rl.encoding.card import encode_card_row
-from src.rl.encoding.potion import ENCODING_DIM_POTION
-from src.rl.encoding.potion import encode_potion_into
-from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.encoding.relic import encode_relic_into
 from src.rl.utils import get_sqrt_norm
 
 _GOLD_MAX = 100  # offered gold (monster 10-20, elite 25-44, chest 25-75); sqrt-scaled
@@ -28,53 +19,17 @@ def encode_batch_rewards(
     batch_reward: list[Reward | None],
     batch_gold: list[int],
     device: torch.device,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
+) -> torch.Tensor:
+    """Reward meta only — the offered card/relic/potion entities are encoded by
+    their entity-class encoders (reward segments per src.rl.index)."""
     batch_size = len(batch_reward)
 
-    # Pre-allocate NumPy arrays
-    x_card = np.zeros(
-        (batch_size, MAX_SIZE_COMBAT_CARD_REWARD, ENCODING_DIM_CARD), dtype=np.float32
-    )
-    x_card_pad = np.zeros((batch_size, MAX_SIZE_COMBAT_CARD_REWARD), dtype=bool)
-    x_relic = np.zeros((batch_size, MAX_RELIC_REWARDS, ENCODING_DIM_RELIC), dtype=np.float32)
-    x_relic_pad = np.zeros((batch_size, MAX_RELIC_REWARDS), dtype=bool)
-    x_potion = np.zeros((batch_size, MAX_POTION_REWARDS, ENCODING_DIM_POTION), dtype=np.float32)
-    x_potion_pad = np.zeros((batch_size, MAX_POTION_REWARDS), dtype=bool)
     x_meta = np.zeros((batch_size, _ENCODING_DIM_REWARD_META), dtype=np.float32)
 
     for b, reward in enumerate(batch_reward):
         if reward is None:
             continue
 
-        # Reward cards aren't played from here; energy_current is irrelevant -> 0
-        for i, card in enumerate(reward.cards):
-            encode_card_row(card, 0, x_card[b, i])
-            x_card_pad[b, i] = True
-
-        if reward.relic is not None:
-            encode_relic_into(reward.relic, 0, x_relic[b, 0])
-            x_relic_pad[b, 0] = True
-
-        if reward.potion is not None:
-            encode_potion_into(reward.potion, 0, x_potion[b, 0])
-            x_potion_pad[b, 0] = True
-
         _encode_reward_meta_into(reward, batch_gold[b], x_meta[b])
 
-    return (
-        torch.from_numpy(x_card).to(device),
-        torch.from_numpy(x_card_pad).to(device),
-        torch.from_numpy(x_relic).to(device),
-        torch.from_numpy(x_relic_pad).to(device),
-        torch.from_numpy(x_potion).to(device),
-        torch.from_numpy(x_potion_pad).to(device),
-        torch.from_numpy(x_meta).to(device),
-    )
+    return torch.from_numpy(x_meta).to(device)
