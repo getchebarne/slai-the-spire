@@ -48,7 +48,7 @@ ENCODING_DIM_MONSTER = (
 
 
 def _encode_monster_into(
-    monster: Monster, char_health: int, char_block: int, out: np.ndarray
+    monster: Monster, char_health: int, char_block: int, total_incoming: float, out: np.ndarray
 ) -> None:
     # Initialize current position pointer
     pos = 0
@@ -78,8 +78,10 @@ def _encode_monster_into(
     out[pos + 2] = float(monster.intent.kind in _INTENT_BLOCK_KINDS)
     out[pos + 3] = float(monster.intent.kind in _INTENT_BUFF_KINDS)
     out[pos + 4] = float(monster.intent.kind in _INTENT_DEBUFF_KINDS)
-    out[pos + 5] = float(total_damage <= char_block)
-    out[pos + 6] = float(total_damage >= char_health + char_block)
+    out[pos + 5] = float(total_damage <= char_block)  # this attacker fully blockable
+    # Turn-lethal: the WHOLE turn's incoming (all attackers) >= my HP + block, not just
+    # this monster's hit (which ignored the others, misleading in multi-attacker fights).
+    out[pos + 6] = float(total_incoming >= char_health + char_block)
     out[pos + 7] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
     out[pos + 8] = monster.health / max(monster.health_max, 1)
     pos += 9
@@ -102,12 +104,18 @@ def encode_batch_monsters(
     outgoing_damages = []
 
     for b, monsters in enumerate(batch_monster):
-        outgoing_damage = 0.0
+        # Total incoming this turn = sum over all attackers; drives the turn-lethal flag
+        # and is returned for the character encoder.
+        outgoing_damage = sum(
+            (monster.intent.damage or 0.0) * (monster.intent.instances or 1.0)
+            for monster in monsters
+        )
 
         for i, monster in enumerate(monsters):
-            _encode_monster_into(monster, batch_health[b], batch_block[b], x_out[b, i])
+            _encode_monster_into(
+                monster, batch_health[b], batch_block[b], outgoing_damage, x_out[b, i]
+            )
             x_pad[b, i] = True
-            outgoing_damage += (monster.intent.damage or 0.0) * (monster.intent.instances or 1.0)
 
         outgoing_damages.append(outgoing_damage)
 

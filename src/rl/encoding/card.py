@@ -1,23 +1,30 @@
 import warnings
+from typing import NamedTuple
 
 import numpy as np
 import torch
 from slai import Card
+from slai import Effect
 from slai import GameState
 from slai import CardColor
 from slai import CardCostKind
 from slai import CardKind
 from slai import CardName
 from slai import CardRarity
+from slai import ModifierKind
+from slai import Screen
 from slai import members
 
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
-from src.rl.index import CLASS_SEGMENTS
-from src.rl.index import CLASS_SLICE
-from src.rl.index import NUM_CLASS_TOKENS
-from src.rl.index import EntityClass
-from src.rl.index import Segment
+from src.rl.index import KIND_TOKENS
+from src.rl.index import LOCAL_SLICE
+from src.rl.index import NUM_KIND_TOKENS
+from src.rl.index import TOKEN_SIZE
+from src.rl.index import Token
+from src.rl.index import TokenContext
+from src.rl.index import TokenKind
+from src.rl.index import token_entities
 
 # Enum maps
 _MAP_CARD_NAME = {card_name: i for i, card_name in enumerate(members(CardName))}
@@ -34,8 +41,10 @@ _COST_MIN = 0
 _COST_MAX = 5
 _COST_VECTOR_DIM = _COST_MAX - _COST_MIN + 1
 
-# Encoding dimension
-ENCODING_DIM_CARD = (
+# Encoding dimension: identity+energy features (cached) + a per-step combat suffix
+# (modifier-adjusted block/damage + two decision bits) that depends on live combat
+# state, so it can't be identity-cached.
+ENCODING_DIM_CARD_CACHED = (
     len(_MAP_CARD_NAME)  # Name OHE
     + len(_MAP_CARD_KIND)  # Kind OHE
     + len(_MAP_CARD_COLOR)  # Color OHE
@@ -56,13 +65,30 @@ ENCODING_DIM_CARD = (
     + 1  # Cost zero-once (free-to-play-once)
     + 1  # Affordable (cost <= energy_current)
 )
+ENCODING_DIM_CARD_COMBAT = 4  # adj block, adj damage, covers-incoming, can-lethal
+ENCODING_DIM_CARD = ENCODING_DIM_CARD_CACHED + ENCODING_DIM_CARD_COMBAT
 
-# Encoding cache: a card's encoding depends only on (card.identity_hash, energy_current)
+# Combat-suffix normalization caps (Act-1 ranges)
+_ADJ_BLOCK_CAP = 40
+_ADJ_DMG_CAP = 40
+
+# Encoding cache: the identity+energy PREFIX depends only on (identity_hash, energy)
 _CARD_ROW_CACHE: dict[tuple[int, int], np.ndarray] = {}
 _CARD_ROW_CACHE_MAX = 100_000
+# Base (pre-modifier) damage/hits/block per identity, for the combat suffix
+_CARD_COMBAT_BASE_CACHE: dict[int, tuple[int, int, int]] = {}
 
-# Set tracking card segments that have triggered truncation warnings
-_WARNED_TRUNCATED: set[Segment] = set()
+# Set tracking card tokens that have triggered truncation warnings
+_WARNED_TRUNCATED: set[Token] = set()
+
+# The full owned deck is a valid token only in non-combat screens (deck-edit + shop/
+# reward synergy + map planning). In combat it's hidden — the same cards are visible
+# via the draw/hand/discard/exhaust piles (their union is the deck) under the shared
+# card projection. Skipping its encode here both saves the work AND masks it: the
+# skipped slots keep x_pad=False, which is the deck's visibility mask downstream.
+_DECK_SCREENS = frozenset(
+    {Screen.Map, Screen.Chest, Screen.RestSite, Screen.Shop, Screen.Reward, Screen.Event}
+)
 
 
 def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray) -> int:
@@ -114,58 +140,164 @@ def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray
     return pos
 
 
+# ---- Combat suffix (post-cache; depends on live monster + player-modifier state) ----
+
+
+class _CombatCtx(NamedTuple):
+    strength: int
+    dexterity: int
+    vigor: int
+    weak: bool
+    frail: bool
+    double_damage: bool
+    char_block: int
+    total_incoming: int
+    min_eff_hp: int  # min over monsters of (health + block); huge if none
+
+
+def _combat_context(game_state: GameState) -> _CombatCtx:
+    """Player attack/block modifiers + the turn's total incoming damage and weakest
+    monster, read once per state for the hand's combat suffix."""
+    mods = {m.kind: m.stacks for m in game_state.character.modifiers}
+    total_incoming = 0
+    min_eff_hp = 1_000_000
+    for monster in game_state.monsters:
+        intent = monster.intent
+        total_incoming += (intent.damage or 0) * (intent.instances or 1)
+        eff_hp = monster.health + monster.block
+        if eff_hp < min_eff_hp:
+            min_eff_hp = eff_hp
+    return _CombatCtx(
+        strength=mods.get(ModifierKind.Strength, 0),
+        dexterity=mods.get(ModifierKind.Dexterity, 0),
+        vigor=mods.get(ModifierKind.Vigor, 0),
+        weak=ModifierKind.Weak in mods,
+        frail=ModifierKind.Frail in mods,
+        double_damage=ModifierKind.DoubleDamage in mods,
+        char_block=game_state.character.block,
+        total_incoming=total_incoming,
+        min_eff_hp=min_eff_hp,
+    )
+
+
+def _card_combat_base(card: Card) -> tuple[int, int, int]:
+    """(base flat damage total, hit count, base block) from a card's effects — the
+    pre-modifier values. Identity-derived (effects are part of identity), so cached."""
+    base = _CARD_COMBAT_BASE_CACHE.get(card.identity_hash)
+    if base is None:
+        dmg = hits = block = 0
+        for effect in card.effects:
+            if isinstance(effect, Effect.DamagePhysical):
+                dmg += effect.amount
+                hits += 1
+            elif isinstance(effect, Effect.BlockGain):
+                block += effect.amount
+        base = (dmg, hits, block)
+        if len(_CARD_COMBAT_BASE_CACHE) >= _CARD_ROW_CACHE_MAX:
+            _CARD_COMBAT_BASE_CACHE.clear()
+        _CARD_COMBAT_BASE_CACHE[card.identity_hash] = base
+    return base
+
+
+def _encode_card_combat_into(card: Card, ctx: _CombatCtx, out: np.ndarray) -> None:
+    """Write the combat suffix into `out` (length ENCODING_DIM_CARD_COMBAT): the
+    modifier-adjusted block/damage this card would produce now plus two P1/P5 decision
+    bits. Replicates the engine scaling (utils.rs scale_attack_damage,
+    process_effect_block_gain.rs); target-agnostic (no Vulnerable/Intangible, set at L3)."""
+    base_dmg, hits, base_block = _card_combat_base(card)
+
+    # Block: (base + Dexterity) * 0.75^Frail, floored at 0.
+    adj_block = base_block + ctx.dexterity if base_block else 0
+    if ctx.frail:
+        adj_block = adj_block * 0.75
+    adj_block = max(0, int(adj_block))
+
+    # Damage: Strength + Vigor added per hit, * 0.75^Weak, * 2^DoubleDamage, floored.
+    if hits:
+        adj_dmg = base_dmg + (ctx.strength + max(ctx.vigor, 0)) * hits
+        if ctx.weak:
+            adj_dmg = adj_dmg * 0.75
+        if ctx.double_damage:
+            adj_dmg = adj_dmg * 2.0
+        adj_dmg = max(0, int(adj_dmg))
+    else:
+        adj_dmg = 0
+
+    out[0] = min(adj_block / _ADJ_BLOCK_CAP, 1.0)
+    out[1] = min(adj_dmg / _ADJ_DMG_CAP, 1.0)
+    # Covers remaining incoming: my block + this card's block >= the turn's total damage.
+    out[2] = float(ctx.char_block + adj_block >= ctx.total_incoming)
+    # Can lethal: this card's damage >= the weakest monster's effective HP.
+    out[3] = float(adj_dmg >= ctx.min_eff_hp)
+
+
 def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -> None:
+    """Write the cached identity+energy PREFIX into out[:ENCODING_DIM_CARD_CACHED]. The
+    combat suffix (out[ENCODING_DIM_CARD_CACHED:]) is written separately, post-cache."""
     cache_key = (card.identity_hash, energy_current)
-    card_encoding = _CARD_ROW_CACHE.get(cache_key)
-    if card_encoding is None:
-        # Encode
-        _encode_card_into(card, energy_current, 0, out)
-
-        # Guard the cached master copy against potential writes
-        out_copy = out.copy()
-        out_copy.flags.writeable = False
-
-        # Store master copy in the cache
+    prefix = _CARD_ROW_CACHE.get(cache_key)
+    if prefix is None:
+        prefix = np.zeros(ENCODING_DIM_CARD_CACHED, dtype=np.float32)
+        _encode_card_into(card, energy_current, 0, prefix)
+        prefix.flags.writeable = False  # guard the cached master copy
         if len(_CARD_ROW_CACHE) >= _CARD_ROW_CACHE_MAX:
             _CARD_ROW_CACHE.clear()
-
-        _CARD_ROW_CACHE[cache_key] = out_copy
-    else:
-        out[:] = card_encoding
+        _CARD_ROW_CACHE[cache_key] = prefix
+    out[:ENCODING_DIM_CARD_CACHED] = prefix
 
 
 def encode_batch_cards(
     batch_game_state: list[GameState],
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Encode every card segment (registry CARD class) into one concatenated
-    (B, N_CARDS, ENCODING_DIM_CARD) tensor + mask; segments live at their
-    index.CLASS_SLICE positions."""
+    """Encode every card token (registry CARD kind) into one concatenated
+    (B, N_CARDS, ENCODING_DIM_CARD) tensor + mask; tokens live at their
+    index.LOCAL_SLICE positions."""
     batch_size = len(batch_game_state)
-    num_tokens = NUM_CLASS_TOKENS[EntityClass.CARD]
+    num_tokens = NUM_KIND_TOKENS[TokenKind.CARD]
 
     # Allocate arrays
     x_out = np.zeros((batch_size, num_tokens, ENCODING_DIM_CARD), dtype=np.float32)
     x_pad = np.zeros((batch_size, num_tokens), dtype=bool)
 
     for b, game_state in enumerate(batch_game_state):
-        for spec in CLASS_SEGMENTS[EntityClass.CARD]:
-            cards = spec.getter(game_state)
-            energy_current = spec.energy(game_state)
-            if len(cards) > spec.size:
+        for token in KIND_TOKENS[TokenKind.CARD]:
+            # Deck is hidden in combat (cards visible via the piles); skipping the
+            # encode leaves x_pad=False, which is its visibility mask.
+            if (
+                token == Token(TokenKind.CARD, TokenContext.OWNED)
+                and game_state.screen not in _DECK_SCREENS
+            ):
+                continue
+
+            cards = token_entities(token, game_state)
+            energy_current = game_state.energy.energy_current
+            token_size = TOKEN_SIZE[token]
+            if len(cards) > token_size:
                 # Truncate
-                if spec.segment not in _WARNED_TRUNCATED:
-                    _WARNED_TRUNCATED.add(spec.segment)
+                if token not in _WARNED_TRUNCATED:
+                    _WARNED_TRUNCATED.add(token)
                     warnings.warn(
-                        f"{spec.segment.name} pile of {len(cards)} cards truncated to"
-                        f" encoder cap ({spec.size})"
+                        f"{token.context.name} pile of {len(cards)} cards truncated to"
+                        f" encoder cap ({token_size})"
                     )
 
-                cards = cards[: spec.size]
+                cards = cards[:token_size]
 
-            offset = CLASS_SLICE[spec.segment].start
+            offset = LOCAL_SLICE[token].start
+            # Combat suffix only on the hand (the playable cards): modifier-adjusted
+            # block/damage + decision bits for THIS turn. ctx is read once per state.
+            ctx = (
+                _combat_context(game_state)
+                if token.context == TokenContext.HAND and cards
+                else None
+            )
             for i, card in enumerate(cards):
                 encode_card_into_w_cache(card, energy_current, x_out[b, offset + i])
+                if ctx is not None:
+                    _encode_card_combat_into(
+                        card, ctx, x_out[b, offset + i, ENCODING_DIM_CARD_CACHED:]
+                    )
 
                 # Tag mask
                 x_pad[b, offset + i] = True

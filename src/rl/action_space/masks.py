@@ -5,18 +5,17 @@ import slai
 import torch
 from tensordict import TensorDict
 
-from src.rl.index import POOL_SIZE
-from src.rl.types import AT_POOL
+from src.rl.index import TOKEN_SIZE
+from src.rl.index import Token
+from src.rl.index import TokenKind
+from src.rl.index import token_entities
+from src.rl.types import AT_SIZE
+from src.rl.types import AT_TARGET
 from src.rl.types import NUM_ACTION_TYPES
-from src.rl.types import Pool
 from src.rl.types import SELECTING_ACTION_TYPES
 from src.rl.types import TMask
 from src.rl.constants import MAX_MONSTERS
 from src.rl.constants import MAX_POTION_SLOTS
-from src.rl.constants import MAX_SIZE_SHOP_CARDS
-from src.rl.constants import MAX_SIZE_REWARD_CARDS
-from src.rl.constants import MAX_SIZE_DECK
-from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_HAND
 
 
@@ -28,26 +27,14 @@ def card_identity_ids(cards: list[slai.Card]) -> list[int]:
     return [seen.setdefault(card.identity_hash, len(seen)) for card in cards]
 
 
-def _pile_ids(state: slai.GameState, pool: int) -> list[int]:
-    """Identity group-ids for the pool's dedup source pile; [] if the pool doesn't dedup
-    (only card piles dedup — copies of the same card collapse to one selectable slot)."""
-    if pool == Pool.HAND:
-        return card_identity_ids(state.hand[:MAX_SIZE_HAND])
-    if pool == Pool.DECK:
-        return card_identity_ids(state.deck[:MAX_SIZE_DECK])
-    if pool == Pool.REWARD_CARDS:
-        cards = state.reward.cards if state.reward is not None else []
-        return card_identity_ids(cards[:MAX_SIZE_REWARD_CARDS])
-    if pool == Pool.DISCOVER:
-        return card_identity_ids(state.discover[:MAX_SIZE_DISCOVER])
-    if pool == Pool.SHOP_CARDS:
-        cards = state.shop.cards if state.shop is not None else []
-        return card_identity_ids(cards[:MAX_SIZE_SHOP_CARDS])
-    return []
+def _pile_ids(state: slai.GameState, target: "Token | object") -> list[int]:
+    """Identity group-ids for a card target's dedup source pile; [] if the target doesn't
+    dedup (only card piles dedup — copies of the same card collapse to one selectable slot).
+    The dedup pile is exactly the target token's entities (truncated to its cap)."""
+    if not isinstance(target, Token) or target.kind != TokenKind.CARD:
+        return []
+    return card_identity_ids(token_entities(target, state)[: TOKEN_SIZE[target]])
 
-
-_POOL_HAND = int(Pool.HAND)
-_POOL_POTIONS = int(Pool.POTIONS)
 
 # Action types we've already warned about dropping (selection index beyond the
 # encoder's pool cap) — truncation must never be silent.
@@ -64,9 +51,7 @@ def build_masks(
     legal entities go in its own L2 mask (legality is per type, deduped per pool)."""
     B = len(states)
     action_type_np = np.zeros((B, NUM_ACTION_TYPES), dtype=bool)
-    sel_np = {
-        at: np.zeros((B, POOL_SIZE[AT_POOL[at]]), dtype=bool) for at in SELECTING_ACTION_TYPES
-    }
+    sel_np = {at: np.zeros((B, AT_SIZE[at]), dtype=bool) for at in SELECTING_ACTION_TYPES}
     card_tgt_np = np.zeros((B, MAX_SIZE_HAND, MAX_MONSTERS), dtype=bool)
     potion_tgt_np = np.zeros((B, MAX_POTION_SLOTS, MAX_MONSTERS), dtype=bool)
 
@@ -74,9 +59,9 @@ def build_masks(
         for action in legal_actions_batch[i]:
             at = int(action.action_type)
             idxs = action.idxs
-            pool = AT_POOL[at]
-            if pool >= 0 and idxs:
-                if idxs[0] >= POOL_SIZE[pool]:
+            target = AT_TARGET[at]
+            if target is not None and idxs:
+                if idxs[0] >= AT_SIZE[at]:
                     # Beyond the encoder cap: unselectable, so don't legalize its
                     # L1 kind off it either (a legal kind with an all-False L2 mask
                     # would NaN the selection Categorical).
@@ -84,14 +69,14 @@ def build_masks(
                         _WARNED_DROPPED.add(at)
                         warnings.warn(
                             f"Dropped legal action: type={at} idx={idxs[0]} exceeds "
-                            f"pool cap {POOL_SIZE[pool]} (see constants.MAX_SIZE_*)"
+                            f"pool cap {AT_SIZE[at]} (see constants.MAX_SIZE_*)"
                         )
                     continue
                 sel_np[at][i, idxs[0]] = True  # per ACTION TYPE — legality differs per type
                 if len(idxs) == 2 and idxs[1] < MAX_MONSTERS:
-                    if pool == _POOL_HAND:
+                    if target.kind == TokenKind.CARD:
                         card_tgt_np[i, idxs[0], idxs[1]] = True
-                    elif pool == _POOL_POTIONS:
+                    elif target.kind == TokenKind.POTION:
                         potion_tgt_np[i, idxs[0], idxs[1]] = True
             action_type_np[i, at] = True  # L1: every legal kind the masks can express
         if not action_type_np[i].any():
@@ -106,15 +91,15 @@ def build_masks(
         # only the first occurrence of each card identity (copies collapse to one).
         # Non-deduping pools return [] from _pile_ids, so the empty check skips them.
         for at in SELECTING_ACTION_TYPES:
-            pool = AT_POOL[at]
+            target = AT_TARGET[at]
             row = sel_np[at][i]
             if not row.any():
                 continue
-            ids = _pile_ids(state, pool)
+            ids = _pile_ids(state, target)
             if not ids:
                 continue
             seen: set = set()
-            for slot in range(min(len(ids), POOL_SIZE[pool])):
+            for slot in range(min(len(ids), AT_SIZE[at])):
                 if not row[slot]:
                     continue
                 if ids[slot] in seen:

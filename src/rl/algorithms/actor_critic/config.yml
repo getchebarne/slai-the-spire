@@ -1,9 +1,9 @@
-exp_name: ppo/NEWERA-X  # dim_key 32->64 (fallback rung a: IX showed shared-space interference, win gap vs VII)
+exp_name: ppo/NEWERA-XI  # dim_key 32->64 (fallback rung a: IX showed shared-space interference, win gap vs VII)
 seed: 0
 num_iterations: 5.0e+4
 log_every: 10
 save_every: 100
-gamma: 0.995
+gamma: 0.998  # b/item-7: longer horizon (~500 steps) for economy/deck-thinning credit
 lam: 0.95
 coef_value: 0.500
 coef_entropy_max: 0.010

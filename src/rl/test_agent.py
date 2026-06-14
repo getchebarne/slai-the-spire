@@ -22,7 +22,9 @@ _INTENT_DEBUFF_KINDS = frozenset(
 )
 
 from src.rl.index import GLOBAL_SLICE
-from src.rl.index import Segment
+from src.rl.index import Token
+from src.rl.index import TokenContext
+from src.rl.index import TokenKind
 from src.rl.types import TMask
 from src.rl.action_space.masks import build_masks
 from src.rl.constants import ASCENSION_LEVEL
@@ -351,7 +353,9 @@ def get_card_probabilities(
     x_op = model.operation_embedding(
         torch.tensor([int(slai.ActionType.CardPlay)], device=mask.device)
     )
-    keys = model.pointer_keys["CARD"](core_out.tokens.x[:, GLOBAL_SLICE[Segment.HAND]])
+    keys = model.pointer_keys["CARD"](
+        core_out.tokens.x[:, GLOBAL_SLICE[Token(TokenKind.CARD, TokenContext.HAND)]]
+    )
     head_out = model.query_l2(keys, core_out.x_global, x_op, mask)
     masked = head_out.logits.masked_fill(~mask, float("-inf"))
     probs = torch.softmax(masked, dim=-1)

@@ -1,9 +1,6 @@
 import torch
 from slai import GameState
-from slai import Screen
 
-from src.rl.index import CLASS_SLICE
-from src.rl.index import Segment
 from src.rl.types import TGameState
 from src.rl.types import TPadded
 from src.rl.encoding.card import encode_batch_cards
@@ -18,14 +15,6 @@ from src.rl.encoding.relic import encode_batch_relics
 from src.rl.encoding.reward import encode_batch_rewards
 from src.rl.encoding.screen import encode_batch_screen
 from src.rl.encoding.shop import encode_batch_shop
-
-
-# Deck is the full owned deck (non-empty every screen); a valid token in every
-# non-combat screen (deck-edit + shop/reward synergy + map-path planning), masked
-# only in combat so card plays aren't diluted by the deck tokens.
-_DECK_SCREENS = frozenset(
-    {Screen.Map, Screen.Chest, Screen.RestSite, Screen.Shop, Screen.Reward, Screen.Event}
-)
 
 
 def encode_batch_game_state(batch_game_state: list[GameState], device: torch.device) -> TGameState:
@@ -75,12 +64,8 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
     relics_x, relics_mask = encode_batch_relics(batch_game_state, device)
     potions_x, potions_mask = encode_batch_potions(batch_game_state, device)
 
-    # Deck cards: only a valid token in deck-building screens (see _DECK_SCREENS)
-    deck_screen = torch.tensor(
-        [game_state.screen in _DECK_SCREENS for game_state in batch_game_state], device=device
-    )
-    cards_mask[:, CLASS_SLICE[Segment.DECK]] &= deck_screen.unsqueeze(1)
-
+    # Deck visibility (token only in deck-building screens; hidden in combat) is enforced
+    # in encode_batch_cards, which skips the deck encode in combat -> x_pad False there.
     return TGameState(
         cards=TPadded(cards_x, cards_mask, batch_size=batch_size),
         relics=TPadded(relics_x, relics_mask, batch_size=batch_size),

@@ -177,7 +177,7 @@ class EnvironmentManager:
     def step(self, env_idx: int, action) -> tuple[np.ndarray, bool]:
         prev = self._obs[env_idx]
         nxt, terminated = self._envs[env_idx].step(action)
-        reward = compute_reward(prev, nxt, terminated, action, self._gamma)  # (K,)
+        reward = compute_reward(prev, nxt, terminated, self._gamma)  # (K,)
         self._ep_rewards[env_idx] += reward
         self._ep_lengths[env_idx] += 1
         if terminated:
@@ -370,7 +370,7 @@ def _run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) ->
                 action = out.get_action(0)
                 prev = obs
                 obs, terminated = env.step(action)
-                total_reward += float(compute_reward(prev, obs, terminated, action, gamma).sum())
+                total_reward += float(compute_reward(prev, obs, terminated, gamma).sum())
                 length += 1
             rewards.append(total_reward)
             lengths.append(length)
