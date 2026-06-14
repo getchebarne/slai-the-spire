@@ -7,12 +7,21 @@ from src.rl.encoding.event import _ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.types import TEntityProjection
+from src.rl.index import NUM_TOKENS
+from src.rl.index import EntityClass
 from src.rl.types import TGameState
 from src.rl.types import TPadded
 
 
 class EntityProjector(nn.Module):
+    """One shared projection per entity class into the entity-embedding space.
+
+    The encoding layer delivers each class pre-concatenated (segments per
+    src.rl.index), so projection is one sparse GEMM per class — no cat/split.
+    Emits the single token tensor (B, index.NUM_TOKENS, dim_embedding) with the
+    class blocks in registry order.
+    """
+
     def __init__(self, dim_embedding: int):
         super().__init__()
 
@@ -28,73 +37,41 @@ class EntityProjector(nn.Module):
 
         self._norm = nn.LayerNorm(dim_embedding)
 
-    def forward(self, x: TGameState) -> TEntityProjection:
+    def forward(self, x: TGameState) -> TPadded:
         batch_size = x.batch_size
 
-        hand, draw, discard, exhaust, deck, discover, reward_cards, shop_cards = _forward_grouped(
-            self._proj_card,
-            self._norm,
-            [
-                x.combat.hand,
-                x.combat.draw,
-                x.combat.discard,
-                x.combat.exhaust,
-                x.combat.deck,
-                x.combat.discover,
-                x.reward.cards,
-                x.shop.cards,
-            ],
-            self._dim_embedding,
-        )
-        relics, reward_relic, shop_relics = _forward_grouped(
-            self._proj_relic,
-            self._norm,
-            [x.relics, x.reward.relic, x.shop.relics],
-            self._dim_embedding,
-        )
-        potions, reward_potion, shop_potions = _forward_grouped(
-            self._proj_potion,
-            self._norm,
-            [x.potions, x.reward.potion, x.shop.potions],
-            self._dim_embedding,
-        )
-        monsters = _project_sparse(
-            self._proj_monster, self._norm, x.combat.monsters, self._dim_embedding
-        )
-        event_options = _project_sparse(
-            self._proj_event_option, self._norm, x.event.options, self._dim_embedding
+        # Character is the only singleton entity (flat, always valid)
+        character = TPadded(
+            torch.unsqueeze(self._norm(self._proj_character(x.character)), 1),
+            torch.ones(batch_size[0], 1, dtype=torch.bool, device=x.character.device),
         )
 
-        # Character is the only singleton entity
-        character = self._norm(self._proj_character(x.character))
+        class_projections: dict[EntityClass, TPadded] = {
+            EntityClass.CARD: _project_sparse(
+                self._proj_card, self._norm, x.cards, self._dim_embedding
+            ),
+            EntityClass.RELIC: _project_sparse(
+                self._proj_relic, self._norm, x.relics, self._dim_embedding
+            ),
+            EntityClass.POTION: _project_sparse(
+                self._proj_potion, self._norm, x.potions, self._dim_embedding
+            ),
+            EntityClass.MONSTER: _project_sparse(
+                self._proj_monster, self._norm, x.monsters, self._dim_embedding
+            ),
+            EntityClass.EVENT: _project_sparse(
+                self._proj_event_option, self._norm, x.event_options, self._dim_embedding
+            ),
+            EntityClass.CHARACTER: character,
+        }
 
-        return TEntityProjection(
-            # Card piles
-            hand=hand,
-            draw=draw,
-            discard=discard,
-            exhaust=exhaust,
-            deck=deck,
-            discover=discover,
-            # Combat actors
-            monsters=monsters,
-            character=character,
-            # Reward
-            reward_cards=reward_cards,
-            reward_relic=reward_relic,
-            reward_potion=reward_potion,
-            # Owned
-            relics=relics,
-            potions=potions,
-            # Shop items
-            shop_cards=shop_cards,
-            shop_relics=shop_relics,
-            shop_potions=shop_potions,
-            # Event
-            event_options=event_options,
-            batch_size=batch_size,
-            # TODO: add `all`, contained all concatenated entities and their masks
-        )
+        # Class blocks are contiguous in registry order, so the cat lands every
+        # segment at its index.GLOBAL_SLICE position
+        x_out = torch.cat([class_projections[c].x for c in EntityClass], dim=1)
+        mask = torch.cat([class_projections[c].mask for c in EntityClass], dim=1)
+        assert x_out.shape[1] == NUM_TOKENS
+
+        return TPadded(x_out, mask, batch_size=batch_size)
 
 
 def _get_projection(dim_in: int, dim_embedding: int) -> nn.Sequential:
@@ -129,33 +106,3 @@ def _project_sparse(
     # Reshape to original (B, S, D)
     x_out = x_out.reshape(batch_size, num_entities, dim_embedding)
     return TPadded(x_out, mask)
-
-
-# TODO: also return concatenated `x_out`. Return tensor of all projected entities
-def _forward_grouped(
-    proj: nn.Module,
-    norm: nn.Module,
-    tensors_padded: list[TPadded],
-    dim_embedding: int,
-) -> list[TPadded]:
-    # Concatenate all tensors and their masks preserving order
-    xs = []
-    masks = []
-    for tensor_padded in tensors_padded:
-        xs.append(tensor_padded.x)
-        masks.append(tensor_padded.mask)
-
-    x_cat = torch.cat(xs, dim=1)
-    mask_cat = torch.cat(masks, dim=1)
-
-    # Project valid rows over the concatenated group
-    x_out = _project_sparse(proj, norm, TPadded(x_cat, mask_cat), dim_embedding).x
-
-    # Split back into the original per-source sequences
-    x_out_splits = torch.split(
-        x_out, [tensor_padded.x.shape[1] for tensor_padded in tensors_padded], dim=1
-    )
-    return [
-        TPadded(x_out_split, tensor_padded.mask)
-        for x_out_split, tensor_padded in zip(x_out_splits, tensors_padded)
-    ]

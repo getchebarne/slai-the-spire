@@ -16,11 +16,15 @@ The total action log-prob is option + selection + target.
 
 import math
 from dataclasses import dataclass
-from operator import attrgetter
 
 import torch
 import torch.nn as nn
 
+from src.rl.index import GLOBAL_SLICE
+from src.rl.index import POOL_PRICE_FIELD
+from src.rl.index import POOL_SEGMENT
+from src.rl.index import SPEC
+from src.rl.index import Segment
 from src.rl.types import TMask
 from src.rl.types import AT_MAY_TARGET
 from src.rl.types import AT_POOL
@@ -40,19 +44,11 @@ from src.rl.reward import REWARD_STREAMS
 
 # Pointer-key entity class per pool: pools of one class share a key projection,
 # so the same entity gets the same base key in every selection context (shop
-# pools add a separate price-key term on top).
+# pools add a separate price-key term on top). Derived from the registry; MAP is
+# not a token segment and keys off the map encoder's columns.
 POOL_KEY_CLASS: dict[Pool, str] = {
-    Pool.HAND: "CARD",
-    Pool.DECK: "CARD",
-    Pool.DISCOVER: "CARD",
-    Pool.REWARD_CARDS: "CARD",
-    Pool.SHOP_CARDS: "CARD",
-    Pool.POTIONS: "POTION",
-    Pool.SHOP_POTIONS: "POTION",
-    Pool.SHOP_RELICS: "RELIC",
-    Pool.EVENT_OPTIONS: "EVENT",
-    Pool.MAP: "MAP",
-}
+    pool: SPEC[segment].entity_class.name for pool, segment in POOL_SEGMENT.items()
+} | {Pool.MAP: "MAP"}
 
 
 @dataclass
@@ -160,17 +156,10 @@ class ActorCritic(nn.Module):
         )
 
         # L2/L3: pointer selection — per-entity-class key projections (POOL_KEY_CLASS;
-        # MONSTER serves L3) + one shared query net per level. Shop pools' CoreOutput
-        # tensors carry [entity ‖ price]; the entity part goes through its class keys
-        # and the price through an additive price-key term. The bound getter resolves
-        # each pool's CoreOutput tensor once, so scoring has no runtime getattr-by-string.
+        # MONSTER serves L3) + one shared query net per level. Every pool except MAP
+        # is a segment slice of the refined token tensor (index.POOL_SEGMENT); shop
+        # pools add an additive price-key term over their price tensors.
         self.operation_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
-        self._dim_entity = dim_entity
-        self._pool_get: dict = {}
-        for pool in Pool:
-            self._pool_get[pool] = attrgetter(
-                "x_" + pool.name.lower()
-            )  # CoreOutput tensor for this pool
         self.pointer_keys = nn.ModuleDict(
             {
                 "CARD": PointerKeys(dim_entity, dim_key),
@@ -229,14 +218,13 @@ class ActorCritic(nn.Module):
         from the shared L2 query net conditioned on the ActionType embedding."""
         pool = Pool(AT_POOL[at])
         mask = mask_batch.mask_action_idx[str(at)][rows]
-        pool_tensor = self._pool_get[pool](core_out)[rows]
-        key_proj = self.pointer_keys[POOL_KEY_CLASS[pool]]
-        if pool.name.startswith("SHOP"):  # CoreOutput shop tensors are [entity ‖ price]
-            keys = key_proj(pool_tensor[..., : self._dim_entity]) + self.price_keys(
-                pool_tensor[..., self._dim_entity:]
-            )
+        if pool is Pool.MAP:
+            pool_tensor = core_out.x_map[rows]
         else:
-            keys = key_proj(pool_tensor)
+            pool_tensor = core_out.tokens.x[:, GLOBAL_SLICE[POOL_SEGMENT[pool]]][rows]
+        keys = self.pointer_keys[POOL_KEY_CLASS[pool]](pool_tensor)
+        if pool in POOL_PRICE_FIELD:  # shop pools: additive price-key term
+            keys = keys + self.price_keys(getattr(core_out, POOL_PRICE_FIELD[pool])[rows])
         x_op = self.operation_embedding(torch.full_like(rows, at))
         logits = self.query_l2(keys, core_out.x_global[rows], x_op, mask).logits
         return self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
@@ -254,11 +242,10 @@ class ActorCritic(nn.Module):
             return None
         tsub = rows[tl]
         mask = monster_mask[tl]
-        if pool == Pool.HAND:
-            x_active = core_out.x_hand[tsub, sel_idx[tl]]
-        else:
-            x_active = core_out.x_potions[tsub, sel_idx[tl]]
-        keys = self.pointer_keys["MONSTER"](core_out.x_monsters[tsub])
+        x_active = core_out.tokens.x[:, GLOBAL_SLICE[POOL_SEGMENT[pool]]][tsub, sel_idx[tl]]
+        keys = self.pointer_keys["MONSTER"](
+            core_out.tokens.x[:, GLOBAL_SLICE[Segment.MONSTERS]][tsub]
+        )
         logits = self.query_l3(keys, core_out.x_global[tsub], x_active, mask).logits
         rec_idx = rec_tgt[tl] if rec_tgt is not None else None
         idx, lp, ent = self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
