@@ -8,7 +8,7 @@ from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.index import NUM_TOKENS
-from src.rl.index import EntityClass
+from src.rl.index import TokenKind
 from src.rl.types import TGameState
 from src.rl.types import TPadded
 
@@ -46,29 +46,29 @@ class EntityProjector(nn.Module):
             torch.ones(batch_size[0], 1, dtype=torch.bool, device=x.character.device),
         )
 
-        class_projections: dict[EntityClass, TPadded] = {
-            EntityClass.CARD: _project_sparse(
+        class_projections: dict[TokenKind, TPadded] = {
+            TokenKind.CARD: _project_sparse(
                 self._proj_card, self._norm, x.cards, self._dim_embedding
             ),
-            EntityClass.RELIC: _project_sparse(
+            TokenKind.RELIC: _project_sparse(
                 self._proj_relic, self._norm, x.relics, self._dim_embedding
             ),
-            EntityClass.POTION: _project_sparse(
+            TokenKind.POTION: _project_sparse(
                 self._proj_potion, self._norm, x.potions, self._dim_embedding
             ),
-            EntityClass.MONSTER: _project_sparse(
+            TokenKind.MONSTER: _project_sparse(
                 self._proj_monster, self._norm, x.monsters, self._dim_embedding
             ),
-            EntityClass.EVENT: _project_sparse(
+            TokenKind.EVENT: _project_sparse(
                 self._proj_event_option, self._norm, x.event_options, self._dim_embedding
             ),
-            EntityClass.CHARACTER: character,
+            TokenKind.CHARACTER: character,
         }
 
         # Class blocks are contiguous in registry order, so the cat lands every
         # segment at its index.GLOBAL_SLICE position
-        x_out = torch.cat([class_projections[c].x for c in EntityClass], dim=1)
-        mask = torch.cat([class_projections[c].mask for c in EntityClass], dim=1)
+        x_out = torch.cat([class_projections[c].x for c in TokenKind], dim=1)
+        mask = torch.cat([class_projections[c].mask for c in TokenKind], dim=1)
         assert x_out.shape[1] == NUM_TOKENS
 
         return TPadded(x_out, mask, batch_size=batch_size)

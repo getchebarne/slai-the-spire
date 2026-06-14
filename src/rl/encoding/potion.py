@@ -8,10 +8,11 @@ from slai import members
 
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
-from src.rl.index import CLASS_SEGMENTS
-from src.rl.index import CLASS_SLICE
-from src.rl.index import NUM_CLASS_TOKENS
-from src.rl.index import EntityClass
+from src.rl.index import KIND_TOKENS
+from src.rl.index import LOCAL_SLICE
+from src.rl.index import NUM_KIND_TOKENS
+from src.rl.index import TokenKind
+from src.rl.index import token_entities
 
 
 _POTION_NAME_TO_IDX = {potion_name: i for i, potion_name in enumerate(members(PotionName))}
@@ -47,22 +48,22 @@ def encode_potion_into(potion: Potion, pos: int, out: np.ndarray) -> int:
 def encode_batch_potions(
     batch_game_state: list[GameState], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Encode every potion segment (registry POTION class) into one concatenated
-    (B, N_POTIONS, ENCODING_DIM_POTION) tensor + mask; segments live at their
-    index.CLASS_SLICE positions. Belt slots may hold None mid-list (drunk potion);
+    """Encode every potion token (registry POTION kind) into one concatenated
+    (B, N_POTIONS, ENCODING_DIM_POTION) tensor + mask; tokens live at their
+    index.LOCAL_SLICE positions. Belt slots may hold None mid-list (drunk potion);
     the slot keeps its index and stays masked. Targeting is no longer derived
     here — the L3 target mask comes from the engine's legal actions (masks.py)."""
     batch_size = len(batch_game_state)
-    num_tokens = NUM_CLASS_TOKENS[EntityClass.POTION]
+    num_tokens = NUM_KIND_TOKENS[TokenKind.POTION]
 
     # Pre-allocate NumPy arrays
     x_out = np.zeros((batch_size, num_tokens, ENCODING_DIM_POTION), dtype=np.float32)
     x_pad = np.zeros((batch_size, num_tokens), dtype=bool)
 
     for b, game_state in enumerate(batch_game_state):
-        for spec in CLASS_SEGMENTS[EntityClass.POTION]:
-            offset = CLASS_SLICE[spec.segment].start
-            for i, potion in enumerate(spec.getter(game_state)):
+        for token in KIND_TOKENS[TokenKind.POTION]:
+            offset = LOCAL_SLICE[token].start
+            for i, potion in enumerate(token_entities(token, game_state)):
                 if potion is None:
                     continue
 
