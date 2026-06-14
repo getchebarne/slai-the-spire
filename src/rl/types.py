@@ -8,6 +8,7 @@ from slai import members
 from tensordict import TensorDict
 from tensordict import tensorclass
 
+
 @tensorclass
 class TPadded:
     x: torch.Tensor  # (B, S, D) per-item features
