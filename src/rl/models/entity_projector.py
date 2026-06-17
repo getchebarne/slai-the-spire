@@ -7,7 +7,8 @@ from src.rl.encoding.event import _ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.index import NUM_TOKENS
+from src.rl.index import NUM_PROJECTED_TOKENS
+from src.rl.index import PROJECTED_KINDS
 from src.rl.index import TokenKind
 from src.rl.types import TGameState
 from src.rl.types import TPadded
@@ -65,11 +66,12 @@ class EntityProjector(nn.Module):
             TokenKind.CHARACTER: character,
         }
 
-        # Class blocks are contiguous in registry order, so the cat lands every
-        # segment at its index.GLOBAL_SLICE position
-        x_out = torch.cat([class_projections[c].x for c in TokenKind], dim=1)
-        mask = torch.cat([class_projections[c].mask for c in TokenKind], dim=1)
-        assert x_out.shape[1] == NUM_TOKENS
+        # Class blocks are contiguous in registry order, so the cat lands every token at
+        # its index.GLOBAL_SLICE position. ROOM is excluded (PROJECTED_KINDS) — its tokens
+        # come from the map GNN and Core appends them as the last block.
+        x_out = torch.cat([class_projections[c].x for c in PROJECTED_KINDS], dim=1)
+        mask = torch.cat([class_projections[c].mask for c in PROJECTED_KINDS], dim=1)
+        assert x_out.shape[1] == NUM_PROJECTED_TOKENS
 
         return TPadded(x_out, mask, batch_size=batch_size)
 

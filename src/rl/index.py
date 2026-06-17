@@ -51,11 +51,13 @@ class TokenKind(IntEnum):
     MONSTER = 3
     EVENT = 4
     CHARACTER = 5
+    ROOM = 6  # next-row selectable map rooms; encoded model-side by the map GNN
 
 
 class TokenContext(IntEnum):
-    """A token's zone. REWARD / SHOP / OWNED are shared across kinds (the engine reuses
-    the notion); the rest are card-only combat piles or singleton zones."""
+    """A card's zone within its kind. REWARD / SHOP / OWNED are shared across kinds (the
+    engine reuses the notion); the rest are card-only combat piles. Single-context kinds
+    (monster / event / character / room) carry no zone — their tokens use context=None."""
 
     HAND = 0
     DRAW = 1
@@ -65,18 +67,16 @@ class TokenContext(IntEnum):
     DISCOVER = 5
     REWARD = 6
     SHOP = 7
-    ENEMIES = 8  # combat monsters
-    OPTIONS = 9  # event choices
-    SELF = 10  # the player
 
 
 class Token(NamedTuple):
     """A token's identity: (kind, context). Replaces the old flat Segment enum —
     hashable (dict key) with .kind / .context for the kind/context predicates that
-    used to be Pool-membership tests."""
+    used to be Pool-membership tests. Single-context kinds use context=None (the kind
+    alone identifies them)."""
 
     kind: TokenKind
-    context: TokenContext
+    context: TokenContext | None
 
 
 _K, _C = TokenKind, TokenContext
@@ -103,11 +103,15 @@ REGISTRY: tuple[tuple[Token, int], ...] = (
     (Token(_K.POTION, _C.OWNED), MAX_POTION_SLOTS),
     (Token(_K.POTION, _C.REWARD), MAX_POTION_REWARDS),
     (Token(_K.POTION, _C.SHOP), MAX_SHOP_POTIONS),
-    # Single-token kinds (bespoke encoders: monster needs character health/block and emits
-    # incoming damage; event encodes meta + options jointly; character is a flat singleton)
-    (Token(_K.MONSTER, _C.ENEMIES), MAX_MONSTERS),
-    (Token(_K.EVENT, _C.OPTIONS), MAX_EVENT_OPTIONS),
-    (Token(_K.CHARACTER, _C.SELF), 1),
+    # Single-context kinds (context=None; bespoke encoders: monster needs character
+    # health/block and emits incoming damage; event encodes meta + options jointly;
+    # character is a flat singleton)
+    (Token(_K.MONSTER, None), MAX_MONSTERS),
+    (Token(_K.EVENT, None), MAX_EVENT_OPTIONS),
+    (Token(_K.CHARACTER, None), 1),
+    # Map rooms — produced model-side by the map GNN (not the flat encode path) and
+    # injected by Core as the last token block; one slot per next-row column.
+    (Token(_K.ROOM, None), MAP_WIDTH),
 )
 
 TOKENS: tuple[Token, ...] = tuple(t for t, _ in REGISTRY)
@@ -186,6 +190,12 @@ KIND_TOKENS: dict[TokenKind, list[Token]] = {
 NUM_KIND_TOKENS: dict[TokenKind, int] = {
     kind: sum(TOKEN_SIZE[t] for t in toks) for kind, toks in KIND_TOKENS.items()
 }
+
+# Kinds whose tokens come from the flat encode path + EntityProjector. ROOM is the
+# exception: its tokens are produced model-side by the map GNN and injected by Core as
+# the last block, so the projector covers only these and Core concatenates ROOM after.
+PROJECTED_KINDS: list[TokenKind] = [k for k in TokenKind if k is not TokenKind.ROOM]
+NUM_PROJECTED_TOKENS: int = sum(TOKEN_SIZE[t] for k in PROJECTED_KINDS for t in KIND_TOKENS[k])
 
 # Local slice of each token within its kind tensor (B, sum(kind sizes), D)
 LOCAL_SLICE: dict[Token, slice] = {}
