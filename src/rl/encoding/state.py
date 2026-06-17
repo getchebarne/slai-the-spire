@@ -9,6 +9,7 @@ from src.rl.encoding.energy import encode_batch_energy
 from src.rl.encoding.event import encode_batch_events
 from src.rl.encoding.map_ import encode_batch_map
 from src.rl.encoding.map_ import encode_batch_map_meta
+from src.rl.encoding.map_ import encode_batch_room_node_idx
 from src.rl.encoding.monster import encode_batch_monsters
 from src.rl.encoding.potion import encode_batch_potions
 from src.rl.encoding.relic import encode_batch_relics
@@ -75,6 +76,7 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
         character=encode_batch_character(batch_character, incoming_damages, batch_deck, device),
         energy=encode_batch_energy(batch_energy, device),
         map_grid=encode_batch_map(batch_map, device),
+        room_node_idx=encode_batch_room_node_idx(batch_map, device),
         map_meta=encode_batch_map_meta(batch_map, device),
         screen=encode_batch_screen(batch_game_state, device),
         reward_meta=reward_meta,

@@ -1,3 +1,5 @@
+from enum import Enum
+
 import torch
 from slai import ACTION_SPEC_REGISTRY
 from slai import Action
@@ -6,7 +8,6 @@ from slai import members
 from tensordict import TensorDict
 from tensordict import tensorclass
 
-from src.rl.constants import MAP_WIDTH
 from src.rl.index import TOKEN_SIZE
 from src.rl.index import Token
 from src.rl.index import TokenContext
@@ -34,6 +35,7 @@ class TGameState:
     # Flat context
     energy: torch.Tensor
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
+    room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long — next-row room node per column (map GNN)
     map_meta: torch.Tensor
     screen: torch.Tensor
     reward_meta: torch.Tensor
@@ -53,13 +55,13 @@ class TCoreOutput:
     order — consumers slice it with index.GLOBAL_SLICE; the learned global token is
     stripped (its content lives in x_global). Context-only segments (relics piles,
     draw/discard/exhaust, ...) reach x_global via attention and are simply never
-    sliced for selection. Shop prices pass through for the pointer price keys.
+    sliced for selection. The next-row map rooms are the ROOM token block, refined
+    alongside every other entity — RoomSelect slices them like any other selection.
+    Shop prices pass through for the pointer price keys.
     """
 
     x_global: torch.Tensor  # (B, dim_global)
     x_screen: torch.Tensor  # (B, _ENCODING_DIM_SCREEN) raw flats — L1 GLU context
-    x_map: torch.Tensor  # (B, MAP_WIDTH, dim_map) — per-column embeddings
-    x_map_candidates: torch.Tensor  # (B, MAP_WIDTH, MAP_NUM_ROOM_KINDS) next-row kinds, key side
     tokens: TPadded  # (B, NUM_TOKENS, dim_entity) refined entity tokens
     shop_card_prices: torch.Tensor
     shop_relic_prices: torch.Tensor
@@ -87,40 +89,30 @@ class TMask:
 # L1 (option) is a masked categorical over `ActionType`; L2 (selection) an entity pick over
 # a token (one pointer-key net per kind, conditioned on the ActionType); L3 (target) a
 # monster pick for CardPlay / PotionUse. `ACTION_TARGET` maps each action to the token it
-# selects (or the MAP sentinel); the engine's action arity drives the idx shape (selection /
-# optional target). The int-indexed `AT_*` views feed the hot paths (no FFI-enum dict keys).
+# selects (RoomSelect targets the ROOM token block produced by the map GNN); the engine's
+# action arity drives the idx shape (selection / optional target). The int-indexed `AT_*`
+# views feed the hot paths (no FFI-enum dict keys).
 
 
 _AT_BY_INT = list(members(ActionType))
 NUM_ACTION_TYPES = len(_AT_BY_INT)
 
 
-# MAP isn't a token (it's the map CNN's per-column output); RoomSelect targets it via this
-# sentinel, special-cased in selection. Distinct from any Token.
-class _MapTarget:
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "MAP_TARGET"
-
-
-MAP_TARGET = _MapTarget()
-
 # L2 selection target per action type; types absent here are terminal (no selection). Keyed
 # by ActionType so it's robust to enum reordering. Pending-only kinds (CardSetup..CardRetain)
 # are reached via a halt and appear in L1 only when their halt is the sole legal action.
-ACTION_TARGET: dict[ActionType, "Token | _MapTarget"] = {
+ACTION_TARGET: dict[ActionType, Token] = {
     ActionType.CardPlay: Token(TokenKind.CARD, TokenContext.HAND),
     ActionType.PotionUse: Token(TokenKind.POTION, TokenContext.OWNED),
     ActionType.PotionDiscard: Token(TokenKind.POTION, TokenContext.OWNED),
-    ActionType.RoomSelect: MAP_TARGET,
+    ActionType.RoomSelect: Token(TokenKind.ROOM, None),
     ActionType.CardUpgrade: Token(TokenKind.CARD, TokenContext.OWNED),  # rest/pending upgrade
     ActionType.RewardTakeCard: Token(TokenKind.CARD, TokenContext.REWARD),
     ActionType.ShopBuyCard: Token(TokenKind.CARD, TokenContext.SHOP),
     ActionType.ShopBuyRelic: Token(TokenKind.RELIC, TokenContext.SHOP),
     ActionType.ShopBuyPotion: Token(TokenKind.POTION, TokenContext.SHOP),
     ActionType.ShopPurge: Token(TokenKind.CARD, TokenContext.OWNED),
-    ActionType.EventOptionSelect: Token(TokenKind.EVENT, TokenContext.OPTIONS),
+    ActionType.EventOptionSelect: Token(TokenKind.EVENT, None),
     ActionType.CardSetup: Token(TokenKind.CARD, TokenContext.HAND),
     ActionType.CardNightmare: Token(TokenKind.CARD, TokenContext.HAND),
     ActionType.CardDiscover: Token(TokenKind.CARD, TokenContext.DISCOVER),
@@ -133,7 +125,7 @@ ACTION_TARGET: dict[ActionType, "Token | _MapTarget"] = {
 
 # The engine's action schema is the source of truth for each action's idx shape via its
 # arity (min, max args): (0,0) terminal, (1,1) a selection, (1,2) a selection + optional
-# monster target. Deriving may-target and asserting ACTION_POOL against it means an engine
+# monster target. Deriving may-target and asserting ACTION_TARGET against it means an engine
 # arg-shape change fails loudly here rather than silently emitting invalid actions.
 _AT_ARITY: list = [ACTION_SPEC_REGISTRY[m].arity for m in _AT_BY_INT]  # (min, max) per ActionType
 assert len(ACTION_SPEC_REGISTRY) == NUM_ACTION_TYPES, "registry must cover every ActionType"
@@ -142,7 +134,7 @@ assert {int(a) for a in ACTION_TARGET} == {
 }, "ACTION_TARGET must cover exactly the engine's index-taking actions"
 
 # Int-indexed views over ActionType for the hot paths (None target = terminal, no selection).
-AT_TARGET: list["Token | _MapTarget | None"] = [ACTION_TARGET.get(m) for m in _AT_BY_INT]
+AT_TARGET: list["Token | None"] = [ACTION_TARGET.get(m) for m in _AT_BY_INT]
 AT_MAY_TARGET: list[bool] = [
     a[1] == 2 for a in _AT_ARITY
 ]  # optional trailing monster (CardPlay / PotionUse)
@@ -151,13 +143,11 @@ SELECTING_ACTION_TYPES: list[int] = [
 ]
 
 
-def _target_size(target: "Token | _MapTarget | None") -> int:
-    """Max selectable entities for an action's target: MAP_WIDTH for the map, the token's
-    cap for a token, -1 for terminals. Drives the L2 mask shapes."""
+def _target_size(target: "Token | None") -> int:
+    """Max selectable entities for an action's target: the token's cap, -1 for terminals.
+    Drives the L2 mask shapes. (RoomSelect's ROOM token caps at MAP_WIDTH.)"""
     if target is None:
         return -1
-    if target is MAP_TARGET:
-        return MAP_WIDTH
     return TOKEN_SIZE[target]
 
 

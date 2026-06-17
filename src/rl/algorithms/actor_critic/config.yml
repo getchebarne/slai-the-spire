@@ -28,7 +28,7 @@ model:
   transformer_dim_ff: 128
   transformer_num_heads: 4
   transformer_num_blocks: 2
-  map_encoder_kernel_size: 3
+  gnn_num_layers: 15  # map GNN depth = MAP_HEIGHT → full downstream lookahead per room
   map_encoder_dim: 64
 
   # Head dimensions

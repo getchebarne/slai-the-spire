@@ -114,3 +114,31 @@ def encode_batch_map_meta(batch_map: list[Map], device: torch.device) -> torch.T
         _encode_map_meta_into(map_, x_out[b])
 
     return torch.from_numpy(x_out).to(device)
+
+
+def _room_node_idx_into(map_: Map, out: np.ndarray) -> None:
+    """Per-column flattened node index (y_next*MAP_WIDTH + x) of each next-row selectable
+    room, -1 where the column has no legal room. Mirrors the engine's RoomSelect
+    enumeration exactly (Start → any non-None row-0 room; Overworld → edge + non-None
+    next room). The map GNN gathers its room-token embeddings at these indices; -1 marks
+    an invalid (masked) room slot."""
+    y_next = 0 if map_.y_current is None else map_.y_current + 1
+    if y_next >= MAP_HEIGHT:
+        return  # next step is the off-grid act boss (RoomSelect not enumerated there)
+    if map_.y_current is None:
+        for x in range(MAP_WIDTH):
+            if map_.rooms[0][x] is not None:
+                out[x] = y_next * MAP_WIDTH + x
+        return
+    cur = map_.rooms[map_.y_current][map_.x_current]
+    if cur is not None:
+        for x_next in cur.edges:
+            if 0 <= x_next < MAP_WIDTH and map_.rooms[y_next][x_next] is not None:
+                out[x_next] = y_next * MAP_WIDTH + x_next
+
+
+def encode_batch_room_node_idx(batch_map: list[Map], device: torch.device) -> torch.Tensor:
+    out = np.full((len(batch_map), MAP_WIDTH), -1, dtype=np.int64)
+    for b, map_ in enumerate(batch_map):
+        _room_node_idx_into(map_, out[b])
+    return torch.from_numpy(out).to(device)
