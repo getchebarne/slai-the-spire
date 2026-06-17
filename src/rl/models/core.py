@@ -1,11 +1,9 @@
 import torch
 import torch.nn as nn
 
-from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.energy import _ENCODING_DIM_ENERGY
 from src.rl.encoding.event import _ENCODING_DIM_EVENT_META
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
-from src.rl.encoding.map_ import MAP_NUM_ROOM_KINDS
 from src.rl.encoding.reward import _ENCODING_DIM_REWARD_META
 from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
 from src.rl.encoding.shop import _DIM_SHOP_META
@@ -14,7 +12,6 @@ from src.rl.index import NUM_TOKENS
 from src.rl.index import TOKENS
 from src.rl.index import TYPE_IDX
 from src.rl.index import Token
-from src.rl.index import TokenContext
 from src.rl.index import TokenKind
 from src.rl.index import token_counts
 from src.rl.types import TCoreOutput
@@ -22,13 +19,14 @@ from src.rl.types import TGameState
 from src.rl.types import TPadded
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
-from src.rl.models.map_encoder import MapEncoder
+from src.rl.models.map_encoder import MapGNN
 
 
 _NUM_TOKENS = NUM_TOKENS + 1  # + the learned global token
 
 # Packing buckets for the transformer's token dim: measured occupancy is ~17 valid
-# tokens of _NUM_TOKENS=199 (p90 ~21), so the transformer runs on a compacted prefix
+# tokens of _NUM_TOKENS=206 (p90 ~21; +7 ROOM tokens, valid only on the map), so the
+# transformer runs on a compacted prefix
 # padded up to the smallest covering bucket (few distinct shapes keeps kernels and
 # torch.compile happy); the last bucket is the unpacked width, so packing never
 # truncates.
@@ -39,9 +37,10 @@ class Core(nn.Module):
     """Shared encoder: game state -> per-entity embeddings + global context.
 
     One entity transformer over all entity tokens (registry order per src.rl.index)
-    plus a learned global token, padding-masked; the map has its own per-column
-    CNN. The global context combines the refined global token (attention-aggregated
-    entities) with per-segment counts and the raw flat blocks.
+    plus a learned global token, padding-masked; the map is encoded by a GNN that emits
+    the next-row rooms as the ROOM token block (refined alongside every other entity) plus
+    a graph readout. The global context combines the refined global token (attention-
+    aggregated entities) with per-token counts and the raw flat blocks.
     """
 
     def __init__(
@@ -51,7 +50,7 @@ class Core(nn.Module):
         transformer_dim_ff: int,
         transformer_num_heads: int,
         transformer_num_blocks: int,
-        map_encoder_kernel_size: int,
+        gnn_num_layers: int,
         map_encoder_dim: int,
     ):
         super().__init__()
@@ -66,7 +65,7 @@ class Core(nn.Module):
         )
         self.last_pack_width = _NUM_TOKENS  # observability: bucket chosen by the last forward
         self._type_emb = nn.Embedding(len(TOKENS), dim_entity)
-        self._map_encoder = MapEncoder(map_encoder_kernel_size, map_encoder_dim)
+        self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim, dim_entity)
 
         # Learned global token, refined by the transformer alongside the entities —
         # replaces per-group mean/max pooling as the entity -> global pathway.
@@ -107,18 +106,24 @@ class Core(nn.Module):
         return self._dim_global
 
     def forward(self, x: TGameState) -> TCoreOutput:
-        p = self._entity_projector(x)  # (B, NUM_TOKENS, dim_entity) in registry order
+        p = self._entity_projector(x)  # (B, NUM_PROJECTED_TOKENS, dim_entity), registry order
         b = x.batch_size[0]
         device = x.character.device
 
+        # ---- Map GNN: next-row rooms as the last token block + a graph readout ----
+        room_tokens, x_map_readout = self._map_gnn(x.map_grid, x.room_node_idx)
+        room_valid = x.room_node_idx >= 0  # (B, MAP_WIDTH) — column has a selectable room
+        x_tokens = torch.cat([p.x, room_tokens], dim=1)  # (B, NUM_TOKENS, dim_entity)
+        x_mask = torch.cat([p.mask, room_valid], dim=1)  # (B, NUM_TOKENS)
+
         # ---- Single entity transformer over the token tensor ----
-        tokens = p.x + self._type_emb(self._type_idx.expand(b, -1))
+        tokens = x_tokens + self._type_emb(self._type_idx.expand(b, -1))
 
         # Learned global token appended after the type embeddings (its parameter
         # plays that role); always valid.
         always_valid = torch.ones(b, 1, dtype=torch.bool, device=device)
         tokens = torch.cat([tokens, self._global_token.expand(b, -1, -1)], dim=1)
-        valid = torch.cat([p.mask, always_valid], dim=1)
+        valid = torch.cat([x_mask, always_valid], dim=1)
 
         # ---- Token packing: run the transformer on a compacted prefix ----
         # Exact: masked keys contribute nothing to valid rows, and pad-slot outputs
@@ -139,29 +144,19 @@ class Core(nn.Module):
         # Strip the global token back off; entity tokens keep registry positions
         x_global_token = refined[:, -1]
         refined = refined[:, :-1]
-        x_character = torch.squeeze(
-            refined[:, GLOBAL_SLICE[Token(TokenKind.CHARACTER, TokenContext.SELF)]], 1
-        )
-
-        # ---- Map: per-column embeddings (B, MAP_WIDTH, dim_map) ----
-        x_map = self._map_encoder(x.map_grid)
-        # Per-column next-row room kinds, sliced from the (column-shared) map_meta tail and
-        # reshaped (B, MAP_WIDTH, MAP_NUM_ROOM_KINDS) — fed to the MAP pointer KEYS so the
-        # RoomSelect logits discriminate per column (audit P3 fix).
-        x_map_candidates = x.map_meta[:, -MAP_WIDTH * MAP_NUM_ROOM_KINDS :].reshape(
-            b, MAP_WIDTH, MAP_NUM_ROOM_KINDS
-        )
+        x_character = torch.squeeze(refined[:, GLOBAL_SLICE[Token(TokenKind.CHARACTER, None)]], 1)
 
         # ---- Global context ----
         # The global token carries entity content via attention; counts carry the
-        # cardinalities (deck size, pile sizes, ...) that attention/pooling blur.
+        # cardinalities (deck size, pile sizes, ...) that attention/pooling blur. The map
+        # GNN readout is the whole-graph summary (replaces the old CNN column-mean).
         x_global = self._global_projection(
             torch.cat(
                 [
                     x_global_token,
                     x_character,
-                    x_map.mean(dim=1),
-                    token_counts(p.mask),
+                    x_map_readout,
+                    token_counts(x_mask),
                     x.energy,
                     x.screen,
                     x.map_meta,
@@ -176,9 +171,7 @@ class Core(nn.Module):
         return TCoreOutput(
             x_global=x_global,
             x_screen=x.screen,
-            x_map=x_map,
-            x_map_candidates=x_map_candidates,
-            tokens=TPadded(refined, p.mask),
+            tokens=TPadded(refined, x_mask),
             shop_card_prices=x.shop_card_prices,
             shop_relic_prices=x.shop_relic_prices,
             shop_potion_prices=x.shop_potion_prices,

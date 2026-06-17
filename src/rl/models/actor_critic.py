@@ -27,10 +27,8 @@ from src.rl.index import TokenKind
 from src.rl.types import TMask
 from src.rl.types import AT_MAY_TARGET
 from src.rl.types import AT_TARGET
-from src.rl.types import MAP_TARGET
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import action_from_actiontype
-from src.rl.encoding.map_ import MAP_NUM_ROOM_KINDS
 from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.types import TGameState
@@ -125,7 +123,7 @@ class ActorCritic(nn.Module):
         transformer_dim_ff: int = 256,
         transformer_num_heads: int = 4,
         transformer_num_blocks: int = 2,
-        map_encoder_kernel_size: int = 3,
+        gnn_num_layers: int = 15,
         map_encoder_dim: int = 32,
         dim_ff_primary: int = 128,
         dim_ff_value: int = 128,
@@ -140,11 +138,10 @@ class ActorCritic(nn.Module):
             transformer_dim_ff=transformer_dim_ff,
             transformer_num_heads=transformer_num_heads,
             transformer_num_blocks=transformer_num_blocks,
-            map_encoder_kernel_size=map_encoder_kernel_size,
+            gnn_num_layers=gnn_num_layers,
             map_encoder_dim=map_encoder_dim,
         )
         dim_global = self.core.dim_global
-        dim_map = self.core.dim_map
 
         # L1: one masked categorical over ActionType (which action kind), screen-gated
         # (GLU). Pending-only types are always masked here; a halt has an empty L1 mask.
@@ -155,9 +152,9 @@ class ActorCritic(nn.Module):
             dim_context=_ENCODING_DIM_SCREEN,
         )
 
-        # L2/L3: pointer selection — one key projection per TokenKind (keyed by
-        # kind name; MONSTER serves L3) + one shared query net per level. Every target
-        # except MAP is a slice of the refined token tensor (index.GLOBAL_SLICE[token]);
+        # L2/L3: pointer selection — one key projection per selectable TokenKind (keyed by
+        # kind name; MONSTER serves L3, ROOM serves RoomSelect) + one shared query net per
+        # level. Every target is a slice of the refined token tensor (GLOBAL_SLICE[token]);
         # SHOP-context targets add an additive price-key term over their price tensors.
         self.operation_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
         self.pointer_keys = nn.ModuleDict(
@@ -167,7 +164,7 @@ class ActorCritic(nn.Module):
                 "RELIC": PointerKeys(dim_entity, dim_key),
                 "EVENT": PointerKeys(dim_entity, dim_key),
                 "MONSTER": PointerKeys(dim_entity, dim_key),
-                "MAP": PointerKeys(dim_map + MAP_NUM_ROOM_KINDS, dim_key),
+                "ROOM": PointerKeys(dim_entity, dim_key),
             }
         )
         self.price_keys = nn.Linear(ENCODING_DIM_PRICE, dim_key, bias=False)
@@ -218,19 +215,13 @@ class ActorCritic(nn.Module):
         shared L2 query net conditioned on the ActionType embedding."""
         target = AT_TARGET[at]
         mask = mask_batch.mask_action_idx[str(at)][rows]
-        if target is MAP_TARGET:
-            # Concat per-column next-row room kinds onto the column embeddings so the
-            # pointer keys (not just the shared query) can tell the columns apart.
-            pool_tensor = torch.cat(
-                [core_out.x_map[rows], core_out.x_map_candidates[rows]], dim=-1
-            )
-            keys = self.pointer_keys["MAP"](pool_tensor)
-        else:
-            pool_tensor = core_out.tokens.x[:, GLOBAL_SLICE[target]][rows]
-            keys = self.pointer_keys[target.kind.name](pool_tensor)
-            if target.context is TokenContext.SHOP:  # shop tokens: additive price-key term
-                price = getattr(core_out, _SHOP_PRICE_FIELD[target.kind])
-                keys = keys + self.price_keys(price[rows])
+        # Every target (incl. RoomSelect's ROOM block) is a slice of the refined token
+        # tensor — uniform pointer-key path, keyed by the target's kind.
+        pool_tensor = core_out.tokens.x[:, GLOBAL_SLICE[target]][rows]
+        keys = self.pointer_keys[target.kind.name](pool_tensor)
+        if target.context is TokenContext.SHOP:  # shop tokens: additive price-key term
+            price = getattr(core_out, _SHOP_PRICE_FIELD[target.kind])
+            keys = keys + self.price_keys(price[rows])
         x_op = self.operation_embedding(torch.full_like(rows, at))
         logits = self.query_l2(keys, core_out.x_global[rows], x_op, mask).logits
         return self._categorical_step(logits, mask, sample, rec_idx=rec_idx)
@@ -254,9 +245,7 @@ class ActorCritic(nn.Module):
         mask = monster_mask[tl]
         x_active = core_out.tokens.x[:, GLOBAL_SLICE[target]][tsub, sel_idx[tl]]
         keys = self.pointer_keys["MONSTER"](
-            core_out.tokens.x[:, GLOBAL_SLICE[Token(TokenKind.MONSTER, TokenContext.ENEMIES)]][
-                tsub
-            ]
+            core_out.tokens.x[:, GLOBAL_SLICE[Token(TokenKind.MONSTER, None)]][tsub]
         )
         logits = self.query_l3(keys, core_out.x_global[tsub], x_active, mask).logits
         rec_idx = rec_tgt[tl] if rec_tgt is not None else None

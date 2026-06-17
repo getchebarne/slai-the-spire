@@ -148,7 +148,7 @@ def main(exp_path, use_random, ascension, delay, device, no_fast_mode):
             transformer_dim_ff=64,
             transformer_num_heads=2,
             transformer_num_blocks=1,
-            map_encoder_kernel_size=3,
+            gnn_num_layers=15,
             map_encoder_dim=16,
             dim_ff_primary=32,
             dim_ff_value=32,
