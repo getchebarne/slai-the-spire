@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from src.rl.types import TPadded
+
 
 class EntityTransformer(nn.Module):
     def __init__(self, dim_embedding: int, dim_feed_forward: int, num_heads: int, num_blocks: int):
@@ -18,25 +20,22 @@ class EntityTransformer(nn.Module):
             ]
         )
 
-    def forward(
-        self,
-        x_entity: torch.Tensor,
-        x_entity_mask_pad: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Process all entities through transformer blocks.
+    def forward(self, t_padded: TPadded) -> TPadded:
+        """Process all entities through transformer blocks.
 
         Args:
-            x_entity: Concatenated entity tensor (B, S, D)
-            x_entity_mask_pad: Padding mask for entities (B, S), True = padded/invalid
+            t_padded: TPadded (x: (B, S, D), mask: (B, S) True = valid). The valid-mask is flipped
+                to a key-padding mask (True = padded) for attention.
 
         Returns:
-            Transformed entity tensor (B, S, D)
+            Transformed entities as a TPadded (x (B, S, D) refined, mask carried through unchanged)
         """
+        t_entity = t_padded.x
+        t_entity_mask_pad = ~t_padded.mask  # TPadded mask is True=valid; MHA wants True=padded
         for entity_transformer_block in self._entity_transformer_blocks:
-            x_entity = entity_transformer_block(x_entity, x_entity_mask_pad)
+            t_entity = entity_transformer_block(t_entity, t_entity_mask_pad)
 
-        return x_entity
+        return TPadded(t_entity, t_padded.mask)
 
 
 class _EntityTransformerBlock(nn.Module):
@@ -58,15 +57,15 @@ class _EntityTransformerBlock(nn.Module):
             nn.Linear(dim_feed_forward, dim_embedding),
         )
 
-    def forward(self, x_entity: torch.Tensor, x_mask_pad: torch.Tensor) -> torch.Tensor:
+    def forward(self, t_entity: torch.Tensor, t_mask_pad: torch.Tensor) -> torch.Tensor:
         # Multi-head attention
-        x_mha = self._multi_head_attention(
-            x_entity, x_entity, x_entity, key_padding_mask=x_mask_pad, need_weights=False
+        t_mha = self._multi_head_attention(
+            t_entity, t_entity, t_entity, key_padding_mask=t_mask_pad, need_weights=False
         )[0]
-        x_out = self._layer_norm_1(x_entity + x_mha)
+        t_out = self._layer_norm_1(t_entity + t_mha)
 
         # Feedforward with residual connection
-        x_mlp = self._mlp(x_out)
-        x_out = self._layer_norm_2(x_out + x_mlp)
+        t_mlp = self._mlp(t_out)
+        t_out = self._layer_norm_2(t_out + t_mlp)
 
-        return x_out
+        return t_out

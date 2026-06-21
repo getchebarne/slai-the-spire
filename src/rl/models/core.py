@@ -1,48 +1,58 @@
 import torch
 import torch.nn as nn
 
-from src.rl.encoding.energy import _ENCODING_DIM_ENERGY
-from src.rl.encoding.event import _ENCODING_DIM_EVENT_META
+from src.rl.encoding.card import SLICE_CARDS
+from src.rl.encoding.character import SLICE_CHARACTER
+from src.rl.encoding.energy import ENCODING_DIM_ENERGY
+from src.rl.encoding.event import ENCODING_DIM_EVENT_META
+from src.rl.encoding.event import SLICE_EVENTS
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
-from src.rl.encoding.reward import _ENCODING_DIM_REWARD_META
-from src.rl.encoding.screen import _ENCODING_DIM_SCREEN
-from src.rl.encoding.shop import _DIM_SHOP_META
-from src.rl.index import GLOBAL_SLICE
-from src.rl.index import NUM_TOKENS
-from src.rl.index import TOKENS
-from src.rl.index import TYPE_IDX
-from src.rl.index import Token
-from src.rl.index import TokenKind
-from src.rl.index import token_counts
-from src.rl.types import TCoreOutput
-from src.rl.types import TGameState
-from src.rl.types import TPadded
+from src.rl.encoding.map_ import SLICE_ROOMS
+from src.rl.encoding.monster import SLICE_MONSTERS
+from src.rl.encoding.potion import SLICE_POTIONS
+from src.rl.encoding.relic import SLICE_RELICS
+from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
+from src.rl.encoding.screen import ENCODING_DIM_SCREEN
+from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
+from src.rl.types import ACTION_TYPE_POOL
+from src.rl.types import SliceKind
+from src.rl.types import TCoreOutput
+from src.rl.types import TEntityProjection
+from src.rl.types import TGameState
+from src.rl.types import TPadded
 
 
-_NUM_TOKENS = NUM_TOKENS + 1  # + the learned global token
+# Cat order = global token order; ROOM last (GNN node features, projected with the rest).
+SLICE_ALL = (
+    SLICE_CARDS
+    + SLICE_RELICS
+    + SLICE_POTIONS
+    + SLICE_MONSTERS
+    + SLICE_EVENTS
+    + SLICE_CHARACTER
+    + SLICE_ROOMS
+)
 
-# Packing buckets for the transformer's token dim: measured occupancy is ~17 valid
-# tokens of _NUM_TOKENS=206 (p90 ~21; +7 ROOM tokens, valid only on the map), so the
-# transformer runs on a compacted prefix
-# padded up to the smallest covering bucket (few distinct shapes keeps kernels and
-# torch.compile happy); the last bucket is the unpacked width, so packing never
-# truncates.
-_PACK_BUCKETS = (32, 40, 48, 56, 64, 80, 96, 112, 128, _NUM_TOKENS)
+
+def _build_token_layout() -> tuple[dict[SliceKind, slice], int]:
+    offsets = {}
+    offset = 0
+    for slice_ in SLICE_ALL:
+        offsets[slice_.kind] = slice(offset, offset + slice_.size)
+        offset += slice_.size
+
+    return offsets, offset
+
+
+_SLICE_OFFSETS, _NUM_TOKENS = _build_token_layout()
+_SELECTABLE = set(ACTION_TYPE_POOL.values()) | {SliceKind.MONSTERS}
+_PACK_WIDTH_BUCKETS = (32, 40, 48, 56, 64, 80, 96, 112, 128, _NUM_TOKENS + 1)
 
 
 class Core(nn.Module):
-    """Shared encoder: game state -> per-entity embeddings + global context.
-
-    One entity transformer over all entity tokens (registry order per src.rl.index)
-    plus a learned global token, padding-masked; the map is encoded by a GNN that emits
-    the next-row rooms as the ROOM token block (refined alongside every other entity) plus
-    a graph readout. The global context combines the refined global token (attention-
-    aggregated entities) with per-token counts and the raw flat blocks.
-    """
-
     def __init__(
         self,
         dim_entity: int,
@@ -57,34 +67,31 @@ class Core(nn.Module):
 
         self._dim_entity = dim_entity
         self._dim_global = dim_global
-        self._map_encoder_dim = map_encoder_dim
 
-        self._entity_projector = EntityProjector(dim_entity)
+        self._entity_projector = EntityProjector(dim_entity, map_encoder_dim)
         self._entity_transformer = EntityTransformer(
             dim_entity, transformer_dim_ff, transformer_num_heads, transformer_num_blocks
         )
-        self.last_pack_width = _NUM_TOKENS  # observability: bucket chosen by the last forward
-        self._type_emb = nn.Embedding(len(TOKENS), dim_entity)
-        self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim, dim_entity)
+        self._type_emb = nn.Embedding(len(SLICE_ALL), dim_entity)
+        self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim)
 
-        # Learned global token, refined by the transformer alongside the entities —
-        # replaces per-group mean/max pooling as the entity -> global pathway.
-        self._global_token = nn.Parameter(torch.empty(1, 1, dim_entity))
-        nn.init.normal_(self._global_token, std=0.02)
+        # Learned global token, refined with the entities (replaces pooling).
+        self._entity_global = nn.Parameter(torch.empty(1, 1, dim_entity))
+        nn.init.normal_(self._entity_global, std=0.02)
 
-        # Global context = refined global token + character + map summary
-        # + per-segment counts + raw flats.
+        # Global context: global token + character + map readout + per-slice counts + raw flats.
         global_input_dim = (
             dim_entity  # global token (attention-aggregated entities)
             + dim_entity  # character (refined singleton)
-            + map_encoder_dim  # map CNN (column-mean summary)
-            + len(TOKENS)  # per-token counts (mask.sum / size)
-            + _ENCODING_DIM_ENERGY  # energy (raw)
-            + _ENCODING_DIM_SCREEN  # screen state
+            + map_encoder_dim  # map GNN readout (whole-graph summary)
+            + len(SLICE_ALL)
+            - 1  # per-slice counts (mask.sum / size); CHARACTER excluded (const)
+            + ENCODING_DIM_ENERGY  # energy (raw)
+            + ENCODING_DIM_SCREEN  # screen state
             + ENCODING_DIM_MAP_META  # floor depth + act-boss + next-row kinds
-            + _ENCODING_DIM_REWARD_META
-            + _DIM_SHOP_META
-            + _ENCODING_DIM_EVENT_META
+            + ENCODING_DIM_REWARD_META
+            + ENCODING_DIM_PRICE  # shop purge service price
+            + ENCODING_DIM_EVENT_META
         )
         self._global_projection = nn.Sequential(
             nn.Linear(global_input_dim, dim_global),
@@ -92,88 +99,117 @@ class Core(nn.Module):
             nn.Linear(dim_global, dim_global),
         )
 
-        # token -> segment type-embedding index (1, N), expanded to (B, N) in forward.
-        # Derived from the registry -> excluded from checkpoints.
-        type_idx = torch.tensor(TYPE_IDX, dtype=torch.long).unsqueeze(0)
-        self.register_buffer("_type_idx", type_idx, persistent=False)
-
-    @property
-    def dim_map(self) -> int:
-        return self._map_encoder_dim
+        # token slot -> SLICE_ALL index; derived from layout, excluded from checkpoints.
+        t_type_idx = torch.tensor(
+            [i for i, s in enumerate(SLICE_ALL) for _ in range(s.size)], dtype=torch.long
+        ).unsqueeze(0)
+        self.register_buffer("_type_idx", t_type_idx, persistent=False)
 
     @property
     def dim_global(self) -> int:
         return self._dim_global
 
-    def forward(self, x: TGameState) -> TCoreOutput:
-        p = self._entity_projector(x)  # (B, NUM_PROJECTED_TOKENS, dim_entity), registry order
-        b = x.batch_size[0]
-        device = x.character.device
+    def forward(self, t_game_state: TGameState) -> TCoreOutput:
+        # Map GNN: next-row room features + whole-graph readout
+        t_room_features, t_map_readout = self._map_gnn(
+            t_game_state.map_grid, t_game_state.room_node_idx
+        )
+        t_blocks = self._entity_projector(t_game_state, t_room_features)
 
-        # ---- Map GNN: next-row rooms as the last token block + a graph readout ----
-        room_tokens, x_map_readout = self._map_gnn(x.map_grid, x.room_node_idx)
-        room_valid = x.room_node_idx >= 0  # (B, MAP_WIDTH) — column has a selectable room
-        x_tokens = torch.cat([p.x, room_tokens], dim=1)  # (B, NUM_TOKENS, dim_entity)
-        x_mask = torch.cat([p.mask, room_valid], dim=1)  # (B, NUM_TOKENS)
+        t_tokens = self._assemble_tokens(t_blocks)
+        t_refined = self._refine_tokens(t_tokens)
 
-        # ---- Single entity transformer over the token tensor ----
-        tokens = x_tokens + self._type_emb(self._type_idx.expand(b, -1))
+        return TCoreOutput(
+            global_=self._global_context(t_game_state, t_refined, t_map_readout),
+            pool={kind: t_refined.x[:, _SLICE_OFFSETS[kind]] for kind in _SELECTABLE},
+        )
 
-        # Learned global token appended after the type embeddings (its parameter
-        # plays that role); always valid.
-        always_valid = torch.ones(b, 1, dtype=torch.bool, device=device)
-        tokens = torch.cat([tokens, self._global_token.expand(b, -1, -1)], dim=1)
-        valid = torch.cat([x_mask, always_valid], dim=1)
+    def _assemble_tokens(self, t_blocks: TEntityProjection) -> TPadded:
+        batch = t_blocks.cards.x.shape[0]
+        t_entities = torch.cat(
+            [
+                t_blocks.cards.x,
+                t_blocks.relics.x,
+                t_blocks.potions.x,
+                t_blocks.monsters.x,
+                t_blocks.events.x,
+                t_blocks.character.x,
+                t_blocks.rooms.x,
+            ],
+            dim=1,
+        )
+        t_entities = t_entities + self._type_emb(self._type_idx.expand(batch, -1))
+        t_valid = torch.cat(
+            [
+                t_blocks.cards.mask,
+                t_blocks.relics.mask,
+                t_blocks.potions.mask,
+                t_blocks.monsters.mask,
+                t_blocks.events.mask,
+                t_blocks.character.mask,
+                t_blocks.rooms.mask,
+            ],
+            dim=1,
+        )
 
-        # ---- Token packing: run the transformer on a compacted prefix ----
-        # Exact: masked keys contribute nothing to valid rows, and pad-slot outputs
-        # are only ever read behind selection masks (subsets of `valid`), so
-        # replacing them with zeros changes no logit, value, or log-prob.
-        order = torch.argsort(~valid, dim=1, stable=True)  # valid tokens first
-        n_valid = int(valid.sum(dim=1).max())
-        s_pack = next(s for s in _PACK_BUCKETS if s >= n_valid)
-        self.last_pack_width = s_pack
-        pack_idx = order[:, :s_pack].unsqueeze(-1).expand(-1, -1, tokens.shape[-1])
-        packed_tokens = tokens.gather(1, pack_idx)
-        packed_valid = valid.gather(1, order[:, :s_pack])
+        t_entity_global = self._entity_global.expand(batch, -1, -1)
+        t_always_valid = torch.ones(batch, 1, dtype=torch.bool, device=t_entities.device)
+        return TPadded(
+            torch.cat([t_entities, t_entity_global], dim=1),
+            torch.cat([t_valid, t_always_valid], dim=1),
+        )
 
-        refined_packed = self._entity_transformer(packed_tokens, ~packed_valid)
+    def _refine_tokens(self, t_tokens: TPadded) -> TPadded:
+        # Calculate maximum true sequence length across the batch and derive pack width from it
+        max_seq_len = int(t_tokens.mask.sum(dim=1).max())
+        pack_width = next(w for w in _PACK_WIDTH_BUCKETS if w >= max_seq_len)
 
-        refined = torch.zeros_like(tokens).scatter(1, pack_idx, refined_packed)
+        # Gather valid elements across each sample in the batch
+        t_idx_keep_mask = torch.argsort(~t_tokens.mask, dim=1, stable=True, descending=False)
+        t_idx_keep_mask = t_idx_keep_mask[:, :pack_width]
+        t_idx_keep_x = t_idx_keep_mask.unsqueeze(-1).expand(-1, -1, t_tokens.x.shape[-1])
+        t_tokens_packed = TPadded(
+            t_tokens.x.gather(1, t_idx_keep_x), t_tokens.mask.gather(1, t_idx_keep_mask)
+        )
 
-        # Strip the global token back off; entity tokens keep registry positions
-        x_global_token = refined[:, -1]
-        refined = refined[:, :-1]
-        x_character = torch.squeeze(refined[:, GLOBAL_SLICE[Token(TokenKind.CHARACTER, None)]], 1)
+        # Run transformer
+        t_tokens_ref = self._entity_transformer(t_tokens_packed)
 
-        # ---- Global context ----
-        # The global token carries entity content via attention; counts carry the
-        # cardinalities (deck size, pile sizes, ...) that attention/pooling blur. The map
-        # GNN readout is the whole-graph summary (replaces the old CNN column-mean).
-        x_global = self._global_projection(
+        # Create all-zeros tensor w/ the original input shape and fill it with the refined tokens
+        t_scattered = torch.zeros_like(t_tokens.x).scatter(1, t_idx_keep_x, t_tokens_ref.x)
+        return TPadded(t_scattered, t_tokens.mask)
+
+    def _global_context(
+        self, t_game_state: TGameState, t_refined: TPadded, t_map_readout: torch.Tensor
+    ) -> torch.Tensor:
+        t_entity_global = t_refined.x[:, -1]
+        t_character = t_refined.x[:, _SLICE_OFFSETS[SliceKind.CHARACTER]].squeeze(1)
+        return self._global_projection(
             torch.cat(
                 [
-                    x_global_token,
-                    x_character,
-                    x_map_readout,
-                    token_counts(x_mask),
-                    x.energy,
-                    x.screen,
-                    x.map_meta,
-                    x.reward_meta,
-                    x.shop_meta,
-                    x.event_meta,
+                    t_entity_global,
+                    t_character,
+                    t_map_readout,
+                    # Counts exclude the learned global token
+                    _get_token_counts(t_refined.mask[:, :-1]),
+                    t_game_state.energy,
+                    t_game_state.screen,
+                    t_game_state.map_meta,
+                    t_game_state.reward_meta,
+                    t_game_state.shop_meta,
+                    t_game_state.event_meta,
                 ],
                 dim=1,
             )
         )
 
-        return TCoreOutput(
-            x_global=x_global,
-            x_screen=x.screen,
-            tokens=TPadded(refined, x_mask),
-            shop_card_prices=x.shop_card_prices,
-            shop_relic_prices=x.shop_relic_prices,
-            shop_potion_prices=x.shop_potion_prices,
-            batch_size=x.batch_size,
-        )
+
+def _get_token_counts(t_mask: torch.Tensor) -> torch.Tensor:
+    return torch.cat(
+        [
+            t_mask[:, _SLICE_OFFSETS[slice_.kind]].sum(dim=1, keepdim=True).float() / slice_.size
+            for slice_ in SLICE_ALL
+            if slice_.kind is not SliceKind.CHARACTER  # singleton: count is a constant 1.0
+        ],
+        dim=1,
+    )

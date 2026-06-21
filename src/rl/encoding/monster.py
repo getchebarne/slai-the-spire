@@ -8,11 +8,17 @@ from slai import members
 from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
+from src.rl.encoding.modifier import ENCODING_DIM_MODIFIERS
 from src.rl.encoding.modifier import encode_modifiers_into
-from src.rl.encoding.modifier import get_encoding_dim_modifiers
+from src.rl.types import Slice
+from src.rl.types import SliceKind
 from src.rl.utils import get_piecewise_bucket
 from src.rl.utils import get_piecewise_dim
 from src.rl.utils import get_sqrt_norm
+
+
+# Order = fill order = Core's global-offset order
+SLICE_MONSTERS = [Slice(SliceKind.MONSTERS, MAX_MONSTERS)]
 
 _MAP_MONSTER_NAME = {name: i for i, name in enumerate(members(MonsterName))}
 _MAP_INTENT_KIND = {intent_kind: i for i, intent_kind in enumerate(members(IntentKind))}
@@ -21,16 +27,15 @@ _INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBu
 _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
 
 # Normalization caps, bump when adding heavy hitters
-_DAMAGE_MAX = 64  # post-scaling: Guardian/Slime Boss base ~36-38 x FACTOR_VULN 1.5 ~= 54-57
+_DAMAGE_MAX = 64  # The Guardian / Slime Boss base ~36-38 x `FACTOR_VULN` 1.5 ~= 54-57
 _INSTANCES_MAX = 5  # The Guardian's Whirlwind
 _HEALTH_MAX = 250  # The Guardian's max health
 _BLOCK_MAX = 35
-
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
 ENCODING_DIM_MONSTER = (
-    get_encoding_dim_modifiers()  # Modifiers OHE
+    ENCODING_DIM_MODIFIERS  # Modifiers OHE
     + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
     + len(_MAP_MONSTER_NAME)  # Name OHE
     + _DAMAGE_DIM  # Intent damage OHE
@@ -47,8 +52,13 @@ ENCODING_DIM_MONSTER = (
 )
 
 
+def _intent_total_damage(monster: Monster) -> int:
+    """Monster's total attack damage this turn: per-hit damage * instances (0 if not attacking)."""
+    return (monster.intent.damage or 0) * (monster.intent.instances or 1)
+
+
 def _encode_monster_into(
-    monster: Monster, char_health: int, char_block: int, total_incoming: float, out: np.ndarray
+    monster: Monster, char_health: int, char_block: int, outgoing_damage: float, out: np.ndarray
 ) -> None:
     # Initialize current position pointer
     pos = 0
@@ -72,16 +82,14 @@ def _encode_monster_into(
     pos += _DAMAGE_DIM
 
     # Scalars
-    total_damage = damage * (monster.intent.instances or 1)
+    total_damage = _intent_total_damage(monster)
     out[pos] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
     out[pos + 1] = min(monster.intent.instances or 0, _INSTANCES_MAX) / _INSTANCES_MAX
     out[pos + 2] = float(monster.intent.kind in _INTENT_BLOCK_KINDS)
     out[pos + 3] = float(monster.intent.kind in _INTENT_BUFF_KINDS)
     out[pos + 4] = float(monster.intent.kind in _INTENT_DEBUFF_KINDS)
-    out[pos + 5] = float(total_damage <= char_block)  # this attacker fully blockable
-    # Turn-lethal: the WHOLE turn's incoming (all attackers) >= my HP + block, not just
-    # this monster's hit (which ignored the others, misleading in multi-attacker fights).
-    out[pos + 6] = float(total_incoming >= char_health + char_block)
+    out[pos + 5] = float(total_damage <= char_block)
+    out[pos + 6] = float(outgoing_damage >= char_health + char_block)
     out[pos + 7] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
     out[pos + 8] = monster.health / max(monster.health_max, 1)
     pos += 9
@@ -99,28 +107,24 @@ def encode_batch_monsters(
     batch_size = len(batch_monster)
 
     # Pre-allocate NumPy arrays
-    x_out = np.zeros((batch_size, MAX_MONSTERS, ENCODING_DIM_MONSTER), dtype=np.float32)
-    x_pad = np.zeros((batch_size, MAX_MONSTERS), dtype=bool)
+    np_out = np.zeros((batch_size, MAX_MONSTERS, ENCODING_DIM_MONSTER), dtype=np.float32)
+    np_pad = np.zeros((batch_size, MAX_MONSTERS), dtype=bool)
     outgoing_damages = []
 
     for b, monsters in enumerate(batch_monster):
-        # Total incoming this turn = sum over all attackers; drives the turn-lethal flag
-        # and is returned for the character encoder.
-        outgoing_damage = sum(
-            (monster.intent.damage or 0.0) * (monster.intent.instances or 1.0)
-            for monster in monsters
-        )
+        # Total incoming this turn = sum over attackers (turn-lethal flag; also for character).
+        outgoing_damage = sum(_intent_total_damage(monster) for monster in monsters)
 
         for i, monster in enumerate(monsters):
             _encode_monster_into(
-                monster, batch_health[b], batch_block[b], outgoing_damage, x_out[b, i]
+                monster, batch_health[b], batch_block[b], outgoing_damage, np_out[b, i]
             )
-            x_pad[b, i] = True
+            np_pad[b, i] = True
 
         outgoing_damages.append(outgoing_damage)
 
     return (
-        torch.from_numpy(x_out).to(device),
-        torch.from_numpy(x_pad).to(device),
+        torch.from_numpy(np_out).to(device),
+        torch.from_numpy(np_pad).to(device),
         outgoing_damages,
     )

@@ -3,27 +3,19 @@ import torch.nn as nn
 
 from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
-from src.rl.encoding.event import _ENCODING_DIM_EVENT_OPTION
+from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.index import NUM_PROJECTED_TOKENS
-from src.rl.index import PROJECTED_KINDS
-from src.rl.index import TokenKind
+from src.rl.types import TEntityProjection
 from src.rl.types import TGameState
 from src.rl.types import TPadded
 
 
 class EntityProjector(nn.Module):
-    """One shared projection per entity class into the entity-embedding space.
+    """One shared projection per entity type; returns the per-type blocks (no cat/split)."""
 
-    The encoding layer delivers each class pre-concatenated (segments per
-    src.rl.index), so projection is one sparse GEMM per class — no cat/split.
-    Emits the single token tensor (B, index.NUM_TOKENS, dim_embedding) with the
-    class blocks in registry order.
-    """
-
-    def __init__(self, dim_embedding: int):
+    def __init__(self, dim_embedding: int, dim_map: int):
         super().__init__()
 
         self._dim_embedding = dim_embedding
@@ -34,46 +26,34 @@ class EntityProjector(nn.Module):
         self._proj_character = _get_projection(ENCODING_DIM_CHARACTER, dim_embedding)
         self._proj_relic = _get_projection(ENCODING_DIM_RELIC, dim_embedding)
         self._proj_potion = _get_projection(ENCODING_DIM_POTION, dim_embedding)
-        self._proj_event_option = _get_projection(_ENCODING_DIM_EVENT_OPTION, dim_embedding)
+        self._proj_event_option = _get_projection(ENCODING_DIM_EVENT_OPTION, dim_embedding)
+        # Rooms come deep-processed from the GNN, so a 1-layer lift (the others need a 2-layer MLP)
+        self._proj_room = nn.Linear(dim_map, dim_embedding)
 
         self._norm = nn.LayerNorm(dim_embedding)
 
-    def forward(self, x: TGameState) -> TPadded:
-        batch_size = x.batch_size
-
-        # Character is the only singleton entity (flat, always valid)
-        character = TPadded(
-            torch.unsqueeze(self._norm(self._proj_character(x.character)), 1),
-            torch.ones(batch_size[0], 1, dtype=torch.bool, device=x.character.device),
+    def forward(self, t_game_state: TGameState, t_rooms: TPadded) -> TEntityProjection:
+        return TEntityProjection(
+            cards=_project_sparse(
+                self._proj_card, self._norm, t_game_state.cards, self._dim_embedding
+            ),
+            relics=_project_sparse(
+                self._proj_relic, self._norm, t_game_state.relics, self._dim_embedding
+            ),
+            potions=_project_sparse(
+                self._proj_potion, self._norm, t_game_state.potions, self._dim_embedding
+            ),
+            monsters=_project_sparse(
+                self._proj_monster, self._norm, t_game_state.monsters, self._dim_embedding
+            ),
+            events=_project_sparse(
+                self._proj_event_option, self._norm, t_game_state.event_options, self._dim_embedding
+            ),
+            character=_project_sparse(
+                self._proj_character, self._norm, t_game_state.character, self._dim_embedding
+            ),
+            rooms=_project_sparse(self._proj_room, self._norm, t_rooms, self._dim_embedding),
         )
-
-        class_projections: dict[TokenKind, TPadded] = {
-            TokenKind.CARD: _project_sparse(
-                self._proj_card, self._norm, x.cards, self._dim_embedding
-            ),
-            TokenKind.RELIC: _project_sparse(
-                self._proj_relic, self._norm, x.relics, self._dim_embedding
-            ),
-            TokenKind.POTION: _project_sparse(
-                self._proj_potion, self._norm, x.potions, self._dim_embedding
-            ),
-            TokenKind.MONSTER: _project_sparse(
-                self._proj_monster, self._norm, x.monsters, self._dim_embedding
-            ),
-            TokenKind.EVENT: _project_sparse(
-                self._proj_event_option, self._norm, x.event_options, self._dim_embedding
-            ),
-            TokenKind.CHARACTER: character,
-        }
-
-        # Class blocks are contiguous in registry order, so the cat lands every token at
-        # its index.GLOBAL_SLICE position. ROOM is excluded (PROJECTED_KINDS) — its tokens
-        # come from the map GNN and Core appends them as the last block.
-        x_out = torch.cat([class_projections[c].x for c in PROJECTED_KINDS], dim=1)
-        mask = torch.cat([class_projections[c].mask for c in PROJECTED_KINDS], dim=1)
-        assert x_out.shape[1] == NUM_PROJECTED_TOKENS
-
-        return TPadded(x_out, mask, batch_size=batch_size)
 
 
 def _get_projection(dim_in: int, dim_embedding: int) -> nn.Sequential:
@@ -88,23 +68,24 @@ def _get_projection(dim_in: int, dim_embedding: int) -> nn.Sequential:
 def _project_sparse(
     proj: nn.Module,
     norm: nn.Module,
-    tensor_padded: TPadded,
+    t_padded: TPadded,
     dim_embedding: int,
 ) -> TPadded:
-    x = tensor_padded.x
-    mask = tensor_padded.mask
+    t_x = t_padded.x
+    t_mask = t_padded.mask
 
     # Initialize empty result tensor w/ one row per batch-entity
-    batch_size, num_entities, dim_entity = x.shape
-    x_out = torch.zeros(batch_size * num_entities, dim_embedding, dtype=x.dtype)
+    batch_size, num_entities, dim_entity = t_x.shape
+    t_out = torch.zeros(batch_size * num_entities, dim_embedding, dtype=t_x.dtype)
 
     # Compute which rows actually need to be projected
-    row_idxs = torch.nonzero(torch.flatten(mask), as_tuple=True)[0]
+    t_row_idxs = torch.nonzero(torch.flatten(t_mask), as_tuple=True)[0]
 
     # Compute projection
-    if row_idxs.numel():
-        x_out[row_idxs] = norm(proj(x.reshape(batch_size * num_entities, dim_entity)[row_idxs]))
+    if t_row_idxs.numel():
+        t_flat = t_x.reshape(batch_size * num_entities, dim_entity)
+        t_out[t_row_idxs] = norm(proj(t_flat[t_row_idxs]))
 
     # Reshape to original (B, S, D)
-    x_out = x_out.reshape(batch_size, num_entities, dim_embedding)
-    return TPadded(x_out, mask)
+    t_out = t_out.reshape(batch_size, num_entities, dim_embedding)
+    return TPadded(t_out, t_mask)
