@@ -31,6 +31,7 @@ ENERGY_MAX = 5
 
 import slai as _slai
 
+
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS

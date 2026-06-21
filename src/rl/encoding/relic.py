@@ -5,13 +5,23 @@ from slai import Relic
 from slai import RelicName
 from slai import members
 
+from src.rl.constants import MAX_RELIC_REWARDS
+from src.rl.constants import MAX_RELICS
+from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
-from src.rl.index import KIND_TOKENS
-from src.rl.index import LOCAL_SLICE
-from src.rl.index import NUM_KIND_TOKENS
-from src.rl.index import TokenKind
-from src.rl.index import token_entities
+from src.rl.types import Slice
+from src.rl.types import SliceKind
+
+
+# Order = fill order = Core's global-offset order
+SLICE_RELICS = [
+    Slice(SliceKind.RELIC_OWNED, MAX_RELICS),
+    Slice(SliceKind.RELIC_REWARD, MAX_RELIC_REWARDS),
+    Slice(SliceKind.RELIC_SHOP, MAX_SHOP_RELICS),
+]
+SLICE_KIND_RELICS = {slice_.kind for slice_ in SLICE_RELICS}
+NUM_RELIC_TOKENS = sum(slice_.size for slice_ in SLICE_RELICS)
 
 
 _RELIC_NAME_TO_IDX = {relic_name: i for i, relic_name in enumerate(members(RelicName))}
@@ -23,6 +33,10 @@ ENCODING_DIM_RELIC = (
     + 1  # Counter scalar
     + ENCODING_DIM_EFFECTS  # Combat-start effect blocks (trigger timing rides on the name)
 )
+
+# Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
+_RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
+_RELIC_ROW_CACHE_MAX = 100_000
 
 
 def encode_relic_into(relic: Relic, pos: int, out: np.ndarray) -> int:
@@ -39,27 +53,53 @@ def encode_relic_into(relic: Relic, pos: int, out: np.ndarray) -> int:
     return encode_effects_into(relic.effects_on_combat_start, pos, out)
 
 
+def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
+    """Write the full relic encoding into `out`, cached by (name, used_up, clamped counter)."""
+    cache_key = (relic.name, relic.used_up, min(relic.counter, _COUNTER_MAX))
+    row = _RELIC_ROW_CACHE.get(cache_key)
+    if row is None:
+        row = np.zeros(ENCODING_DIM_RELIC, dtype=np.float32)
+        encode_relic_into(relic, 0, row)
+        row.flags.writeable = False  # guard the cached master copy
+        if len(_RELIC_ROW_CACHE) >= _RELIC_ROW_CACHE_MAX:
+            _RELIC_ROW_CACHE.clear()
+        _RELIC_ROW_CACHE[cache_key] = row
+    out[:] = row
+
+
+def _get_relic_entities(kind: SliceKind, game_state: GameState) -> list:
+    match kind:
+        case SliceKind.RELIC_OWNED:
+            return game_state.relics
+        case SliceKind.RELIC_REWARD:
+            return (
+                [game_state.reward.relic]
+                if game_state.reward is not None and game_state.reward.relic is not None
+                else []
+            )
+        case SliceKind.RELIC_SHOP:
+            return game_state.shop.relics if game_state.shop is not None else []
+        case _:
+            raise ValueError(f"not a relic slice: {kind}")
+
+
 def encode_batch_relics(
     batch_game_state: list[GameState], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Encode every relic segment (registry RELIC class) into one concatenated
-    (B, N_RELICS, ENCODING_DIM_RELIC) tensor + mask; tokens live at their
-    index.LOCAL_SLICE positions."""
+    """Encode all relic slices into one (B, NUM_RELIC_TOKENS, ENCODING_DIM_RELIC) tensor + mask."""
     batch_size = len(batch_game_state)
-    num_tokens = NUM_KIND_TOKENS[TokenKind.RELIC]
-
-    # Pre-allocate NumPy arrays
-    x_out = np.zeros((batch_size, num_tokens, ENCODING_DIM_RELIC), dtype=np.float32)
-    x_pad = np.zeros((batch_size, num_tokens), dtype=bool)
+    np_out = np.zeros((batch_size, NUM_RELIC_TOKENS, ENCODING_DIM_RELIC), dtype=np.float32)
+    np_pad = np.zeros((batch_size, NUM_RELIC_TOKENS), dtype=bool)
 
     for b, game_state in enumerate(batch_game_state):
-        for token in KIND_TOKENS[TokenKind.RELIC]:
-            offset = LOCAL_SLICE[token].start
-            for i, relic in enumerate(token_entities(token, game_state)):
-                encode_relic_into(relic, 0, x_out[b, offset + i])
-                x_pad[b, offset + i] = True
+        offset = 0
+        for slice_ in SLICE_RELICS:
+            for i, relic in enumerate(_get_relic_entities(slice_.kind, game_state)):
+                encode_relic_into_w_cache(relic, np_out[b, offset + i])
+                np_pad[b, offset + i] = True
+            offset += slice_.size
 
     return (
-        torch.from_numpy(x_out).to(device),
-        torch.from_numpy(x_pad).to(device),
+        torch.from_numpy(np_out).to(device),
+        torch.from_numpy(np_pad).to(device),
     )

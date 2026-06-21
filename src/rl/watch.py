@@ -152,6 +152,7 @@ def main(exp_path, use_random, ascension, delay, device, no_fast_mode):
             map_encoder_dim=16,
             dim_ff_primary=32,
             dim_ff_value=32,
+            dim_op=32,
             dim_key=16,
         )
     else:

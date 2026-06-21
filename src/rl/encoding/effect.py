@@ -9,9 +9,9 @@ from slai import SelectionKind
 from slai import Target
 from slai import members
 
-from src.rl.encoding.modifier import MODIFIER_IS_BUFF
 from src.rl.encoding.modifier import MODIFIER_KIND_TO_IDX
 from src.rl.encoding.modifier import STACKS_MAX
+
 
 _NUM_MODIFIER_KINDS = len(MODIFIER_KIND_TO_IDX)
 _CARD_KIND_TO_IDX = {kind: i for i, kind in enumerate(members(CardKind))}
@@ -199,7 +199,7 @@ def _modifier_gain(effect, base: int, out: np.ndarray) -> None:
     enemy = _on_enemy(effect.target)
     side = _OFF_MOD_ENEMY if enemy else _OFF_MOD_SELF
     out[base + side + MODIFIER_KIND_TO_IDX[effect.kind]] += effect.stacks
-    if MODIFIER_IS_BUFF[effect.kind]:
+    if effect.kind.is_buff:
         summary = _OFF_MOD_BUFF_ENEMY if enemy else _OFF_MOD_BUFF_SELF
     else:
         summary = _OFF_MOD_DEBUFF_ENEMY if enemy else _OFF_MOD_DEBUFF_SELF

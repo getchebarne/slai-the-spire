@@ -1,25 +1,12 @@
 import math
-from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 
 
-@dataclass
-class HeadOutput:
-    logits: torch.Tensor  # (B, num_options) raw scores after masking
-    indices: torch.Tensor | None  # (B,) sampled indices, None if not sampling
-    log_probs: torch.Tensor | None  # (B,) log probs of sampled indices, None if not sampling
-
-
-# =============================================================================
-# Binary Choice Head (for decision primaries)
-# =============================================================================
-
-
-class HeadBinaryChoice(nn.Module):
+class HeadActionType(nn.Module):
     """
-    L1 action-kind head: x_global gated by the screen context before scoring
+    L1 action-kind head: t_global gated by the screen context before scoring
     (AlphaStar-style GLU — the action space is modal per screen, so the gate lets
     the head mute the global features irrelevant to the current mode).
     """
@@ -35,18 +22,13 @@ class HeadBinaryChoice(nn.Module):
         )
 
     def forward(
-        self, x_global: torch.Tensor, context: torch.Tensor, mask: torch.Tensor
-    ) -> HeadOutput:
-        """Score the option-kind choices; returns masked logits (sampling/recompute
+        self, t_global: torch.Tensor, t_context: torch.Tensor, t_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Score the action-type choices; returns masked logits (sampling/recompute
         is the caller's job)."""
-        gated = torch.sigmoid(self._gate(context)) * x_global
-        logits = self._scorer(gated)
-        return HeadOutput(logits.masked_fill(~mask, float("-inf")), None, None)
-
-
-# =============================================================================
-# Pointer Selection Heads (Secondary + Target)
-# =============================================================================
+        t_gated = torch.sigmoid(self._gate(t_context)) * t_global
+        t_logits = self._scorer(t_gated)
+        return t_logits.masked_fill(~t_mask, float("-inf"))
 
 
 class PointerKeys(nn.Module):
@@ -66,9 +48,9 @@ class PointerKeys(nn.Module):
             nn.Linear(dim_in, dim_key),
         )
 
-    def forward(self, x_entities: torch.Tensor) -> torch.Tensor:
+    def forward(self, t_entities: torch.Tensor) -> torch.Tensor:
         """Project entity embeddings (B, N, dim_in) to pointer keys (B, N, dim_key)."""
-        return self._net(x_entities)
+        return self._net(t_entities)
 
 
 class HeadPointerSelect(nn.Module):
@@ -103,22 +85,17 @@ class HeadPointerSelect(nn.Module):
 
     def forward(
         self,
-        keys: torch.Tensor,
-        x_global: torch.Tensor,
-        cond: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> HeadOutput:
-        """Score entities by scaled key·query; returns masked logits. `keys` is
-        (B, N, dim_key) from PointerKeys; identity dedup is baked into `mask`
+        t_keys: torch.Tensor,
+        t_global: torch.Tensor,
+        t_cond: torch.Tensor,
+        t_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Score entities by scaled key·query; returns masked logits. `t_keys` is
+        (B, N, dim_key) from PointerKeys; identity dedup is baked into `t_mask`
         (masks.py); sampling is the caller's job."""
-        query = self._query_net(torch.cat([x_global, cond], dim=-1))  # (B, dim_key)
-        logits = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1) * self._scale  # (B, N)
-        return HeadOutput(logits.masked_fill(~mask, float("-inf")), None, None)
-
-
-# =============================================================================
-# Value Head (Critic)
-# =============================================================================
+        t_query = self._query_net(torch.cat([t_global, t_cond], dim=-1))  # (B, dim_key)
+        t_logits = torch.bmm(t_keys, t_query.unsqueeze(-1)).squeeze(-1) * self._scale  # (B, N)
+        return t_logits.masked_fill(~t_mask, float("-inf"))
 
 
 class HeadValue(nn.Module):
@@ -146,14 +123,14 @@ class HeadValue(nn.Module):
             nn.Linear(dim_ff, num_streams),
         )
 
-    def forward(self, x_global: torch.Tensor) -> torch.Tensor:
+    def forward(self, t_global: torch.Tensor) -> torch.Tensor:
         """
         Estimate per-stream state values.
 
         Args:
-            x_global: Global context vector (B, dim_global)
+            t_global: Global context vector (B, dim_global)
 
         Returns:
             Value estimates (B, num_streams)
         """
-        return self._network(x_global)
+        return self._network(t_global)
