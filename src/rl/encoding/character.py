@@ -6,11 +6,17 @@ from slai import Character
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
+from src.rl.encoding.modifier import ENCODING_DIM_MODIFIERS
 from src.rl.encoding.modifier import encode_modifiers_into
-from src.rl.encoding.modifier import get_encoding_dim_modifiers
+from src.rl.types import Slice
+from src.rl.types import SliceKind
 from src.rl.utils import get_piecewise_bucket
 from src.rl.utils import get_piecewise_dim
 from src.rl.utils import get_sqrt_norm
+
+
+# Order = fill order = Core's global-offset order
+SLICE_CHARACTER = [Slice(SliceKind.CHARACTER, 1)]
 
 
 _INCOMING_DAMAGE_MAX = 150  # summed multi-monster turn; sqrt-scaled
@@ -22,7 +28,7 @@ _GOLD_MAX = 499
 _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 ENCODING_DIM_CHARACTER = (
-    get_encoding_dim_modifiers()  # Modifiers OHE
+    ENCODING_DIM_MODIFIERS  # Modifiers OHE
     + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
     + _GOLD_DIM  # Gold OHE
     + 1  # Gold scalar
@@ -66,8 +72,7 @@ def _encode_character_into(
     out[pos + 4] = character.health / max(character.health_max, 1)
     out[pos + 5] = get_sqrt_norm(character.health_max, _HEALTH_MAX_CAP)
     out[pos + 6] = get_sqrt_norm(max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX)
-    # Master-deck size/quality — always-on, covering combat where the deck token
-    # group is screen-masked
+    # Master-deck size/quality — always-on, covering combat where the deck token group is masked.
     out[pos + 7] = get_sqrt_norm(len(deck), MAX_SIZE_DECK)
     out[pos + 8] = sum(card.upgraded for card in deck) / max(len(deck), 1)
 
@@ -77,15 +82,18 @@ def encode_batch_character(
     batch_incoming_damage: list[int],
     batch_deck: list[list[Card]],
     device: torch.device,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     batch_size = len(batch_character)
 
     # Pre-allocate NumPy array
-    x_out = np.zeros((batch_size, ENCODING_DIM_CHARACTER), dtype=np.float32)
+    np_out = np.zeros((batch_size, ENCODING_DIM_CHARACTER), dtype=np.float32)
 
     for b, (character, incoming_damage, deck) in enumerate(
         zip(batch_character, batch_incoming_damage, batch_deck)
     ):
-        _encode_character_into(character, incoming_damage, deck, x_out[b])
+        _encode_character_into(character, incoming_damage, deck, np_out[b])
 
-    return torch.from_numpy(x_out).to(device)
+    # Singleton entity (always present): a seq dim of 1 + an all-valid mask, for a TPadded slice
+    x = torch.from_numpy(np_out).to(device).unsqueeze(1)
+    mask = torch.ones(batch_size, 1, dtype=torch.bool, device=device)
+    return x, mask

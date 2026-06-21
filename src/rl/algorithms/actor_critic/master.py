@@ -1,16 +1,3 @@
-"""PPO training with fixed-length rollouts and in-process environments.
-
-Envs run in-process with `fast_mode=True` (the engine auto-advances trivial
-single-legal-action states, so the trainer only sees real choice points).
-`env.step` returns a 2-tuple `(obs, terminated)`; reward is computed trainer-side.
-
-A rollout is stored columnar in a `RolloutBuffer`: the batched per-step tensors
-(encoded state, masks, recorded action indices, log-probs, values) are written in
-place into preallocated (N, ...) storage, and PPO minibatches index them by row.
-Masks come from each env's `get_legal_actions()` (the authoritative legal set), so
-recompute needs no live envs.
-"""
-
 import multiprocessing as mp
 import os
 import random
@@ -28,23 +15,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.rl.types import TMask
-from src.rl.action_space.masks import build_masks
-from src.rl.types import action_from_actiontype
+from src.rl.masks import build_masks
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
-from src.rl.types import TGameState
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
+from src.rl.models.actor_critic import get_action
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
+from src.rl.types import Level
+from src.rl.types import NUM_ACTION_TYPES
+from src.rl.types import TGameState
+from src.rl.types import TMask
+from src.rl.types import action_from_actiontype
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
-
-# =============================================================================
-# Data structures
-# =============================================================================
 
 
 @dataclass
@@ -54,9 +39,9 @@ class RolloutBuffer:
     Values/returns are per reward stream (K = len(REWARD_STREAMS)); the policy
     advantage is the per-stream advantages summed, then normalized."""
 
-    x_game_state: TGameState  # (N, ...)
+    game_state: TGameState  # (N, ...)
     mask_batch: TMask  # (N, ...) — row-sliced per minibatch (mask_batch[rows])
-    option_idx: torch.Tensor  # (N,) recorded L1 ActionType pick
+    action_type_idx: torch.Tensor  # (N,) recorded L1 ActionType pick
     selection_idx: torch.Tensor  # (N,) recorded L2 entity pick
     target_idx: torch.Tensor  # (N,) recorded L3 monster pick (-1 if none)
     log_probs_old: torch.Tensor  # (N,)
@@ -84,7 +69,7 @@ class EpisodeStats:
 # Behavioral telemetry
 # =============================================================================
 
-# Behaviorally-loaded ActionTypes surfaced to TensorBoard (option_idx value ==
+# Behaviorally-loaded ActionTypes surfaced to TensorBoard (action_type_idx value ==
 # int(ActionType)). Names are resolved against the engine enum at import, so a
 # rename/removal in slai fails loudly here instead of silently mislabeling a tag.
 _TELEMETRY_ACTION_NAMES = (
@@ -118,10 +103,10 @@ def _behavioral_metrics(buffer: "RolloutBuffer") -> dict[str, float]:
     derived from already-stored buffer fields. These are SAMPLED actions, so noisy;
     the low-variance signal is the greedy eval battery. `cond_rate` = when the kind
     was legal, how often it was chosen; `avail_rate` = how often the choice arose."""
-    opt = buffer.option_idx  # (N,) chosen L1 ActionType
+    action_types = buffer.action_type_idx  # (N,) chosen L1 ActionType
     avail = buffer.mask_batch.mask_action_type  # (N, NUM_ACTION_TYPES) bool legality
-    n = float(opt.shape[0])
-    chosen = torch.bincount(opt, minlength=NUM_ACTION_TYPES).float()
+    n = float(action_types.shape[0])
+    chosen = torch.bincount(action_types, minlength=NUM_ACTION_TYPES).float()
     available = avail.sum(0).float()
 
     metrics: dict[str, float] = {}
@@ -134,7 +119,7 @@ def _behavioral_metrics(buffer: "RolloutBuffer") -> dict[str, float]:
     reward_avail = avail[:, _REWARD_TAKE_IDX].any(dim=1)
     n_reward = reward_avail.sum().item()
     if n_reward > 0:
-        skipped = ((opt == _ROOM_EXIT_IDX) & reward_avail).sum().item()
+        skipped = ((action_types == _ROOM_EXIT_IDX) & reward_avail).sum().item()
         metrics["Actions/reward_skip_rate"] = skipped / n_reward
     # Potion-held fraction: PotionUse/PotionDiscard are legal iff a potion is held.
     metrics["Actions/potion_held_frac"] = avail[:, _POTION_AT_IDX].any(dim=1).float().mean().item()
@@ -227,11 +212,6 @@ def _compute_gae(rewards, values, dones, bootstrap, gamma, lam):
     return advantages + values, advantages
 
 
-# =============================================================================
-# Rollout collection
-# =============================================================================
-
-
 def _collect_rollout(
     model: ActorCritic,
     env_mgr: EnvironmentManager,
@@ -249,7 +229,7 @@ def _collect_rollout(
     N = T * E
     K = len(REWARD_STREAMS)
     buf_x = buf_mb = None  # allocated from the first step's shapes
-    opt_idx = torch.empty(N, dtype=torch.long, device=device)
+    action_type_idx = torch.empty(N, dtype=torch.long, device=device)
     sel_idx = torch.empty(N, dtype=torch.long, device=device)
     tgt_idx = torch.empty(N, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
@@ -264,7 +244,7 @@ def _collect_rollout(
             legal = env_mgr.get_legal_actions()
             x = encode_batch_game_state(views, device)
             mb = build_masks(views, legal, device)
-            out = model(x, mb, sample=True)
+            out = model(x, mb, greedy=False)
 
             if buf_x is None:
                 buf_x = x.new_empty(N)
@@ -272,16 +252,14 @@ def _collect_rollout(
             rows = slice(t * E, (t + 1) * E)
             buf_x[rows] = x
             buf_mb[rows] = mb
-            opt_idx[rows] = out.option.idx
-            sel_idx[rows] = out.selection.idx
-            tgt_idx[rows] = out.target.idx
-            log_probs[rows] = out.total_log_prob()
+            action_type_idx[rows] = out.idx[:, Level.ACTION_TYPE]
+            sel_idx[rows] = out.idx[:, Level.L1]
+            tgt_idx[rows] = out.idx[:, Level.L2]
+            log_probs[rows] = out.log_prob.sum(-1)
             values[t] = out.values  # (E, K)
 
             # Extract the action ints once (not per-env .item()), then step each env.
-            ops, sels, tgts = torch.stack(
-                [out.option.idx, out.selection.idx, out.target.idx]
-            ).tolist()
+            ops, sels, tgts = out.idx.t().tolist()
             for i in range(E):
                 reward, done = env_mgr.step(i, action_from_actiontype(ops[i], sels[i], tgts[i]))
                 rewards[t, i] = torch.from_numpy(reward)
@@ -292,7 +270,7 @@ def _collect_rollout(
         views = env_mgr.get_view_states()
         legal = env_mgr.get_legal_actions()
         boot_out = model(
-            encode_batch_game_state(views, device), build_masks(views, legal, device), sample=False
+            encode_batch_game_state(views, device), build_masks(views, legal, device), greedy=True
         )
         bootstrap = boot_out.values  # (E, K)
     model.train()
@@ -312,9 +290,9 @@ def _collect_rollout(
 
     return (
         RolloutBuffer(
-            x_game_state=buf_x,
+            game_state=buf_x,
             mask_batch=buf_mb,
-            option_idx=opt_idx,
+            action_type_idx=action_type_idx,
             selection_idx=sel_idx,
             target_idx=tgt_idx,
             log_probs_old=log_probs,
@@ -358,16 +336,16 @@ def _run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) ->
                     break
                 x = encode_batch_game_state([obs], device)
                 mb = build_masks([obs], [legal], device)
-                out = model(x, mb, sample=False)
+                out = model(x, mb, greedy=True)
                 m = mb.mask_action_type[0]
-                at = int(out.option.idx[0].item())
+                at = int(out.idx[0, Level.ACTION_TYPE].item())
                 chosen[at] += 1.0
                 available += m.float()
                 if m[_REWARD_TAKE_IDX].any():
                     n_reward += 1
                     if at == _ROOM_EXIT_IDX:
                         n_reward_skip += 1
-                action = out.get_action(0)
+                action = get_action(out, 0)
                 prev = obs
                 obs, terminated = env.step(action)
                 total_reward += float(compute_reward(prev, obs, terminated, gamma).sum())
@@ -486,9 +464,9 @@ def _update_ppo(
         # Shuffle the whole buffer once per epoch (nested-tensorclass indexing costs
         # ~25 ms per call); minibatches are then cheap contiguous slice views.
         perm = torch.randperm(len(buffer), device=device)
-        x_ep = buffer.x_game_state[perm]
+        t_ep = buffer.game_state[perm]
         mb_ep = buffer.mask_batch[perm]
-        opt_ep = buffer.option_idx[perm]
+        action_type_ep = buffer.action_type_idx[perm]
         sel_ep = buffer.selection_idx[perm]
         tgt_ep = buffer.target_idx[perm]
         logp_ep = buffer.log_probs_old[perm]
@@ -498,7 +476,7 @@ def _update_ppo(
         for start in range(0, len(buffer), minibatch_size):
             rows = slice(start, start + minibatch_size)
             log_probs_new, entropies, values_new = model.evaluate_actions(
-                x_ep[rows], mb_ep[rows], opt_ep[rows], sel_ep[rows], tgt_ep[rows]
+                t_ep[rows], mb_ep[rows], action_type_ep[rows], sel_ep[rows], tgt_ep[rows]
             )
             log_probs_old = logp_ep[rows]
             adv = adv_ep[rows]
@@ -537,7 +515,7 @@ def _update_ppo(
             totals["Loss/value"] += loss_value.item()
             totals["Loss/entropy"] += loss_entropy.item()
             ent_mean = entropies.mean(dim=0)
-            totals["Entropy/option"] += ent_mean[0].item()
+            totals["Entropy/action_type"] += ent_mean[0].item()
             totals["Entropy/selection"] += ent_mean[1].item()
             totals["Entropy/target"] += ent_mean[2].item()
             # Schulman's approx-KL estimator; clip fraction = share of moved-off ratios
@@ -697,7 +675,6 @@ def train(
                 writer.add_scalar("Steps/total", total_steps, iteration)
                 writer.add_scalar("Time/rollout", t_rollout - t_start, iteration)
                 writer.add_scalar("Time/update", t_update - t_rollout, iteration)
-                writer.add_scalar("Pack/width", model.core.last_pack_width, iteration)
                 for key, value in _behavioral_metrics(buffer).items():
                     writer.add_scalar(key, value, iteration)
                 for key, value in rollout_info.items():

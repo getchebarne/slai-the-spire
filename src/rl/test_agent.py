@@ -15,24 +15,24 @@ import slai
 import torch
 from slai import IntentKind
 
+
 _INTENT_BLOCK_KINDS = frozenset({IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff})
 _INTENT_BUFF_KINDS = frozenset({IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff})
 _INTENT_DEBUFF_KINDS = frozenset(
     {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
 )
 
-from src.rl.index import GLOBAL_SLICE
-from src.rl.index import Token
-from src.rl.index import TokenContext
-from src.rl.index import TokenKind
-from src.rl.types import TMask
-from src.rl.action_space.masks import build_masks
+from src.rl.masks import build_masks
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
-from src.rl.types import TGameState
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
+from src.rl.models.actor_critic import get_action
+from src.rl.types import SliceKind
+from src.rl.types import TGameState
+from src.rl.types import TMask
 from src.rl.utils import load_config
+
 
 try:
     N_COL, _ = os.get_terminal_size()
@@ -332,8 +332,8 @@ def _format_view(view: slai.GameState) -> str:
 
 def get_card_probabilities(
     model: ActorCritic,
-    x_game_state: TGameState,
-    mask_batch: TMask,
+    t_game_state: TGameState,
+    t_mask_batch: TMask,
 ) -> torch.Tensor:
     """
     Get grouped probabilities for cards in hand from the card play head.
@@ -346,25 +346,23 @@ def get_card_probabilities(
         identity-deduped, so the first copy of each card carries the type's
         probability and later copies show 0.
     """
-    core_out = model.core(x_game_state)
-    mask = mask_batch.mask_action_idx[
+    t_core_out = model.core(t_game_state)
+    t_mask = t_mask_batch.mask_action_idx[
         str(int(slai.ActionType.CardPlay))
     ]  # (1, MAX_SIZE_HAND), deduped
-    x_op = model.operation_embedding(
-        torch.tensor([int(slai.ActionType.CardPlay)], device=mask.device)
+    t_op = model._operation_embedding(
+        torch.tensor([int(slai.ActionType.CardPlay)], device=t_mask.device)
     )
-    keys = model.pointer_keys["CARD"](
-        core_out.tokens.x[:, GLOBAL_SLICE[Token(TokenKind.CARD, TokenContext.HAND)]]
-    )
-    head_out = model.query_l2(keys, core_out.x_global, x_op, mask)
-    masked = head_out.logits.masked_fill(~mask, float("-inf"))
-    probs = torch.softmax(masked, dim=-1)
-    return probs[0]
+    t_keys = model._pointer_key_card(t_core_out.pool[SliceKind.CARD_HAND])
+    t_head_out = model._head_level_2(t_keys, t_core_out.global_, t_op, t_mask)
+    t_masked = t_head_out.masked_fill(~t_mask, float("-inf"))
+    t_probs = torch.softmax(t_masked, dim=-1)
+    return t_probs[0]
 
 
 def format_card_probabilities(
     view: slai.GameState,
-    probs: torch.Tensor,
+    t_probs: torch.Tensor,
 ) -> str:
     """Format card probabilities grouped by card type."""
     seen: dict[str, dict] = {}
@@ -373,7 +371,7 @@ def format_card_probabilities(
     for idx, card in enumerate(view.hand):
         display = card.display_name
         if display not in seen:
-            prob = probs[idx].item()
+            prob = t_probs[idx].item()
             if prob != prob:  # NaN guard
                 prob = 0.0
             playable = is_card_playable(card, view.energy.energy_current)
@@ -403,20 +401,20 @@ def get_action_from_model(
 ) -> tuple[object, str | None]:
     """Get an action from the model for the given view (masks come from the
     engine's `legal_actions`). Returns (action, card_probs_str)."""
-    x_game_state = encode_batch_game_state([view], device)
-    mask_batch = build_masks([view], [legal_actions], device)
+    t_game_state = encode_batch_game_state([view], device)
+    t_mask_batch = build_masks([view], [legal_actions], device)
 
     with torch.no_grad():
-        output = model.forward(x_game_state, mask_batch, sample=not greedy)
+        t_output = model.forward(t_game_state, t_mask_batch, greedy=greedy)
 
         card_probs_str = None
         in_combat = view.screen == slai.Screen.Combat and view.pending is None
         has_playable = any(is_card_playable(c, view.energy.energy_current) for c in view.hand)
         if show_card_probs and in_combat and view.hand and has_playable:
-            probs = get_card_probabilities(model, x_game_state, mask_batch)
-            card_probs_str = format_card_probabilities(view, probs)
+            t_probs = get_card_probabilities(model, t_game_state, t_mask_batch)
+            card_probs_str = format_card_probabilities(view, t_probs)
 
-    return output.get_action(0), card_probs_str
+    return get_action(t_output, 0), card_probs_str
 
 
 def run_game(
@@ -567,6 +565,7 @@ def main(
             map_encoder_dim=16,
             dim_ff_primary=32,
             dim_ff_value=32,
+            dim_op=32,
             dim_key=16,
         )
     else:
