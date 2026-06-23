@@ -1,4 +1,4 @@
-exp_name: ppo/NEWERA-XII  # dim_key 32->64 (fallback rung a: IX showed shared-space interference, win gap vs VII)
+exp_name: ppo/NEWERA-XIII  # map_encoder_dim 64->32 (narrow GNN, lifted to dim_entity in projector; depth kept 15)
 seed: 0
 num_iterations: 5.0e+4
 log_every: 10
@@ -29,7 +29,7 @@ model:
   transformer_num_heads: 4
   transformer_num_blocks: 2
   gnn_num_layers: 15  # map GNN depth = MAP_HEIGHT → full downstream lookahead per room
-  map_encoder_dim: 64
+  map_encoder_dim: 32  # GNN internal width (lifted to dim_entity in entity_projector); depth unchanged
 
   # Head dimensions
   dim_ff_primary: 64
