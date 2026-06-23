@@ -38,70 +38,83 @@ ENCODING_DIM_MAP_META = (
 )
 
 
-def _encode_map_into(map_: Map, out: np.ndarray) -> None:
-    # Room kind OHE + outgoing-edge multi-hot, per node
-    for y, row in enumerate(map_.rooms):
-        for x, room in enumerate(row):
-            if room is None:
-                continue
-
-            idx_room_kind = _MAP_ROOM_KIND[room.room_kind]
-            out[y, x, idx_room_kind] = 1.0
-            for x_next in room.edges:
-                delta = x_next - x  # engine edges stay within ±1 column
-                if 0 <= x_next < MAP_WIDTH and -1 <= delta <= 1:
-                    out[y, x, MAP_NUM_ROOM_KINDS + delta + 1] = 1.0
-
-    # Current position (the act boss sits off-grid at y_current == MAP_HEIGHT; skip it)
-    if map_.y_current is not None and map_.x_current is not None and map_.y_current < MAP_HEIGHT:
-        out[map_.y_current, map_.x_current, NUM_CHANNELS - 1] = 1.0
+# Static map-grid cache keyed by map.identity_hash: room kinds + edges are fixed per map (only the
+# position bit moves), and the 105-node fill is the encode hotspot. Mirrors the card/potion caches.
+_MAP_GRID_CACHE: dict[int, np.ndarray] = {}
+_MAP_GRID_CACHE_MAX = 100_000
 
 
-def _encode_map_meta_into(map_: Map, out: np.ndarray) -> None:
+def _static_grid(identity_hash: int, rooms: list) -> np.ndarray:
+    """The position-independent (room kind + edge) grid for a map, cached by identity_hash."""
+    grid = _MAP_GRID_CACHE.get(identity_hash)
+    if grid is None:
+        grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
+        for y, row in enumerate(rooms):
+            for x, room in enumerate(row):
+                if room is None:
+                    continue
+
+                grid[y, x, _MAP_ROOM_KIND[room.room_kind]] = 1.0
+                for x_next in room.edges:
+                    delta = x_next - x  # engine edges stay within ±1 column
+                    if 0 <= x_next < MAP_WIDTH and -1 <= delta <= 1:
+                        grid[y, x, MAP_NUM_ROOM_KINDS + delta + 1] = 1.0
+        grid.flags.writeable = False  # guard the cached master copy
+        if len(_MAP_GRID_CACHE) >= _MAP_GRID_CACHE_MAX:
+            _MAP_GRID_CACHE.clear()
+        _MAP_GRID_CACHE[identity_hash] = grid
+    return grid
+
+
+def _encode_map_meta_into(
+    rooms: list, y_current: int | None, x_current: int | None, boss, out: np.ndarray
+) -> None:
     # Floor depth + on-map sentinel
-    if map_.y_current is not None:
-        out[0] = map_.y_current / MAP_HEIGHT
+    if y_current is not None:
+        out[0] = y_current / MAP_HEIGHT
         out[1] = 1.0
 
     # Act-boss identity OHE — fail loudly on a boss we haven't mapped (new act)
-    idx_boss = _MAP_BOSS.get(map_.boss)
+    idx_boss = _MAP_BOSS.get(boss)
     if idx_boss is None:
-        raise ValueError(f"Unknown act boss {map_.boss!r}; add it to _MAP_BOSS")
+        raise ValueError(f"Unknown act boss {boss!r}; add it to _MAP_BOSS")
     out[2 + idx_boss] = 1.0
 
     # Current room kind OHE; skip the off-grid boss row (act-boss identity covers it).
-    if map_.y_current is not None and map_.y_current < MAP_HEIGHT:
-        room = map_.rooms[map_.y_current][map_.x_current]
+    if y_current is not None and y_current < MAP_HEIGHT:
+        room = rooms[y_current][x_current]
         if room is not None:
             out[2 + len(_MAP_BOSS) + _MAP_ROOM_KIND[room.room_kind]] = 1.0
 
     # Next-row room kinds per column — the RoomSelect candidates (row 0 before the first pick).
-    y_next = 0 if map_.y_current is None else map_.y_current + 1
+    y_next = 0 if y_current is None else y_current + 1
     if y_next < MAP_HEIGHT:
         base = 2 + len(_MAP_BOSS) + len(_MAP_ROOM_KIND)
-        for x, room in enumerate(map_.rooms[y_next]):
+        for x, room in enumerate(rooms[y_next]):
             if room is not None:
                 out[base + x * len(_MAP_ROOM_KIND) + _MAP_ROOM_KIND[room.room_kind]] = 1.0
 
 
-def _room_node_idx_into(map_: Map, out: np.ndarray) -> None:
+def _room_node_idx_into(
+    rooms: list, y_current: int | None, x_current: int | None, out: np.ndarray
+) -> None:
     """Per-column flattened node index (y_next*MAP_WIDTH + x) of each next-row selectable
     room, -1 where the column has no legal room. Mirrors the engine's RoomSelect
     enumeration exactly (Start → any non-None row-0 room; Overworld → edge + non-None
     next room). The map GNN gathers its room-token embeddings at these indices; -1 marks
     an invalid (masked) room slot."""
-    y_next = 0 if map_.y_current is None else map_.y_current + 1
+    y_next = 0 if y_current is None else y_current + 1
     if y_next >= MAP_HEIGHT:
         return  # next step is the off-grid act boss (RoomSelect not enumerated there)
-    if map_.y_current is None:
+    if y_current is None:
         for x in range(MAP_WIDTH):
-            if map_.rooms[0][x] is not None:
+            if rooms[0][x] is not None:
                 out[x] = y_next * MAP_WIDTH + x
         return
-    cur = map_.rooms[map_.y_current][map_.x_current]
+    cur = rooms[y_current][x_current]
     if cur is not None:
         for x_next in cur.edges:
-            if 0 <= x_next < MAP_WIDTH and map_.rooms[y_next][x_next] is not None:
+            if 0 <= x_next < MAP_WIDTH and rooms[y_next][x_next] is not None:
                 out[x_next] = y_next * MAP_WIDTH + x_next
 
 
@@ -116,9 +129,16 @@ def encode_batch_map(
     np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
 
     for b, map_ in enumerate(batch_map):
-        _encode_map_into(map_, np_grid[b])
-        _room_node_idx_into(map_, np_node_idx[b])
-        _encode_map_meta_into(map_, np_meta[b])
+        # `map_.rooms` reconstructs the whole grid across the FFI (~23us); fetch it once per state
+        rooms = map_.rooms
+        y_current = map_.y_current
+        x_current = map_.x_current
+        # Grid: copy the cached static (room+edge) grid, then set the live position bit
+        np_grid[b] = _static_grid(map_.identity_hash, rooms)
+        if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
+            np_grid[b, y_current, x_current, NUM_CHANNELS - 1] = 1.0
+        _room_node_idx_into(rooms, y_current, x_current, np_node_idx[b])
+        _encode_map_meta_into(rooms, y_current, x_current, map_.boss, np_meta[b])
 
     return (
         torch.from_numpy(np_grid).to(device),

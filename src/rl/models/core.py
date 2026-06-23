@@ -49,7 +49,6 @@ def _build_token_layout() -> tuple[dict[SliceKind, slice], int]:
 
 _SLICE_OFFSETS, _NUM_TOKENS = _build_token_layout()
 _SELECTABLE = set(ACTION_TYPE_POOL.values()) | {SliceKind.MONSTERS}
-_PACK_WIDTH_BUCKETS = (32, 40, 48, 56, 64, 80, 96, 112, 128, _NUM_TOKENS + 1)
 
 
 class Core(nn.Module):
@@ -160,9 +159,9 @@ class Core(nn.Module):
         )
 
     def _refine_tokens(self, t_tokens: TPadded) -> TPadded:
-        # Calculate maximum true sequence length across the batch and derive pack width from it
-        max_seq_len = int(t_tokens.mask.sum(dim=1).max())
-        pack_width = next(w for w in _PACK_WIDTH_BUCKETS if w >= max_seq_len)
+        # Pack to the batch's true max token count: attention is O(width^2), and CPU-eager has no
+        # recompilation penalty for a per-batch width (re-bucket if you compile or move to GPU).
+        pack_width = int(t_tokens.mask.sum(dim=1).max())
 
         # Gather valid elements across each sample in the batch
         t_idx_keep_mask = torch.argsort(~t_tokens.mask, dim=1, stable=True, descending=False)
@@ -175,8 +174,11 @@ class Core(nn.Module):
         # Run transformer
         t_tokens_ref = self._entity_transformer(t_tokens_packed)
 
-        # Create all-zeros tensor w/ the original input shape and fill it with the refined tokens
-        t_scattered = torch.zeros_like(t_tokens.x).scatter(1, t_idx_keep_x, t_tokens_ref.x)
+        # Scatter the refined tokens back to their original slots. Padding must be zeroed (not
+        # empty_like): downstream masks multiply (x*0), and NaN*0=NaN, so uninitialized NaN-pattern
+        # bytes propagate — observed crashing the CPU path on x86 with garbage that happened to be NaN.
+        t_scattered = torch.zeros_like(t_tokens.x)
+        t_scattered.scatter_(1, t_idx_keep_x, t_tokens_ref.x)
         return TPadded(t_scattered, t_tokens.mask)
 
     def _global_context(
