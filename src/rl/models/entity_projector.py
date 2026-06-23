@@ -76,7 +76,9 @@ def _project_sparse(
 
     # Initialize empty result tensor w/ one row per batch-entity
     batch_size, num_entities, dim_entity = t_x.shape
-    t_out = torch.zeros(batch_size * num_entities, dim_embedding, dtype=t_x.dtype)
+    t_out = torch.zeros(
+        batch_size * num_entities, dim_embedding, dtype=t_x.dtype, device=t_x.device
+    )
 
     # Compute which rows actually need to be projected
     t_row_idxs = torch.nonzero(torch.flatten(t_mask), as_tuple=True)[0]
