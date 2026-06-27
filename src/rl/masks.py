@@ -3,8 +3,8 @@ import warnings
 import numpy as np
 import slai
 import torch
-from tensordict import TensorDict
 from slai import Card
+from tensordict import TensorDict
 
 from src.rl.constants import MAX_MONSTERS
 from src.rl.constants import MAX_POTION_SLOTS
@@ -22,6 +22,7 @@ from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import Slice
 from src.rl.types import SliceKind
 from src.rl.types import TMask
+
 
 # Target-slice sizes; built here (masks is the only consumer).
 BY_KIND: dict[SliceKind, Slice] = {

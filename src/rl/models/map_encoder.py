@@ -4,11 +4,12 @@ import torch.nn.functional as F
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.encoding.map_ import NUM_CHANNELS
-from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
 from src.rl.encoding.map_ import CH_EDGES
 from src.rl.encoding.map_ import CH_POSITION
+from src.rl.encoding.map_ import NUM_CHANNELS
+from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
 from src.rl.types import TPadded
+
 
 _NUM_NODES = MAP_HEIGHT * MAP_WIDTH
 
