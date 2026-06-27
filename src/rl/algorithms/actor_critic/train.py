@@ -4,7 +4,6 @@ import random
 import shutil
 import signal
 import time
-from collections import defaultdict
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from types import FrameType
@@ -269,6 +268,34 @@ def _rollout_worker(
             conn.send(("done", None, completed, rollout_info))
 
 
+def _minibatch_metrics(
+    loss_policy: torch.Tensor,
+    loss_value: torch.Tensor,
+    loss_entropy: torch.Tensor,
+    entropies: torch.Tensor,
+    ratio: torch.Tensor,
+    log_probs_new: torch.Tensor,
+    log_probs_old: torch.Tensor,
+    grad_norm: torch.Tensor,
+    clip_eps: float,
+) -> dict[str, float]:
+    """Per-minibatch TensorBoard scalars (minibatch means). Schulman's approx-KL
+    estimator; clip fraction = share of moved-off ratios; grad norm is the pre-clip
+    total (otherwise discarded by clip_grad_norm_)."""
+    ent_mean = entropies.mean(dim=0)
+    return {
+        "loss/policy": loss_policy.item(),
+        "loss/value": loss_value.item(),
+        "loss/entropy": loss_entropy.item(),
+        "entropy/L1": ent_mean[0].item(),
+        "entropy/L2": ent_mean[1].item(),
+        "entropy/L3": ent_mean[2].item(),
+        "update/approx_kl": ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item(),
+        "update/clip_fraction": ((ratio - 1).abs() > clip_eps).float().mean().item(),
+        "grad/norm_preclip": grad_norm.item(),
+    }
+
+
 def _update_ppo(
     model: ActorCritic,
     buffer: RolloutBuffer,
@@ -284,8 +311,7 @@ def _update_ppo(
 ) -> dict[str, float]:
     """One PPO update over the buffer. Returns iteration-mean metrics keyed by their
     TensorBoard scalar names."""
-    totals: dict[str, float] = defaultdict(float)
-    n = 0
+    records: list[dict[str, float]] = []
 
     # The decomposition's instrumentation: per-stream explained variance from
     # rollout-time values — which return stream the critic can predict (EV → 1)
@@ -335,21 +361,20 @@ def _update_ppo(
             grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
 
-            totals["loss/policy"] += loss_policy.item()
-            totals["loss/value"] += loss_value.item()
-            totals["loss/entropy"] += loss_entropy.item()
-            ent_mean = entropies.mean(dim=0)
-            totals["entropy/action_type"] += ent_mean[0].item()
-            totals["entropy/selection"] += ent_mean[1].item()
-            totals["entropy/target"] += ent_mean[2].item()
-            # Schulman's approx-KL estimator; clip fraction = share of moved-off ratios
-            totals["update/approx_kl"] += (
-                ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item()
+            records.append(
+                _minibatch_metrics(
+                    loss_policy,
+                    loss_value,
+                    loss_entropy,
+                    entropies,
+                    ratio,
+                    log_probs_new,
+                    log_probs_old,
+                    grad_norm,
+                    clip_eps,
+                )
             )
-            totals["update/clip_fraction"] += ((ratio - 1).abs() > clip_eps).float().mean().item()
-            totals["grad/norm_preclip"] += grad_norm.item()  # pre-clip total norm (else discarded)
-            n += 1
-    metrics = {k: v / n for k, v in totals.items()}
+    metrics = {key: sum(r[key] for r in records) / len(records) for key in records[0]}
     for k, name in enumerate(REWARD_STREAMS):
         metrics[f"Value/ev_{name}"] = ev[k].item()
     return metrics
