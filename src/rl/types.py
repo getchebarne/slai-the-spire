@@ -55,6 +55,7 @@ class TGameState:
     energy: torch.Tensor
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
     room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
+    room_mask: torch.Tensor  # (B, MAP_WIDTH) bool — next-row room non-padding mask
     map_meta: torch.Tensor
     screen: torch.Tensor
     reward_meta: torch.Tensor

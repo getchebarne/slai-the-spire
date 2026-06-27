@@ -4,19 +4,11 @@ Constants for the RL module.
 Centralizes magic numbers and configuration values used across the RL codebase.
 """
 
-# =============================================================================
-# Training
-# =============================================================================
-
 ASCENSION_LEVEL = 1
 
 # Skip trivial single-legal-action states in the engine (auto-advance). Used
 # for training and eval — env-construction flag, not a tunable hyperparameter.
 FAST_MODE = True
-
-# =============================================================================
-# Encoding Limits
-# =============================================================================
 
 # Actor encoding limits
 BLOCK_MAX_CHARACTER = 20
