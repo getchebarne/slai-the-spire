@@ -2,14 +2,15 @@ import numpy as np
 import torch
 from slai import Map
 from slai import MonsterEncounter
+from slai import Room
 from slai import RoomKind
 from slai import members
-from slai import Room
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.types import Slice
 from src.rl.types import SliceKind
+
 
 # Order = fill order = Core's global-offset order
 SLICE_ROOMS = [Slice(SliceKind.ROOMS, MAP_WIDTH)]
