@@ -101,10 +101,9 @@ class Level(IntEnum):
     L2 = 2
 
 
-@tensorclass(shadow=True)  # 'values' field name shadows TensorDict.values() (never called)
+@tensorclass
 class TAction:
-    values: torch.Tensor  # (B, len(REWARD_STREAMS)) critic, one output per reward stream
-    idx: torch.Tensor  # (B, len(Level)) long, per-Level column; -1 where the level didn't apply
+    idxs: torch.Tensor  # (B, len(Level)) long, per-Level column; -1 where the level didn't apply
     log_prob: torch.Tensor  # (B, len(Level)) float, 0 where N/A
     entropy: torch.Tensor  # (B, len(Level)) float, 0 where N/A
 
