@@ -2,7 +2,6 @@ import math
 
 import torch
 import torch.nn as nn
-from slai import Action
 from slai import ActionType
 
 from src.rl.encoding.screen import ENCODING_DIM_SCREEN
@@ -15,22 +14,12 @@ from src.rl.models.heads import PointerKeys
 from src.rl.reward import REWARD_STREAMS
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import ACTION_TYPE_POOL
-from src.rl.types import Level
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
 from src.rl.types import TAction
 from src.rl.types import TCoreOutput
 from src.rl.types import TGameState
 from src.rl.types import TMask
-from src.rl.types import action_from_actiontype
-
-
-def get_action(t_batch: TAction, i: int) -> Action:
-    return action_from_actiontype(
-        int(t_batch.idxs[i, Level.ACTION_TYPE].item()),
-        int(t_batch.idxs[i, Level.L1].item()),
-        int(t_batch.idxs[i, Level.L2].item()),
-    )
 
 
 class ActorCritic(nn.Module):
@@ -301,9 +290,9 @@ class ActorCritic(nn.Module):
         self,
         t_game_state: TGameState,
         t_mask: TMask,
-        t_action_type_indices: torch.Tensor,
-        t_l1_indices: torch.Tensor,
-        t_l2_indices: torch.Tensor,
+        t_idx_at: torch.Tensor,
+        t_idx_l1: torch.Tensor,
+        t_idx_l2: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         t_core_out = self.core(t_game_state)
         t_values = self._head_value(t_core_out.global_)
@@ -312,9 +301,9 @@ class ActorCritic(nn.Module):
             t_core_out,
             t_mask,
             greedy=True,
-            t_recorded_action_type=t_action_type_indices,
-            t_recorded_l1=t_l1_indices,
-            t_recorded_l2=t_l2_indices,
+            t_recorded_action_type=t_idx_at,
+            t_recorded_l1=t_idx_l1,
+            t_recorded_l2=t_idx_l2,
         )
         return t_actions.log_prob.sum(-1), t_actions.entropy, t_values
 
