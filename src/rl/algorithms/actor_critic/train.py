@@ -6,6 +6,8 @@ import signal
 import time
 from collections import defaultdict
 from dataclasses import dataclass, fields
+from multiprocessing.connection import Connection
+from types import FrameType
 
 import numpy as np
 import slai
@@ -20,7 +22,6 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
-from src.rl.models.actor_critic import get_action
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.types import Level
@@ -30,6 +31,10 @@ from src.rl.types import TMask
 from src.rl.types import action_from_actiontype
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
+from src.rl.algorithms.actor_critic.evals import _REWARD_TAKE_IDX
+from src.rl.algorithms.actor_critic.evals import _ROOM_EXIT_IDX
+from src.rl.algorithms.actor_critic.evals import _TELEMETRY_AT_IDX
+from src.rl.algorithms.actor_critic.evals import eval_battery_worker
 
 
 @dataclass
@@ -65,36 +70,9 @@ class EpisodeStats:
         return float(self.stream_rewards.sum())
 
 
-# =============================================================================
-# Behavioral telemetry
-# =============================================================================
-
-# Behaviorally-loaded ActionTypes surfaced to TensorBoard (action_type_idx value ==
-# int(ActionType)). Names are resolved against the engine enum at import, so a
-# rename/removal in slai fails loudly here instead of silently mislabeling a tag.
-_TELEMETRY_ACTION_NAMES = (
-    "CardPurge",
-    "ShopPurge",  # P4 deck thinning
-    "ShopBuyCard",
-    "ShopBuyRelic",
-    "ShopBuyPotion",  # P3 shop spend
-    "RewardTakeGold",
-    "RewardTakePotion",
-    "RewardTakeCard",
-    "RewardTakeRelic",  # P2 loot
-    "PotionUse",
-    "PotionDiscard",  # P2 potions
-    "Rest",
-    "CardUpgrade",  # P1/P3 rest vs upgrade
-    "RoomSelect",
-    "TurnEnd",  # P3 routing / P5 turn end
-)
-_TELEMETRY_AT_IDX = {n: int(getattr(slai.ActionType, n)) for n in _TELEMETRY_ACTION_NAMES}
-_REWARD_TAKE_IDX = [
-    int(getattr(slai.ActionType, n))
-    for n in ("RewardTakeGold", "RewardTakePotion", "RewardTakeCard", "RewardTakeRelic")
-]
-_ROOM_EXIT_IDX = int(slai.ActionType.RoomExit)
+# PotionUse/PotionDiscard are legal iff a potion is held (rollout potion-held telemetry).
+# The shared ActionType telemetry vocab (_TELEMETRY_AT_IDX, _REWARD_TAKE_IDX, _ROOM_EXIT_IDX)
+# lives in evals.py and is imported above.
 _POTION_AT_IDX = [int(slai.ActionType.PotionUse), int(slai.ActionType.PotionDiscard)]
 
 
@@ -126,11 +104,6 @@ def _behavioral_metrics(buffer: "RolloutBuffer") -> dict[str, float]:
     return metrics
 
 
-# =============================================================================
-# Environment manager
-# =============================================================================
-
-
 class EnvironmentManager:
     def __init__(self, num_envs: int, gamma: float):
         self.num_envs = num_envs
@@ -156,10 +129,10 @@ class EnvironmentManager:
     def get_view_states(self) -> list[slai.GameState]:
         return self._obs
 
-    def get_legal_actions(self) -> list[list]:
+    def get_legal_actions(self) -> list[list[slai.Action]]:
         return [env.get_legal_actions() for env in self._envs]
 
-    def step(self, env_idx: int, action) -> tuple[np.ndarray, bool]:
+    def step(self, env_idx: int, action: slai.Action) -> tuple[np.ndarray, bool]:
         prev = self._obs[env_idx]
         nxt, terminated = self._envs[env_idx].step(action)
         reward = compute_reward(prev, nxt, terminated, self._gamma)  # (K,)
@@ -187,12 +160,14 @@ class EnvironmentManager:
         return completed
 
 
-# =============================================================================
-# GAE
-# =============================================================================
-
-
-def _compute_gae(rewards, values, dones, bootstrap, gamma, lam):
+def _compute_gae(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    dones: torch.Tensor,
+    bootstrap: torch.Tensor,
+    gamma: float,
+    lam: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Vectorized GAE over E parallel envs. Rewards/values are (T, E, K) with one GAE
     recursion per reward stream (GAE is linear in rewards, so the per-stream advantages
     sum to the single-critic advantage on the summed reward); `bootstrap` is (E, K) and
@@ -219,7 +194,7 @@ def _collect_rollout(
     gamma: float,
     lam: float,
     device: torch.device,
-) -> tuple[RolloutBuffer, list[EpisodeStats]]:
+) -> tuple[RolloutBuffer, list[EpisodeStats], dict[str, float]]:
     """Collect a fixed-length rollout into a columnar RolloutBuffer (rows = t*E + e),
     written in place into storage preallocated at (N, ...) — no per-step tree
     retention or torch.cat. GAE is computed per env (column) before flattening;
@@ -305,99 +280,19 @@ def _collect_rollout(
     )
 
 
-# Greedy deterministic play can loop; cap so a hung eval can't wedge its worker
-_EVAL_MAX_STEPS = 1000
-_EVAL_NUM_EPISODES = 64
-_EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance trend
-
-
-def _run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) -> dict[str, float]:
-    """Greedy battery over a fixed seed set; returns outcome + behavioral metrics. Same
-    encode->mask->forward path as training/watch. Fixed seeds make it a consistent test
-    set across checkpoints (paired comparison; std/sqrt(N) variance, not the old 1/sqrt(1))."""
-    rewards: list[float] = []
-    lengths: list[int] = []
-    wins: list[bool] = []
-    floors: list[int] = []
-    chosen = torch.zeros(NUM_ACTION_TYPES)
-    available = torch.zeros(NUM_ACTION_TYPES)
-    n_reward = 0
-    n_reward_skip = 0
-    with torch.no_grad():
-        for seed in _EVAL_SEEDS:
-            env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
-            obs = env.reset(seed=seed)
-            total_reward = 0.0
-            length = 0
-            terminated = False
-            while not terminated and length < _EVAL_MAX_STEPS:
-                legal = env.get_legal_actions()
-                if not legal:
-                    break
-                x = encode_batch_game_state([obs], device)
-                mb = build_masks([obs], [legal], device)
-                out = model(x, mb, greedy=True)
-                m = mb.mask_action_type[0]
-                at = int(out.idx[0, Level.ACTION_TYPE].item())
-                chosen[at] += 1.0
-                available += m.float()
-                if m[_REWARD_TAKE_IDX].any():
-                    n_reward += 1
-                    if at == _ROOM_EXIT_IDX:
-                        n_reward_skip += 1
-                action = get_action(out, 0)
-                prev = obs
-                obs, terminated = env.step(action)
-                total_reward += float(compute_reward(prev, obs, terminated, gamma).sum())
-                length += 1
-            rewards.append(total_reward)
-            lengths.append(length)
-            wins.append(bool(terminated and obs.character.health > 0))
-            floors.append(obs.map.y_current or 0)
-
-    n = len(rewards)
-    metrics: dict[str, float] = {
-        "Eval/win_rate": sum(wins) / n,
-        "Eval/avg_floor": sum(floors) / n,
-        "Eval/avg_length": sum(lengths) / n,
-        "Eval/reward_mean": float(np.mean(rewards)),
-        "Eval/reward_std": float(np.std(rewards)),
-    }
-    for name, idx in _TELEMETRY_AT_IDX.items():
-        a = available[idx].item()
-        metrics[f"Eval/cond_rate/{name}"] = chosen[idx].item() / a if a > 0 else 0.0
-    if n_reward > 0:
-        metrics["Eval/reward_skip_rate"] = n_reward_skip / n_reward
-    return metrics
-
-
-def _eval_battery_worker(conn, model_config, gamma) -> None:
-    """Persistent eval worker (mirrors _rollout_worker's lifecycle): receive (weights,
-    iteration), run the fixed-seed greedy battery, reply with metrics. `None` stops it.
-    One thread, so it rides the spare core off the training critical path."""
-    torch.set_num_threads(1)
-    device = torch.device("cpu")
-    model = ActorCritic(**model_config)
-    model.eval()
-    while True:
-        msg = conn.recv()
-        if msg is None:
-            return
-        state_dict, iteration = msg
-        model.load_state_dict(state_dict)
-        conn.send((iteration, _run_eval_battery(model, device, gamma)))
-
-
-# =============================================================================
-# Overlapped rollout collection (rollout t+1 runs while the master updates on t)
-# =============================================================================
-
-
 def _buffer_clone(buf: RolloutBuffer) -> RolloutBuffer:
     return RolloutBuffer(**{f.name: getattr(buf, f.name).clone() for f in fields(RolloutBuffer)})
 
 
-def _rollout_worker(conn, model_config, num_envs, rollout_length, gamma, lam, seed) -> None:
+def _rollout_worker(
+    conn: Connection,
+    model_config: dict,
+    num_envs: int,
+    rollout_length: int,
+    gamma: float,
+    lam: float,
+    seed: int,
+) -> None:
     """Side process: receive weights, collect one rollout, expose it via a stable
     shared-memory buffer (sent as handles once), reply with episode stats. Envs are
     built here — engine objects aren't picklable. Data is collected with the weights
@@ -432,23 +327,18 @@ def _rollout_worker(conn, model_config, num_envs, rollout_length, gamma, lam, se
             conn.send(("done", None, completed, rollout_info))
 
 
-# =============================================================================
-# PPO update
-# =============================================================================
-
-
 def _update_ppo(
-    model,
+    model: ActorCritic,
     buffer: RolloutBuffer,
-    optimizer,
-    num_epochs,
-    minibatch_size,
-    clip_eps,
-    clip_value_loss,
-    coef_value,
-    coef_entropy,
-    max_grad_norm,
-    device,
+    optimizer: torch.optim.Optimizer,
+    num_epochs: int,
+    minibatch_size: int,
+    clip_eps: float,
+    clip_value_loss: bool,
+    coef_value: float,
+    coef_entropy: float,
+    max_grad_norm: float,
+    device: torch.device,
 ) -> dict[str, float]:
     """One PPO update over the buffer. Returns iteration-mean metrics keyed by their
     TensorBoard scalar names."""
@@ -536,7 +426,13 @@ def _update_ppo(
 # =============================================================================
 
 
-def _save_checkpoint(path, model, optimizer, iteration, total_steps) -> None:
+def _save_checkpoint(
+    path: str,
+    model: ActorCritic,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    total_steps: int,
+) -> None:
     torch.save(
         {
             "model": model.state_dict(),
@@ -549,30 +445,30 @@ def _save_checkpoint(path, model, optimizer, iteration, total_steps) -> None:
 
 
 def train(
-    exp_name,
-    num_iterations,
-    log_every,
-    save_every,
-    model,
-    model_config,
-    optimizer,
-    rollout_length,
-    num_epochs,
-    minibatch_size,
-    clip_eps,
-    clip_value_loss,
-    gamma,
-    lam,
-    coef_value,
-    coef_entropy_max,
-    coef_entropy_min,
-    entropy_decay_steps,
-    max_grad_norm,
-    num_envs,
-    device,
-    start_iteration=0,
-    total_steps=0,
-    overlap_rollout=False,
+    exp_name: str,
+    num_iterations: int,
+    log_every: int,
+    save_every: int,
+    model: ActorCritic,
+    model_config: dict,
+    optimizer: torch.optim.Optimizer,
+    rollout_length: int,
+    num_epochs: int,
+    minibatch_size: int,
+    clip_eps: float,
+    clip_value_loss: bool,
+    gamma: float,
+    lam: float,
+    coef_value: float,
+    coef_entropy_max: float,
+    coef_entropy_min: float,
+    entropy_decay_steps: float,
+    max_grad_norm: float,
+    num_envs: int,
+    device: torch.device,
+    start_iteration: int = 0,
+    total_steps: int = 0,
+    overlap_rollout: bool = False,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
     model.to(device)
@@ -585,7 +481,7 @@ def train(
     eval_ctx = mp.get_context("spawn")
     eval_conn, eval_child = eval_ctx.Pipe()
     eval_proc = eval_ctx.Process(
-        target=_eval_battery_worker, args=(eval_child, model_config, gamma), daemon=True
+        target=eval_battery_worker, args=(eval_child, model_config, gamma), daemon=True
     )
     eval_proc.start()
     eval_busy = False
@@ -720,7 +616,7 @@ def train(
     writer.close()
 
 
-def _raise_keyboard_interrupt(signum, frame):
+def _raise_keyboard_interrupt(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
@@ -730,15 +626,20 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     config_path = "src/rl/algorithms/actor_critic/config.yml"
     config = load_config(config_path)
+
+    # Set seeds
     seed = int(config["seed"])
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+    # Instance `ActorCritic` model and optimizer
     model = ActorCritic(**config["model"])
     optimizer = init_optimizer(config["optimizer"]["name"], model, **config["optimizer"]["kwargs"])
     os.makedirs(f"experiments/{config['exp_name']}", exist_ok=True)
     shutil.copy(config_path, f"experiments/{config['exp_name']}/config.yml")
 
+    # Load checkpoint
     start_iteration = 0
     total_steps = 0
     ckpt_path = f"experiments/{config['exp_name']}/checkpoint.pth"

@@ -4,46 +4,29 @@ import torch.nn.functional as F
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.encoding.map_ import MAP_NUM_ROOM_KINDS
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
+from src.rl.encoding.map_ import CH_EDGES
+from src.rl.encoding.map_ import CH_POSITION
 from src.rl.types import TPadded
 
 _NUM_NODES = MAP_HEIGHT * MAP_WIDTH
 
 
 def _build_child_idx() -> torch.Tensor:
-    """(_NUM_NODES, NUM_EDGE_CHANNELS) long: for node n=(y,x) and relative-edge channel
-    c (deltas {-1, 0, +1}), the flattened child node index in the next row, or _NUM_NODES
-    (a padding column dropped after the scatter) when the child is off-grid. Topology only,
-    so it's a fixed buffer; per-map edge existence rides on the grid's edge channels."""
     t_child = torch.full((_NUM_NODES, NUM_EDGE_CHANNELS), _NUM_NODES, dtype=torch.long)
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
-            n = y * MAP_WIDTH + x
+            hw = y * MAP_WIDTH + x  # Flat index
             if y + 1 < MAP_HEIGHT:
                 for c in range(NUM_EDGE_CHANNELS):
-                    xc = x + (c - 1)  # channels are deltas {-1, 0, +1}
+                    xc = x + (c - 1)  # {-1, 0, +1}
                     if 0 <= xc < MAP_WIDTH:
-                        t_child[n, c] = (y + 1) * MAP_WIDTH + xc
+                        t_child[hw, c] = (y + 1) * MAP_WIDTH + xc
     return t_child
 
 
 class MapGNN(nn.Module):
-    """Graph encoder for the map DAG. Message passing aggregates each node's children
-    (next-row edges + self-loop), so K = MAP_HEIGHT layers give every node full downstream
-    lookahead; residual + LayerNorm per layer curb oversmoothing at that depth.
-
-    Only forward (not-yet-visited) rooms are valid — visited/current floors are sunk and
-    excluded from both message passing and the readout. The adjacency is materialized
-    transiently from the grid's relative-edge channels (a dense N*N child matrix + self
-    loops, row-normalized); at N=105 the BLAS bmm beats a banded gather on CPU.
-
-    Emits (a) per-column next-row room node features (the selectable rooms, gathered at
-    `room_node_idx`; EntityProjector lifts them to the entity-token width), and (b) a masked-mean
-    graph readout (forward rooms only) for the global context.
-    """
-
     def __init__(self, num_layers: int, hidden: int):
         super().__init__()
         self._in_proj = nn.Linear(NUM_CHANNELS, hidden)
@@ -56,74 +39,90 @@ class MapGNN(nn.Module):
         )
 
     def forward(
-        self, t_grid: torch.Tensor, t_room_node_idx: torch.Tensor
+        self, t_grid: torch.Tensor, t_room_node_idx: torch.Tensor, t_room_mask: torch.Tensor
     ) -> tuple[TPadded, torch.Tensor]:
-        """t_grid (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), t_room_node_idx (B, MAP_WIDTH) long.
-        Returns the next-row room node features as a TPadded (x (B, MAP_WIDTH, hidden), mask True
-        where the column has a selectable room) + the forward-map readout (B, hidden)."""
         batch_size = t_grid.shape[0]
+
+        # Flatten grid from (B, H, W, C) -> (B, H * W, C)
         t_nodes = t_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
 
-        # Envs sit on one map node for many steps, so (grid, room_idx) is highly redundant
-        # across a minibatch: run the GNN on unique inputs once and gather back (exact),
-        # mirroring the old CNN's dedup.
-        t_flat = torch.cat([t_nodes.reshape(batch_size, -1), t_room_node_idx.float()], dim=1)
-        t_uniq, t_inverse = torch.unique(t_flat, dim=0, return_inverse=True)
+        # The game sits on one map node for many steps, so (grid, room_idx) is highly redundant
+        # across a minibatch: run the GNN on unique inputs once and gather back (exact)
+        t_cat_flat = torch.cat(
+            [
+                t_nodes.reshape(batch_size, -1),  # (B, H * W * C)
+                t_room_node_idx.float(),  # (B, W)
+            ],
+            dim=1,
+        )  # (B, H * W * C + W)
+        t_uniq, t_inverse = torch.unique(t_cat_flat, dim=0, return_inverse=True)
+        # t_uniq: (U, H * W * C + W)
+        # t_inverse: (B,) / t_inverse[b] ∈ [0, U). Maps unique ID to batch sample index
+
         t_rep = torch.zeros(t_uniq.shape[0], dtype=torch.long, device=t_grid.device)
         t_rep[t_inverse] = torch.arange(batch_size, device=t_grid.device)
 
-        # Encode the unique maps, then scatter the results back over the original batch
-        t_room_u, t_valid_u, t_readout_u = self._run(t_nodes[t_rep], t_room_node_idx[t_rep])
-        return TPadded(t_room_u[t_inverse], t_valid_u[t_inverse]), t_readout_u[t_inverse]
+        # Encode the unique maps, scatter the room features back, then mask padding columns with
+        # the encoder's next-row room mask
+        t_room_uniq, t_readout_uniq = self._run(t_nodes[t_rep], t_room_node_idx[t_rep])
+        t_room_features = t_room_uniq[t_inverse] * t_room_mask.unsqueeze(-1)
+        return TPadded(t_room_features, t_room_mask), t_readout_uniq[t_inverse]
 
     def _run(
         self, t_nodes: torch.Tensor, t_room_node_idx: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        t_valid = self._forward_valid(t_nodes)  # (U, N) forward rooms only
-        t_a = self._adjacency(t_nodes)  # (U, N, N) row-normalized child + self
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        t_valid = self._forward_valid(t_nodes)  # (U, H * W) / Forward rooms only
+        t_adj = self._adjacency(t_nodes)  # (U, H * W, H * W) / Row-normalized children
 
-        # Message passing: aggregate children + self per layer, masked to forward rooms
-        t_h = self._in_proj(t_nodes) * t_valid.unsqueeze(-1)
+        # Message passing: aggregate children per layer, masked to forward rooms
+        t_hidden = self._in_proj(t_nodes) * t_valid.unsqueeze(-1)
         for lin, norm in zip(self._layers, self._norms):
-            t_h = norm(t_h + F.relu(lin(torch.bmm(t_a, t_h))))
-            t_h = t_h * t_valid.unsqueeze(-1)
+            t_hidden = norm(t_hidden + F.relu(lin(torch.bmm(t_adj, t_hidden))))
+            t_hidden = t_hidden * t_valid.unsqueeze(-1)
 
-        # Gather the next-row node features per column, zeroed where no legal room (EntityProjector
-        # lifts them to dim_entity)
-        t_room_valid = t_room_node_idx >= 0  # (U, MAP_WIDTH)
-        t_gather_idx = t_room_node_idx.clamp(min=0).unsqueeze(-1).expand(-1, -1, t_h.shape[-1])
-        t_room_h = torch.gather(t_h, 1, t_gather_idx) * t_room_valid.unsqueeze(-1)
+        # Gather the next-row node features per column (the caller masks padding columns)
+        t_gather_idx = (
+            t_room_node_idx.clamp(min=0).unsqueeze(-1).expand(-1, -1, t_hidden.shape[-1])
+        )
+        t_room_h = torch.gather(t_hidden, 1, t_gather_idx)
 
-        # Whole-(forward-)map readout: masked mean over valid nodes
+        # Map readout: masked mean over valid nodes
         t_denom = t_valid.sum(1, keepdim=True).clamp(min=1).float()
-        t_readout = (t_h * t_valid.unsqueeze(-1)).sum(1) / t_denom
-        return t_room_h, t_room_valid, t_readout
+        t_readout = (t_hidden * t_valid.unsqueeze(-1)).sum(1) / t_denom
 
-    def _adjacency(self, t_nodes: torch.Tensor) -> torch.Tensor:
-        """Row-normalized child adjacency (+ self-loops) from the grid's edge channels.
-        Off-grid edges (top row -> boss) scatter to a padding column that's dropped."""
-        num_unique = t_nodes.shape[0]
-        t_edges = t_nodes[:, :, MAP_NUM_ROOM_KINDS : MAP_NUM_ROOM_KINDS + NUM_EDGE_CHANNELS]
-        t_a = torch.zeros(
-            num_unique, _NUM_NODES, _NUM_NODES + 1, device=t_nodes.device, dtype=t_nodes.dtype
-        )
-        t_a.scatter_(2, self._child_idx.unsqueeze(0).expand(num_unique, -1, -1), t_edges)
-
-        # Drop the off-grid padding column, add self-loops, then row-normalize
-        t_a = t_a[:, :, :_NUM_NODES] + torch.eye(
-            _NUM_NODES, device=t_nodes.device, dtype=t_nodes.dtype
-        )
-        return t_a / t_a.sum(-1, keepdim=True).clamp(min=1.0)
+        return t_room_h, t_readout
 
     def _forward_valid(self, t_nodes: torch.Tensor) -> torch.Tensor:
-        """Valid = a real room AND strictly ahead of the current floor (visited/current
-        rows are sunk). At the act start (no position bit) every row is ahead. At the
-        off-grid boss there's no position bit either, but no forward rooms exist there so
-        the readout is degenerate-but-harmless."""
-        t_room_exists = t_nodes[:, :, :MAP_NUM_ROOM_KINDS].sum(-1) > 0  # (U, N)
-        t_pos = t_nodes[:, :, NUM_CHANNELS - 1]  # current-position bit: (U, N) one-hot node, or 0
-        t_has_pos = t_pos.sum(-1) > 0  # (U,)
-        t_cur_row = (t_pos * self._row_of_node).sum(-1)  # (U,) current floor, 0 if none
-        t_cur_row = torch.where(t_has_pos, t_cur_row, t_cur_row.new_full((), -1.0))
-        t_forward = self._row_of_node.unsqueeze(0) > t_cur_row.unsqueeze(1)  # (U, N)
-        return t_room_exists & t_forward
+        """Computes the valid rooms matrix (higher than current floor and not None)"""
+
+        t_room_exists = t_nodes.sum(-1) > 0  # (U, H * W)
+        t_pos = t_nodes[:, :, CH_POSITION]  # Current-position bit: (U, H * W)
+        t_row_current = (t_pos * self._row_of_node).sum(-1)  # (U,) / Current floor, 0 if none
+        t_row_current = torch.where(
+            condition=t_pos.sum(-1) > 0,  # (U,)
+            input=t_row_current,  # (U,)
+            other=t_row_current.new_full((), -1.0),  # (U,)
+        )
+        t_forward = self._row_of_node.unsqueeze(0) > t_row_current.unsqueeze(1)  # (U, H * W)
+        return t_room_exists & t_forward  # (U, H * W)
+
+    def _adjacency(self, t_nodes: torch.Tensor) -> torch.Tensor:
+        num_unique = t_nodes.shape[0]
+
+        t_edges = t_nodes[:, :, CH_EDGES]
+        t_adj = torch.zeros(
+            num_unique,
+            _NUM_NODES,
+            _NUM_NODES + 1,
+            device=t_nodes.device,
+            dtype=t_nodes.dtype,
+        )
+        t_adj = torch.scatter(
+            t_adj,
+            dim=2,
+            index=self._child_idx.unsqueeze(0).expand(num_unique, -1, -1),
+            src=t_edges,
+        )
+        # Drop the off-grid padding column, then row-normalize
+        t_adj = t_adj[:, :, :_NUM_NODES]
+        return t_adj / t_adj.sum(-1, keepdim=True).clamp(min=1.0)
