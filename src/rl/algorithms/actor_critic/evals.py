@@ -4,13 +4,16 @@ import numpy as np
 import slai
 import torch
 
+from src.rl.algorithms.actor_critic.episode import EpisodeStats
+from src.rl.algorithms.actor_critic.episode import aggregate_episodes
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
-from src.rl.models.actor_critic import get_action
+from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
+from src.rl.utils import action_from_actiontype
 
 # Greedy deterministic play can loop; cap so a hung eval can't wedge its worker
 _EVAL_MAX_STEPS = 1000
@@ -19,15 +22,12 @@ _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance
 
 
 def run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) -> dict[str, float]:
-    ep_rewards = []
-    ep_lengths = []
-    ep_wins = []
-    ep_floors = []
+    episodes: list[EpisodeStats] = []
     with torch.no_grad():
         for seed in _EVAL_SEEDS:
             env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
             obs = env.reset(seed=seed)
-            reward_total = 0.0
+            stream_rewards = np.zeros(len(REWARD_STREAMS))
             length = 0
             terminated = False
             while not terminated and length < _EVAL_MAX_STEPS:
@@ -44,24 +44,21 @@ def run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) -> 
 
                 # Game step
                 prev = obs
-                obs, terminated = env.step(get_action(t_action, 0))
-                reward_total += float(compute_reward(prev, obs, terminated, gamma).sum())
+                obs, terminated = env.step(action_from_actiontype(t_action, 0))
+                stream_rewards += compute_reward(prev, obs, terminated, gamma)
                 length += 1
 
-            ep_rewards.append(reward_total)
-            ep_lengths.append(length)
-            ep_wins.append(bool(terminated and obs.character.health > 0))
-            ep_floors.append(obs.map.y_current or 0)
+            episodes.append(
+                EpisodeStats(
+                    stream_rewards=stream_rewards,
+                    length=length,
+                    won=bool(terminated and obs.character.health > 0),
+                    floor=obs.map.y_current or 0,
+                )
+            )
 
-    # Outcome metrics
-    n = len(_EVAL_SEEDS)
-    metrics = {
-        "evals/win_rate": sum(ep_wins) / n,
-        "evals/floor_avg": sum(ep_floors) / n,
-        "evals/length_avg": sum(ep_lengths) / n,
-        "evals/reward_avg": float(np.mean(ep_rewards)),
-        "evals/reward_std": float(np.std(ep_rewards)),
-    }
+    metrics = {f"evals/{key}": value for key, value in aggregate_episodes(episodes).items()}
+    metrics["evals/reward_std"] = float(np.std([e.total_reward for e in episodes]))
     return metrics
 
 
