@@ -4,7 +4,6 @@ from typing import Any
 import torch
 import torch.nn as nn
 import yaml
-
 from slai import Action
 
 from src.rl.types import ACTION_TYPE_BY_INT

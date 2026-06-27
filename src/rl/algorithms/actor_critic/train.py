@@ -16,10 +16,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from src.rl.masks import build_masks
+from src.rl.algorithms.actor_critic.episode import EpisodeStats
+from src.rl.algorithms.actor_critic.episode import aggregate_episodes
+from src.rl.algorithms.actor_critic.evals import eval_battery_worker
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.encoding.state import encode_batch_game_state
+from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
@@ -29,9 +32,6 @@ from src.rl.utils import action_from_actiontype
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 from src.rl.utils import shuffle_rollout_buffer
-from src.rl.algorithms.actor_critic.episode import EpisodeStats
-from src.rl.algorithms.actor_critic.episode import aggregate_episodes
-from src.rl.algorithms.actor_critic.evals import eval_battery_worker
 
 
 @dataclass
