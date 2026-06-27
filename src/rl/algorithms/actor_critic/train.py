@@ -5,6 +5,7 @@ import shutil
 import signal
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from types import FrameType
 
@@ -34,60 +35,70 @@ from src.rl.algorithms.actor_critic.episode import aggregate_episodes
 from src.rl.algorithms.actor_critic.evals import eval_battery_worker
 
 
-class EnvironmentManager:
-    def __init__(self, num_envs: int, gamma: float):
-        self.num_envs = num_envs
-        self._gamma = gamma
-        self._envs: list[slai.GameEnv] = []
-        self._obs: list[slai.GameState] = []
-        # Episode stats live here (not in _collect_rollout) so episodes spanning
-        # rollout boundaries report true totals.
-        self._ep_rewards = [np.zeros(len(REWARD_STREAMS)) for _ in range(num_envs)]
-        self._ep_lengths = [0] * num_envs
-        self._completed: list[EpisodeStats] = []
-        for _ in range(num_envs):
-            env, obs = self._make_env()
-            self._envs.append(env)
-            self._obs.append(obs)
+@dataclass
+class EnvPool:
+    envs: list[slai.GameEnv]
+    obs: list[slai.GameState]
+    ep_rewards: list[np.ndarray]  # (K,) per env, accumulated across the episode
+    ep_lengths: list[int]
+    completed: list[EpisodeStats]
+    gamma: float
 
-    @staticmethod
-    def _make_env() -> tuple[slai.GameEnv, slai.GameState]:
-        env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
-        obs = env.reset(seed=random.randint(0, 2**31 - 1))
-        return env, obs
 
-    def get_view_states(self) -> list[slai.GameState]:
-        return self._obs
+def _make_env() -> tuple[slai.GameEnv, slai.GameState]:
+    env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
+    obs = env.reset(seed=random.randint(0, 2**31 - 1))
+    return env, obs
 
-    def get_legal_actions(self) -> list[list[slai.Action]]:
-        return [env.get_legal_actions() for env in self._envs]
 
-    def step(self, env_idx: int, action: slai.Action) -> tuple[np.ndarray, bool]:
-        prev = self._obs[env_idx]
-        nxt, terminated = self._envs[env_idx].step(action)
-        reward = compute_reward(prev, nxt, terminated, self._gamma)  # (K,)
-        self._ep_rewards[env_idx] += reward
-        self._ep_lengths[env_idx] += 1
-        if terminated:
-            # nxt is still the pre-reset terminal snapshot here
-            self._completed.append(
-                EpisodeStats(
-                    self._ep_rewards[env_idx],
-                    self._ep_lengths[env_idx],
-                    won=nxt.character.health > 0,
-                    floor=nxt.map.y_current or 0,
-                )
+def make_env_pool(num_envs: int, gamma: float) -> EnvPool:
+    # Episode stats live on the pool (not in _collect_rollout) so episodes spanning
+    # rollout boundaries report true totals.
+    envs, obs = [], []
+    for _ in range(num_envs):
+        env, ob = _make_env()
+        envs.append(env)
+        obs.append(ob)
+    return EnvPool(
+        envs=envs,
+        obs=obs,
+        ep_rewards=[np.zeros(len(REWARD_STREAMS)) for _ in range(num_envs)],
+        ep_lengths=[0] * num_envs,
+        completed=[],
+        gamma=gamma,
+    )
+
+
+def legal_actions(pool: EnvPool) -> list[list[slai.Action]]:
+    return [env.get_legal_actions() for env in pool.envs]
+
+
+def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarray, bool]:
+    prev = pool.obs[env_idx]
+    nxt, terminated = pool.envs[env_idx].step(action)
+    reward = compute_reward(prev, nxt, terminated, pool.gamma)  # (K,)
+    pool.ep_rewards[env_idx] += reward
+    pool.ep_lengths[env_idx] += 1
+    if terminated:
+        # nxt is still the pre-reset terminal snapshot here
+        pool.completed.append(
+            EpisodeStats(
+                pool.ep_rewards[env_idx],
+                pool.ep_lengths[env_idx],
+                won=nxt.character.health > 0,
+                floor=nxt.map.y_current or 0,
             )
-            self._ep_rewards[env_idx] = np.zeros(len(REWARD_STREAMS))
-            self._ep_lengths[env_idx] = 0
-            env, nxt = self._make_env()
-            self._envs[env_idx] = env
-        self._obs[env_idx] = nxt
-        return reward, terminated
+        )
+        pool.ep_rewards[env_idx] = np.zeros(len(REWARD_STREAMS))
+        pool.ep_lengths[env_idx] = 0
+        pool.envs[env_idx], nxt = _make_env()
+    pool.obs[env_idx] = nxt
+    return reward, terminated
 
-    def drain_completed(self) -> list[EpisodeStats]:
-        completed, self._completed = self._completed, []
-        return completed
+
+def drain_completed(pool: EnvPool) -> list[EpisodeStats]:
+    completed, pool.completed = pool.completed, []
+    return completed
 
 
 def _compute_gae(
@@ -119,7 +130,7 @@ def _compute_gae(
 
 def _collect_rollout(
     model: ActorCritic,
-    env_manager: EnvironmentManager,
+    pool: EnvPool,
     rollout_length: int,
     gamma: float,
     lam: float,
@@ -129,7 +140,7 @@ def _collect_rollout(
     written in place into storage preallocated at (N, ...) — no per-step tree
     retention or torch.cat. GAE is computed per env (column) before flattening;
     advantages are normalized."""
-    E = env_manager.num_envs
+    E = len(pool.envs)
     T = rollout_length
     N = T * E
     K = len(REWARD_STREAMS)
@@ -146,8 +157,8 @@ def _collect_rollout(
     model.eval()
     with torch.no_grad():
         for t in range(T):
-            views = env_manager.get_view_states()
-            legal = env_manager.get_legal_actions()
+            views = pool.obs
+            legal = legal_actions(pool)
             x = encode_batch_game_state(views, device)
             mb = build_masks(views, legal, device)
             out, t_values = model(x, mb, greedy=False)
@@ -167,14 +178,14 @@ def _collect_rollout(
             # Decode actions on CPU once (one device->host transfer, not per-env), then step.
             out_cpu = out.cpu()
             for i in range(E):
-                reward, done = env_manager.step(i, action_from_actiontype(out_cpu, i))
+                reward, done = step_env(pool, i, action_from_actiontype(out_cpu, i))
                 rewards[t, i] = torch.from_numpy(reward)
                 dones[t, i] = float(done)
 
         # Bootstrap value V(s_T) per env (a fresh env's value if it reset on the last step;
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
-        views = env_manager.get_view_states()
-        legal = env_manager.get_legal_actions()
+        views = pool.obs
+        legal = legal_actions(pool)
         _, bootstrap = model(
             encode_batch_game_state(views, device), build_masks(views, legal, device), greedy=True
         )  # bootstrap (E, K)
@@ -208,7 +219,7 @@ def _collect_rollout(
             advantages=advantages.reshape(-1, 1),
             batch_size=[N],
         ),
-        env_manager.drain_completed(),
+        drain_completed(pool),
         rollout_info,
     )
 
@@ -232,7 +243,7 @@ def _rollout_worker(
     torch.manual_seed(seed)
     device = torch.device("cpu")
     model = ActorCritic(**model_config)
-    env_manager = EnvironmentManager(num_envs, gamma)
+    pool = make_env_pool(num_envs, gamma)
     shared: RolloutBuffer | None = None
 
     while True:
@@ -245,7 +256,7 @@ def _rollout_worker(
 
         # Collect rollout
         buf, completed, rollout_info = _collect_rollout(
-            model, env_manager, rollout_length, gamma, lam, device
+            model, pool, rollout_length, gamma, lam, device
         )
         if shared is None:
             # First rollout defines the shared storage; the master keeps the handles
@@ -425,7 +436,7 @@ def train(
         worker_conn.send(model.state_dict())  # kick off the first rollout
         shared_buffer = None
     else:
-        env_manager = EnvironmentManager(num_envs, gamma)
+        pool = make_env_pool(num_envs, gamma)
 
     try:
         for iteration in range(start_iteration, num_iterations):
@@ -444,7 +455,7 @@ def train(
                 worker_conn.send(model.state_dict())
             else:
                 buffer, completed, rollout_info = _collect_rollout(
-                    model, env_manager, rollout_length, gamma, lam, device
+                    model, pool, rollout_length, gamma, lam, device
                 )
             t_rollout = time.perf_counter()
             total_steps += rollout_length * num_envs
