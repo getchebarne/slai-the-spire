@@ -5,7 +5,6 @@ import shutil
 import signal
 import time
 from collections import defaultdict
-from dataclasses import dataclass, fields
 from multiprocessing.connection import Connection
 from types import FrameType
 
@@ -25,72 +24,14 @@ from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.types import Level
-from src.rl.types import TGameState
-from src.rl.types import TMask
-from src.rl.types import action_from_actiontype
+from src.rl.types import RolloutBuffer
+from src.rl.utils import action_from_actiontype
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
-from src.rl.algorithms.actor_critic.evals import _REWARD_TAKE_IDX
-from src.rl.algorithms.actor_critic.evals import _ROOM_EXIT_IDX
+from src.rl.utils import shuffle_rollout_buffer
+from src.rl.algorithms.actor_critic.episode import EpisodeStats
+from src.rl.algorithms.actor_critic.episode import aggregate_episodes
 from src.rl.algorithms.actor_critic.evals import eval_battery_worker
-
-
-@dataclass
-class RolloutBuffer:
-    """Columnar rollout (N = rollout_length * num_envs rows). The full-batch masks are
-    stored once and row-sliced per minibatch; GAE returns/advantages are precomputed.
-    Values/returns are per reward stream (K = len(REWARD_STREAMS)); the policy
-    advantage is the per-stream advantages summed, then normalized."""
-
-    game_state: TGameState  # (N, ...)
-    mask_batch: TMask  # (N, ...) — row-sliced per minibatch (mask_batch[rows])
-    action_type_idx: torch.Tensor  # (N,) recorded L1 ActionType pick
-    selection_idx: torch.Tensor  # (N,) recorded L2 entity pick
-    target_idx: torch.Tensor  # (N,) recorded L3 monster pick (-1 if none)
-    log_probs_old: torch.Tensor  # (N,)
-    values: torch.Tensor  # (N, K)
-    returns: torch.Tensor  # (N, K)
-    advantages: torch.Tensor  # (N, 1), summed over streams, normalized
-
-    def __len__(self) -> int:
-        return self.log_probs_old.shape[0]
-
-
-@dataclass
-class EpisodeStats:
-    stream_rewards: np.ndarray  # (K,) per-stream episode totals
-    length: int
-    won: bool
-    floor: int
-
-    @property
-    def total_reward(self) -> float:
-        return float(self.stream_rewards.sum())
-
-
-# PotionUse/PotionDiscard are legal iff a potion is held (rollout potion-held telemetry).
-# The shared ActionType telemetry vocab (_REWARD_TAKE_IDX, _ROOM_EXIT_IDX) lives in
-# evals.py and is imported above.
-_POTION_AT_IDX = [int(slai.ActionType.PotionUse), int(slai.ActionType.PotionDiscard)]
-
-
-def _behavioral_metrics(buffer: "RolloutBuffer") -> dict[str, float]:
-    """Reward-skip and potion-held rates over a rollout (behavioral observability),
-    derived from already-stored buffer fields. These are SAMPLED actions, so noisy;
-    the low-variance signal is the greedy eval battery."""
-    action_types = buffer.action_type_idx  # (N,) chosen L1 ActionType
-    avail = buffer.mask_batch.mask_action_type  # (N, NUM_ACTION_TYPES) bool legality
-
-    metrics: dict[str, float] = {}
-    # Reward-skip: among steps where a RewardTake* was legal, fraction choosing RoomExit.
-    reward_avail = avail[:, _REWARD_TAKE_IDX].any(dim=1)
-    n_reward = reward_avail.sum().item()
-    if n_reward > 0:
-        skipped = ((action_types == _ROOM_EXIT_IDX) & reward_avail).sum().item()
-        metrics["Actions/reward_skip_rate"] = skipped / n_reward
-    # Potion-held fraction: PotionUse/PotionDiscard are legal iff a potion is held.
-    metrics["Actions/potion_held_frac"] = avail[:, _POTION_AT_IDX].any(dim=1).float().mean().item()
-    return metrics
 
 
 class EnvironmentManager:
@@ -178,7 +119,7 @@ def _compute_gae(
 
 def _collect_rollout(
     model: ActorCritic,
-    env_mgr: EnvironmentManager,
+    env_manager: EnvironmentManager,
     rollout_length: int,
     gamma: float,
     lam: float,
@@ -188,24 +129,25 @@ def _collect_rollout(
     written in place into storage preallocated at (N, ...) — no per-step tree
     retention or torch.cat. GAE is computed per env (column) before flattening;
     advantages are normalized."""
-    E = env_mgr.num_envs
+    E = env_manager.num_envs
     T = rollout_length
     N = T * E
     K = len(REWARD_STREAMS)
     buf_x = buf_mb = None  # allocated from the first step's shapes
-    action_type_idx = torch.empty(N, dtype=torch.long, device=device)
-    sel_idx = torch.empty(N, dtype=torch.long, device=device)
-    tgt_idx = torch.empty(N, dtype=torch.long, device=device)
+    idx_at = torch.empty(N, dtype=torch.long, device=device)
+    idx_l1 = torch.empty(N, dtype=torch.long, device=device)
+    idx_l2 = torch.empty(N, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
     values = torch.empty(T, E, K, device=device)
     rewards = torch.empty(T, E, K, device=device)
     dones = torch.empty(T, E, device=device)
 
+    # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
         for t in range(T):
-            views = env_mgr.get_view_states()
-            legal = env_mgr.get_legal_actions()
+            views = env_manager.get_view_states()
+            legal = env_manager.get_legal_actions()
             x = encode_batch_game_state(views, device)
             mb = build_masks(views, legal, device)
             out, t_values = model(x, mb, greedy=False)
@@ -216,26 +158,28 @@ def _collect_rollout(
             rows = slice(t * E, (t + 1) * E)
             buf_x[rows] = x
             buf_mb[rows] = mb
-            action_type_idx[rows] = out.idxs[:, Level.ACTION_TYPE]
-            sel_idx[rows] = out.idxs[:, Level.L1]
-            tgt_idx[rows] = out.idxs[:, Level.L2]
+            idx_at[rows] = out.idxs[:, Level.ACTION_TYPE]
+            idx_l1[rows] = out.idxs[:, Level.L1]
+            idx_l2[rows] = out.idxs[:, Level.L2]
             log_probs[rows] = out.log_prob.sum(-1)
             values[t] = t_values  # (E, K)
 
-            # Extract the action ints once (not per-env .item()), then step each env.
-            ops, sels, tgts = out.idxs.t().tolist()
+            # Decode actions on CPU once (one device->host transfer, not per-env), then step.
+            out_cpu = out.cpu()
             for i in range(E):
-                reward, done = env_mgr.step(i, action_from_actiontype(ops[i], sels[i], tgts[i]))
+                reward, done = env_manager.step(i, action_from_actiontype(out_cpu, i))
                 rewards[t, i] = torch.from_numpy(reward)
                 dones[t, i] = float(done)
 
         # Bootstrap value V(s_T) per env (a fresh env's value if it reset on the last step;
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
-        views = env_mgr.get_view_states()
-        legal = env_mgr.get_legal_actions()
+        views = env_manager.get_view_states()
+        legal = env_manager.get_legal_actions()
         _, bootstrap = model(
             encode_batch_game_state(views, device), build_masks(views, legal, device), greedy=True
         )  # bootstrap (E, K)
+
+    # Set model to training mode
     model.train()
 
     returns, advantages = _compute_gae(rewards, values, dones.unsqueeze(-1), bootstrap, gamma, lam)
@@ -247,29 +191,26 @@ def _collect_rollout(
     # Surface the termination vs rollout-boundary-bootstrap split (the GAE truncation
     # path): how many envs were still mid-episode at T and relied on V(s_T).
     rollout_info = {
-        "Rollout/terminations": dones.sum().item(),
-        "Rollout/boundary_truncations": float(E) - dones[T - 1].sum().item(),
+        "rollout/terminations": dones.sum().item(),
+        "rollout/boundary_truncations": float(E) - dones[T - 1].sum().item(),
     }
 
     return (
         RolloutBuffer(
             game_state=buf_x,
             mask_batch=buf_mb,
-            action_type_idx=action_type_idx,
-            selection_idx=sel_idx,
-            target_idx=tgt_idx,
+            idx_at=idx_at,
+            idx_l1=idx_l1,
+            idx_l2=idx_l2,
             log_probs_old=log_probs,
             values=values.reshape(-1, K),
             returns=returns.reshape(-1, K),
             advantages=advantages.reshape(-1, 1),
+            batch_size=[N],
         ),
-        env_mgr.drain_completed(),
+        env_manager.drain_completed(),
         rollout_info,
     )
-
-
-def _buffer_clone(buf: RolloutBuffer) -> RolloutBuffer:
-    return RolloutBuffer(**{f.name: getattr(buf, f.name).clone() for f in fields(RolloutBuffer)})
 
 
 def _rollout_worker(
@@ -291,27 +232,29 @@ def _rollout_worker(
     torch.manual_seed(seed)
     device = torch.device("cpu")
     model = ActorCritic(**model_config)
-    env_mgr = EnvironmentManager(num_envs, gamma)
+    env_manager = EnvironmentManager(num_envs, gamma)
     shared: RolloutBuffer | None = None
 
     while True:
+        # Receive and load current model weights
         state_dict = conn.recv()
         if state_dict is None:
             return
+
         model.load_state_dict(state_dict)
+
+        # Collect rollout
         buf, completed, rollout_info = _collect_rollout(
-            model, env_mgr, rollout_length, gamma, lam, device
+            model, env_manager, rollout_length, gamma, lam, device
         )
         if shared is None:
             # First rollout defines the shared storage; the master keeps the handles
             # and clones out of them each iteration.
-            for f in fields(RolloutBuffer):
-                getattr(buf, f.name).share_memory_()
+            buf.share_memory_()
             shared = buf
             conn.send(("buffer", shared, completed, rollout_info))
         else:
-            for f in fields(RolloutBuffer):
-                getattr(shared, f.name).copy_(getattr(buf, f.name))
+            shared.copy_(buf)
             conn.send(("done", None, completed, rollout_info))
 
 
@@ -330,7 +273,6 @@ def _update_ppo(
 ) -> dict[str, float]:
     """One PPO update over the buffer. Returns iteration-mean metrics keyed by their
     TensorBoard scalar names."""
-    advantages = buffer.advantages.squeeze(-1)  # (N,)
     totals: dict[str, float] = defaultdict(float)
     n = 0
 
@@ -339,27 +281,20 @@ def _update_ppo(
     # and which carries the residual noise (typically the outcome stream).
     ev = 1.0 - (buffer.returns - buffer.values).var(dim=0) / (buffer.returns.var(dim=0) + 1e-8)
     for _ in range(num_epochs):
-        # Shuffle the whole buffer once per epoch (nested-tensorclass indexing costs
-        # ~25 ms per call); minibatches are then cheap contiguous slice views.
-        perm = torch.randperm(len(buffer), device=device)
-        t_ep = buffer.game_state[perm]
-        mb_ep = buffer.mask_batch[perm]
-        action_type_ep = buffer.action_type_idx[perm]
-        sel_ep = buffer.selection_idx[perm]
-        tgt_ep = buffer.target_idx[perm]
-        logp_ep = buffer.log_probs_old[perm]
-        adv_ep = advantages[perm]
-        ret_ep = buffer.returns[perm]
-        val_ep = buffer.values[perm]
+        ep = shuffle_rollout_buffer(buffer, device)
         for start in range(0, len(buffer), minibatch_size):
             rows = slice(start, start + minibatch_size)
             log_probs_new, entropies, values_new = model.evaluate_actions(
-                t_ep[rows], mb_ep[rows], action_type_ep[rows], sel_ep[rows], tgt_ep[rows]
+                ep.game_state[rows],
+                ep.mask_batch[rows],
+                ep.idx_at[rows],
+                ep.idx_l1[rows],
+                ep.idx_l2[rows],
             )
-            log_probs_old = logp_ep[rows]
-            adv = adv_ep[rows]
-            returns = ret_ep[rows]
-            values_old = val_ep[rows]
+            log_probs_old = ep.log_probs_old[rows]
+            adv = ep.advantages[rows].squeeze(-1)
+            returns = ep.returns[rows]
+            values_old = ep.values[rows]
 
             ratio = torch.exp(log_probs_new - log_probs_old)
             surr1 = ratio * adv
@@ -389,19 +324,19 @@ def _update_ppo(
             grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
 
-            totals["Loss/policy"] += loss_policy.item()
-            totals["Loss/value"] += loss_value.item()
-            totals["Loss/entropy"] += loss_entropy.item()
+            totals["loss/policy"] += loss_policy.item()
+            totals["loss/value"] += loss_value.item()
+            totals["loss/entropy"] += loss_entropy.item()
             ent_mean = entropies.mean(dim=0)
-            totals["Entropy/action_type"] += ent_mean[0].item()
-            totals["Entropy/selection"] += ent_mean[1].item()
-            totals["Entropy/target"] += ent_mean[2].item()
+            totals["entropy/action_type"] += ent_mean[0].item()
+            totals["entropy/selection"] += ent_mean[1].item()
+            totals["entropy/target"] += ent_mean[2].item()
             # Schulman's approx-KL estimator; clip fraction = share of moved-off ratios
-            totals["Update/approx_kl"] += (
+            totals["update/approx_kl"] += (
                 ((ratio - 1) - (log_probs_new - log_probs_old)).mean().item()
             )
-            totals["Update/clip_fraction"] += ((ratio - 1).abs() > clip_eps).float().mean().item()
-            totals["Grad/norm_preclip"] += grad_norm.item()  # pre-clip total norm (else discarded)
+            totals["update/clip_fraction"] += ((ratio - 1).abs() > clip_eps).float().mean().item()
+            totals["grad/norm_preclip"] += grad_norm.item()  # pre-clip total norm (else discarded)
             n += 1
     metrics = {k: v / n for k, v in totals.items()}
     for k, name in enumerate(REWARD_STREAMS):
@@ -490,7 +425,7 @@ def train(
         worker_conn.send(model.state_dict())  # kick off the first rollout
         shared_buffer = None
     else:
-        env_mgr = EnvironmentManager(num_envs, gamma)
+        env_manager = EnvironmentManager(num_envs, gamma)
 
     try:
         for iteration in range(start_iteration, num_iterations):
@@ -505,11 +440,11 @@ def train(
                 kind, payload, completed, rollout_info = worker_conn.recv()
                 if kind == "buffer":
                     shared_buffer = payload
-                buffer = _buffer_clone(shared_buffer)
+                buffer = shared_buffer.clone()
                 worker_conn.send(model.state_dict())
             else:
                 buffer, completed, rollout_info = _collect_rollout(
-                    model, env_mgr, rollout_length, gamma, lam, device
+                    model, env_manager, rollout_length, gamma, lam, device
                 )
             t_rollout = time.perf_counter()
             total_steps += rollout_length * num_envs
@@ -545,41 +480,27 @@ def train(
             if iteration % log_every == 0:
                 print(
                     f"Iter {iteration} | steps={total_steps} | "
-                    f"policy={metrics['Loss/policy']:.4f} value={metrics['Loss/value']:.4f} | "
+                    f"policy={metrics['loss/policy']:.4f} value={metrics['loss/value']:.4f} | "
                     f"episodes={len(completed)}"
                 )
                 for key, value in metrics.items():
                     writer.add_scalar(key, value, iteration)
-                writer.add_scalar("Entropy/coef", coef_entropy, iteration)
+                writer.add_scalar("entropy/coef", coef_entropy, iteration)
                 writer.add_scalar("Steps/total", total_steps, iteration)
                 writer.add_scalar("Time/rollout", t_rollout - t_start, iteration)
                 writer.add_scalar("Time/update", t_update - t_rollout, iteration)
-                for key, value in _behavioral_metrics(buffer).items():
-                    writer.add_scalar(key, value, iteration)
                 for key, value in rollout_info.items():
                     writer.add_scalar(key, value, iteration)
                 if completed:
-                    avg_r = sum(e.total_reward for e in completed) / len(completed)
-                    avg_l = sum(e.length for e in completed) / len(completed)
-                    writer.add_scalar("Episode/avg_reward", avg_r, iteration)
+                    for key, value in aggregate_episodes(completed).items():
+                        writer.add_scalar(f"Episode/{key}", value, iteration)
+                    writer.add_scalar("Episode/completed_count", len(completed), iteration)
                     for k, name in enumerate(REWARD_STREAMS):
                         writer.add_scalar(
-                            f"Episode/avg_reward_{name}",
+                            f"Episode/reward_avg_{name}",
                             sum(e.stream_rewards[k] for e in completed) / len(completed),
                             iteration,
                         )
-                    writer.add_scalar("Episode/avg_length", avg_l, iteration)
-                    writer.add_scalar("Episode/completed_count", len(completed), iteration)
-                    writer.add_scalar(
-                        "Episode/win_rate",
-                        sum(e.won for e in completed) / len(completed),
-                        iteration,
-                    )
-                    writer.add_scalar(
-                        "Episode/avg_floor",
-                        sum(e.floor for e in completed) / len(completed),
-                        iteration,
-                    )
             if iteration % save_every == 0:
                 _save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps)
     except KeyboardInterrupt:

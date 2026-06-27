@@ -5,7 +5,6 @@ from typing import NamedTuple
 
 import torch
 from slai import ACTION_SPEC_REGISTRY
-from slai import Action
 from slai import ActionType
 from slai import members
 from tensordict import TensorDict
@@ -108,6 +107,24 @@ class TAction:
     entropy: torch.Tensor  # (B, len(Level)) float, 0 where N/A
 
 
+@tensorclass(shadow=True)  # `values` field shadows TensorDict.values()
+class RolloutBuffer:
+    """Columnar rollout (N = rollout_length * num_envs rows). The full-batch masks are
+    stored once and row-sliced per minibatch; GAE returns/advantages are precomputed.
+    Values/returns are per reward stream (K = len(REWARD_STREAMS)); the policy
+    advantage is the per-stream advantages summed, then normalized."""
+
+    game_state: TGameState  # (N, ...)
+    mask_batch: TMask  # (N, ...) — row-sliced per minibatch (mask_batch[rows])
+    idx_at: torch.Tensor  # (N,) recorded L1 ActionType pick
+    idx_l1: torch.Tensor  # (N,) recorded L2 entity pick
+    idx_l2: torch.Tensor  # (N,) recorded L3 monster pick (-1 if none)
+    log_probs_old: torch.Tensor  # (N,)
+    values: torch.Tensor  # (N, K)
+    returns: torch.Tensor  # (N, K)
+    advantages: torch.Tensor  # (N, 1), summed over streams, normalized
+
+
 ACTION_TYPE_BY_INT = list(members(ActionType))
 NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
@@ -138,14 +155,3 @@ _ACTION_TYPE_ARITY: list = [ACTION_SPEC_REGISTRY[m].arity for m in ACTION_TYPE_B
 assert {int(a) for a in ACTION_TYPE_POOL} == {
     at for at in range(NUM_ACTION_TYPES) if _ACTION_TYPE_ARITY[at] != (0, 0)
 }, "ACTION_TYPE_POOL must cover exactly the engine's index-taking actions"
-
-
-def action_from_actiontype(at_int: int, selection_index: int, target_index: int) -> Action:
-    action_type = ACTION_TYPE_BY_INT[at_int]
-    if action_type not in ACTION_TYPE_POOL:
-        idxs = []
-    elif target_index >= 0:
-        idxs = [selection_index, target_index]
-    else:
-        idxs = [selection_index]
-    return Action(action_type, idxs)

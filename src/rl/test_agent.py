@@ -27,7 +27,7 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
-from src.rl.models.actor_critic import get_action
+from src.rl.utils import action_from_actiontype
 from src.rl.types import SliceKind
 from src.rl.types import TGameState
 from src.rl.types import TMask
@@ -405,7 +405,7 @@ def get_action_from_model(
     t_mask_batch = build_masks([view], [legal_actions], device)
 
     with torch.no_grad():
-        t_output = model.forward(t_game_state, t_mask_batch, greedy=greedy)
+        t_action, _ = model.forward(t_game_state, t_mask_batch, greedy=greedy)
 
         card_probs_str = None
         in_combat = view.screen == slai.Screen.Combat and view.pending is None
@@ -414,7 +414,7 @@ def get_action_from_model(
             t_probs = get_card_probabilities(model, t_game_state, t_mask_batch)
             card_probs_str = format_card_probabilities(view, t_probs)
 
-    return get_action(t_output, 0), card_probs_str
+    return action_from_actiontype(t_action, 0), card_probs_str
 
 
 def run_game(
