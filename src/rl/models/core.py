@@ -111,7 +111,7 @@ class Core(nn.Module):
     def forward(self, t_game_state: TGameState) -> TCoreOutput:
         # Map GNN: next-row room features + whole-graph readout
         t_room_features, t_map_readout = self._map_gnn(
-            t_game_state.map_grid, t_game_state.room_node_idx
+            t_game_state.map_grid, t_game_state.room_node_idx, t_game_state.room_mask
         )
         t_blocks = self._entity_projector(t_game_state, t_room_features)
 
@@ -176,7 +176,7 @@ class Core(nn.Module):
 
         # Scatter the refined tokens back to their original slots. Padding must be zeroed (not
         # empty_like): downstream masks multiply (x*0), and NaN*0=NaN, so uninitialized NaN-pattern
-        # bytes propagate — observed crashing the CPU path on x86 with garbage that happened to be NaN.
+        # bytes propagate — observed crashing the x86 CPU path with NaN-pattern garbage.
         t_scattered = torch.zeros_like(t_tokens.x)
         t_scattered.scatter_(1, t_idx_keep_x, t_tokens_ref.x)
         return TPadded(t_scattered, t_tokens.mask)

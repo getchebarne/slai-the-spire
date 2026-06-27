@@ -66,7 +66,7 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
     )
 
     # Map: GNN node-feature grid + next-row room node indices + flat meta
-    t_map_grid, t_room_node_idx, t_map_meta = encode_batch_map(batch_map, device)
+    t_map_grid, t_room_node_idx, t_room_mask, t_map_meta = encode_batch_map(batch_map, device)
 
     # Deck visibility (hidden in combat) is enforced in encode_batch_cards (np_pad False there).
     return TGameState(
@@ -79,6 +79,7 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
         energy=encode_batch_energy(batch_energy, device),
         map_grid=t_map_grid,
         room_node_idx=t_room_node_idx,
+        room_mask=t_room_mask,
         map_meta=t_map_meta,
         screen=encode_batch_screen(batch_game_state, device),
         reward_meta=t_reward_meta,
