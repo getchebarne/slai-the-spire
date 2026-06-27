@@ -1,4 +1,4 @@
-exp_name: ppo/NEWERA-XIII  # map_encoder_dim 64->32 (narrow GNN, lifted to dim_entity in projector; depth kept 15)
+exp_name: ppo/NEWERA-XIII
 seed: 0
 num_iterations: 5.0e+4
 log_every: 10
@@ -10,11 +10,11 @@ coef_entropy_max: 0.010
 coef_entropy_min: 0.001
 entropy_decay_steps: 2.0e+7  # env steps (linear decay max -> min, then floor)
 max_grad_norm: 0.500
-num_envs: 48
+num_envs: 64
 rollout_length: 128
 clip_eps: 0.20
 clip_value_loss: false
-minibatch_size: 512
+minibatch_size: 2048
 num_epochs: 4
 # Rollout(t+1) collected in a side process during update(t), staleness 1. Measured a
 # WASH on the 4-P-core M4 post-packing (hidden rollout reappears as update contention:
@@ -23,19 +23,19 @@ overlap_rollout: false
 
 model:
   # Core encoder
-  dim_entity: 64
-  dim_global: 256
-  transformer_dim_ff: 128
+  dim_entity: 256
+  dim_global: 1024
+  transformer_dim_ff: 512
   transformer_num_heads: 4
   transformer_num_blocks: 2
   gnn_num_layers: 15  # map GNN depth = MAP_HEIGHT → full downstream lookahead per room
-  map_encoder_dim: 32  # GNN internal width (lifted to dim_entity in entity_projector); depth unchanged
+  map_encoder_dim: 256  # GNN internal width (lifted to dim_entity in entity_projector); depth unchanged
 
   # Head dimensions
-  dim_ff_primary: 64
-  dim_ff_value: 64
-  dim_op: 32  # operation-embedding dim (L2 query conditioning)
-  dim_key: 64  # pointer key/query dim (AlphaStar full-config size; 32 underperformed = IX)
+  dim_ff_primary: 1024
+  dim_ff_value: 1024
+  dim_op: 256  # operation-embedding dim (L2 query conditioning)
+  dim_key: 256  # pointer key/query dim (64 = AlphaStar size; 32 underperformed = IX)
 
 optimizer:
   name: Adam

@@ -25,7 +25,6 @@ from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.types import Level
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import TGameState
 from src.rl.types import TMask
 from src.rl.types import action_from_actiontype
@@ -33,7 +32,6 @@ from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 from src.rl.algorithms.actor_critic.evals import _REWARD_TAKE_IDX
 from src.rl.algorithms.actor_critic.evals import _ROOM_EXIT_IDX
-from src.rl.algorithms.actor_critic.evals import _TELEMETRY_AT_IDX
 from src.rl.algorithms.actor_critic.evals import eval_battery_worker
 
 
@@ -71,28 +69,19 @@ class EpisodeStats:
 
 
 # PotionUse/PotionDiscard are legal iff a potion is held (rollout potion-held telemetry).
-# The shared ActionType telemetry vocab (_TELEMETRY_AT_IDX, _REWARD_TAKE_IDX, _ROOM_EXIT_IDX)
-# lives in evals.py and is imported above.
+# The shared ActionType telemetry vocab (_REWARD_TAKE_IDX, _ROOM_EXIT_IDX) lives in
+# evals.py and is imported above.
 _POTION_AT_IDX = [int(slai.ActionType.PotionUse), int(slai.ActionType.PotionDiscard)]
 
 
 def _behavioral_metrics(buffer: "RolloutBuffer") -> dict[str, float]:
-    """Per-ActionType behavioral rates over a rollout (P1-P5 observability), all
+    """Reward-skip and potion-held rates over a rollout (behavioral observability),
     derived from already-stored buffer fields. These are SAMPLED actions, so noisy;
-    the low-variance signal is the greedy eval battery. `cond_rate` = when the kind
-    was legal, how often it was chosen; `avail_rate` = how often the choice arose."""
+    the low-variance signal is the greedy eval battery."""
     action_types = buffer.action_type_idx  # (N,) chosen L1 ActionType
     avail = buffer.mask_batch.mask_action_type  # (N, NUM_ACTION_TYPES) bool legality
-    n = float(action_types.shape[0])
-    chosen = torch.bincount(action_types, minlength=NUM_ACTION_TYPES).float()
-    available = avail.sum(0).float()
 
     metrics: dict[str, float] = {}
-    for name, idx in _TELEMETRY_AT_IDX.items():
-        a = available[idx].item()
-        metrics[f"Actions/avail_rate/{name}"] = a / n
-        metrics[f"Actions/cond_rate/{name}"] = chosen[idx].item() / a if a > 0 else 0.0
-
     # Reward-skip: among steps where a RewardTake* was legal, fraction choosing RoomExit.
     reward_avail = avail[:, _REWARD_TAKE_IDX].any(dim=1)
     n_reward = reward_avail.sum().item()
@@ -219,7 +208,7 @@ def _collect_rollout(
             legal = env_mgr.get_legal_actions()
             x = encode_batch_game_state(views, device)
             mb = build_masks(views, legal, device)
-            out = model(x, mb, greedy=False)
+            out, t_values = model(x, mb, greedy=False)
 
             if buf_x is None:
                 buf_x = x.new_empty(N)
@@ -227,14 +216,14 @@ def _collect_rollout(
             rows = slice(t * E, (t + 1) * E)
             buf_x[rows] = x
             buf_mb[rows] = mb
-            action_type_idx[rows] = out.idx[:, Level.ACTION_TYPE]
-            sel_idx[rows] = out.idx[:, Level.L1]
-            tgt_idx[rows] = out.idx[:, Level.L2]
+            action_type_idx[rows] = out.idxs[:, Level.ACTION_TYPE]
+            sel_idx[rows] = out.idxs[:, Level.L1]
+            tgt_idx[rows] = out.idxs[:, Level.L2]
             log_probs[rows] = out.log_prob.sum(-1)
-            values[t] = out.values  # (E, K)
+            values[t] = t_values  # (E, K)
 
             # Extract the action ints once (not per-env .item()), then step each env.
-            ops, sels, tgts = out.idx.t().tolist()
+            ops, sels, tgts = out.idxs.t().tolist()
             for i in range(E):
                 reward, done = env_mgr.step(i, action_from_actiontype(ops[i], sels[i], tgts[i]))
                 rewards[t, i] = torch.from_numpy(reward)
@@ -244,10 +233,9 @@ def _collect_rollout(
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
         views = env_mgr.get_view_states()
         legal = env_mgr.get_legal_actions()
-        boot_out = model(
+        _, bootstrap = model(
             encode_batch_game_state(views, device), build_masks(views, legal, device), greedy=True
-        )
-        bootstrap = boot_out.values  # (E, K)
+        )  # bootstrap (E, K)
     model.train()
 
     returns, advantages = _compute_gae(rewards, values, dones.unsqueeze(-1), bootstrap, gamma, lam)
@@ -419,11 +407,6 @@ def _update_ppo(
     for k, name in enumerate(REWARD_STREAMS):
         metrics[f"Value/ev_{name}"] = ev[k].item()
     return metrics
-
-
-# =============================================================================
-# Training loop
-# =============================================================================
 
 
 def _save_checkpoint(
@@ -620,12 +603,38 @@ def _raise_keyboard_interrupt(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
+def _load_checkpoint(
+    ckpt_path: str,
+    model: ActorCritic,
+    optimizer: torch.optim.Optimizer,
+    seed: int,
+) -> tuple[int, int]:
+    """Resume model/optimizer/RNG from `ckpt_path` if it exists; returns
+    (start_iteration, total_steps), or (0, 0) for a fresh run."""
+    if not os.path.exists(ckpt_path):
+        return 0, 0
+
+    ckpt = torch.load(ckpt_path, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    optimizer.load_state_dict(ckpt["optimizer"])
+    start_iteration = ckpt["iteration"] + 1
+    total_steps = ckpt["total_steps"]
+    # Offset the stream seeds so a resume doesn't replay the run's env-seed sequence
+    random.seed(seed + start_iteration)
+    torch.manual_seed(seed + start_iteration)
+    print(f"Resuming from {ckpt_path}: iteration {start_iteration}, {total_steps} steps")
+    return start_iteration, total_steps
+
+
 if __name__ == "__main__":
     # nohup-backgrounded processes ignore SIGINT; route SIGTERM into the same
     # KeyboardInterrupt path so `kill <pid>` checkpoints the current iteration.
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     config_path = "src/rl/algorithms/actor_critic/config.yml"
     config = load_config(config_path)
+
+    # TF32 on Ampere+ GPUs: near-free matmul throughput (no-op on CPU/MPS)
+    torch.set_float32_matmul_precision("high")
 
     # Set seeds
     seed = int(config["seed"])
@@ -640,21 +649,12 @@ if __name__ == "__main__":
     shutil.copy(config_path, f"experiments/{config['exp_name']}/config.yml")
 
     # Load checkpoint
-    start_iteration = 0
-    total_steps = 0
     ckpt_path = f"experiments/{config['exp_name']}/checkpoint.pth"
-    if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, weights_only=True)
-        model.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        start_iteration = ckpt["iteration"] + 1
-        total_steps = ckpt["total_steps"]
-        # Offset the stream seeds so a resume doesn't replay the run's env-seed sequence
-        random.seed(seed + start_iteration)
-        torch.manual_seed(seed + start_iteration)
-        print(f"Resuming from {ckpt_path}: iteration {start_iteration}, {total_steps} steps")
+    start_iteration, total_steps = _load_checkpoint(ckpt_path, model, optimizer, seed)
 
     print(f"Starting training: {config['exp_name']}")
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"  params={n_params:,} ({n_params / 1e6:.2f}M)")
     print(f"  num_envs={config['num_envs']}, rollout_length={config['rollout_length']}")
     train(
         exp_name=config["exp_name"],
@@ -677,7 +677,7 @@ if __name__ == "__main__":
         entropy_decay_steps=float(config["entropy_decay_steps"]),
         max_grad_norm=config["max_grad_norm"],
         num_envs=config["num_envs"],
-        device=torch.device("cpu"),
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         start_iteration=start_iteration,
         total_steps=total_steps,
         overlap_rollout=bool(config.get("overlap_rollout", False)),

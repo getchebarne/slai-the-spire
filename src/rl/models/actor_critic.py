@@ -27,9 +27,9 @@ from src.rl.types import action_from_actiontype
 
 def get_action(t_batch: TAction, i: int) -> Action:
     return action_from_actiontype(
-        int(t_batch.idx[i, Level.ACTION_TYPE].item()),
-        int(t_batch.idx[i, Level.L1].item()),
-        int(t_batch.idx[i, Level.L2].item()),
+        int(t_batch.idxs[i, Level.ACTION_TYPE].item()),
+        int(t_batch.idxs[i, Level.L1].item()),
+        int(t_batch.idxs[i, Level.L2].item()),
     )
 
 
@@ -261,7 +261,6 @@ class ActorCritic(nn.Module):
         t_core_out: TCoreOutput,
         t_mask: TMask,
         greedy: bool,
-        t_values: torch.Tensor,
         t_recorded_action_type: torch.Tensor | None = None,
         t_recorded_l1: torch.Tensor | None = None,
         t_recorded_l2: torch.Tensor | None = None,
@@ -285,17 +284,18 @@ class ActorCritic(nn.Module):
 
         # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
         return TAction(
-            values=t_values,
-            idx=torch.stack([t_idx_at, t_idx_l1, t_idx_l2], dim=1),
+            idxs=torch.stack([t_idx_at, t_idx_l1, t_idx_l2], dim=1),
             log_prob=torch.stack([t_log_prob_at, t_log_prob_l1, t_log_prob_l2], dim=1),
             entropy=torch.stack([t_entropy_at, t_entropy_l1, t_entropy_l2], dim=1),
             batch_size=[t_idx_at.shape[0]],
         )
 
-    def forward(self, t_game_state: TGameState, t_mask: TMask, greedy: bool = False) -> TAction:
+    def forward(
+        self, t_game_state: TGameState, t_mask: TMask, greedy: bool = False
+    ) -> tuple[TAction, torch.Tensor]:
         t_core_out = self.core(t_game_state)
         t_values = self._head_value(t_core_out.global_)
-        return self._run(t_game_state, t_core_out, t_mask, greedy, t_values)
+        return self._run(t_game_state, t_core_out, t_mask, greedy), t_values
 
     def evaluate_actions(
         self,
@@ -312,7 +312,6 @@ class ActorCritic(nn.Module):
             t_core_out,
             t_mask,
             greedy=True,
-            t_values=t_values,
             t_recorded_action_type=t_action_type_indices,
             t_recorded_l1=t_l1_indices,
             t_recorded_l2=t_l2_indices,
