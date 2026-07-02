@@ -223,6 +223,13 @@ def _collect_rollout(
     )
 
 
+def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
+    """Model weights as CPU tensors — picklable across processes on any backend (CUDA
+    IPC works, but MPS has no portable cross-process sharing; CPU is safe for both and
+    the GPU->CPU copy of ~9M params is negligible)."""
+    return {k: v.cpu() for k, v in model.state_dict().items()}
+
+
 def _rollout_worker(
     conn: Connection,
     model_config: dict,
@@ -232,40 +239,35 @@ def _rollout_worker(
     lam: float,
     seed: int,
 ) -> None:
-    """Side process: receive weights, collect one rollout, expose it via a stable
-    shared-memory buffer (sent as handles once), reply with episode stats. Envs are
-    built here — engine objects aren't picklable. Data is collected with the weights
-    of the PREVIOUS update (staleness 1); PPO's ratio clipping absorbs it, guarded by
-    the approx_kl/clip_fraction logs."""
+    """Side process: receive weights, collect one rollout, reply with the rollout (as
+    CPU tensors) + episode stats. Envs are built here — engine objects aren't picklable.
+    Data is collected with the weights of the PREVIOUS update (staleness 1); PPO's ratio
+    clipping absorbs it, guarded by the approx_kl/clip_fraction logs."""
     torch.set_num_threads(1)  # master keeps the P-cores for the update
     random.seed(seed)
     torch.manual_seed(seed)
-    device = torch.device("cpu")
+    device = torch.device(
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available() else "cpu"
+    )
     model = ActorCritic(**model_config)
+    model.to(device)  # moves params AND non-persistent buffers (e.g. map_encoder._row_of_node)
     pool = make_env_pool(num_envs, gamma)
-    shared: RolloutBuffer | None = None
 
     while True:
-        # Receive and load current model weights
+        # Receive current weights (CPU tensors), load them, collect one rollout.
         state_dict = conn.recv()
         if state_dict is None:
             return
-
         model.load_state_dict(state_dict)
-
-        # Collect rollout
         buf, completed, rollout_info = _collect_rollout(
             model, pool, rollout_length, gamma, lam, device
         )
-        if shared is None:
-            # First rollout defines the shared storage; the master keeps the handles
-            # and clones out of them each iteration.
-            buf.share_memory_()
-            shared = buf
-            conn.send(("buffer", shared, completed, rollout_info))
-        else:
-            shared.copy_(buf)
-            conn.send(("done", None, completed, rollout_info))
+        # Hand the rollout back as CPU tensors — picklable across processes on any
+        # backend (no portable CUDA-IPC / MPS cross-process sharing); the master moves
+        # it onto its device. Simpler and correct vs the old shared-memory handoff.
+        conn.send((buf.cpu(), completed, rollout_info))
 
 
 def _minibatch_metrics(
@@ -458,8 +460,7 @@ def train(
             daemon=True,
         )
         rollout_worker.start()
-        worker_conn.send(model.state_dict())  # kick off the first rollout
-        shared_buffer = None
+        worker_conn.send(_cpu_state_dict(model))  # kick off the first rollout
     else:
         pool = make_env_pool(num_envs, gamma)
 
@@ -471,13 +472,11 @@ def train(
             coef_entropy = coef_entropy_max + frac * (coef_entropy_min - coef_entropy_max)
             t_start = time.perf_counter()
             if overlap_rollout:
-                # Wait out whatever rollout time the update didn't hide, clone the
-                # shared buffer, and immediately restart the worker on fresh weights.
-                kind, payload, completed, rollout_info = worker_conn.recv()
-                if kind == "buffer":
-                    shared_buffer = payload
-                buffer = shared_buffer.clone()
-                worker_conn.send(model.state_dict())
+                # Receive the rollout the worker collected during the last update (CPU
+                # tensors), move it to our device, restart the worker on fresh weights.
+                buf_cpu, completed, rollout_info = worker_conn.recv()
+                buffer = buf_cpu.to(device)
+                worker_conn.send(_cpu_state_dict(model))
             else:
                 buffer, completed, rollout_info = _collect_rollout(
                     model, pool, rollout_length, gamma, lam, device
@@ -511,7 +510,7 @@ def train(
                     f"reward={eval_metrics['Eval/reward_mean']:.4f}"
                 )
             if iteration % save_every == 0 and not eval_busy:
-                eval_conn.send((model.state_dict(), iteration))
+                eval_conn.send((_cpu_state_dict(model), iteration))
                 eval_busy = True
             if iteration % log_every == 0:
                 print(
