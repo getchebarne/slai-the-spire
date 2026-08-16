@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+from src.rl.encoding.ascension import ENCODING_DIM_ASCENSION
 from src.rl.encoding.card import SLICE_CARDS
 from src.rl.encoding.character import SLICE_CHARACTER
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
@@ -87,6 +88,7 @@ class Core(nn.Module):
             - 1  # per-slice counts (mask.sum / size); CHARACTER excluded (const)
             + ENCODING_DIM_ENERGY  # energy (raw)
             + ENCODING_DIM_SCREEN  # screen state
+            + ENCODING_DIM_ASCENSION  # ascension thermometer (curriculum level)
             + ENCODING_DIM_MAP_META  # floor depth + act-boss + next-row kinds
             + ENCODING_DIM_REWARD_META
             + ENCODING_DIM_PRICE  # shop purge service price
@@ -160,7 +162,10 @@ class Core(nn.Module):
 
     def _refine_tokens(self, t_tokens: TPadded) -> TPadded:
         # Pack to the batch's true max token count: attention is O(width^2), and CPU-eager has no
-        # recompilation penalty for a per-batch width (re-bucket if you compile or move to GPU).
+        # recompilation penalty for a per-batch width. The int(max) is a per-forward host sync,
+        # but it measured ~free on GPU (2026-07 probe) — and the alternatives lost: no-pack
+        # ballooned the update (199-token attention, 12.0 s/iter) and a fixed width paid ~2.3x
+        # the transformer for widths that are typically 20-31 tokens.
         pack_width = int(t_tokens.mask.sum(dim=1).max())
 
         # Gather valid elements across each sample in the batch
@@ -196,6 +201,7 @@ class Core(nn.Module):
                     _get_token_counts(t_refined.mask[:, :-1]),
                     t_game_state.energy,
                     t_game_state.screen,
+                    t_game_state.ascension,
                     t_game_state.map_meta,
                     t_game_state.reward_meta,
                     t_game_state.shop_meta,

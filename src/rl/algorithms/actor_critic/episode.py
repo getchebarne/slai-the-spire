@@ -17,12 +17,26 @@ class EpisodeStats:
         return float(self.stream_rewards.sum())
 
 
+# Metric-name and prefix constants — shared by the rollout logging (train/*), the
+# eval battery (eval/*), and train()'s eval print, so producers and consumers can't
+# drift apart (a name drift crashed NEWERA-XV at its first eval report).
+PREFIX_TRAIN = "train/"
+PREFIX_EVAL = "eval/"
+KEY_WIN_RATE = "win_rate"
+KEY_FLOOR_AVG = "floor_avg"
+KEY_LENGTH_AVG = "length_avg"
+KEY_REWARD_AVG = "reward_avg"
+KEY_REWARD_STD = "reward_std"
+
+
 def aggregate_episodes(episodes: list[EpisodeStats]) -> dict[str, float]:
-    """Mean outcome metrics over a batch of episodes (win rate, floor, length, reward)."""
+    """Outcome metrics over a batch of episodes (win rate, floor, length, reward)."""
     n = len(episodes)
+    rewards = [e.total_reward for e in episodes]
     return {
-        "win_rate": sum(e.won for e in episodes) / n,
-        "floor_avg": sum(e.floor for e in episodes) / n,
-        "length_avg": sum(e.length for e in episodes) / n,
-        "reward_avg": float(np.mean([e.total_reward for e in episodes])),
+        KEY_WIN_RATE: sum(e.won for e in episodes) / n,
+        KEY_FLOOR_AVG: sum(e.floor for e in episodes) / n,
+        KEY_LENGTH_AVG: sum(e.length for e in episodes) / n,
+        KEY_REWARD_AVG: float(np.mean(rewards)),
+        KEY_REWARD_STD: float(np.std(rewards)),
     }

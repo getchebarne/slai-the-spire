@@ -40,8 +40,8 @@ SELECTING_ACTION_TYPES: list[int] = [int(action_type) for action_type in ACTION_
 
 def card_identity_ids(cards: list[Card]) -> list[int]:
     """Contiguous group ids over a pile; same-identity cards share an id (selection dedup)."""
-    seen: dict[tuple, int] = {}
-    return [seen.setdefault(card.identity_hash, len(seen)) for card in cards]
+    seen: dict[Card, int] = {}
+    return [seen.setdefault(card, len(seen)) for card in cards]
 
 
 def _pile_ids(state: slai.GameState, target_kind: "SliceKind | None") -> list[int]:

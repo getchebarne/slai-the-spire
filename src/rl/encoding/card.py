@@ -79,7 +79,7 @@ ENCODING_DIM_CARD = (
     + 1  # Affordable (cost <= energy_current)
 )
 
-# Per-card encoding cache keyed by (identity_hash, energy); identity_hash now varies with modifiers.
+# Per-card encoding cache keyed by (hash(card), energy); the hash varies with combat modifiers.
 _CARD_ROW_CACHE: dict[tuple[int, int], np.ndarray] = {}
 _CARD_ROW_CACHE_MAX = 100_000
 
@@ -140,8 +140,8 @@ def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray
 
 
 def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -> None:
-    """Write the full card encoding into `out`, cached by (identity_hash, energy)."""
-    cache_key = (card.identity_hash, energy_current)
+    """Write the full card encoding into `out`, cached by (hash(card), energy)."""
+    cache_key = (hash(card), energy_current)
     row = _CARD_ROW_CACHE.get(cache_key)
     if row is None:
         row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)

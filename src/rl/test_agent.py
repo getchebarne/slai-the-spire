@@ -571,7 +571,7 @@ def main(
     else:
         config = load_config(f"{exp_path}/config.yml")
         model = ActorCritic(**config["model"])
-        ckpt = torch.load(f"{exp_path}/checkpoint.pth", weights_only=True)
+        ckpt = torch.load(f"{exp_path}/checkpoint.pth", weights_only=True, map_location="cpu")
         model.load_state_dict(ckpt["model"])
     model.eval()
 

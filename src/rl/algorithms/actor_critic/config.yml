@@ -1,24 +1,38 @@
-exp_name: ppo/NEWERA-XIII
+exp_name: ppo/NEWERA-XVIII
 seed: 0
-num_iterations: 5.0e+4
+num_iterations: 1.0e+6
 log_every: 10
 save_every: 100
 gamma: 0.998  # b/item-7: longer horizon (~500 steps) for economy/deck-thinning credit
 lam: 0.95
 coef_value: 0.500
 coef_entropy_max: 0.010
-coef_entropy_min: 0.001
-entropy_decay_steps: 2.0e+7  # env steps (linear decay max -> min, then floor)
+coef_entropy_min: 0.010  # decay neutralized (min = max): the uniform-KL barrier is the
+entropy_decay_steps: 2.0e+7  # anti-collapse floor; a decayed bonus could never reopen a head (XIV fix #4)
+# Uniform-KL log-barrier per head: floors legal-action probs at ~coef/(n·|A|). Entropy's
+# restoring force vanishes on a dying action (XIV's L1 collapse); the barrier's doesn't. No decay.
+coef_kl_uniform: 0.020
+# Soft ascension curriculum: envs graduate to the frontier level in curriculum_step
+# fractions when the greedy eval battery sustains promote_win_rate at the frontier.
+ascension_start: 0
+ascension_max: 20
+promote_win_rate: 0.75    # advance c when frontier eval/win_rate >= this...
+promote_streak: 2         # ...for this many consecutive frontier batteries
+curriculum_step: 0.25     # fraction of envs graduated per qualifying eval
+target_kl: 0.03           # PPO epoch early-stop at 1.5x this — transition-shift hygiene
 max_grad_norm: 0.500
-num_envs: 64
-rollout_length: 128
+# 256x32 keeps N=8192 but amortizes rollout launch overhead: 7.53 -> 6.93 s/iter measured
+# on the RTX 3090 (2026-07 probe). T=32 still exceeds the GAE lambda-horizon (~20 steps).
+num_envs: 256
+rollout_length: 32
 clip_eps: 0.20
 clip_value_loss: false
 minibatch_size: 2048
 num_epochs: 4
 # Rollout(t+1) collected in a side process during update(t), staleness 1. Measured a
 # WASH on the 4-P-core M4 post-packing (hidden rollout reappears as update contention:
-# 10.5s either way); enable on boxes with spare cores or if rollout grows again.
+# 10.5s either way), and a clear LOSS on the single-GPU 3090 (9.9 vs 7.5 s serial,
+# 2026-07 probe: GPU contention + full-buffer pipe transfer). Leave off on one GPU.
 overlap_rollout: false
 
 model:

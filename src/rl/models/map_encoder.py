@@ -13,6 +13,12 @@ from src.rl.types import TPadded
 
 _NUM_NODES = MAP_HEIGHT * MAP_WIDTH
 
+# Dedup pays only when the batch actually repeats maps (update minibatches, 2048 rows);
+# rollout batches (64-256) are ~all-distinct, where unique() is pure overhead — measured
+# −0.2 s/iter on the RTX 3090 (2026-07 probe). Exact either way; 512 sits between the
+# largest rollout batch and the smallest update minibatch.
+_DEDUP_MIN_BATCH = 512
+
 
 def _build_child_idx() -> torch.Tensor:
     t_child = torch.full((_NUM_NODES, NUM_EDGE_CHANNELS), _NUM_NODES, dtype=torch.long)
@@ -47,6 +53,10 @@ class MapGNN(nn.Module):
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
         t_nodes = t_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
 
+        if batch_size < _DEDUP_MIN_BATCH:
+            t_room_h, t_readout = self._run(t_nodes, t_room_node_idx)
+            return TPadded(t_room_h * t_room_mask.unsqueeze(-1), t_room_mask), t_readout
+
         # The game sits on one map node for many steps, so (grid, room_idx) is highly redundant
         # across a minibatch: run the GNN on unique inputs once and gather back (exact)
         t_cat_flat = torch.cat(
@@ -75,7 +85,10 @@ class MapGNN(nn.Module):
         t_valid = self._forward_valid(t_nodes)  # (U, H * W) / Forward rooms only
         t_adj = self._adjacency(t_nodes)  # (U, H * W, H * W) / Row-normalized children
 
-        # Message passing: aggregate children per layer, masked to forward rooms
+        # Message passing: aggregate children per layer, masked to forward rooms.
+        # The dense bmm looks wasteful (≤3 children/room) but a sparse gather-sum measured
+        # SLOWER on GPU (8.4 vs 7.5 s/iter, 2026-07): at HW=105 the bmm is launch-bound,
+        # not FLOP-bound, and the gather path adds kernels + memory traffic per layer.
         t_hidden = self._in_proj(t_nodes) * t_valid.unsqueeze(-1)
         for lin, norm in zip(self._layers, self._norms):
             t_hidden = norm(t_hidden + F.relu(lin(torch.bmm(t_adj, t_hidden))))
