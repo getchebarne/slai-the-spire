@@ -121,7 +121,7 @@ class ActorCritic(nn.Module):
         t_mask: torch.Tensor,
         t_recorded_idx: torch.Tensor | None = None,
         greedy: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         t_masked_logits = t_logits.masked_fill(~t_mask, float("-inf"))
         dist = torch.distributions.Categorical(logits=t_masked_logits)
 
@@ -136,7 +136,14 @@ class ActorCritic(nn.Module):
             # Sample from distribution
             t_idx = dist.sample()
 
-        return t_idx, dist.log_prob(t_idx), dist.entropy()
+        # KL(uniform‖π) over the legal set — the anti-collapse barrier. Entropy's
+        # restoring force on a dying action vanishes with its probability (∝ p·|log p|);
+        # this gradient tends to a constant ~1/n instead, flooring legal-action probs
+        # near coef/(n·|A|) (log-barrier regularization, Agarwal et al. 2021).
+        t_n_legal = t_mask.sum(-1).clamp(min=1).float()  # min=1: empty/singleton rows → KL 0
+        t_kl_uniform = -dist.logits.masked_fill(~t_mask, 0.0).sum(-1) / t_n_legal - t_n_legal.log()
+
+        return t_idx, dist.log_prob(t_idx), dist.entropy(), t_kl_uniform
 
     def _compute_action_type(
         self,
@@ -145,7 +152,7 @@ class ActorCritic(nn.Module):
         t_mask: TMask,
         greedy: bool,
         t_recorded: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Pick the `ActionType` for every row — one masked categorical, screen-gated."""
         t_logits = self._head_action_type(
             t_core_out.global_, t_game_state.screen, t_mask.mask_action_type
@@ -169,9 +176,11 @@ class ActorCritic(nn.Module):
         t_idx_l1 = torch.full((batch_size,), -1, dtype=torch.long, device=device)
         t_log_prob_l1 = torch.zeros(batch_size, device=device)
         t_entropy_l1 = torch.zeros(batch_size, device=device)
+        t_kl_uniform_l1 = torch.zeros(batch_size, device=device)
         t_idx_l2 = torch.full((batch_size,), -1, dtype=torch.long, device=device)
         t_log_prob_l2 = torch.zeros(batch_size, device=device)
         t_entropy_l2 = torch.zeros(batch_size, device=device)
+        t_kl_uniform_l2 = torch.zeros(batch_size, device=device)
 
         for action_type in t_idx_at.unique().tolist():
             pool = ACTION_TYPE_POOL.get(ACTION_TYPE_BY_INT[action_type])
@@ -195,9 +204,12 @@ class ActorCritic(nn.Module):
             t_logits = self._head_level_2(
                 t_keys, t_core_out.global_[t_rows], t_action_type_emb, t_mask_l1
             )
-            t_idx_l1[t_rows], t_log_prob_l1[t_rows], t_entropy_l1[t_rows] = self._categorical_step(
-                t_logits, t_mask_l1, self._rows(t_recorded_l1, t_rows), greedy
-            )
+            (
+                t_idx_l1[t_rows],
+                t_log_prob_l1[t_rows],
+                t_entropy_l1[t_rows],
+                t_kl_uniform_l1[t_rows],
+            ) = self._categorical_step(t_logits, t_mask_l1, self._rows(t_recorded_l1, t_rows), greedy)
 
             # Level 2: monster target, only for actions that take one (CardPlay / PotionUse)
             t_target_mask = _get_target_mask_for(action_type, t_mask)
@@ -226,17 +238,22 @@ class ActorCritic(nn.Module):
                 t_keys, t_core_out.global_[t_rows_l2], t_selected_card_or_pot, t_mask_l2
             )
             t_recorded_local = t_recorded_rows[t_local] if t_recorded_rows is not None else None
-            t_idx_l2[t_rows_l2], t_log_prob_l2[t_rows_l2], t_entropy_l2[t_rows_l2] = (
-                self._categorical_step(t_logits, t_mask_l2, t_recorded_local, greedy)
-            )
+            (
+                t_idx_l2[t_rows_l2],
+                t_log_prob_l2[t_rows_l2],
+                t_entropy_l2[t_rows_l2],
+                t_kl_uniform_l2[t_rows_l2],
+            ) = self._categorical_step(t_logits, t_mask_l2, t_recorded_local, greedy)
 
         return (
             t_idx_l1,
             t_log_prob_l1,
             t_entropy_l1,
+            t_kl_uniform_l1,
             t_idx_l2,
             t_log_prob_l2,
             t_entropy_l2,
+            t_kl_uniform_l2,
         )
 
     @staticmethod
@@ -255,7 +272,7 @@ class ActorCritic(nn.Module):
         t_recorded_l2: torch.Tensor | None = None,
     ) -> TAction:
         # Compute `ActionType` first
-        t_idx_at, t_log_prob_at, t_entropy_at = self._compute_action_type(
+        t_idx_at, t_log_prob_at, t_entropy_at, t_kl_uniform_at = self._compute_action_type(
             t_game_state, t_core_out, t_mask, greedy, t_recorded_action_type
         )
 
@@ -264,9 +281,11 @@ class ActorCritic(nn.Module):
             t_idx_l1,
             t_log_prob_l1,
             t_entropy_l1,
+            t_kl_uniform_l1,
             t_idx_l2,
             t_log_prob_l2,
             t_entropy_l2,
+            t_kl_uniform_l2,
         ) = self._compute_action_idxs(
             t_idx_at, t_game_state, t_core_out, t_mask, greedy, t_recorded_l1, t_recorded_l2
         )
@@ -276,6 +295,7 @@ class ActorCritic(nn.Module):
             idxs=torch.stack([t_idx_at, t_idx_l1, t_idx_l2], dim=1),
             log_prob=torch.stack([t_log_prob_at, t_log_prob_l1, t_log_prob_l2], dim=1),
             entropy=torch.stack([t_entropy_at, t_entropy_l1, t_entropy_l2], dim=1),
+            kl_uniform=torch.stack([t_kl_uniform_at, t_kl_uniform_l1, t_kl_uniform_l2], dim=1),
             batch_size=[t_idx_at.shape[0]],
         )
 
@@ -293,7 +313,7 @@ class ActorCritic(nn.Module):
         t_idx_at: torch.Tensor,
         t_idx_l1: torch.Tensor,
         t_idx_l2: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         t_core_out = self.core(t_game_state)
         t_values = self._head_value(t_core_out.global_)
         t_actions = self._run(
@@ -305,7 +325,7 @@ class ActorCritic(nn.Module):
             t_recorded_l1=t_idx_l1,
             t_recorded_l2=t_idx_l2,
         )
-        return t_actions.log_prob.sum(-1), t_actions.entropy, t_values
+        return t_actions.log_prob.sum(-1), t_actions.entropy, t_actions.kl_uniform, t_values
 
 
 def _get_target_mask_for(action_type: int, t_mask: TMask) -> torch.Tensor | None:

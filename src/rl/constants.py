@@ -4,11 +4,14 @@ Constants for the RL module.
 Centralizes magic numbers and configuration values used across the RL codebase.
 """
 
-ASCENSION_LEVEL = 1
+ASCENSION_LEVEL = 20
 
 # Skip trivial single-legal-action states in the engine (auto-advance). Used
 # for training and eval — env-construction flag, not a tunable hyperparameter.
-FAST_MODE = True
+# Disabled 2026-07: holding a potion makes PotionDiscard legal everywhere, which
+# un-trivializes otherwise-skipped states — a pure surfaced-step inflation that,
+# under per-step discounting, taxes potion-holding and biases toward early discards.
+FAST_MODE = False
 
 # Actor encoding limits
 BLOCK_MAX_CHARACTER = 20

@@ -57,6 +57,7 @@ class TGameState:
     room_mask: torch.Tensor  # (B, MAP_WIDTH) bool — next-row room non-padding mask
     map_meta: torch.Tensor
     screen: torch.Tensor
+    ascension: torch.Tensor  # (B, ENCODING_DIM_ASCENSION) thermometer, bit i = level > i
     reward_meta: torch.Tensor
     shop_meta: torch.Tensor
     event_meta: torch.Tensor
@@ -105,6 +106,7 @@ class TAction:
     idxs: torch.Tensor  # (B, len(Level)) long, per-Level column; -1 where the level didn't apply
     log_prob: torch.Tensor  # (B, len(Level)) float, 0 where N/A
     entropy: torch.Tensor  # (B, len(Level)) float, 0 where N/A
+    kl_uniform: torch.Tensor  # (B, len(Level)) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
 @tensorclass(shadow=True)  # `values` field shadows TensorDict.values()

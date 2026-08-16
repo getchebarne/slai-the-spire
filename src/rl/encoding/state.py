@@ -1,6 +1,7 @@
 import torch
 from slai import GameState
 
+from src.rl.encoding.ascension import encode_batch_ascension
 from src.rl.encoding.card import encode_batch_cards
 from src.rl.encoding.character import encode_batch_character
 from src.rl.encoding.energy import encode_batch_energy
@@ -82,6 +83,7 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
         room_mask=t_room_mask,
         map_meta=t_map_meta,
         screen=encode_batch_screen(batch_game_state, device),
+        ascension=encode_batch_ascension(batch_game_state, device),
         reward_meta=t_reward_meta,
         shop_meta=t_shop_meta,
         event_meta=t_event_meta,

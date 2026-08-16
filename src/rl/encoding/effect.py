@@ -235,10 +235,14 @@ def _health_delta(off_gain_abs: int, off_loss_abs: int, off_gain_rel: int, off_l
         amount = effect.amount
         if isinstance(amount, HealthDeltaAmount.Absolute):
             out[base + (off_gain_abs if gain else off_loss_abs)] += amount.amount
-        else:  # Relative {numerator, denominator}: a fraction of the base
+        elif isinstance(amount, HealthDeltaAmount.Relative):
+            # A fraction of the base. The engine's RelativeRounded variant is folded
+            # into Relative by the bindings (ffi.rs: rounding mode is engine-internal).
             out[base + (off_gain_rel if gain else off_loss_rel)] += (
                 amount.numerator / amount.denominator
             )
+        else:
+            raise ValueError(f"Unencoded HealthDeltaAmount variant: {type(amount).__name__}")
 
     return handler
 

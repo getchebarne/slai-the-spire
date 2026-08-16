@@ -4,9 +4,13 @@ import numpy as np
 import slai
 import torch
 
+from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
+from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
+from src.rl.algorithms.actor_critic.episode import KEY_REWARD_STD
+from src.rl.algorithms.actor_critic.episode import KEY_WIN_RATE
+from src.rl.algorithms.actor_critic.episode import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.episode import aggregate_episodes
-from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
@@ -21,12 +25,21 @@ _EVAL_MAX_STEPS = 1000
 _EVAL_NUM_EPISODES = 64
 _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance trend
 
+# Full eval tags, composed from the shared prefix + key constants; imported by
+# train()'s eval print.
+EVAL_WIN_RATE = PREFIX_EVAL + KEY_WIN_RATE
+EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
+EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
+EVAL_REWARD_STD = PREFIX_EVAL + KEY_REWARD_STD
 
-def run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) -> dict[str, float]:
+
+def run_eval_battery(
+    model: ActorCritic, device: torch.device, gamma: float, ascension: int
+) -> dict[str, float]:
     episodes: list[EpisodeStats] = []
     with torch.no_grad():
         for seed in _EVAL_SEEDS:
-            env = slai.GameEnv(ascension=ASCENSION_LEVEL, fast_mode=FAST_MODE)
+            env = slai.GameEnv(ascension=ascension, fast_mode=FAST_MODE)
             obs = env.reset(seed=seed)
             stream_rewards = np.zeros(len(REWARD_STREAMS))
             length = 0
@@ -58,9 +71,7 @@ def run_eval_battery(model: ActorCritic, device: torch.device, gamma: float) -> 
                 )
             )
 
-    metrics = {f"evals/{key}": value for key, value in aggregate_episodes(episodes).items()}
-    metrics["evals/reward_std"] = float(np.std([e.total_reward for e in episodes]))
-    return metrics
+    return {PREFIX_EVAL + key: value for key, value in aggregate_episodes(episodes).items()}
 
 
 def eval_battery_worker(conn: Connection, model_config: dict, gamma: float) -> None:
@@ -72,6 +83,6 @@ def eval_battery_worker(conn: Connection, model_config: dict, gamma: float) -> N
         msg = conn.recv()
         if msg is None:
             return
-        state_dict, iteration = msg
+        state_dict, iteration, ascension = msg
         model.load_state_dict(state_dict)
-        conn.send((iteration, run_eval_battery(model, device, gamma)))
+        conn.send((iteration, ascension, run_eval_battery(model, device, gamma, ascension)))
