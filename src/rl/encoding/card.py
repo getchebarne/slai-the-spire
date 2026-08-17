@@ -1,4 +1,4 @@
-import warnings
+from typing import get_args
 
 import numpy as np
 import torch
@@ -8,23 +8,26 @@ from slai import CardCostKind
 from slai import CardKind
 from slai import CardName
 from slai import CardRarity
+from slai import CostScope
+from slai import EventKindWeMeetAgain
 from slai import GameState
-from slai import Screen
 from slai import members
 
+from src.rl.constants import MAX_REWARD_CARD_BUNDLES
+from src.rl.constants import MAX_REWARD_CARD_TOKENS
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISC_PILE
 from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_DRAW_PILE
 from src.rl.constants import MAX_SIZE_EXHAUST
 from src.rl.constants import MAX_SIZE_HAND
-from src.rl.constants import MAX_SIZE_REWARD_CARDS
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
+from src.rl.constants import MAX_SIZE_STASIS
 from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
 from src.rl.types import Slice
 from src.rl.types import SliceKind
-
+from src.rl.types import clip_to_slice
 
 # Order = fill order = Core's global-offset order
 SLICE_CARDS = [
@@ -34,22 +37,26 @@ SLICE_CARDS = [
     Slice(SliceKind.CARD_EXHAUST, MAX_SIZE_EXHAUST),
     Slice(SliceKind.CARD_DECK, MAX_SIZE_DECK),
     Slice(SliceKind.CARD_DISCOVER, MAX_SIZE_DISCOVER),
-    Slice(SliceKind.CARD_REWARD, MAX_SIZE_REWARD_CARDS),
+    Slice(SliceKind.CARD_REWARD, MAX_REWARD_CARD_TOKENS),
     Slice(SliceKind.CARD_SHOP, MAX_SIZE_SHOP_CARDS),
+    Slice(SliceKind.CARD_STASIS, MAX_SIZE_STASIS),
+    Slice(SliceKind.CARD_EVENT, 1),  # "We Meet Again!" Event
 ]
 SLICE_KIND_CARDS = {slice_.kind for slice_ in SLICE_CARDS}
 NUM_CARD_TOKENS = sum(slice_.size for slice_ in SLICE_CARDS)
 
 
-# Enum maps
-_MAP_CARD_NAME = {card_name: i for i, card_name in enumerate(members(CardName))}
-_MAP_CARD_KIND = {card_kind: i for i, card_kind in enumerate(members(CardKind))}
-_MAP_CARD_COLOR = {card_color: i for i, card_color in enumerate(members(CardColor))}
-_MAP_CARD_RARITY = {card_rarity: i for i, card_rarity in enumerate(members(CardRarity))}
-_MAP_CARD_COST_KIND = {
-    card_cost_kind: i
-    for i, card_cost_kind in enumerate(m for m in dir(CardCostKind) if not m.startswith("_"))
-}
+# Enum maps, keyed by int(): the declaration-order discriminant, stable across
+# engine content bumps (members() is alphabetical and shifts on every insertion).
+_MAP_CARD_NAME = {card_name: int(card_name) for card_name in members(CardName)}
+_MAP_CARD_KIND = {card_kind: int(card_kind) for card_kind in members(CardKind)}
+_MAP_CARD_COLOR = {card_color: int(card_color) for card_color in members(CardColor)}
+_MAP_CARD_RARITY = {card_rarity: int(card_rarity) for card_rarity in members(CardRarity)}
+# CardCostKind is a union of flat variant classes (no discriminant): key on type.
+# (dir() on a UnionType yields nothing — building this from dir() silently
+# produced a zero-width OHE.)
+_MAP_CARD_COST_KIND = {cls: i for i, cls in enumerate(get_args(CardCostKind))}
+_MAP_COST_SCOPE = {scope: int(scope) for scope in members(CostScope)}
 
 # Cost
 _COST_MIN = 0
@@ -75,21 +82,22 @@ ENCODING_DIM_CARD = (
     + 1  # Playable
     + 1  # Signed energy delta (energy_current - cost)
     + 1  # Cost base scalar
-    + 1  # Cost zero-once (free-to-play-once)
-    + 1  # Affordable (cost <= energy_current)
+    + 1  # Bottled
+    + len(_MAP_COST_SCOPE)  # Cost-override scope OHE (all-zero = no override)
+    + MAX_REWARD_CARD_BUNDLES  # Reward bundle-index OHE — stamped OUTSIDE the cache
 )
 
-# Per-card encoding cache keyed by (hash(card), energy); the hash varies with combat modifiers.
+# Bundle OHE lives at the row tail so the fill loop can stamp it after the cache
+# copy: cached rows stay pure functions of (card, energy) — position bits never
+# enter the cache (same pattern as map_.py's position stamp).
+_OFF_BUNDLE = ENCODING_DIM_CARD - MAX_REWARD_CARD_BUNDLES
+
+# Per-card encoding cache keyed by (hash(card), energy). The engine's structural
+# hash covers every Card field (effects included, pre-scaled by live modifiers),
+# so hash-equality implies encode-equality; collisions alias (64-bit, tolerated,
+# same exposure as the old identity_hash int key).
 _CARD_ROW_CACHE: dict[tuple[int, int], np.ndarray] = {}
 _CARD_ROW_CACHE_MAX = 100_000
-
-# Set tracking card slices that have triggered truncation warnings
-_WARNED_TRUNCATED: set[SliceKind] = set()
-
-# Screens where the full owned deck is shown; hidden in combat (visible via the piles).
-_DECK_SCREENS = frozenset(
-    {Screen.Map, Screen.Chest, Screen.RestSite, Screen.Shop, Screen.Reward, Screen.Event}
-)
 
 
 def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray) -> int:
@@ -110,7 +118,7 @@ def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray
     pos += len(_MAP_CARD_RARITY)
 
     # Cost kind OHE
-    out[pos + _MAP_CARD_COST_KIND[type(card.cost_kind).__name__]] = 1.0
+    out[pos + _MAP_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
     pos += len(_MAP_CARD_COST_KIND)
 
     # Cost vector
@@ -132,9 +140,17 @@ def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray
     out[pos + 7] = float(card.playable)
     out[pos + 8] = max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
     out[pos + 9] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
-    out[pos + 10] = float(card.cost_zero_once)
-    out[pos + 11] = float(card.cost <= energy_current)
-    pos += 12
+    out[pos + 10] = float(card.bottled)
+    pos += 11
+
+    # Cost-override scope OHE (Snecko Confusion / Snecko Oil / Madness / setup
+    # picks); all-zero = no override. The overridden cost itself is card.cost.
+    if card.cost_override_scope is not None:
+        out[pos + _MAP_COST_SCOPE[card.cost_override_scope]] = 1.0
+    pos += len(_MAP_COST_SCOPE)
+
+    # Bundle OHE tail: deliberately NOT written here (position-dependent).
+    pos += MAX_REWARD_CARD_BUNDLES
 
     return pos
 
@@ -153,27 +169,47 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
     out[:] = row
 
 
-def _get_card_entities(kind: SliceKind, game_state: GameState) -> list:
-    """The GameState card pile a card slice covers (used by the fill loop + masks dedup)."""
+def _get_card_entities(kind: SliceKind, game_state: GameState, combat) -> list[Card]:
+    """The GameState card pile a card slice covers (used by the fill loop + masks dedup).
+
+    `combat` is the caller's hoisted `game_state.combat`: every context access
+    deep-clones the whole snapshot across the FFI, so it is fetched once per
+    state, never per slice."""
     match kind:
         case SliceKind.CARD_HAND:
-            return game_state.hand
+            return combat.hand if combat is not None else []
         case SliceKind.CARD_DRAW:
-            return game_state.pile_draw[-MAX_SIZE_DRAW_PILE:]  # next-to-draw tail
+            # Head truncation, not the next-to-draw tail: CardMoveToHand.idx
+            # indexes raw pile_draw positions, so slot i must equal engine index
+            # i (overflow slots are warn-dropped by masks). Costs next-to-draw
+            # visibility only when the pile exceeds the cap.
+            return combat.pile_draw[:MAX_SIZE_DRAW_PILE] if combat is not None else []
         case SliceKind.CARD_DISCARD:
-            return game_state.pile_discard
+            return combat.pile_discard if combat is not None else []
         case SliceKind.CARD_EXHAUST:
-            return game_state.pile_exhaust
+            return combat.pile_exhaust if combat is not None else []
+        case SliceKind.CARD_STASIS:
+            return combat.pile_stasis if combat is not None else []
         case SliceKind.CARD_DECK:
-            return game_state.deck  # master deck
+            return game_state.deck
         case SliceKind.CARD_DISCOVER:
-            return game_state.discover
+            return combat.discover if combat is not None else []
         case SliceKind.CARD_REWARD:
-            return game_state.reward.cards if game_state.reward is not None else []
+            reward = game_state.reward
+            if reward is None:
+                return []
+            return [card for bundle in reward.cards for card in bundle]
         case SliceKind.CARD_SHOP:
             return game_state.shop.cards if game_state.shop is not None else []
+        case SliceKind.CARD_EVENT:
+            event = game_state.event
+            if event is not None and isinstance(event.kind, EventKindWeMeetAgain):
+                pick = event.kind.pick_card
+                return [pick] if pick is not None else []
+
+            raise ValueError(f"Unsupported Event {event}")
         case _:
-            raise ValueError(f"not a card slice: {kind}")
+            raise ValueError(f"Unsupported `SliceKind`: {kind}")
 
 
 def encode_batch_cards(
@@ -186,27 +222,37 @@ def encode_batch_cards(
     np_pad = np.zeros((batch_size, NUM_CARD_TOKENS), dtype=bool)
 
     for b, game_state in enumerate(batch_game_state):
-        energy_current = game_state.energy.energy_current
+        combat = game_state.combat
+        energy_current = combat.energy.energy_current if combat is not None else 0
+        # Deck hidden while fighting (visible via the piles); any other focus —
+        # including a reward overlaying the ended combat — shows it. Equivalent
+        # to derive_focus(game_state) is not Focus.COMBAT (reward is the only
+        # context that outranks combat), from the already-hoisted snapshots.
+        reward = game_state.reward
+        show_deck = reward is not None or combat is None
         offset = 0
         for slice_ in SLICE_CARDS:
-            # Deck hidden in combat; skip the encode but advance offset so later slices align
-            if slice_.kind is SliceKind.CARD_DECK and game_state.screen not in _DECK_SCREENS:
+            # Skip the encode but advance offset so later slices align
+            if slice_.kind is SliceKind.CARD_DECK and not show_deck:
                 offset += slice_.size
                 continue
 
-            cards = _get_card_entities(slice_.kind, game_state)
-            if len(cards) > slice_.size:
-                if slice_.kind not in _WARNED_TRUNCATED:
-                    _WARNED_TRUNCATED.add(slice_.kind)
-                    warnings.warn(
-                        f"{slice_.kind.name} pile of {len(cards)} cards truncated to"
-                        f" encoder cap ({slice_.size})"
-                    )
-                cards = cards[: slice_.size]
+            cards = clip_to_slice(_get_card_entities(slice_.kind, game_state, combat), slice_)
 
             for i, card in enumerate(cards):
                 encode_card_into_w_cache(card, energy_current, np_out[b, offset + i])
                 np_pad[b, offset + i] = True
+
+            # Bundle-index OHE, stamped after the cache copy (position-dependent:
+            # taking any card consumes its whole bundle, so membership matters).
+            if slice_.kind is SliceKind.CARD_REWARD and reward is not None and cards:
+                tok = 0
+                for bundle_idx, bundle in enumerate(reward.cards):
+                    ohe = min(bundle_idx, MAX_REWARD_CARD_BUNDLES - 1)
+                    for _ in range(min(len(bundle), len(cards) - tok)):
+                        np_out[b, offset + tok, _OFF_BUNDLE + ohe] = 1.0
+                        tok += 1
+
             offset += slice_.size
 
     return (

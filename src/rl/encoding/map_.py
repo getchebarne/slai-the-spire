@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from slai import GameEnv
 from slai import Map
 from slai import MonsterEncounter
 from slai import Room
@@ -15,13 +16,20 @@ from src.rl.types import SliceKind
 # Order = fill order = Core's global-offset order
 SLICE_ROOMS = [Slice(SliceKind.ROOMS, MAP_WIDTH)]
 
-_MAP_ROOM_KIND = {room_kind: i for i, room_kind in enumerate(members(RoomKind))}
+# int() keying: declaration-order discriminant, stable across engine bumps
+_MAP_ROOM_KIND = {room_kind: int(room_kind) for room_kind in members(RoomKind)}
+# The six act bosses (I then II); a boss outside this table fails loud below
 _MAP_MONSTER_ENCOUNTER = {
     MonsterEncounter.TheGuardian: 0,
     MonsterEncounter.Hexaghost: 1,
     MonsterEncounter.SlimeBoss: 2,
+    MonsterEncounter.BronzeAutomaton: 3,
+    MonsterEncounter.TheCollector: 4,
+    MonsterEncounter.Champ: 5,
 }
 MAP_NUM_ROOM_KINDS = len(_MAP_ROOM_KIND)
+
+_NUM_ACTS = GameEnv.ACT_FINAL  # act OHE width; a write past it fails loud (IndexError)
 
 # Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant.
 NUM_EDGE_CHANNELS = 3
@@ -43,6 +51,7 @@ ENCODING_DIM_MAP_META = (
     + len(_MAP_MONSTER_ENCOUNTER)  # Act-boss identity OHE
     + len(_MAP_ROOM_KIND)  # Current room kind OHE
     + MAP_WIDTH * len(_MAP_ROOM_KIND)  # Next-row room kind OHE per column
+    + _NUM_ACTS  # Act OHE (each act is a fresh 15-row map; depth alone is ambiguous)
 )
 
 # Static map-grid cache keyed by map.identity_hash: room kinds + edges are fixed per map (only the
@@ -108,6 +117,7 @@ def _encode_map_meta_into(
     y_current: int | None,
     x_current: int | None,
     boss,
+    act: int,
     out: np.ndarray,
 ) -> None:
     # Floor depth + on-map sentinel
@@ -134,6 +144,9 @@ def _encode_map_meta_into(
     for x in _next_row_candidate_cols(rooms, y_current, x_current):
         out[base + x * len(_MAP_ROOM_KIND) + _MAP_ROOM_KIND[rooms[y_next][x].room_kind]] = 1.0
 
+    # Act OHE (1-based)
+    out[base + MAP_WIDTH * len(_MAP_ROOM_KIND) + (act - 1)] = 1.0
+
 
 def _encode_room_node_idx_into(
     rooms: list[list[Room | None]],
@@ -147,7 +160,7 @@ def _encode_room_node_idx_into(
 
 
 def encode_batch_map(
-    batch_map: list[Map], device: torch.device
+    batch_map: list[Map], batch_act: list[int], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     batch_size = len(batch_map)
     np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
@@ -168,7 +181,7 @@ def encode_batch_map(
             np_grid[b, y_current, x_current, CH_POSITION] = 1.0
 
         _encode_room_node_idx_into(rooms, y_current, x_current, np_node_idx[b])
-        _encode_map_meta_into(rooms, y_current, x_current, map_.boss, np_meta[b])
+        _encode_map_meta_into(rooms, y_current, x_current, map_.boss, batch_act[b], np_meta[b])
 
     # Non-padding mask for the next-row room tokens (which columns hold a selectable room)
     np_room_mask = np_node_idx >= 0

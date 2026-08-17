@@ -90,9 +90,12 @@ class ActorCritic(nn.Module):
     def _pointer_key_for(self, action_type: int) -> PointerKeys:
         match ACTION_TYPE_BY_INT[action_type]:
             case (
-                ActionType.CardDiscard
+                ActionType.CardBottle
+                | ActionType.CardDiscard
                 | ActionType.CardDiscover
                 | ActionType.CardDuplicate
+                | ActionType.CardExhaust
+                | ActionType.CardMoveToHand
                 | ActionType.CardNightmare
                 | ActionType.CardPlay
                 | ActionType.CardPurge
@@ -100,14 +103,20 @@ class ActorCritic(nn.Module):
                 | ActionType.CardSetup
                 | ActionType.CardTransform
                 | ActionType.CardUpgrade
+                | ActionType.RewardSingingBowl
                 | ActionType.RewardTakeCard
                 | ActionType.ShopBuyCard
                 | ActionType.ShopPurge
             ):
                 return self._pointer_key_card
-            case ActionType.ShopBuyRelic:
+            case ActionType.RewardTakeRelic | ActionType.ShopBuyRelic:
                 return self._pointer_key_relic
-            case ActionType.PotionDiscard | ActionType.PotionUse | ActionType.ShopBuyPotion:
+            case (
+                ActionType.PotionDiscard
+                | ActionType.PotionUse
+                | ActionType.RewardTakePotion
+                | ActionType.ShopBuyPotion
+            ):
                 return self._pointer_key_potion
             case ActionType.EventOptionSelect:
                 return self._pointer_key_event
@@ -209,7 +218,9 @@ class ActorCritic(nn.Module):
                 t_log_prob_l1[t_rows],
                 t_entropy_l1[t_rows],
                 t_kl_uniform_l1[t_rows],
-            ) = self._categorical_step(t_logits, t_mask_l1, self._rows(t_recorded_l1, t_rows), greedy)
+            ) = self._categorical_step(
+                t_logits, t_mask_l1, self._rows(t_recorded_l1, t_rows), greedy
+            )
 
             # Level 2: monster target, only for actions that take one (CardPlay / PotionUse)
             t_target_mask = _get_target_mask_for(action_type, t_mask)

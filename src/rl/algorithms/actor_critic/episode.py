@@ -4,13 +4,19 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from src.rl.constants import MAP_HEIGHT
+
+
+# Cumulative floor of Act II's first row: reaching it ⟺ beat the Act I boss.
+ACT2_FLOOR_MIN = MAP_HEIGHT + 1
+
 
 @dataclass
 class EpisodeStats:
     stream_rewards: np.ndarray  # (K,) per-stream episode totals
     length: int
     won: bool
-    floor: int
+    floor: int  # run-CUMULATIVE floor (reward.cumulative_floor), 0..31
 
     @property
     def total_reward(self) -> float:
@@ -27,6 +33,7 @@ KEY_FLOOR_AVG = "floor_avg"
 KEY_LENGTH_AVG = "length_avg"
 KEY_REWARD_AVG = "reward_avg"
 KEY_REWARD_STD = "reward_std"
+KEY_ACT2_RATE = "act2_rate"
 
 
 def aggregate_episodes(episodes: list[EpisodeStats]) -> dict[str, float]:
@@ -39,4 +46,7 @@ def aggregate_episodes(episodes: list[EpisodeStats]) -> dict[str, float]:
         KEY_LENGTH_AVG: sum(e.length for e in episodes) / n,
         KEY_REWARD_AVG: float(np.mean(rewards)),
         KEY_REWARD_STD: float(np.std(rewards)),
+        # Wins are two-act by definition now; this is the Act-I-cleared rate —
+        # the progress signal through the expected long low-win-rate phase.
+        KEY_ACT2_RATE: sum(e.floor >= ACT2_FLOOR_MIN for e in episodes) / n,
     }

@@ -6,7 +6,10 @@ from slai import members
 from src.rl.utils import get_sqrt_norm
 
 
-MODIFIER_KIND_TO_IDX = {modifier_kind: i for i, modifier_kind in enumerate(members(ModifierKind))}
+# int() keying: declaration-order discriminant, stable across engine bumps
+MODIFIER_KIND_TO_IDX = {
+    modifier_kind: int(modifier_kind) for modifier_kind in members(ModifierKind)
+}
 ENCODING_DIM_MODIFIERS = len(MODIFIER_KIND_TO_IDX)
 STACKS_MAX = 99
 

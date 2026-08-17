@@ -5,6 +5,8 @@ from slai import Monster
 from slai import MonsterName
 from slai import members
 
+from src.rl.constants import BLOCK_MAX_MONSTER
+from src.rl.constants import HEALTH_MAX_MONSTER
 from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
@@ -20,17 +22,19 @@ from src.rl.utils import get_sqrt_norm
 # Order = fill order = Core's global-offset order
 SLICE_MONSTERS = [Slice(SliceKind.MONSTERS, MAX_MONSTERS)]
 
-_MAP_MONSTER_NAME = {name: i for i, name in enumerate(members(MonsterName))}
-_MAP_INTENT_KIND = {intent_kind: i for i, intent_kind in enumerate(members(IntentKind))}
+# int() keying: declaration-order discriminant, stable across engine bumps
+_MAP_MONSTER_NAME = {name: int(name) for name in members(MonsterName)}
+_MAP_INTENT_KIND = {intent_kind: int(intent_kind) for intent_kind in members(IntentKind)}
 _INTENT_BLOCK_KINDS = {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
 _INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
 _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
 
 # Normalization caps, bump when adding heavy hitters
-_DAMAGE_MAX = 64  # The Guardian / Slime Boss base ~36-38 x `FACTOR_VULN` 1.5 ~= 54-57
+_DAMAGE_MAX = 96  # Bronze Automaton's Hyper Beam 50 x `FACTOR_VULN` 1.5 = 75
 _INSTANCES_MAX = 5  # The Guardian's Whirlwind
-_HEALTH_MAX = 250  # The Guardian's max health
-_BLOCK_MAX = 35
+_HEALTH_MAX = HEALTH_MAX_MONSTER  # Champ 440 at A9+ (constants.py)
+_BLOCK_MAX = BLOCK_MAX_MONSTER  # Spheric Guardian lives at 40 (constants.py)
+_STOLEN_GOLD_MAX = 40  # Mugger/Looter thievery accumulation; sqrt-scaled
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
@@ -48,6 +52,7 @@ ENCODING_DIM_MONSTER = (
     + 1  # Hit is lethal
     + 1  # Max-HP magnitude
     + 1  # Health fraction of max
+    + 1  # Stolen gold (Mugger/Looter; returned on kill)
     + len(_MAP_INTENT_KIND)  # Intent kind OHE
 )
 
@@ -92,7 +97,8 @@ def _encode_monster_into(
     out[pos + 6] = float(outgoing_damage >= char_health + char_block)
     out[pos + 7] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
     out[pos + 8] = monster.health / max(monster.health_max, 1)
-    pos += 9
+    out[pos + 9] = get_sqrt_norm(monster.stolen_gold, _STOLEN_GOLD_MAX)
+    pos += 10
 
     # Intent kind OHE (the category flags above miss Escape/Sleep/Stunned/Unknown)
     out[pos + _MAP_INTENT_KIND[monster.intent.kind]] = 1.0

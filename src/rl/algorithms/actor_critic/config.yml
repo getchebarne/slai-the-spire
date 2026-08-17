@@ -1,9 +1,14 @@
-exp_name: ppo/NEWERA-XVIII
+exp_name: ppo/NEWERA-XIX
 seed: 0
 num_iterations: 1.0e+6
 log_every: 10
 save_every: 100
-gamma: 0.998  # b/item-7: longer horizon (~500 steps) for economy/deck-thinning credit
+# Two-act horizon: 1/(1-γ)=1000 ≈ 2.5x the ~400-step episode (the ratio XVIII ran
+# at 0.998/~200). At 0.998 the 31-floor reward invariants are infeasible — the
+# discounted climb outruns the win margin before it clears the time cost; see
+# reward.py + scripts/verify_reward.py. Reward totals are NOT comparable to
+# pre-two-act runs.
+gamma: 0.999
 lam: 0.95
 coef_value: 0.500
 coef_entropy_max: 0.010
@@ -17,6 +22,8 @@ coef_kl_uniform: 0.020
 ascension_start: 0
 ascension_max: 20
 promote_win_rate: 0.75    # advance c when frontier eval/win_rate >= this...
+                          # NOTE: a win now means clearing BOTH acts — expect a long
+                          # c=0 plateau; eval/act2_rate is the progress signal there.
 promote_streak: 2         # ...for this many consecutive frontier batteries
 curriculum_step: 0.25     # fraction of envs graduated per qualifying eval
 target_kl: 0.03           # PPO epoch early-stop at 1.5x this — transition-shift hygiene
@@ -27,13 +34,28 @@ num_envs: 256
 rollout_length: 32
 clip_eps: 0.20
 clip_value_loss: false
-minibatch_size: 2048
+# bf16 autocast on the update forward; loss math stays fp32. 4090-measured:
+# update 3.07 -> 2.59 s/iter at mb 2048.
+amp: true
+# 2048 -> 4096: fewer optimizer steps, better GPU regime. 4090-measured: update
+# 2.59 -> 2.07 s/iter. Side effect: realized approx_kl roughly halves (smoother
+# steps) — factor this into any future lr retuning.
+minibatch_size: 4096
 num_epochs: 4
 # Rollout(t+1) collected in a side process during update(t), staleness 1. Measured a
 # WASH on the 4-P-core M4 post-packing (hidden rollout reappears as update contention:
 # 10.5s either way), and a clear LOSS on the single-GPU 3090 (9.9 vs 7.5 s serial,
 # 2026-07 probe: GPU contention + full-buffer pipe transfer). Leave off on one GPU.
 overlap_rollout: false
+# Sharded rollout: env-step + reward + encode + masks run in this many worker
+# processes over shared memory (0 = single-thread serial path). 4090 staged bench
+# 2026-08-16 (40-iter A0, s/iter): serial 4.18 -> workers8 3.45 (rollout 2.10 ->
+# 1.25). double_buffer (two env gangs, SF-style) measured a LOSS on this box:
+# 3.71 vs 3.45 — the rollout forward is launch-latency-bound, so two half-batch
+# forwards cost more than one full one. Re-measure only if the forward becomes
+# compute-bound (bigger model). Full ladder incl. amp+mb4096: 5.32 -> 3.45.
+rollout_workers: 8
+double_buffer: false
 
 model:
   # Core encoder
@@ -54,4 +76,7 @@ model:
 optimizer:
   name: Adam
   kwargs:
-    lr: 1.0e-4
+    # 2.5x fill-the-trust-region bump (XVIII ran approx_kl ~0.006 vs target 0.03
+    # with the 1.5x early-stop never engaging — see the XVIII post-mortem).
+    # update/approx_kl + update/epochs_run are the guardrail telemetry.
+    lr: 2.5e-4

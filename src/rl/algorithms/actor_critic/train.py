@@ -4,9 +4,11 @@ import os
 import random
 import shutil
 import signal
+import sys
 import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
+from multiprocessing.shared_memory import SharedMemory
 from types import FrameType
 
 import numpy as np
@@ -20,6 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from src.rl.algorithms.actor_critic.episode import PREFIX_TRAIN
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.episode import aggregate_episodes
+from src.rl.algorithms.actor_critic.evals import EVAL_ACT2_RATE
 from src.rl.algorithms.actor_critic.evals import EVAL_FLOOR_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_REWARD_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_WIN_RATE
@@ -31,10 +34,15 @@ from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
+from src.rl.reward import cumulative_floor
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import Level
 from src.rl.types import RolloutBuffer
+from src.rl.types import TGameState
+from src.rl.types import TMask
+from src.rl.types import TPadded
 from src.rl.utils import action_from_actiontype
+from src.rl.utils import engine_action
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 from src.rl.utils import shuffle_rollout_buffer
@@ -91,6 +99,11 @@ class EnvPool:
     gamma: float
     ascension_c: float  # soft-curriculum position; envs adopt their level on reset
     ascension_max: int
+    # Sharded pools cover env range [idx_offset, idx_offset+len(envs)) of a
+    # total_envs-wide fleet; the curriculum level is a function of the GLOBAL
+    # env index so the level distribution is shard-invariant.
+    idx_offset: int = 0
+    total_envs: int = 0  # 0 = len(envs)
 
 
 def _make_env(ascension: int) -> tuple[slai.GameEnv, slai.GameState]:
@@ -104,12 +117,15 @@ def make_env_pool(
     gamma: float,
     ascension: float = ASCENSION_LEVEL,
     ascension_max: int = ASCENSION_LEVEL,
+    idx_offset: int = 0,
+    total_envs: int = 0,
 ) -> EnvPool:
     # Episode stats live on the pool (not in _collect_rollout) so episodes spanning
     # rollout boundaries report true totals.
+    total = total_envs or num_envs
     envs, obs = [], []
     for i in range(num_envs):
-        env, ob = _make_env(_env_level(ascension, i, num_envs, ascension_max))
+        env, ob = _make_env(_env_level(ascension, idx_offset + i, total, ascension_max))
         envs.append(env)
         obs.append(ob)
     return EnvPool(
@@ -121,6 +137,8 @@ def make_env_pool(
         gamma=gamma,
         ascension_c=ascension,
         ascension_max=ascension_max,
+        idx_offset=idx_offset,
+        total_envs=total,
     )
 
 
@@ -141,13 +159,18 @@ def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarr
                 pool.ep_rewards[env_idx],
                 pool.ep_lengths[env_idx],
                 won=nxt.character.health > 0,
-                floor=nxt.map.y_current or 0,
+                floor=cumulative_floor(nxt),
             )
         )
         pool.ep_rewards[env_idx] = np.zeros(len(REWARD_STREAMS))
         pool.ep_lengths[env_idx] = 0
         pool.envs[env_idx], nxt = _make_env(
-            _env_level(pool.ascension_c, env_idx, len(pool.envs), pool.ascension_max)
+            _env_level(
+                pool.ascension_c,
+                pool.idx_offset + env_idx,
+                pool.total_envs or len(pool.envs),
+                pool.ascension_max,
+            )
         )
     pool.obs[env_idx] = nxt
     return reward, terminated
@@ -245,7 +268,7 @@ def _collect_rollout(
             # Decode actions on CPU once (one device->host transfer, not per-env), then step.
             out_cpu = out.cpu()
             for i in range(E):
-                reward, done = step_env(pool, i, action_from_actiontype(out_cpu, i))
+                reward, done = step_env(pool, i, action_from_actiontype(out_cpu, i, views[i]))
                 rewards[t, i] = torch.from_numpy(reward)
                 dones[t, i] = float(done)
 
@@ -296,6 +319,467 @@ def _collect_rollout(
     )
 
 
+# ---- Sharded rollout (config rollout_workers > 0) ----
+# The rollout's CPU work (engine step + reward + encode + masks) is sharded
+# across worker processes; the model forward and sampling stay central. Workers
+# write encoded observations/masks straight into one SharedMemory block (no
+# pickling — the pipe transfer is what sank the 2026-07 overlap probe), and
+# receive the sampled [ActionType, L1, L2] ints back through the same block
+# (the engine-Action back-map needs the pre-step state, which the worker holds).
+# With double_buffer, envs split into two gangs: the GPU forwards one gang
+# while the other gang's workers step+encode (Sample Factory's double-buffered
+# sampling; exactly on-policy, staleness 0).
+
+_OP_STOP, _OP_ENCODE, _OP_STEP_ENCODE = 0, 1, 2
+
+
+def _obs_tensor_items(x: TGameState) -> list[tuple[str, torch.Tensor]]:
+    """Deterministic (name, tensor) walk of the observation — the shared-memory
+    field layout. Padded pairs flatten to `.x`/`.mask`."""
+    items: list[tuple[str, torch.Tensor]] = []
+    for name in (
+        "cards",
+        "relics",
+        "potions",
+        "monsters",
+        "event_options",
+        "character",
+    ):
+        padded: TPadded = getattr(x, name)
+        items.append((f"{name}.x", padded.x))
+        items.append((f"{name}.mask", padded.mask))
+    for name in (
+        "energy",
+        "map_grid",
+        "room_node_idx",
+        "room_mask",
+        "map_meta",
+        "screen",
+        "ascension",
+        "reward_meta",
+        "shop_meta",
+        "event_meta",
+        "shop_card_prices",
+        "shop_relic_prices",
+        "shop_potion_prices",
+    ):
+        items.append((name, getattr(x, name)))
+    return items
+
+
+def _mask_tensor_items(mb: TMask) -> list[tuple[str, torch.Tensor]]:
+    items = [("mask_action_type", mb.mask_action_type)]
+    for key in sorted(mb.mask_action_idx.keys(), key=int):
+        items.append((f"l1.{key}", mb.mask_action_idx[key]))
+    items.append(("mask_target_card", mb.mask_target_card))
+    items.append(("mask_target_potion", mb.mask_target_potion))
+    return items
+
+
+@dataclass
+class ShardLayout:
+    fields: dict[str, tuple[int, tuple[int, ...], np.dtype]]  # name -> (offset, shape, dtype)
+    nbytes: int
+
+
+def _build_shard_layout(num_envs: int, num_workers: int) -> ShardLayout:
+    """Size every shared field from a 1-env probe encode (dims are config-derived;
+    a fresh throwaway env keeps this layout-source-of-truth-free)."""
+    env = slai.GameEnv(ascension=0, fast_mode=FAST_MODE)
+    obs = env.reset(seed=0)
+    cpu = torch.device("cpu")
+    probe_x = encode_batch_game_state([obs], cpu)
+    probe_mb = build_masks([obs], [env.get_legal_actions()], cpu)
+
+    fields: dict[str, tuple[int, tuple[int, ...], np.dtype]] = {}
+    offset = 0
+
+    def add(name: str, shape: tuple[int, ...], dtype: np.dtype) -> None:
+        nonlocal offset
+        offset = (offset + 63) // 64 * 64  # 64B-align every field
+        fields[name] = (offset, shape, dtype)
+        offset += int(np.prod(shape)) * dtype.itemsize
+
+    for name, t in _obs_tensor_items(probe_x) + _mask_tensor_items(probe_mb):
+        np_dtype = np.dtype(str(t.dtype).removeprefix("torch."))
+        add(name, (num_envs, *t.shape[1:]), np_dtype)
+    add("_actions", (num_envs, 3), np.dtype(np.int64))
+    add("_rewards", (num_envs, len(REWARD_STREAMS)), np.dtype(np.float32))
+    add("_dones", (num_envs,), np.dtype(np.float32))
+    add("_ctrl_c", (1,), np.dtype(np.float64))  # live curriculum position
+    add("_ops", (num_workers,), np.dtype(np.int64))
+    return ShardLayout(fields=fields, nbytes=offset)
+
+
+def _np_views(shm: SharedMemory, layout: ShardLayout) -> dict[str, np.ndarray]:
+    return {
+        name: np.frombuffer(shm.buf, dtype=dtype, count=int(np.prod(shape)), offset=off).reshape(
+            shape
+        )
+        for name, (off, shape, dtype) in layout.fields.items()
+    }
+
+
+def _snapshot_to_device(
+    views: dict[str, np.ndarray], lo: int, hi: int, device: torch.device
+) -> tuple[TGameState, TMask]:
+    """Copy the shard rows [lo, hi) out of shared memory onto the device as a
+    TGameState/TMask pair. The .to(device) copy IS the snapshot boundary — the
+    workers only overwrite these rows after the next signal."""
+    B = [hi - lo]
+
+    def t(name: str) -> torch.Tensor:
+        return torch.from_numpy(views[name][lo:hi]).to(device)
+
+    def padded(name: str) -> TPadded:
+        return TPadded(t(f"{name}.x"), t(f"{name}.mask"), batch_size=B)
+
+    x = TGameState(
+        cards=padded("cards"),
+        relics=padded("relics"),
+        potions=padded("potions"),
+        monsters=padded("monsters"),
+        event_options=padded("event_options"),
+        character=padded("character"),
+        energy=t("energy"),
+        map_grid=t("map_grid"),
+        room_node_idx=t("room_node_idx"),
+        room_mask=t("room_mask"),
+        map_meta=t("map_meta"),
+        screen=t("screen"),
+        ascension=t("ascension"),
+        reward_meta=t("reward_meta"),
+        shop_meta=t("shop_meta"),
+        event_meta=t("event_meta"),
+        shop_card_prices=t("shop_card_prices"),
+        shop_relic_prices=t("shop_relic_prices"),
+        shop_potion_prices=t("shop_potion_prices"),
+        batch_size=B,
+    )
+    from tensordict import TensorDict
+
+    mb = TMask(
+        mask_action_type=t("mask_action_type"),
+        mask_action_idx=TensorDict(
+            {
+                name.removeprefix("l1."): t(name)
+                for name in views
+                if name.startswith("l1.")
+            },
+            batch_size=B,
+        ),
+        mask_target_card=t("mask_target_card"),
+        mask_target_potion=t("mask_target_potion"),
+        batch_size=B,
+    )
+    return x, mb
+
+
+def _shard_worker(
+    worker_id: int,
+    lo: int,
+    hi: int,
+    total_envs: int,
+    seed: int,
+    gamma: float,
+    ascension_start: float,
+    ascension_max: int,
+    shm_name: str,
+    layout: ShardLayout,
+    ep_queue,
+    req,
+    done,
+) -> None:
+    """One rollout shard: owns envs [lo, hi), steps them on _OP_STEP_ENCODE using
+    the action ints in shared memory, then encodes obs + masks for the shard into
+    its rows. _OP_ENCODE encodes without stepping (rollout priming)."""
+    random.seed(seed)
+    np.random.seed(seed % 2**32)
+    torch.set_num_threads(1)  # workers are the parallelism; don't oversubscribe
+    shm = SharedMemory(name=shm_name)
+    views = _np_views(shm, layout)
+    cpu = torch.device("cpu")
+    pool = make_env_pool(
+        hi - lo,
+        gamma,
+        ascension=ascension_start,
+        ascension_max=ascension_max,
+        idx_offset=lo,
+        total_envs=total_envs,
+    )
+    actions = views["_actions"]
+    rewards = views["_rewards"]
+    dones = views["_dones"]
+
+    while True:
+        req.wait()
+        req.clear()
+        op = int(views["_ops"][worker_id])
+        if op == _OP_STOP:
+            break
+        pool.ascension_c = float(views["_ctrl_c"][0])  # promotions apply on reset
+        if op == _OP_STEP_ENCODE:
+            for j in range(hi - lo):
+                at, l1, l2 = actions[lo + j]
+                action = engine_action(int(at), int(l1), int(l2), pool.obs[j])
+                reward, terminated = step_env(pool, j, action)
+                rewards[lo + j] = reward
+                dones[lo + j] = float(terminated)
+        legal = legal_actions(pool)
+        x = encode_batch_game_state(pool.obs, cpu)
+        mb = build_masks(pool.obs, legal, cpu)
+        for name, t in _obs_tensor_items(x) + _mask_tensor_items(mb):
+            views[name][lo:hi] = t.numpy()
+        for stats in drain_completed(pool):
+            ep_queue.put(stats)
+        done.set()
+
+    # Release every numpy view before closing: frombuffer holds buffer exports,
+    # and mmap refuses to close while any exist.
+    del actions, rewards, dones, views
+    shm.close()
+
+
+@dataclass
+class ShardedRollout:
+    procs: list
+    reqs: list
+    dones: list
+    ranges: list[tuple[int, int]]  # per-worker [lo, hi)
+    gangs: list[list[int]]  # worker-index groups (1 = serial forward, 2 = double buffer)
+    shm: SharedMemory
+    views: dict[str, np.ndarray]
+    ep_queue: object
+    num_envs: int
+    primed: bool = False
+
+
+def make_sharded_rollout(
+    num_envs: int,
+    num_workers: int,
+    gamma: float,
+    ascension_start: float,
+    ascension_max: int,
+    double_buffer: bool,
+    seed: int,
+) -> ShardedRollout:
+    gang_count = 2 if double_buffer else 1
+    assert num_workers % gang_count == 0, "double_buffer needs an even worker count"
+    assert num_envs % num_workers == 0, "num_envs must divide evenly across workers"
+    layout = _build_shard_layout(num_envs, num_workers)
+    shm = SharedMemory(create=True, size=layout.nbytes)
+    views = _np_views(shm, layout)
+    views["_ctrl_c"][0] = ascension_start
+
+    ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
+    ep_queue = ctx.Queue()
+    per = num_envs // num_workers
+    procs, reqs, dones, ranges = [], [], [], []
+    for w in range(num_workers):
+        lo, hi = w * per, (w + 1) * per
+        req, done = ctx.Event(), ctx.Event()
+        proc = ctx.Process(
+            target=_shard_worker,
+            args=(
+                w,
+                lo,
+                hi,
+                num_envs,
+                seed * 7919 + w,
+                gamma,
+                ascension_start,
+                ascension_max,
+                shm.name,
+                layout,
+                ep_queue,
+                req,
+                done,
+            ),
+            daemon=True,
+        )
+        proc.start()
+        procs.append(proc)
+        reqs.append(req)
+        dones.append(done)
+        ranges.append((lo, hi))
+    per_gang = num_workers // gang_count
+    gangs = [list(range(g * per_gang, (g + 1) * per_gang)) for g in range(gang_count)]
+    return ShardedRollout(
+        procs=procs,
+        reqs=reqs,
+        dones=dones,
+        ranges=ranges,
+        gangs=gangs,
+        shm=shm,
+        views=views,
+        ep_queue=ep_queue,
+        num_envs=num_envs,
+    )
+
+
+def _gang_range(sr: ShardedRollout, gang: list[int]) -> tuple[int, int]:
+    return sr.ranges[gang[0]][0], sr.ranges[gang[-1]][1]
+
+
+def _signal(sr: ShardedRollout, gang: list[int], op: int) -> None:
+    for w in gang:
+        sr.views["_ops"][w] = op
+        sr.reqs[w].set()
+
+
+def _wait(sr: ShardedRollout, gang: list[int]) -> None:
+    for w in gang:
+        # Bounded wait + liveness check: a crashed worker must surface as an
+        # error here, never as a silent hang on a dead Event.
+        while not sr.dones[w].wait(timeout=10.0):
+            if not sr.procs[w].is_alive():
+                raise RuntimeError(
+                    f"rollout worker {w} died (exitcode {sr.procs[w].exitcode}); "
+                    "see its traceback above"
+                )
+        sr.dones[w].clear()
+
+
+def close_sharded_rollout(sr: ShardedRollout) -> None:
+    for w in range(len(sr.procs)):
+        sr.views["_ops"][w] = _OP_STOP
+        sr.reqs[w].set()
+    for proc in sr.procs:
+        proc.join(timeout=5)
+        if proc.is_alive():
+            proc.terminate()
+    sr.views.clear()  # release buffer exports before mmap close (BufferError otherwise)
+    sr.shm.close()
+    sr.shm.unlink()
+
+
+def _drain_shard_episodes(sr: ShardedRollout) -> list[EpisodeStats]:
+    completed = []
+    while not sr.ep_queue.empty():
+        completed.append(sr.ep_queue.get())
+    return completed
+
+
+def _collect_rollout_sharded(
+    model: ActorCritic,
+    sr: ShardedRollout,
+    rollout_length: int,
+    gamma: float,
+    lam: float,
+    device: torch.device,
+    ascension_c: float,
+) -> tuple[RolloutBuffer, list[EpisodeStats], dict[str, float]]:
+    """Sharded (and optionally double-buffered) counterpart of _collect_rollout.
+    Buffer layout, GAE, and sampling are identical to the serial path — only
+    where the CPU work runs differs."""
+    E = sr.num_envs
+    T = rollout_length
+    N = T * E
+    K = len(REWARD_STREAMS)
+    sr.views["_ctrl_c"][0] = ascension_c
+    buf_x = buf_mb = None
+    idx_at = torch.empty(N, dtype=torch.long, device=device)
+    idx_l1 = torch.empty(N, dtype=torch.long, device=device)
+    idx_l2 = torch.empty(N, dtype=torch.long, device=device)
+    log_probs = torch.empty(N, device=device)
+    values = torch.empty(T, E, K, device=device)
+    rewards = torch.empty(T, E, K, device=device)
+    dones = torch.empty(T, E, device=device)
+    rest_picks = torch.zeros((), device=device)
+    upgrade_picks = torch.zeros((), device=device)
+
+    model.eval()
+    with torch.no_grad():
+        if not sr.primed:
+            for gang in sr.gangs:
+                _signal(sr, gang, _OP_ENCODE)
+            for gang in sr.gangs:
+                _wait(sr, gang)
+            sr.primed = True
+
+        snaps = [
+            _snapshot_to_device(sr.views, *_gang_range(sr, gang), device) for gang in sr.gangs
+        ]
+
+        def forward_and_dispatch(g: int, t: int) -> None:
+            nonlocal buf_x, buf_mb
+            lo, hi = _gang_range(sr, sr.gangs[g])
+            x, mb = snaps[g]
+            out, t_values = model(x, mb, greedy=False)
+            if buf_x is None:
+                buf_x = x.new_empty(N)
+                buf_mb = mb.new_empty(N)
+            rows = slice(t * E + lo, t * E + hi)
+            buf_x[rows] = x
+            buf_mb[rows] = mb
+            idx_at[rows] = out.idxs[:, Level.ACTION_TYPE]
+            idx_l1[rows] = out.idxs[:, Level.L1]
+            idx_l2[rows] = out.idxs[:, Level.L2]
+            log_probs[rows] = out.log_prob.sum(-1)
+            values[t, lo:hi] = t_values
+
+            both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_UPGRADE]
+            chosen = out.idxs[:, Level.ACTION_TYPE]
+            rest_picks.add_((both & (chosen == _AT_REST)).sum())
+            upgrade_picks.add_((both & (chosen == _AT_UPGRADE)).sum())
+
+            sr.views["_actions"][lo:hi] = out.idxs.cpu().numpy()
+            _signal(sr, sr.gangs[g], _OP_STEP_ENCODE)
+
+        def collect_and_snapshot(g: int, t: int) -> None:
+            lo, hi = _gang_range(sr, sr.gangs[g])
+            _wait(sr, sr.gangs[g])
+            rewards[t, lo:hi] = torch.from_numpy(sr.views["_rewards"][lo:hi].copy()).to(device)
+            dones[t, lo:hi] = torch.from_numpy(sr.views["_dones"][lo:hi].copy()).to(device)
+            snaps[g] = _snapshot_to_device(sr.views, lo, hi, device)
+
+        # Ping-pong: gang g steps (in its workers) while the OTHER gang runs its
+        # forward on the GPU. With one gang this degrades to strict alternation.
+        for t in range(T):
+            for g in range(len(sr.gangs)):
+                forward_and_dispatch(g, t)
+            for g in range(len(sr.gangs)):
+                collect_and_snapshot(g, t)
+
+        # Bootstrap V(s_T) per gang from the post-loop snapshots.
+        bootstrap = torch.empty(E, K, device=device)
+        for g, gang in enumerate(sr.gangs):
+            lo, hi = _gang_range(sr, gang)
+            _, boot = model(*snaps[g], greedy=True)
+            bootstrap[lo:hi] = boot
+    model.train()
+
+    returns, advantages = _compute_gae(rewards, values, dones.unsqueeze(-1), bootstrap, gamma, lam)
+    advantages = advantages.sum(-1)
+    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+    n_campfire_picks = (rest_picks + upgrade_picks).item()
+    rollout_info = {
+        "rollout/terminations": dones.sum().item(),
+        "rollout/boundary_truncations": float(E) - dones[T - 1].sum().item(),
+        "rollout/rest_upgrade_rate": upgrade_picks.item() / n_campfire_picks
+        if n_campfire_picks
+        else 0.0,
+    }
+
+    return (
+        RolloutBuffer(
+            game_state=buf_x,
+            mask_batch=buf_mb,
+            idx_at=idx_at,
+            idx_l1=idx_l1,
+            idx_l2=idx_l2,
+            log_probs_old=log_probs,
+            values=values.reshape(-1, K),
+            returns=returns.reshape(-1, K),
+            advantages=advantages.reshape(-1, 1),
+            batch_size=[N],
+        ),
+        _drain_shard_episodes(sr),
+        rollout_info,
+    )
+
+
 def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
     """Model weights as CPU tensors — picklable across processes on any backend (CUDA
     IPC works, but MPS has no portable cross-process sharing; CPU is safe for both and
@@ -324,7 +808,9 @@ def _rollout_worker(
     device = torch.device(
         "cuda"
         if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available() else "cpu"
+        else "mps"
+        if torch.backends.mps.is_available()
+        else "cpu"
     )
     model = ActorCritic(**model_config)
     model.to(device)  # moves params AND non-persistent buffers (e.g. map_encoder._row_of_node)
@@ -394,6 +880,7 @@ def _update_ppo(
     max_grad_norm: float,
     device: torch.device,
     target_kl: float | None = None,
+    amp: bool = False,
 ) -> dict[str, float]:
     """One PPO update over the buffer. Returns iteration-mean metrics keyed by their
     TensorBoard scalar names."""
@@ -409,13 +896,24 @@ def _update_ppo(
         ep = shuffle_rollout_buffer(buffer, device)
         for start in range(0, len(buffer), minibatch_size):
             rows = slice(start, start + minibatch_size)
-            log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                ep.game_state[rows],
-                ep.mask_batch[rows],
-                ep.idx_at[rows],
-                ep.idx_l1[rows],
-                ep.idx_l2[rows],
-            )
+            # bf16 autocast covers the model forward only (Ada ~2x matmul
+            # throughput; no GradScaler needed for bf16). Loss math stays fp32 —
+            # ratio = exp(Δlogprob) is precision-sensitive — so outputs are
+            # upcast at the boundary. Softmax/log_softmax run fp32 under
+            # autocast policy regardless.
+            with torch.autocast(device.type, dtype=torch.bfloat16, enabled=amp):
+                log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
+                    ep.game_state[rows],
+                    ep.mask_batch[rows],
+                    ep.idx_at[rows],
+                    ep.idx_l1[rows],
+                    ep.idx_l2[rows],
+                )
+            if amp:
+                log_probs_new = log_probs_new.float()
+                entropies = entropies.float()
+                kl_uniform = kl_uniform.float()
+                values_new = values_new.float()
             log_probs_old = ep.log_probs_old[rows]
             adv = ep.advantages[rows].squeeze(-1)
             returns = ep.returns[rows]
@@ -543,6 +1041,9 @@ def train(
     start_iteration: int = 0,
     total_steps: int = 0,
     overlap_rollout: bool = False,
+    amp: bool = False,
+    rollout_workers: int = 0,
+    double_buffer: bool = False,
 ) -> None:
     writer = SummaryWriter(f"experiments/{exp_name}")
     model.to(device)
@@ -588,6 +1089,16 @@ def train(
         )
         rollout_worker.start()
         worker_conn.send(_cpu_state_dict(model))  # kick off the first rollout
+    elif rollout_workers > 0:
+        sharded = make_sharded_rollout(
+            num_envs,
+            rollout_workers,
+            gamma,
+            ascension_start=c,
+            ascension_max=ascension_max,
+            double_buffer=double_buffer,
+            seed=random.randint(0, 2**31 - 1),
+        )
     else:
         pool = make_env_pool(num_envs, gamma, ascension=c, ascension_max=ascension_max)
 
@@ -604,6 +1115,10 @@ def train(
                 buf_cpu, completed, rollout_info = worker_conn.recv()
                 buffer = buf_cpu.to(device)
                 worker_conn.send(_cpu_state_dict(model))
+            elif rollout_workers > 0:
+                buffer, completed, rollout_info = _collect_rollout_sharded(
+                    model, sharded, rollout_length, gamma, lam, device, c
+                )
             else:
                 buffer, completed, rollout_info = _collect_rollout(
                     model, pool, rollout_length, gamma, lam, device
@@ -624,6 +1139,7 @@ def train(
                 max_grad_norm,
                 device,
                 target_kl,
+                amp,
             )
             t_update = time.perf_counter()
             # Eval battery (persistent worker): drain a finished one and, on the save
@@ -637,6 +1153,7 @@ def train(
                 print(
                     f"  eval@{eval_iter} A{eval_lvl}: win_rate={eval_metrics[EVAL_WIN_RATE]:.3f} "
                     f"floor={eval_metrics[EVAL_FLOOR_AVG]:.2f} "
+                    f"act2={eval_metrics[EVAL_ACT2_RATE]:.2f} "
                     f"reward={eval_metrics[EVAL_REWARD_AVG]:.4f}"
                 )
                 c_prev = c
@@ -703,6 +1220,8 @@ def train(
                 worker_conn.send(None)
             except (BrokenPipeError, OSError):
                 pass
+        if rollout_workers > 0:
+            close_sharded_rollout(sharded)
         if eval_proc.is_alive():
             try:
                 eval_conn.send(None)
@@ -742,7 +1261,8 @@ if __name__ == "__main__":
     # nohup-backgrounded processes ignore SIGINT; route SIGTERM into the same
     # KeyboardInterrupt path so `kill <pid>` checkpoints the current iteration.
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
-    config_path = "src/rl/algorithms/actor_critic/config.yml"
+    # Optional config override (e.g. config.smoke.yml for the R6 smoke run)
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "src/rl/algorithms/actor_critic/config.yml"
     config = load_config(config_path)
 
     # TF32 on Ampere+ GPUs: near-free matmul throughput (no-op on CPU/MPS)
@@ -762,7 +1282,9 @@ if __name__ == "__main__":
 
     # Load checkpoint
     ckpt_path = f"experiments/{config['exp_name']}/checkpoint.pth"
-    start_iteration, total_steps, curriculum_c = _load_checkpoint(ckpt_path, model, optimizer, seed)
+    start_iteration, total_steps, curriculum_c = _load_checkpoint(
+        ckpt_path, model, optimizer, seed
+    )
 
     print(f"Starting training: {config['exp_name']}")
     n_params = sum(p.numel() for p in model.parameters())
@@ -802,4 +1324,7 @@ if __name__ == "__main__":
         start_iteration=start_iteration,
         total_steps=total_steps,
         overlap_rollout=bool(config.get("overlap_rollout", False)),
+        amp=bool(config.get("amp", False)),
+        rollout_workers=int(config.get("rollout_workers", 0)),
+        double_buffer=bool(config.get("double_buffer", False)),
     )
