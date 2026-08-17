@@ -47,7 +47,10 @@ class EntityProjector(nn.Module):
                 self._proj_monster, self._norm, t_game_state.monsters, self._dim_embedding
             ),
             events=_project_sparse(
-                self._proj_event_option, self._norm, t_game_state.event_options, self._dim_embedding
+                self._proj_event_option,
+                self._norm,
+                t_game_state.event_options,
+                self._dim_embedding,
             ),
             character=_project_sparse(
                 self._proj_character, self._norm, t_game_state.character, self._dim_embedding

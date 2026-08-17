@@ -14,7 +14,7 @@ from src.rl.encoding.potion import SLICE_POTIONS
 from src.rl.encoding.relic import SLICE_RELICS
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.screen import ENCODING_DIM_SCREEN
-from src.rl.encoding.shop import ENCODING_DIM_PRICE
+from src.rl.encoding.shop import ENCODING_DIM_SHOP_META
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
@@ -91,7 +91,7 @@ class Core(nn.Module):
             + ENCODING_DIM_ASCENSION  # ascension thermometer (curriculum level)
             + ENCODING_DIM_MAP_META  # floor depth + act-boss + next-row kinds
             + ENCODING_DIM_REWARD_META
-            + ENCODING_DIM_PRICE  # shop purge service price
+            + ENCODING_DIM_SHOP_META  # shop purge price triple + purged flag
             + ENCODING_DIM_EVENT_META
         )
         self._global_projection = nn.Sequential(

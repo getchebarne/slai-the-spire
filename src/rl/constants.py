@@ -15,9 +15,11 @@ FAST_MODE = False
 
 # Actor encoding limits
 BLOCK_MAX_CHARACTER = 20
-BLOCK_MAX_MONSTER = 20
-HEALTH_MAX_CHARACTER = 70
-HEALTH_MAX_MONSTER = 250  # From The Guardian at Ascension 9+
+BLOCK_MAX_MONSTER = 40  # Spheric Guardian starts at 40 and lives there (Barricade)
+HEALTH_MAX_CHARACTER = (
+    100  # provisional: Silent 70 base + Face of Cleric/max-HP events (R4 harness)
+)
+HEALTH_MAX_MONSTER = 450  # From Champ at Ascension 9+ (440)
 
 # Energy encoding
 ENERGY_MIN = 0
@@ -30,36 +32,53 @@ import slai as _slai
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
-MAX_SIZE_REWARD_CARDS = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
+
+# Reward cards arrive as bundles (Reward.cards: list[list[Card]]): up to
+# MAX_REWARD_CARD_BUNDLES combat bundles of <= MAX_COMBAT_CARD_REWARD cards
+# (Orrery stages 5), or The Library's single MAX_CARD_REWARD_ROLL-card bundle.
+# The CARD_REWARD slice is the bundle-flattened concatenation; both extremes
+# land exactly at 20 tokens.
+MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
+MAX_REWARD_CARD_TOKENS = max(
+    _slai.GameEnv.MAX_REWARD_CARD_BUNDLES * _slai.GameEnv.MAX_COMBAT_CARD_REWARD,
+    _slai.GameEnv.MAX_CARD_REWARD_ROLL,
+)
+
+# Cards exiled by Bronze Orb StasisSteal; the engine slot-parallels them to the
+# monster arena ([Option; MAX_MONSTERS]), so this cap is exact, not headroom.
+MAX_SIZE_STASIS = MAX_MONSTERS
 
 # Encoder-side caps. slai's deck and draw/discard piles grow unboundedly;
 # these are the maximum sizes the encoder pads to (overflow warns + drops the
 # affected actions, see masks.py/card.py). Draw/discard must hold a full deck,
-# so all three move together. Bump if Silent decks routinely exceed.
-MAX_SIZE_DECK = 35
-MAX_SIZE_DISC_PILE = 35
-MAX_SIZE_DRAW_PILE = 35
+# so all three move together. Provisional two-act sizing (R4 harness confirms).
+MAX_SIZE_DECK = 45
+MAX_SIZE_DISC_PILE = 45
+MAX_SIZE_DRAW_PILE = 45
 
-# Exhausted cards stay few in Act 1; tokens are costly, so this cap is tighter.
-MAX_SIZE_EXHAUST = 20
+# Tighter than the deck caps (tokens are costly), but two acts of exhaust
+# cycling run deeper than Act 1 did. R6's on-policy smoke hit 32 (vs 24 from
+# random play), so sized with real headroom; observational-only overflow.
+MAX_SIZE_EXHAUST = 40
 
-# Maximum number of relic-reward offers per RELIC_REWARD halt. Today slai
-# emits at most 1 (post-Elite). Bump if that ever changes.
-MAX_RELIC_REWARDS = 1
+# Maximum number of relic-reward offers per RELIC_REWARD halt: boss rewards
+# roll 3 mutually exclusive relics (taking one discards the others).
+MAX_RELIC_REWARDS = 3
 
-# Combat/Elite/chest rewards offer at most one potion; sized as a 1-slot
-# sequence for representation uniformity with the relic reward.
-MAX_POTION_REWARDS = 1
+# Cauldron stages CAULDRON_POTION_COUNT potions as one reward batch; combat
+# rewards offer at most 1.
+MAX_POTION_REWARDS = _slai.GameEnv.CAULDRON_POTION_COUNT
 
 # Max owned relics encoded as entities. No duplicate relics, so the true
 # ceiling is RelicName::COUNT; sized with headroom, bump as content grows.
-MAX_RELICS = 16
+# Provisional two-act sizing (R4 harness).
+MAX_RELICS = 24
 
 # New-screen encoder/selection caps. Sized to current slai content with a
 # little headroom; masks/encoders enumerate up to these. slai shops offer
 # 7 cards / 3 relics / 3 potions; events up to ~9 options; discover ~3.
-MAX_POTION_SLOTS = 3  # belt default (2 at A11+; extra slot masked empty)
+MAX_POTION_SLOTS = 5  # belt 3 (2 at A11+) + Potion Belt's 2; unused slots masked empty
 MAX_SIZE_SHOP_CARDS = 8
 MAX_SHOP_RELICS = 4
 MAX_SHOP_POTIONS = 4
@@ -86,7 +105,9 @@ __all__ = [
     "MAP_HEIGHT",
     "MAP_WIDTH",
     "MAX_MONSTERS",
-    "MAX_SIZE_REWARD_CARDS",
+    "MAX_REWARD_CARD_BUNDLES",
+    "MAX_REWARD_CARD_TOKENS",
+    "MAX_SIZE_STASIS",
     "MAX_SIZE_DECK",
     "MAX_SIZE_DISC_PILE",
     "MAX_SIZE_DRAW_PILE",

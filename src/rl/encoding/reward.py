@@ -7,12 +7,15 @@ from src.rl.utils import get_sqrt_norm
 
 
 _GOLD_MAX = 100  # Offered gold (monster 10-20, elite 25-44, chest 25-75); sqrt-scaled
-ENCODING_DIM_REWARD_META = 1 + 1  # Gold scalar  # Gold after taking (wallet + offered)
+# Gold scalar + gold-after-taking + boss-relic exclusivity flag
+ENCODING_DIM_REWARD_META = 1 + 1 + 1
 
 
 def _encode_reward_meta_into(reward: Reward, character_gold: int, out: np.ndarray) -> None:
     out[0] = get_sqrt_norm(reward.gold, _GOLD_MAX) if reward.gold is not None else 0.0
     out[1] = get_sqrt_norm(character_gold + (reward.gold or 0), GOLD_CAP)
+    # Boss rewards: the offered relics are mutually exclusive (take one, lose the rest)
+    out[2] = float(reward.relics_exclusive)
 
 
 def encode_batch_rewards(

@@ -17,13 +17,16 @@ def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
     out[_ENERGY_MAX - _ENERGY_MIN + 1] = min(energy.energy_current / _ENERGY_MAX, 1.0)
 
 
-def encode_batch_energy(batch_energy: list[Energy], device: torch.device) -> torch.Tensor:
+def encode_batch_energy(batch_energy: list[Energy | None], device: torch.device) -> torch.Tensor:
+    # None = out of combat (all-zero row; the screen presence bits disambiguate
+    # zero-energy-in-combat from no-combat).
     batch_size = len(batch_energy)
 
     # Pre-allocate NumPy array
     np_out = np.zeros((batch_size, ENCODING_DIM_ENERGY), dtype=np.float32)
 
     for b, energy in enumerate(batch_energy):
-        _encode_energy_into(energy, np_out[b])
+        if energy is not None:
+            _encode_energy_into(energy, np_out[b])
 
     return torch.from_numpy(np_out).to(device)

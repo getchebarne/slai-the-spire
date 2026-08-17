@@ -3,6 +3,7 @@ import torch
 from slai import Card
 from slai import Character
 
+from src.rl.constants import HEALTH_MAX_CHARACTER
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
@@ -20,9 +21,11 @@ SLICE_CHARACTER = [Slice(SliceKind.CHARACTER, 1)]
 
 
 _INCOMING_DAMAGE_MAX = 150  # summed multi-monster turn; sqrt-scaled
-_HEALTH_MAX = 80  # OHE bucket range (fixed for stable dim); the live max HP is a separate scalar
+# OHE bucket range (fixed for stable dim); the live max HP is a separate scalar.
+# Two acts of Face of Cleric / max-HP events pass the old 80 (R4 measured 80 in Act I).
+_HEALTH_MAX = HEALTH_MAX_CHARACTER
 _HEALTH_MAX_CAP = 200  # sqrt cap for the max-HP magnitude scalar
-_BLOCK_MAX = 35  # matches the monster cap
+_BLOCK_MAX = 35  # character block cap (Blur/Barricade-less Silent rarely exceeds)
 _GOLD_MIN = 0
 _GOLD_MAX = 499
 _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt

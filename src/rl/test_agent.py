@@ -24,9 +24,12 @@ _INTENT_DEBUFF_KINDS = frozenset(
 
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
+from src.rl.encoding.screen import Focus
+from src.rl.encoding.screen import derive_focus
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
+from src.rl.reward import cumulative_floor
 from src.rl.types import SliceKind
 from src.rl.types import TGameState
 from src.rl.types import TMask
@@ -64,6 +67,15 @@ def _variant_name(value: object) -> str:
     """`ModifierKind.Strength` → `Strength` (slai pyclass enums repr that way)."""
     s = repr(value)
     return s.rsplit(".", 1)[-1] if "." in s else s
+
+
+def _event_name(event: slai.Event) -> str:
+    """`EventKindWorldOfGoop` → `World of Goop`-ish (`WorldOfGoop`)."""
+    return type(event.kind).__name__.removeprefix("EventKind")
+
+
+def _effects_summary(effects) -> str:
+    return ", ".join(type(e).__name__.removeprefix("Effect") for e in effects)
 
 
 def is_card_playable(card, e) -> bool:
@@ -151,36 +163,45 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
     at = action.action_type
     i = action.idxs
     AT = slai.ActionType
+    combat = view.combat
+    hand = combat.hand if combat is not None else []
 
     def card(pile, k):
-        return pile[k].display_name if k < len(pile) else f"card #{k}"
+        return _variant_name(pile[k].name) if k < len(pile) else f"card #{k}"
 
     def potion(pile, k):
         return _variant_name(pile[k].name) if k < len(pile) else f"potion #{k}"
 
     def target(s: str) -> str:
-        if len(i) > 1 and i[1] < len(view.monsters):
-            return f"{s} targeting {view.monsters[i[1]].display_name}"
+        monsters = combat.monsters if combat is not None else []
+        if len(i) > 1 and i[1] < len(monsters):
+            return f"{s} targeting {_variant_name(monsters[i[1]].name)}"
         return s
 
     if at == AT.CardPlay:
-        return target(f"played {card(view.hand, i[0])}")
+        return target(f"played {card(hand, i[0])}")
     if at == AT.TurnEnd:
         return "ended turn"
     if at == AT.PotionUse:
         return target(f"drank {potion(view.potions, i[0])}")
     if at == AT.PotionDiscard:
         return f"discarded potion {potion(view.potions, i[0])}"
-    if at in (AT.CardDiscard, AT.CardRetain):
-        verb = "discarded" if at == AT.CardDiscard else "retained"
-        names = ", ".join(card(view.hand, k) for k in i)
-        return f"{verb} {names or 'nothing'}"
+    if at == AT.CardDiscard:
+        return f"discarded {card(hand, i[0])}"
+    if at == AT.CardRetain:
+        return f"retained {card(hand, i[0])}"
+    if at == AT.CardExhaust:
+        return f"exhausted {card(hand, i[0])}"
     if at == AT.CardSetup:
-        return f"set aside {card(view.hand, i[0])} (Setup)"
+        return f"set aside {card(hand, i[0])} (Setup)"
     if at == AT.CardNightmare:
-        return f"copied {card(view.hand, i[0])} (Nightmare)"
+        return f"copied {card(hand, i[0])} (Nightmare)"
     if at == AT.CardDiscover:
-        return f"discovered {card(view.discover, i[0])}"
+        return f"discovered {card(combat.discover if combat is not None else [], i[0])}"
+    if at == AT.CardMoveToHand:
+        return f"moved {card(combat.pile_draw if combat is not None else [], i[0])} to hand"
+    if at == AT.CardBottle:
+        return f"bottled {card(view.deck, i[0])}"
     if at == AT.RoomSelect:
         y = 0 if view.map.y_current is None else view.map.y_current + 1
         rooms = view.map.rooms
@@ -194,6 +215,14 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
         return "opened the chest"
     if at == AT.Rest:
         return "rested"
+    if at == AT.RestDig:
+        return "dug for a relic (Shovel)"
+    if at == AT.RestLift:
+        return "lifted (Girya)"
+    if at == AT.RestToke:
+        return "burned a card (Peace Pipe)"
+    if at == AT.PickSkip:
+        return "skipped the pick"
     if at == AT.CardUpgrade:
         return f"upgraded {card(view.deck, i[0])}"
     if at == AT.CardPurge:
@@ -203,16 +232,25 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
     if at == AT.CardDuplicate:
         return f"duplicated {card(view.deck, i[0])}"
     if at == AT.RewardTakeCard:
-        return f"added {card(view.reward.cards, i[0])} to the deck"
+        r = view.reward
+        if r is not None and i[0] < len(r.cards):
+            return f"added {card(r.cards[i[0]], i[1])} to the deck (bundle {i[0]})"
+        return f"added reward card {list(i)} to the deck"
+    if at == AT.RewardSingingBowl:
+        return f"took +2 max HP over bundle {i[0]} (Singing Bowl)"
     if at == AT.RewardTakeGold:
-        gold = view.reward.gold
+        gold = view.reward.gold if view.reward is not None else None
         return f"took {gold} gold" if gold is not None else "took the gold"
     if at == AT.RewardTakeRelic:
-        relic = view.reward.relic
-        return f"took relic {_variant_name(relic.name)}" if relic is not None else "took the relic"
+        relics = view.reward.relics if view.reward is not None else []
+        if i and i[0] < len(relics):
+            return f"took relic {_variant_name(relics[i[0]].name)}"
+        return "took the relic"
     if at == AT.RewardTakePotion:
-        pot = view.reward.potion
-        return f"took potion {_variant_name(pot.name)}" if pot is not None else "took the potion"
+        potions = view.reward.potions if view.reward is not None else []
+        if i and i[0] < len(potions):
+            return f"took potion {_variant_name(potions[i[0]].name)}"
+        return "took the potion"
     if at == AT.ShopBuyCard:
         return f"bought {card(view.shop.cards, i[0])} for {view.shop.card_prices[i[0]]}g"
     if at == AT.ShopBuyRelic:
@@ -226,7 +264,8 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
     if at == AT.EventOptionSelect:
         ev = view.event
         if ev is not None and i and i[0] < len(ev.options):
-            return f'chose "{ev.options[i[0]].label}" ({ev.display_name})'
+            effects = _effects_summary(ev.options[i[0]])
+            return f"chose option {i[0]} [{effects or 'no-op'}] ({_event_name(ev)})"
         return f"chose event option {i[0]}"
     return _fmt_action(action)  # unmapped kinds fall back to the raw form
 
@@ -246,7 +285,7 @@ def _enemy_row(i: int, m: slai.Monster) -> str:
         intent_str = ""
     hp = _hp(f"HP {m.health}/{m.health_max}")
     blk = f"  {_block(f'Block {m.block}')}" if m.block > 0 else ""
-    return f"[{i}] {m.display_name}: {hp}{blk}  → {intent_str}"
+    return f"[{i}] {_variant_name(m.name)}: {hp}{blk}  → {intent_str}"
 
 
 def _format_view(view: slai.GameState) -> str:
@@ -255,12 +294,12 @@ def _format_view(view: slai.GameState) -> str:
     Two-column layout: character/hand on the left, monsters right-padded
     so name/HP/intent columns line up vertically (mirrors `play/__main__.py`).
     """
-    screen_name = _variant_name(view.screen)
-    header = f"Screen: {screen_name}"
+    combat = view.combat
+    header = f"Focus: {derive_focus(view).name}  (act {view.act})"
     if view.pending is not None:
         header += f"  pending={type(view.pending).__name__}"
-    if view.discover:
-        header += f"  discover={[c.display_name for c in view.discover]}"
+    if combat is not None and combat.discover:
+        header += f"  discover={[_variant_name(c.name) for c in combat.discover]}"
     lines = [header]
 
     char_line = (
@@ -275,25 +314,31 @@ def _format_view(view: slai.GameState) -> str:
         relics_str = ", ".join(_variant_name(r.name) for r in view.relics)
         lines.append(f"Relics: {relics_str}")
 
-    if view.monsters:
+    if combat is not None and combat.monsters:
         # Right-pad monster rows so they all start at the same column —
         # matches play/__main__.py's `block_x = right_edge - max(...)`.
-        rendered = [_enemy_row(i, m) for i, m in enumerate(view.monsters)]
+        rendered = [_enemy_row(i, m) for i, m in enumerate(combat.monsters)]
         max_w = max(_ansi_len(r) for r in rendered)
         left_pad = max(0, N_COL - max_w)
         lines.append("Monsters:")
-        for i, (m, row) in enumerate(zip(view.monsters, rendered)):
+        for i, (m, row) in enumerate(zip(combat.monsters, rendered)):
             lines.append(" " * left_pad + row)
             if m.modifiers:
                 lines.append(" " * left_pad + f"  modifiers: {_fmt_modifiers(m.modifiers)}")
 
-    lines.append(f"Energy: {view.energy.energy_current}/{view.energy.energy_max}")
-    if view.hand:
-        lines.append("Hand:")
-        for i, c in enumerate(view.hand):
-            tgt = " (target)" if c.requires_target else ""
-            playable = "" if is_card_playable(c, view.energy.energy_current) else " (unplayable)"
-            lines.append(f"  [{i}] {c.display_name} cost={c.cost}{tgt}{playable}")
+    if combat is not None:
+        lines.append(f"Energy: {combat.energy.energy_current}/{combat.energy.energy_max}")
+        if combat.pile_stasis:
+            lines.append(f"Stasis: {[_variant_name(c.name) for c in combat.pile_stasis]}")
+        if combat.bomb_countdown:
+            lines.append(f"The Bomb: {combat.bomb_countdown} turns")
+        if combat.hand:
+            lines.append("Hand:")
+            energy_current = combat.energy.energy_current
+            for i, c in enumerate(combat.hand):
+                tgt = " (target)" if c.requires_target else ""
+                playable = "" if is_card_playable(c, energy_current) else " (unplayable)"
+                lines.append(f"  [{i}] {_variant_name(c.name)} cost={c.cost}{tgt}{playable}")
 
     belt = [f"[{s}] {_variant_name(p.name)}" for s, p in enumerate(view.potions) if p is not None]
     if belt:
@@ -301,19 +346,21 @@ def _format_view(view: slai.GameState) -> str:
 
     if view.reward is not None:
         r = view.reward
-        if r.cards:
-            lines.append(f"Reward cards: {[c.display_name for c in r.cards]}")
-        if r.relic is not None:
-            lines.append(f"Reward relic: {_variant_name(r.relic.name)}")
-        if r.potion is not None:
-            lines.append(f"Reward potion: {_variant_name(r.potion.name)}")
+        for bi, bundle in enumerate(r.cards):
+            lines.append(f"Reward cards [{bi}]: {[_variant_name(c.name) for c in bundle]}")
+        if r.relics:
+            lines.append(f"Reward relics: {[_variant_name(x.name) for x in r.relics]}")
+        if r.potions:
+            lines.append(f"Reward potions: {[_variant_name(p.name) for p in r.potions]}")
         if r.gold is not None:
             lines.append(f"Reward gold: {r.gold}")
 
     if view.shop is not None:
         s = view.shop
         lines.append(f"Shop gold={view.character.gold} purge={s.purge_cost}")
-        lines.append(f"  cards: {[(c.display_name, p) for c, p in zip(s.cards, s.card_prices)]}")
+        lines.append(
+            f"  cards: {[(_variant_name(c.name), p) for c, p in zip(s.cards, s.card_prices)]}"
+        )
         lines.append(
             f"  relics: {[(_variant_name(r.name), p) for r, p in zip(s.relics, s.relic_prices)]}"
         )
@@ -323,10 +370,9 @@ def _format_view(view: slai.GameState) -> str:
 
     if view.event is not None:
         e = view.event
-        lines.append(f"Event: {e.display_name}")
-        for i, o in enumerate(e.options):
-            gate = " (gated)" if o.gated_out else ""
-            lines.append(f"  [{i}] {o.label}{gate}")
+        lines.append(f"Event: {_event_name(e)}{'  (consumed)' if e.consumed else ''}")
+        for i, effects in enumerate(e.options):
+            lines.append(f"  [{i}] {_effects_summary(effects) or 'no-op'}")
     return "\n".join(lines)
 
 
@@ -368,13 +414,15 @@ def format_card_probabilities(
     seen: dict[str, dict] = {}
     order: list[str] = []
 
-    for idx, card in enumerate(view.hand):
-        display = card.display_name
+    hand = view.combat.hand if view.combat is not None else []
+    energy_current = view.combat.energy.energy_current if view.combat is not None else 0
+    for idx, card in enumerate(hand):
+        display = _variant_name(card.name)
         if display not in seen:
             prob = t_probs[idx].item()
             if prob != prob:  # NaN guard
                 prob = 0.0
-            playable = is_card_playable(card, view.energy.energy_current)
+            playable = is_card_playable(card, energy_current)
             seen[display] = {"prob": prob, "count": 1, "playable": playable}
             order.append(display)
         else:
@@ -408,13 +456,15 @@ def get_action_from_model(
         t_action, _ = model.forward(t_game_state, t_mask_batch, greedy=greedy)
 
         card_probs_str = None
-        in_combat = view.screen == slai.Screen.Combat and view.pending is None
-        has_playable = any(is_card_playable(c, view.energy.energy_current) for c in view.hand)
-        if show_card_probs and in_combat and view.hand and has_playable:
-            t_probs = get_card_probabilities(model, t_game_state, t_mask_batch)
-            card_probs_str = format_card_probabilities(view, t_probs)
+        combat = view.combat
+        in_combat = derive_focus(view) is Focus.COMBAT and view.pending is None
+        if show_card_probs and in_combat and combat.hand:
+            energy_current = combat.energy.energy_current
+            if any(is_card_playable(c, energy_current) for c in combat.hand):
+                t_probs = get_card_probabilities(model, t_game_state, t_mask_batch)
+                card_probs_str = format_card_probabilities(view, t_probs)
 
-    return action_from_actiontype(t_action, 0), card_probs_str
+    return action_from_actiontype(t_action, 0, view), card_probs_str
 
 
 def run_game(
@@ -460,8 +510,8 @@ def run_game(
             if (int(action.action_type), tuple(action.idxs)) not in legal_set:
                 illegal += 1
                 print(
-                    f"  !! ILLEGAL action {_fmt_action(action)} on screen "
-                    f"{_variant_name(obs.screen)}"
+                    f"  !! ILLEGAL action {_fmt_action(action)} on focus "
+                    f"{derive_focus(obs).name}"
                 )
 
         if verbose:
@@ -478,13 +528,13 @@ def run_game(
     if check_legal and illegal:
         print(f"  WARNING: {illegal} illegal actions this game")
 
-    final_floor = obs.map.y_current or 0
+    final_floor = cumulative_floor(obs)
     final_health = obs.character.health
 
     if verbose:
         print(f"\n{'=' * N_COL}")
-        print("GAME OVER")
-        print(f"Final Floor: {final_floor}")
+        print("GAME OVER" + (" — WON" if obs.game_over and final_health > 0 else ""))
+        print(f"Final Floor: {final_floor} (act {obs.act})")
         print(f"Final Health: {final_health}")
         print(f"Steps: {step_count}")
         print("=" * N_COL)

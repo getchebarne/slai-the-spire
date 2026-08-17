@@ -1,3 +1,4 @@
+import warnings
 from dataclasses import dataclass
 from enum import Enum
 from enum import IntEnum
@@ -30,11 +31,33 @@ class SliceKind(Enum):
     EVENT_OPTIONS = 15
     CHARACTER = 16
     ROOMS = 17
+    CARD_STASIS = 18
+    CARD_EVENT = 19
+    POTION_EVENT = 20
+    RELIC_EVENT = 21
 
 
 class Slice(NamedTuple):
     kind: SliceKind
     size: int
+
+
+# Slice kinds that have already warned about overflow — truncation is never silent
+_WARNED_TRUNCATED: set[SliceKind] = set()
+
+
+def clip_to_slice(entities: list, slice_: Slice) -> list:
+    """Clip a pile to its slice cap with a warn-once (the shared warn+drop
+    overflow policy: encoders drop the tail, masks drop the matching actions)."""
+    if len(entities) > slice_.size:
+        if slice_.kind not in _WARNED_TRUNCATED:
+            _WARNED_TRUNCATED.add(slice_.kind)
+            warnings.warn(
+                f"{slice_.kind.name} pile of {len(entities)} entities truncated to"
+                f" encoder cap ({slice_.size})"
+            )
+        return entities[: slice_.size]
+    return entities
 
 
 @tensorclass
@@ -106,7 +129,9 @@ class TAction:
     idxs: torch.Tensor  # (B, len(Level)) long, per-Level column; -1 where the level didn't apply
     log_prob: torch.Tensor  # (B, len(Level)) float, 0 where N/A
     entropy: torch.Tensor  # (B, len(Level)) float, 0 where N/A
-    kl_uniform: torch.Tensor  # (B, len(Level)) float, KL(uniform‖π) over legal actions, 0 where N/A
+    kl_uniform: (
+        torch.Tensor
+    )  # (B, len(Level)) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
 @tensorclass(shadow=True)  # `values` field shadows TensorDict.values()
@@ -127,14 +152,29 @@ class RolloutBuffer:
     advantages: torch.Tensor  # (N, 1), summed over streams, normalized
 
 
-ACTION_TYPE_BY_INT = list(members(ActionType))
+# Sorted by int(): the engine's declaration-order discriminant, which is what
+# masks/utils/heads index by. members() is alphabetical (dir()) and diverged from
+# int() order when the engine appended action types — never use it positionally.
+ACTION_TYPE_BY_INT = sorted(members(ActionType), key=int)
 NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 # Each index-taking action -> the L2 pool its selection indexes into. Terminal actions absent.
+# RewardTakeCard is arity-2 (idx_bundle, idx_card): its L2 pick is a slot in the
+# bundle-flattened CARD_REWARD slice; masks/utils translate slot <-> (bundle, card)
+# via per-state prefix sums. RewardSingingBowl points at a bundle via its first-card
+# slot in the same slice. Only CardPlay/PotionUse have an L3 (monster target).
 ACTION_TYPE_POOL: dict[ActionType, SliceKind] = {
+    ActionType.CardBottle: SliceKind.CARD_DECK,
     ActionType.CardDiscard: SliceKind.CARD_HAND,
     ActionType.CardDiscover: SliceKind.CARD_DISCOVER,
     ActionType.CardDuplicate: SliceKind.CARD_DECK,
+    ActionType.CardExhaust: SliceKind.CARD_HAND,
+    # CardMoveToHand's idx indexes the PENDING halt's source pool — pile_draw for
+    # Violence/Secret Weapon/Technique, pile_discard for Liquid Memories. The static
+    # CARD_DRAW assignment stays index-correct either way (both slices are
+    # identity-indexed with equal caps); the discard case merely points the L2
+    # attention at draw tokens (rare; the halt OHE + piles disambiguate).
+    ActionType.CardMoveToHand: SliceKind.CARD_DRAW,
     ActionType.CardNightmare: SliceKind.CARD_HAND,
     ActionType.CardPlay: SliceKind.CARD_HAND,
     ActionType.CardPurge: SliceKind.CARD_DECK,
@@ -145,7 +185,10 @@ ACTION_TYPE_POOL: dict[ActionType, SliceKind] = {
     ActionType.EventOptionSelect: SliceKind.EVENT_OPTIONS,
     ActionType.PotionDiscard: SliceKind.POTION_OWNED,
     ActionType.PotionUse: SliceKind.POTION_OWNED,
+    ActionType.RewardSingingBowl: SliceKind.CARD_REWARD,
     ActionType.RewardTakeCard: SliceKind.CARD_REWARD,
+    ActionType.RewardTakePotion: SliceKind.POTION_REWARD,
+    ActionType.RewardTakeRelic: SliceKind.RELIC_REWARD,
     ActionType.RoomSelect: SliceKind.ROOMS,
     ActionType.ShopBuyCard: SliceKind.CARD_SHOP,
     ActionType.ShopBuyPotion: SliceKind.POTION_SHOP,

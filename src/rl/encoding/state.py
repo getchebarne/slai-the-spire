@@ -1,7 +1,7 @@
+import numpy as np
 import torch
 from slai import GameState
 
-from src.rl.encoding.ascension import encode_batch_ascension
 from src.rl.encoding.card import encode_batch_cards
 from src.rl.encoding.character import encode_batch_character
 from src.rl.encoding.energy import encode_batch_energy
@@ -16,6 +16,8 @@ from src.rl.encoding.shop import encode_batch_shop
 from src.rl.types import TGameState
 from src.rl.types import TPadded
 
+_ENCODING_DIM_ASCENSION = 20
+
 
 def encode_batch_game_state(batch_game_state: list[GameState], device: torch.device) -> TGameState:
     # tensorclass batch dim shared by every field
@@ -26,6 +28,7 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
     batch_character = []
     batch_energy = []
     batch_map = []
+    batch_act = []
     batch_reward = []
     batch_shop = []
     batch_event = []
@@ -34,10 +37,12 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
     batch_block = []
     batch_gold = []
     for game_state in batch_game_state:
-        batch_monsters.append(game_state.monsters)
+        combat = game_state.combat
+        batch_monsters.append(combat.monsters if combat is not None else [])
         batch_character.append(game_state.character)
-        batch_energy.append(game_state.energy)
+        batch_energy.append(combat.energy if combat is not None else None)
         batch_map.append(game_state.map)
+        batch_act.append(game_state.act)
         batch_reward.append(game_state.reward)
         batch_shop.append(game_state.shop)
         batch_event.append(game_state.event)
@@ -67,7 +72,9 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
     )
 
     # Map: GNN node-feature grid + next-row room node indices + flat meta
-    t_map_grid, t_room_node_idx, t_room_mask, t_map_meta = encode_batch_map(batch_map, device)
+    t_map_grid, t_room_node_idx, t_room_mask, t_map_meta = encode_batch_map(
+        batch_map, batch_act, device
+    )
 
     # Deck visibility (hidden in combat) is enforced in encode_batch_cards (np_pad False there).
     return TGameState(
@@ -83,7 +90,7 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
         room_mask=t_room_mask,
         map_meta=t_map_meta,
         screen=encode_batch_screen(batch_game_state, device),
-        ascension=encode_batch_ascension(batch_game_state, device),
+        ascension=_encode_batch_ascension(batch_game_state, device),
         reward_meta=t_reward_meta,
         shop_meta=t_shop_meta,
         event_meta=t_event_meta,
@@ -92,3 +99,13 @@ def encode_batch_game_state(batch_game_state: list[GameState], device: torch.dev
         shop_potion_prices=t_shop_potion_prices,
         batch_size=batch_size,
     )
+
+
+# Multi-hot vector; bit i = (ascension > i)
+def _encode_batch_ascension(
+    batch_game_state: list[GameState], device: torch.device
+) -> torch.Tensor:
+    np_out = np.zeros((len(batch_game_state), _ENCODING_DIM_ASCENSION), dtype=np.float32)
+    for b, game_state in enumerate(batch_game_state):
+        np_out[b, : game_state.ascension] = 1.0
+    return torch.from_numpy(np_out).to(device)

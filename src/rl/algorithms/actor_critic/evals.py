@@ -4,6 +4,7 @@ import numpy as np
 import slai
 import torch
 
+from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_REWARD_STD
@@ -17,11 +18,14 @@ from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
+from src.rl.reward import cumulative_floor
 from src.rl.utils import action_from_actiontype
 
 
-# Greedy deterministic play can loop; cap so a hung eval can't wedge its worker
-_EVAL_MAX_STEPS = 1000
+# Greedy deterministic play can loop; cap so a hung eval can't wedge its worker.
+# Two-act episodes run ~350-450 steps; 2000 ≈ 4.5x nominal — a lower cap would
+# silently record a truncated run as a loss and corrupt the curriculum gate.
+_EVAL_MAX_STEPS = 2000
 _EVAL_NUM_EPISODES = 64
 _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance trend
 
@@ -30,6 +34,7 @@ _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance
 EVAL_WIN_RATE = PREFIX_EVAL + KEY_WIN_RATE
 EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
 EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
+EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
 EVAL_REWARD_STD = PREFIX_EVAL + KEY_REWARD_STD
 
 
@@ -58,7 +63,7 @@ def run_eval_battery(
 
                 # Game step
                 prev = obs
-                obs, terminated = env.step(action_from_actiontype(t_action, 0))
+                obs, terminated = env.step(action_from_actiontype(t_action, 0, obs))
                 stream_rewards += compute_reward(prev, obs, terminated, gamma)
                 length += 1
 
@@ -67,7 +72,7 @@ def run_eval_battery(
                     stream_rewards=stream_rewards,
                     length=length,
                     won=bool(terminated and obs.character.health > 0),
-                    floor=obs.map.y_current or 0,
+                    floor=cumulative_floor(obs),
                 )
             )
 

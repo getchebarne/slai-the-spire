@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from slai import EventKindWeMeetAgain
 from slai import GameState
 from slai import Potion
 from slai import PotionName
@@ -13,6 +14,7 @@ from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
 from src.rl.encoding.effect import encode_effects_into
 from src.rl.types import Slice
 from src.rl.types import SliceKind
+from src.rl.types import clip_to_slice
 
 
 # Order = fill order = Core's global-offset order
@@ -20,13 +22,15 @@ SLICE_POTIONS = [
     Slice(SliceKind.POTION_OWNED, MAX_POTION_SLOTS),
     Slice(SliceKind.POTION_REWARD, MAX_POTION_REWARDS),
     Slice(SliceKind.POTION_SHOP, MAX_SHOP_POTIONS),
+    Slice(SliceKind.POTION_EVENT, 1),  # We Meet Again's rolled pick_potion
 ]
 NUM_POTION_TOKENS = sum(slice_.size for slice_ in SLICE_POTIONS)
 SLICE_KIND_POTIONS = {slice_.kind for slice_ in SLICE_POTIONS}
 
 
-_POTION_NAME_TO_IDX = {potion_name: i for i, potion_name in enumerate(members(PotionName))}
-_POTION_RARITY_TO_IDX = {potion_rarity: i for i, potion_rarity in enumerate(members(PotionRarity))}
+# int() keying: declaration-order discriminant, stable across engine bumps
+_POTION_NAME_TO_IDX = {potion_name: int(potion_name) for potion_name in members(PotionName)}
+_POTION_RARITY_TO_IDX = {rarity: int(rarity) for rarity in members(PotionRarity)}
 
 ENCODING_DIM_POTION = (
     len(_POTION_NAME_TO_IDX)  # Name OHE
@@ -77,13 +81,20 @@ def _get_potion_entities(kind: SliceKind, game_state: GameState) -> list:
         case SliceKind.POTION_OWNED:
             return game_state.potions
         case SliceKind.POTION_REWARD:
-            return (
-                [game_state.reward.potion]
-                if game_state.reward is not None and game_state.reward.potion is not None
-                else []
-            )
+            reward = game_state.reward
+            return reward.potions if reward is not None else []
         case SliceKind.POTION_SHOP:
             return game_state.shop.potions if game_state.shop is not None else []
+        case SliceKind.POTION_EVENT:
+            event = game_state.event
+            if (
+                event is not None
+                and not event.consumed  # post-choice aftermath: the offer is dead
+                and isinstance(event.kind, EventKindWeMeetAgain)
+            ):
+                pick = event.kind.pick_potion
+                return [pick] if pick is not None else []
+            return []
         case _:
             raise ValueError(f"not a potion slice: {kind}")
 
@@ -99,8 +110,9 @@ def encode_batch_potions(
     for b, game_state in enumerate(batch_game_state):
         offset = 0
         for slice_ in SLICE_POTIONS:
-            for i, potion in enumerate(_get_potion_entities(slice_.kind, game_state)):
-                if potion is None:
+            potions = clip_to_slice(_get_potion_entities(slice_.kind, game_state), slice_)
+            for i, potion in enumerate(potions):
+                if potion is None:  # belt slots are positional; empty = hole
                     continue
 
                 encode_potion_into_w_cache(potion, np_out[b, offset + i])

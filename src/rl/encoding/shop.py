@@ -11,6 +11,10 @@ from src.rl.constants import SHOP_PRICE_CAP
 # Price feats, encoded alongside each item (the items go through their entity encoders).
 ENCODING_DIM_PRICE = 1 + 1 + 1  # Price scalar  # Affordable  # abs(gold - price)
 
+# Shop meta: the purge-service price triple + the purged flag (one purge per
+# shop; the price itself is run-scoped and never resets across acts).
+ENCODING_DIM_SHOP_META = ENCODING_DIM_PRICE + 1
+
 
 def _encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
     out[0] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
@@ -22,12 +26,7 @@ def encode_batch_shop(
     batch_shop: list[Shop | None],
     batch_gold: list[int],
     device: torch.device,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,]:
     """Per-item shop prices (aligned with the shop card/relic/potion segments) + meta."""
     batch_size = len(batch_shop)
 
@@ -39,7 +38,7 @@ def encode_batch_shop(
     np_price_potions = np.zeros(
         (batch_size, MAX_SHOP_POTIONS, ENCODING_DIM_PRICE), dtype=np.float32
     )
-    np_price_purge = np.zeros((batch_size, ENCODING_DIM_PRICE), dtype=np.float32)
+    np_meta = np.zeros((batch_size, ENCODING_DIM_SHOP_META), dtype=np.float32)
 
     for b, (shop, gold) in enumerate(zip(batch_shop, batch_gold)):
         if shop is None:
@@ -54,12 +53,13 @@ def encode_batch_shop(
         for i, price in enumerate(shop.potion_prices):
             _encode_price_into(price, gold, np_price_potions[b, i])
 
-        # Purge service price (same features as the per-item prices)
-        _encode_price_into(shop.purge_cost, gold, np_price_purge[b])
+        # Purge service price (same features as the per-item prices) + purged flag
+        _encode_price_into(shop.purge_cost, gold, np_meta[b])
+        np_meta[b, ENCODING_DIM_PRICE] = float(shop.purged)
 
     return (
         torch.from_numpy(np_price_cards).to(device),
         torch.from_numpy(np_price_relics).to(device),
         torch.from_numpy(np_price_potions).to(device),
-        torch.from_numpy(np_price_purge).to(device),
+        torch.from_numpy(np_meta).to(device),
     )
