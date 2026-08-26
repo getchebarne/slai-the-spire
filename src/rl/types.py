@@ -7,6 +7,15 @@ from typing import NamedTuple
 import torch
 from slai import ACTION_SPEC_REGISTRY
 from slai import ActionType
+from slai import CandidatePoolDeck
+from slai import CandidatePoolDiscover
+from slai import CandidatePoolEventRollCard
+from slai import CandidatePoolEventRollPotion
+from slai import CandidatePoolEventRollRelic
+from slai import CandidatePoolHand
+from slai import CandidatePoolPileDiscard
+from slai import CandidatePoolPileDraw
+from slai import CandidatePoolPileExhaust
 from slai import members
 from tensordict import TensorDict
 from tensordict import tensorclass
@@ -67,6 +76,20 @@ class TPadded:
 
 
 @tensorclass
+class TEffects:
+    """Per-state pool of effect rows, flattened across entities.
+
+    The per-entity axis is ragged (0-5 effects), so it is folded away: `segment`
+    carries the owning token slot and the model sum-pools rows back into their
+    owner. Pads are mask-False with segment 0, which aliases card slot 0 — only
+    maskless misuse could read them."""
+
+    x: torch.Tensor  # (B, MAX_EFFECTS_STATE, ENCODING_DIM_EFFECT) fp32
+    segment: torch.Tensor  # (B, E) long — owner token slot; EFFECT_SEGMENT_PENDING for the halt
+    mask: torch.Tensor  # (B, E) bool
+
+
+@tensorclass
 class TGameState:
     cards: TPadded
     relics: TPadded
@@ -74,6 +97,7 @@ class TGameState:
     monsters: TPadded
     event_options: TPadded
     character: TPadded
+    effects: TEffects
     energy: torch.Tensor
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
     room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
@@ -99,6 +123,7 @@ class TEntityProjection:
     events: TPadded
     character: TPadded
     rooms: TPadded
+    pending: torch.Tensor  # (B, dim) fp32 — pooled halt effect; zeros when no halt
 
 
 # TODO: rethink `dict`
@@ -154,34 +179,46 @@ class RolloutBuffer:
 
 # Sorted by int(): the engine's declaration-order discriminant, which is what
 # masks/utils/heads index by. members() is alphabetical (dir()) and diverged from
-# int() order when the engine appended action types — never use it positionally.
+# int() order when the engine appended action types — never use it positionally
 ACTION_TYPE_BY_INT = sorted(members(ActionType), key=int)
-NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
+NUM_ENGINE_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
-# Each index-taking action -> the L2 pool its selection indexes into. Terminal actions absent.
+
+# Halting candidate pool -> the L2 slice its idx indexes
+#
+# The engine resolves every halt with one `EffectPendingResolve {idx}` over
+# `pending.target.candidate_pool`. Masks, pointer nets and the shared-memory
+# layout all need one static width per action type, so the policy splits that
+# one engine type into a virtual type per pool and folds/unfolds at the boundary
+# (masks.build_masks in, utils.engine_action out). At most one is ever legal:
+# the engine holds a single effect_pending
+PENDING_POOL_SLICE: dict[type, SliceKind] = {
+    CandidatePoolHand: SliceKind.CARD_HAND,
+    CandidatePoolPileDraw: SliceKind.CARD_DRAW,
+    CandidatePoolPileDiscard: SliceKind.CARD_DISCARD,
+    CandidatePoolPileExhaust: SliceKind.CARD_EXHAUST,
+    CandidatePoolDeck: SliceKind.CARD_DECK,
+    CandidatePoolDiscover: SliceKind.CARD_DISCOVER,
+    CandidatePoolEventRollCard: SliceKind.CARD_EVENT,
+    CandidatePoolEventRollRelic: SliceKind.RELIC_EVENT,
+    CandidatePoolEventRollPotion: SliceKind.POTION_EVENT,
+}
+# Policy ints: engine ints 0..N-1 keep their values (so
+# ACTION_TYPE_BY_INT.index(ActionType.X) still works), virtuals append
+PENDING_POOL_INT: dict[type, int] = {
+    pool: NUM_ENGINE_ACTION_TYPES + i for i, pool in enumerate(PENDING_POOL_SLICE)
+}
+PENDING_INTS: frozenset = frozenset(PENDING_POOL_INT.values())
+NUM_ACTION_TYPES = NUM_ENGINE_ACTION_TYPES + len(PENDING_POOL_SLICE)
+
+# Each index-taking action -> the L2 pool its selection indexes into, keyed by
+# POLICY int (virtuals are not engine members). Terminal actions absent
 # RewardTakeCard is arity-2 (idx_bundle, idx_card): its L2 pick is a slot in the
 # bundle-flattened CARD_REWARD slice; masks/utils translate slot <-> (bundle, card)
 # via per-state prefix sums. RewardSingingBowl points at a bundle via its first-card
-# slot in the same slice. Only CardPlay/PotionUse have an L3 (monster target).
-ACTION_TYPE_POOL: dict[ActionType, SliceKind] = {
-    ActionType.CardBottle: SliceKind.CARD_DECK,
-    ActionType.CardDiscard: SliceKind.CARD_HAND,
-    ActionType.CardDiscover: SliceKind.CARD_DISCOVER,
-    ActionType.CardDuplicate: SliceKind.CARD_DECK,
-    ActionType.CardExhaust: SliceKind.CARD_HAND,
-    # CardMoveToHand's idx indexes the PENDING halt's source pool — pile_draw for
-    # Violence/Secret Weapon/Technique, pile_discard for Liquid Memories. The static
-    # CARD_DRAW assignment stays index-correct either way (both slices are
-    # identity-indexed with equal caps); the discard case merely points the L2
-    # attention at draw tokens (rare; the halt OHE + piles disambiguate).
-    ActionType.CardMoveToHand: SliceKind.CARD_DRAW,
-    ActionType.CardNightmare: SliceKind.CARD_HAND,
+# slot in the same slice. Only CardPlay/PotionUse have an L3 (monster target)
+_ENGINE_POOL: dict[ActionType, SliceKind] = {
     ActionType.CardPlay: SliceKind.CARD_HAND,
-    ActionType.CardPurge: SliceKind.CARD_DECK,
-    ActionType.CardRetain: SliceKind.CARD_HAND,
-    ActionType.CardSetup: SliceKind.CARD_HAND,
-    ActionType.CardTransform: SliceKind.CARD_DECK,
-    ActionType.CardUpgrade: SliceKind.CARD_DECK,
     ActionType.EventOptionSelect: SliceKind.EVENT_OPTIONS,
     ActionType.PotionDiscard: SliceKind.POTION_OWNED,
     ActionType.PotionUse: SliceKind.POTION_OWNED,
@@ -193,10 +230,21 @@ ACTION_TYPE_POOL: dict[ActionType, SliceKind] = {
     ActionType.ShopBuyCard: SliceKind.CARD_SHOP,
     ActionType.ShopBuyPotion: SliceKind.POTION_SHOP,
     ActionType.ShopBuyRelic: SliceKind.RELIC_SHOP,
-    ActionType.ShopPurge: SliceKind.CARD_DECK,
+}
+ACTION_TYPE_POOL: dict[int, SliceKind] = {
+    **{int(at): pool for at, pool in _ENGINE_POOL.items()},
+    **{PENDING_POOL_INT[pool]: kind for pool, kind in PENDING_POOL_SLICE.items()},
 }
 
+# Drift alarm: the engine's index-taking set must equal our engine-keyed entries
+# plus the one resolver we split into the virtuals
 _ACTION_TYPE_ARITY: list = [ACTION_SPEC_REGISTRY[m].arity for m in ACTION_TYPE_BY_INT]
-assert {int(a) for a in ACTION_TYPE_POOL} == {
-    at for at in range(NUM_ACTION_TYPES) if _ACTION_TYPE_ARITY[at] != (0, 0)
-}, "ACTION_TYPE_POOL must cover exactly the engine's index-taking actions"
+_ENGINE_INDEX_TAKING = {
+    at for at in range(NUM_ENGINE_ACTION_TYPES) if _ACTION_TYPE_ARITY[at] != (0, 0)
+}
+assert _ENGINE_INDEX_TAKING == {int(a) for a in _ENGINE_POOL} | {
+    int(ActionType.EffectPendingResolve)
+}, (
+    "engine index-taking actions changed: _ENGINE_POOL + EffectPendingResolve "
+    f"!= {sorted(_ENGINE_INDEX_TAKING)}"
+)

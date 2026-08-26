@@ -3,7 +3,8 @@ import torch
 from slai import Card
 from slai import Character
 
-from src.rl.constants import HEALTH_MAX_CHARACTER
+from src.rl.constants import BLOCK_MAX_ENTITY
+from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
@@ -21,18 +22,22 @@ SLICE_CHARACTER = [Slice(SliceKind.CHARACTER, 1)]
 
 
 _INCOMING_DAMAGE_MAX = 150  # summed multi-monster turn; sqrt-scaled
-# OHE bucket range (fixed for stable dim); the live max HP is a separate scalar.
-# Two acts of Face of Cleric / max-HP events pass the old 80 (R4 measured 80 in Act I).
-_HEALTH_MAX = HEALTH_MAX_CHARACTER
+# Health/block caps unified with the monster encoder (ENTITY caps) so both build
+# a byte-identical family block for EntityProjector's shared first-layer weights.
+# Character values only reach the low buckets; the tail stays cold (bucket index
+# is cap-independent below the cap — only the 3 hb scalars rescale).
+_HEALTH_MAX = HEALTH_MAX_ENTITY
 _HEALTH_MAX_CAP = 200  # sqrt cap for the max-HP magnitude scalar
-_BLOCK_MAX = 35  # character block cap (Blur/Barricade-less Silent rarely exceeds)
+_BLOCK_MAX = BLOCK_MAX_ENTITY
 _GOLD_MIN = 0
 _GOLD_MAX = 499
 _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
+_DIM_HEALTH_BLOCK = get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)
+
 ENCODING_DIM_CHARACTER = (
     ENCODING_DIM_MODIFIERS  # Modifiers OHE
-    + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
+    + _DIM_HEALTH_BLOCK  # Health and block OHE and scalars
     + _GOLD_DIM  # Gold OHE
     + 1  # Gold scalar
     + 1  # Incoming damage
@@ -44,6 +49,17 @@ ENCODING_DIM_CHARACTER = (
     + 1  # Deck size
     + 1  # Deck upgraded fraction
 )
+
+# Family-block positions (consumed by EntityProjector's shared first layer). The
+# balance assert ties the slices to _encode_character_into's write order.
+SLICE_MODIFIERS_CHARACTER = slice(0, ENCODING_DIM_MODIFIERS)
+SLICE_HEALTH_BLOCK_CHARACTER = slice(
+    ENCODING_DIM_MODIFIERS, ENCODING_DIM_MODIFIERS + _DIM_HEALTH_BLOCK
+)
+_NUM_TAIL_SCALARS = 9  # gold scalar + the 8-scalar block in _encode_character_into
+assert SLICE_HEALTH_BLOCK_CHARACTER.stop == ENCODING_DIM_CHARACTER - (
+    _GOLD_DIM + _NUM_TAIL_SCALARS
+), "character row layout drifted: family slices no longer match ENCODING_DIM_CHARACTER"
 
 
 def _encode_character_into(

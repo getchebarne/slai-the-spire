@@ -1,6 +1,7 @@
+from collections.abc import Iterator
 import numpy as np
 import torch
-from slai import EventKindNloth
+from slai import Effect
 from slai import GameState
 from slai import Relic
 from slai import RelicName
@@ -9,18 +10,17 @@ from slai import members
 from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
-from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
-from src.rl.encoding.effect import encode_effects_into
 from src.rl.types import Slice
 from src.rl.types import SliceKind
 from src.rl.types import clip_to_slice
+
 
 # Order = fill order = Core's global-offset order
 SLICE_RELICS = [
     Slice(SliceKind.RELIC_OWNED, MAX_RELICS),
     Slice(SliceKind.RELIC_REWARD, MAX_RELIC_REWARDS),
     Slice(SliceKind.RELIC_SHOP, MAX_SHOP_RELICS),
-    Slice(SliceKind.RELIC_EVENT, 2),  # N'loth's two rolled owned relics, option order
+    Slice(SliceKind.RELIC_EVENT, 2),  # event.roll_relics (N'loth stakes 2; Vampires/Altar/Neow 1)
 ]
 SLICE_KIND_RELICS = {slice_.kind for slice_ in SLICE_RELICS}
 NUM_RELIC_TOKENS = sum(slice_.size for slice_ in SLICE_RELICS)
@@ -34,7 +34,6 @@ ENCODING_DIM_RELIC = (
     len(_RELIC_NAME_TO_IDX)  # Name OHE
     + 1  # Used up
     + 1  # Counter scalar
-    + ENCODING_DIM_EFFECTS  # Combat-start effect blocks (trigger timing rides on the name)
 )
 
 # Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
@@ -42,18 +41,10 @@ _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
 _RELIC_ROW_CACHE_MAX = 100_000
 
 
-def encode_relic_into(relic: Relic, pos: int, out: np.ndarray) -> int:
-    # Name OHE
-    out[pos + _RELIC_NAME_TO_IDX[relic.name]] = 1.0
-    pos += len(_RELIC_NAME_TO_IDX)
-
-    # Scalars
-    out[pos] = float(relic.used_up)
-    out[pos + 1] = min(relic.counter, _COUNTER_MAX) / _COUNTER_MAX
-    pos += 2
-
-    # Per-EffectKind effect blocks
-    return encode_effects_into(relic.effects_on_combat_start, pos, out)
+def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
+    out[_RELIC_NAME_TO_IDX[relic.name]] = 1.0
+    out[len(_RELIC_NAME_TO_IDX)] = float(relic.used_up)
+    out[len(_RELIC_NAME_TO_IDX) + 1] = min(relic.counter, _COUNTER_MAX) / _COUNTER_MAX
 
 
 def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
@@ -62,7 +53,7 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
     row = _RELIC_ROW_CACHE.get(cache_key)
     if row is None:
         row = np.zeros(ENCODING_DIM_RELIC, dtype=np.float32)
-        encode_relic_into(relic, 0, row)
+        encode_relic_into(relic, row)
         row.flags.writeable = False  # guard the cached master copy
         if len(_RELIC_ROW_CACHE) >= _RELIC_ROW_CACHE_MAX:
             _RELIC_ROW_CACHE.clear()
@@ -80,20 +71,12 @@ def _get_relic_entities(kind: SliceKind, game_state: GameState) -> list:
         case SliceKind.RELIC_SHOP:
             return game_state.shop.relics if game_state.shop is not None else []
         case SliceKind.RELIC_EVENT:
+            # The engine snapshots staked picks straight from the arena, so the
+            # old post-choice KeyError (stale spawn-baked names vs the belt) is
+            # impossible by construction; the consumed gate is the cutoff
             event = game_state.event
-            if (
-                event is not None
-                and not event.consumed  # post-choice aftermath: the offer is dead
-                and isinstance(event.kind, EventKindNloth)
-            ):
-                # The payload names are baked AT SPAWN; after the agent gives a
-                # relic away (RelicLose), post-choice snapshots still carry the
-                # name with the relic gone from the belt — encode only what is
-                # still owned. (Crashed live at ~12M steps as a loud KeyError
-                # when this filter was briefly removed as "impossible".)
-                by_name = {relic.name: relic for relic in game_state.relics}
-                pair = (event.kind.relic_first, event.kind.relic_second)
-                return [by_name[name] for name in pair if name in by_name]
+            if event is not None and not event.consumed:  # post-choice: the offer is dead
+                return event.roll_relics
             return []
         case _:
             raise ValueError(f"not a relic slice: {kind}")
@@ -120,3 +103,15 @@ def encode_batch_relics(
         torch.from_numpy(np_out).to(device),
         torch.from_numpy(np_pad).to(device),
     )
+
+
+def iter_effect_owners(game_state: GameState) -> Iterator[tuple[int, list[Effect]]]:
+    """(slot, effects) for every relic token with combat-start effects."""
+    offset = 0
+    for slice_ in SLICE_RELICS:
+        relics = clip_to_slice(_get_relic_entities(slice_.kind, game_state), slice_)
+        for i, relic in enumerate(relics):
+            effects = relic.effects_combat_start  # bound once: each read clones the Vec
+            if effects:
+                yield offset + i, effects
+        offset += slice_.size

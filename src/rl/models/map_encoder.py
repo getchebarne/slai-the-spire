@@ -34,7 +34,7 @@ def _build_child_idx() -> torch.Tensor:
 
 
 class MapGNN(nn.Module):
-    def __init__(self, num_layers: int, hidden: int):
+    def __init__(self, num_layers: int, hidden: int) -> None:
         super().__init__()
         self._in_proj = nn.Linear(NUM_CHANNELS, hidden)
         self._layers = nn.ModuleList(nn.Linear(hidden, hidden) for _ in range(num_layers))

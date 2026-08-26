@@ -13,6 +13,7 @@ from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.card import SLICE_CARDS
 from src.rl.encoding.card import SLICE_KIND_CARDS
 from src.rl.encoding.card import _get_card_entities
+from src.rl.encoding.card import card_selection_identity
 from src.rl.encoding.event import SLICE_EVENTS
 from src.rl.encoding.map_ import SLICE_ROOMS
 from src.rl.encoding.potion import SLICE_KIND_POTIONS
@@ -25,36 +26,43 @@ from src.rl.types import Slice
 from src.rl.types import SliceKind
 from src.rl.types import TMask
 from src.rl.utils import reward_card_prefix
+from src.rl.utils import pending_virtual_int
 from src.rl.utils import reward_slot
 
 
-# Target-slice sizes; built here (masks is the only consumer).
+# Target-slice sizes; built here (masks is the only consumer)
 BY_KIND: dict[SliceKind, Slice] = {
     slice_.kind: slice_
     for table in (SLICE_CARDS, SLICE_RELICS, SLICE_POTIONS, SLICE_EVENTS, SLICE_ROOMS)
     for slice_ in table
 }
-# Per-ActionType l1 mask width (the pool's cap), for the selecting actions.
+# Per-policy-type l1 mask width (the pool's cap), for the selecting actions
 ACTION_TYPE_SIZE: dict[int, int] = {
-    int(action_type): BY_KIND[pool].size for action_type, pool in ACTION_TYPE_POOL.items()
+    at: BY_KIND[pool].size for at, pool in ACTION_TYPE_POOL.items()
 }
-# Action types with an l1 selection.
-SELECTING_ACTION_TYPES: list[int] = [int(action_type) for action_type in ACTION_TYPE_POOL]
+# Policy action types with an l1 selection (engine + virtual pending)
+SELECTING_ACTION_TYPES: list[int] = list(ACTION_TYPE_POOL)
 
 # The reward-card actions: their L1 slot is a position in the bundle-flattened
-# CARD_REWARD slice (translation via utils.reward_slot / reward_card_prefix).
+# CARD_REWARD slice (translation via utils.reward_slot / reward_card_prefix)
 _AT_REWARD_CARD = frozenset((int(ActionType.RewardTakeCard), int(ActionType.RewardSingingBowl)))
-# The only action types whose second engine idx is a monster target (L3).
+# The only action types whose second engine idx is a monster target (L3)
 _AT_MONSTER_TARGETED = frozenset((int(ActionType.CardPlay), int(ActionType.PotionUse)))
 
 
 def card_identity_ids(cards: list[Card]) -> list[int]:
-    """Contiguous group ids over a pile; same-identity cards share an id (selection dedup)."""
-    seen: dict[Card, int] = {}
-    return [seen.setdefault(card, len(seen)) for card in cards]
+    """Contiguous group ids over a pile; same-identity cards share an id (selection dedup).
+
+    Groups by card_selection_identity, not by the Card object: the engine's
+    __hash__ now covers the arena `id`, so keying on the object makes every card
+    distinct and the dedup a no-op."""
+    seen: dict[tuple, int] = {}
+    return [seen.setdefault(card_selection_identity(card), len(seen)) for card in cards]
 
 
-def _pile_ids(state: slai.GameState, combat, target_kind: "SliceKind | None") -> list[int]:
+def _pile_ids(
+    state: slai.GameState, combat: "slai.Combat | None", target_kind: "SliceKind | None"
+) -> list[int]:
     """Identity group-ids for a card target's dedup pile; [] if the target doesn't dedup.
 
     `combat` is the caller's hoisted `state.combat` (FFI accesses deep-clone)."""
@@ -62,14 +70,14 @@ def _pile_ids(state: slai.GameState, combat, target_kind: "SliceKind | None") ->
         return []
     if target_kind is SliceKind.CARD_REWARD:
         # No dedup across bundles: the same card offered in two bundles is two
-        # DIFFERENT actions (taking one consumes its whole bundle).
+        # DIFFERENT actions (taking one consumes its whole bundle)
         return []
     return card_identity_ids(
         _get_card_entities(target_kind, state, combat)[: BY_KIND[target_kind].size]
     )
 
 
-# Action types already warned about dropped selections — truncation is never silent.
+# Action types already warned about dropped selections — truncation is never silent
 _WARNED_DROPPED: set[int] = set()
 
 
@@ -88,13 +96,22 @@ def build_masks(
     for i, state in enumerate(states):
         prefix = reward_card_prefix(state)  # cheap outside reward states ([0])
         combat = state.combat  # hoisted once: FFI context accesses deep-clone
+        pending_at = pending_virtual_int(state)  # likewise: one halt per state
         for action in legal_actions_batch[i]:
-            at = int(action.action_type)
+            # Fold the halt resolver onto its pool's virtual type (types.PendingType)
+            if action.action_type is ActionType.EffectPendingResolve:
+                if pending_at is None:
+                    raise RuntimeError(
+                        "EffectPendingResolve is legal but state.effect_pending is None"
+                    )
+                at = pending_at
+            else:
+                at = int(action.action_type)
             idxs = action.idxs
-            target_kind = ACTION_TYPE_POOL.get(action.action_type)
+            target_kind = ACTION_TYPE_POOL.get(at)
             if target_kind is not None and idxs:
                 # L1 slot: bundle-flattened for the reward-card actions, the raw
-                # engine index everywhere else.
+                # engine index everywhere else
                 if at in _AT_REWARD_CARD:
                     slot = reward_slot(prefix, action.action_type, idxs)
                 else:
@@ -110,7 +127,7 @@ def build_masks(
                     continue
                 np_l1[at][i, slot] = True  # per ACTION TYPE — legality differs per type
                 # L3: only CardPlay/PotionUse carry a monster target as idxs[1]
-                # (RewardTakeCard's idxs[1] is a card-within-bundle, folded above).
+                # (RewardTakeCard's idxs[1] is a card-within-bundle, folded above)
                 if at in _AT_MONSTER_TARGETED and len(idxs) == 2 and idxs[1] < MAX_MONSTERS:
                     if target_kind in SLICE_KIND_CARDS:
                         np_card_l2[i, slot, idxs[1]] = True
@@ -118,16 +135,15 @@ def build_masks(
                         np_potion_l2[i, slot, idxs[1]] = True
             np_action_type[i, at] = True  # ActionType: every legal kind the masks can express
         if not np_action_type[i].any():
-            # Every legal action exceeded a pool cap — unrepresentable; fail loudly not NaN.
+            # Every legal action exceeded a pool cap — unrepresentable; fail loudly not NaN
             raise RuntimeError(
                 f"All legal actions exceed encoder pool caps on focus "
                 f"{derive_focus(state).name}: "
                 f"{[(int(a.action_type), list(a.idxs)) for a in legal_actions_batch[i]]}"
             )
 
-        # Dedup each type's l1 mask by identity pile (copies collapse); non-dedup pools return [].
-        for action_type, target_kind in ACTION_TYPE_POOL.items():
-            at = int(action_type)
+        # Dedup each type's l1 mask by identity pile (copies collapse); non-dedup pools return []
+        for at, target_kind in ACTION_TYPE_POOL.items():
             np_row = np_l1[at][i]
             if not np_row.any():
                 continue

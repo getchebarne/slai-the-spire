@@ -9,8 +9,8 @@ from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.card import encode_batch_cards
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import encode_batch_character
-from src.rl.encoding.effect import ENCODING_DIM_EFFECTS
-from src.rl.encoding.effect import encode_effects_into
+from src.rl.encoding.effect import ENCODING_DIM_EFFECT
+from src.rl.encoding.effect import encode_effect_rows
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
 from src.rl.encoding.energy import encode_batch_energy
 from src.rl.encoding.event import ENCODING_DIM_EVENT_META
@@ -43,8 +43,8 @@ __all__ = [
     "encode_batch_character",
     "ENCODING_DIM_CHARACTER",
     # Energy encoding
-    "encode_effects_into",
-    "ENCODING_DIM_EFFECTS",
+    "encode_effect_rows",
+    "ENCODING_DIM_EFFECT",
     "encode_batch_energy",
     "ENCODING_DIM_ENERGY",
     # Screen encoding
