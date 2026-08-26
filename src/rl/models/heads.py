@@ -11,7 +11,7 @@ class HeadActionType(nn.Module):
     the head mute the global features irrelevant to the current mode).
     """
 
-    def __init__(self, dim_global: int, dim_ff: int, num_choices: int, dim_context: int):
+    def __init__(self, dim_global: int, dim_ff: int, num_choices: int, dim_context: int) -> None:
         super().__init__()
 
         self._gate = nn.Linear(dim_context, dim_global)
@@ -39,7 +39,7 @@ class PointerKeys(nn.Module):
     entity maps to the same key in every selection context.
     """
 
-    def __init__(self, dim_in: int, dim_key: int):
+    def __init__(self, dim_in: int, dim_key: int) -> None:
         super().__init__()
 
         self._net = nn.Sequential(
@@ -66,7 +66,7 @@ class HeadPointerSelect(nn.Module):
     query encodes what the current decision wants.
     """
 
-    def __init__(self, dim_global: int, dim_cond: int, dim_key: int):
+    def __init__(self, dim_global: int, dim_cond: int, dim_key: int) -> None:
         """
         Args:
             dim_global: Dimension of the global context vector
@@ -106,7 +106,7 @@ class HeadValue(nn.Module):
     stream's return, and the total state value is the sum over outputs.
     """
 
-    def __init__(self, dim_global: int, dim_ff: int, num_streams: int):
+    def __init__(self, dim_global: int, dim_ff: int, num_streams: int) -> None:
         """
         Args:
             dim_global: Dimension of the global context vector

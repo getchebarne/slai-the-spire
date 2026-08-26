@@ -1,3 +1,5 @@
+from multiprocessing.queues import Queue
+from multiprocessing.synchronize import Event
 import math
 import multiprocessing as mp
 import os
@@ -38,6 +40,7 @@ from src.rl.reward import cumulative_floor
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import Level
 from src.rl.types import RolloutBuffer
+from src.rl.types import TEffects
 from src.rl.types import TGameState
 from src.rl.types import TMask
 from src.rl.types import TPadded
@@ -49,7 +52,8 @@ from src.rl.utils import shuffle_rollout_buffer
 
 
 _AT_REST = ACTION_TYPE_BY_INT.index(slai.ActionType.Rest)
-_AT_UPGRADE = ACTION_TYPE_BY_INT.index(slai.ActionType.CardUpgrade)
+# The smith is argless now; the deck pick it queues arrives as a separate halt
+_AT_SMITH = ACTION_TYPE_BY_INT.index(slai.ActionType.RestSmith)
 
 
 def _env_level(c: float, env_idx: int, num_envs: int, max_level: int) -> int:
@@ -259,11 +263,11 @@ def _collect_rollout(
             log_probs[rows] = out.log_prob.sum(-1)
             values[t] = t_values  # (E, K)
 
-            # Campfire decision: both Rest and CardUpgrade legal — which was chosen?
-            both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_UPGRADE]
+            # Campfire decision: both Rest and RestSmith legal — which was chosen?
+            both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_SMITH]
             chosen = out.idxs[:, Level.ACTION_TYPE]
             rest_picks += (both & (chosen == _AT_REST)).sum()
-            upgrade_picks += (both & (chosen == _AT_UPGRADE)).sum()
+            upgrade_picks += (both & (chosen == _AT_SMITH)).sum()
 
             # Decode actions on CPU once (one device->host transfer, not per-env), then step.
             out_cpu = out.cpu()
@@ -348,6 +352,11 @@ def _obs_tensor_items(x: TGameState) -> list[tuple[str, torch.Tensor]]:
         padded: TPadded = getattr(x, name)
         items.append((f"{name}.x", padded.x))
         items.append((f"{name}.mask", padded.mask))
+    # Effects carry a third field (the owner segment); int64 rides shm fine —
+    # room_node_idx is the precedent.
+    items.append(("effects.x", x.effects.x))
+    items.append(("effects.segment", x.effects.segment))
+    items.append(("effects.mask", x.effects.mask))
     for name in (
         "energy",
         "map_grid",
@@ -441,6 +450,12 @@ def _snapshot_to_device(
         monsters=padded("monsters"),
         event_options=padded("event_options"),
         character=padded("character"),
+        effects=TEffects(
+            x=t("effects.x"),
+            segment=t("effects.segment"),
+            mask=t("effects.mask"),
+            batch_size=B,
+        ),
         energy=t("energy"),
         map_grid=t("map_grid"),
         room_node_idx=t("room_node_idx"),
@@ -486,9 +501,9 @@ def _shard_worker(
     ascension_max: int,
     shm_name: str,
     layout: ShardLayout,
-    ep_queue,
-    req,
-    done,
+    ep_queue: Queue,
+    req: Event,
+    done: Event,
 ) -> None:
     """One rollout shard: owns envs [lo, hi), steps them on _OP_STEP_ENCODE using
     the action ints in shared memory, then encodes obs + masks for the shard into
@@ -718,10 +733,10 @@ def _collect_rollout_sharded(
             log_probs[rows] = out.log_prob.sum(-1)
             values[t, lo:hi] = t_values
 
-            both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_UPGRADE]
+            both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_SMITH]
             chosen = out.idxs[:, Level.ACTION_TYPE]
             rest_picks.add_((both & (chosen == _AT_REST)).sum())
-            upgrade_picks.add_((both & (chosen == _AT_UPGRADE)).sum())
+            upgrade_picks.add_((both & (chosen == _AT_SMITH)).sum())
 
             sr.views["_actions"][lo:hi] = out.idxs.cpu().numpy()
             _signal(sr, sr.gangs[g], _OP_STEP_ENCODE)

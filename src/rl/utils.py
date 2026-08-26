@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 import math
 from bisect import bisect_right
 from typing import Any
@@ -11,6 +12,8 @@ from slai import GameState
 
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import ACTION_TYPE_POOL
+from src.rl.types import PENDING_INTS
+from src.rl.types import PENDING_POOL_INT
 from src.rl.types import RolloutBuffer
 from src.rl.types import TAction
 
@@ -75,7 +78,7 @@ def init_optimizer(optimizer_name: str, model: nn.Module, **kwargs) -> torch.opt
 # so the CARD_REWARD slice is the bundle-flattened concatenation and the L1 slot
 # <-> engine (idx_bundle[, idx_card]) translation runs through prefix sums. This
 # is the single home for both directions: masks.py folds legal actions forward,
-# action_from_actiontype unfolds picks back, and the fuzz oracle reuses both.
+# action_from_actiontype unfolds picks back, and the fuzz oracle reuses both
 
 
 def reward_card_prefix(state: GameState) -> list[int]:
@@ -89,7 +92,7 @@ def reward_card_prefix(state: GameState) -> list[int]:
     return prefix
 
 
-def reward_slot(prefix: list[int], action_type: ActionType, idxs) -> int:
+def reward_slot(prefix: list[int], action_type: ActionType, idxs: Sequence[int]) -> int:
     """Engine (idx_bundle[, idx_card]) -> flat CARD_REWARD slot. RewardSingingBowl
     points at a bundle via its first-card token."""
     if action_type == ActionType.RewardTakeCard:
@@ -108,6 +111,41 @@ def reward_idxs(prefix: list[int], action_type: ActionType, slot: int) -> list[i
 _REWARD_CARD_ACTIONS = frozenset((ActionType.RewardTakeCard, ActionType.RewardSingingBowl))
 
 
+# ---- Pending-halt fold/unfold ----
+# The engine resolves every halt with one EffectPendingResolve; the policy
+# splits it per candidate pool (types.PENDING_POOL_SLICE) so each type keeps a
+# single static L2 width. Both directions live here, next to the reward-card
+# translation, for the same reason: masks folds forward, engine_action unfolds
+
+
+def pending_virtual_int(state: GameState) -> int | None:
+    """The virtual type for this state's halt, or None when nothing is pending.
+
+    Resolve once per state, not once per legal action: every read here is an FFI
+    getter that deep-clones, and a deck halt offers 45 of them."""
+    pending = state.effect_pending
+    if pending is None:
+        return None
+    if pending.target is None:
+        raise RuntimeError("pending effect carries no Resolve target")
+    pool = type(pending.target.candidate_pool)
+    virtual = PENDING_POOL_INT.get(pool)
+    if virtual is None:
+        raise ValueError(f"halt over an unmapped candidate pool: {pool.__name__}")
+    return virtual
+
+
+def virtual_action_int(action: Action, state: GameState) -> int:
+    """Engine action -> policy action-type int. Only the halt resolver moves;
+    every other type keeps its engine discriminant."""
+    if action.action_type != ActionType.EffectPendingResolve:
+        return int(action.action_type)
+    virtual = pending_virtual_int(state)
+    if virtual is None:
+        raise RuntimeError("EffectPendingResolve legal with no pending effect")
+    return virtual
+
+
 def engine_action(
     at_int: int, selection_index: int, target_index: int, state: GameState
 ) -> Action:
@@ -117,8 +155,10 @@ def engine_action(
     `state` is the game state the mask was built from: the reward-card actions'
     L1 slot is a position in the bundle-flattened CARD_REWARD slice and must be
     split back into engine (idx_bundle, idx_card) via the same prefix sums."""
+    if at_int in PENDING_INTS:  # any virtual pending type folds back to the one resolver
+        return Action(ActionType.EffectPendingResolve, [selection_index])
     action_type = ACTION_TYPE_BY_INT[at_int]
-    if action_type not in ACTION_TYPE_POOL:
+    if at_int not in ACTION_TYPE_POOL:
         idxs = []
     elif action_type in _REWARD_CARD_ACTIONS:
         idxs = reward_idxs(reward_card_prefix(state), action_type, selection_index)

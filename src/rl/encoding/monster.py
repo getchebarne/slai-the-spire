@@ -5,8 +5,8 @@ from slai import Monster
 from slai import MonsterName
 from slai import members
 
-from src.rl.constants import BLOCK_MAX_MONSTER
-from src.rl.constants import HEALTH_MAX_MONSTER
+from src.rl.constants import BLOCK_MAX_ENTITY
+from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
@@ -32,15 +32,17 @@ _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.D
 # Normalization caps, bump when adding heavy hitters
 _DAMAGE_MAX = 96  # Bronze Automaton's Hyper Beam 50 x `FACTOR_VULN` 1.5 = 75
 _INSTANCES_MAX = 5  # The Guardian's Whirlwind
-_HEALTH_MAX = HEALTH_MAX_MONSTER  # Champ 440 at A9+ (constants.py)
-_BLOCK_MAX = BLOCK_MAX_MONSTER  # Spheric Guardian lives at 40 (constants.py)
+_HEALTH_MAX = HEALTH_MAX_ENTITY  # Champ 440 at A9+ (constants.py)
+_BLOCK_MAX = BLOCK_MAX_ENTITY  # Spheric Guardian lives at 40 (constants.py)
 _STOLEN_GOLD_MAX = 40  # Mugger/Looter thievery accumulation; sqrt-scaled
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
+_DIM_HEALTH_BLOCK = get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)
+
 ENCODING_DIM_MONSTER = (
     ENCODING_DIM_MODIFIERS  # Modifiers OHE
-    + get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)  # Health and block OHE and scalars
+    + _DIM_HEALTH_BLOCK  # Health and block OHE and scalars
     + len(_MAP_MONSTER_NAME)  # Name OHE
     + _DAMAGE_DIM  # Intent damage OHE
     + 1  # Intent damage scalar
@@ -55,6 +57,17 @@ ENCODING_DIM_MONSTER = (
     + 1  # Stolen gold (Mugger/Looter; returned on kill)
     + len(_MAP_INTENT_KIND)  # Intent kind OHE
 )
+
+# Family-block positions (consumed by EntityProjector's shared first layer). The
+# balance assert ties the slices to _encode_monster_into's write order.
+SLICE_MODIFIERS_MONSTER = slice(0, ENCODING_DIM_MODIFIERS)
+SLICE_HEALTH_BLOCK_MONSTER = slice(
+    ENCODING_DIM_MODIFIERS, ENCODING_DIM_MODIFIERS + _DIM_HEALTH_BLOCK
+)
+_NUM_TAIL_SCALARS = 10  # the scalar block in _encode_monster_into
+assert SLICE_HEALTH_BLOCK_MONSTER.stop == ENCODING_DIM_MONSTER - (
+    len(_MAP_MONSTER_NAME) + _DAMAGE_DIM + _NUM_TAIL_SCALARS + len(_MAP_INTENT_KIND)
+), "monster row layout drifted: family slices no longer match ENCODING_DIM_MONSTER"
 
 
 def _intent_total_damage(monster: Monster) -> int:
@@ -97,7 +110,7 @@ def _encode_monster_into(
     out[pos + 6] = float(outgoing_damage >= char_health + char_block)
     out[pos + 7] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
     out[pos + 8] = monster.health / max(monster.health_max, 1)
-    out[pos + 9] = get_sqrt_norm(monster.stolen_gold, _STOLEN_GOLD_MAX)
+    out[pos + 9] = get_sqrt_norm(monster.gold_stolen, _STOLEN_GOLD_MAX)
     pos += 10
 
     # Intent kind OHE (the category flags above miss Escape/Sleep/Stunned/Unknown)

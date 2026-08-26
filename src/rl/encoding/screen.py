@@ -1,36 +1,37 @@
 from enum import IntEnum
+from typing import get_args
 
 import numpy as np
 import torch
 from slai import CandidatePoolDeck
 from slai import CandidatePoolDiscover
+from slai import CandidatePoolEventRollCard
+from slai import CandidatePoolEventRollPotion
+from slai import CandidatePoolEventRollRelic
 from slai import CandidatePoolHand
 from slai import CandidatePoolPileDiscard
 from slai import CandidatePoolPileDraw
+from slai import CandidatePoolPileExhaust
+from slai import Chest
 from slai import ChestKind
-from slai import EffectBonfireOffer
-from slai import EffectCardBottle
-from slai import EffectCardDiscard
-from slai import EffectCardDiscoverPick
-from slai import EffectCardDuplicate
-from slai import EffectCardExhaust
-from slai import EffectCardMove
-from slai import EffectCardNightmarePick
-from slai import EffectCardPurge
-from slai import EffectCardRetain
-from slai import EffectCardSetupPick
-from slai import EffectCardTransform
-from slai import EffectCardUpgrade
+from slai import Combat
+from slai import Event
 from slai import GameState
+from slai import PendingEffect
+from slai import RestSite
+from slai import Reward
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
+from slai import Shop
 from slai import members
 
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISC_PILE
 from src.rl.constants import MAX_SIZE_DISCOVER
 from src.rl.constants import MAX_SIZE_DRAW_PILE
+from src.rl.constants import MAX_SIZE_EXHAUST
 from src.rl.constants import MAX_SIZE_HAND
+from src.rl.types import PENDING_POOL_SLICE
 
 
 class Focus(IntEnum):
@@ -48,7 +49,14 @@ class Focus(IntEnum):
     MAP = 6
 
 
-def _focus_from(reward, combat, shop, chest, rest_site, event) -> Focus:
+def _focus_from(
+    reward: Reward | None,
+    combat: Combat | None,
+    shop: Shop | None,
+    chest: Chest | None,
+    rest_site: RestSite | None,
+    event: Event | None,
+) -> Focus:
     """Precedence over pre-fetched context snapshots (FFI accesses deep-clone —
     callers that already hold the contexts must not re-fetch them)."""
     if reward is not None:
@@ -72,31 +80,17 @@ def derive_focus(state: GameState) -> Focus:
     )
 
 
-# The exact halting kinds of the engine's pending-effect dispatcher
-# (action.rs fill_legal_actions_effect_pending); a new halting kind must be
-# added here deliberately — encoding fails loud (ValueError) below.
-_EFFECT_PENDING = (
-    EffectCardDiscard,
-    EffectCardRetain,
-    EffectCardExhaust,
-    EffectCardSetupPick,
-    EffectCardNightmarePick,
-    EffectCardMove,
-    EffectCardDiscoverPick,
-    EffectCardPurge,
-    EffectBonfireOffer,
-    EffectCardBottle,
-    EffectCardUpgrade,
-    EffectCardDuplicate,
-    EffectCardTransform,
-)
-_EFFECT_PENDING_TO_IDX = {cls: i for i, cls in enumerate(_EFFECT_PENDING)}
+# The engine's halting kinds, straight from the FFI: `pending` is typed
+# PyPendingEffect, so a new halting kind widens this tuple automatically instead
+# of raising the "unencoded pending halt kind" ValueError below
+EFFECT_PENDING = get_args(PendingEffect)
+_EFFECT_PENDING_TO_IDX = {cls: i for i, cls in enumerate(EFFECT_PENDING)}
 
 _NUM_CHEST_KINDS = len(members(ChestKind))
 
 # Layout offsets
 _OFF_PENDING = len(Focus)
-_OFF_COUNT = _OFF_PENDING + len(_EFFECT_PENDING)
+_OFF_COUNT = _OFF_PENDING + len(EFFECT_PENDING)
 _OFF_SKIPPABLE = _OFF_COUNT + 1
 _OFF_BOMB = _OFF_SKIPPABLE + 1
 _OFF_CHEST_KIND = _OFF_BOMB + 1
@@ -107,33 +101,36 @@ ENCODING_DIM_SCREEN = _OFF_PRESENCE + 6
 
 _BOMB_TURNS = 3.0  # The Bomb's fuse length (engine process_effect_turn_end.rs, bare literal)
 
-# Pool the remaining-pick count is normalized against (Input/InputUpTo halts).
-# CardMove halts carry PileDraw (Violence, Secret Weapon/Technique) or
-# PileDiscard (Liquid Memories) as the source pool.
+# Every pool the engine can halt over; the pick count normalizes against its slice cap
 _INPUT_POOL_CAP = {
     CandidatePoolHand: MAX_SIZE_HAND,
     CandidatePoolDeck: MAX_SIZE_DECK,
     CandidatePoolDiscover: MAX_SIZE_DISCOVER,
     CandidatePoolPileDraw: MAX_SIZE_DRAW_PILE,
     CandidatePoolPileDiscard: MAX_SIZE_DISC_PILE,
+    CandidatePoolPileExhaust: MAX_SIZE_EXHAUST,
+    CandidatePoolEventRollCard: 1,
+    CandidatePoolEventRollRelic: 2,
+    CandidatePoolEventRollPotion: 1,
 }
+assert set(_INPUT_POOL_CAP) == set(PENDING_POOL_SLICE), "halting-pool tables drifted"
 
 
 def _encode_screen_into(state: GameState, out: np.ndarray) -> None:
     # Every context/pending access deep-clones its snapshot across the FFI —
-    # fetch each exactly once and derive everything from the locals.
+    # fetch each exactly once and derive everything from the locals
     combat = state.combat
     reward = state.reward
     shop = state.shop
     chest = state.chest
     rest_site = state.rest_site
     event = state.event
-    pending = state.pending
+    pending = state.effect_pending
 
     out[_focus_from(reward, combat, shop, chest, rest_site, event)] = 1.0
 
     # Pending input kind OHE (all-zero = no pending) + normalized remaining pick
-    # count + skippable flag (InputUpTo is exactly when PickSkip is legal).
+    # count + skippable flag (InputUpTo is exactly when PickSkip is legal)
     if pending is not None:
         idx = _EFFECT_PENDING_TO_IDX.get(type(pending))
         if idx is None:
@@ -165,7 +162,7 @@ def _encode_screen_into(state: GameState, out: np.ndarray) -> None:
         out[_OFF_REST_DONE] = float(rest_site.done)
 
     # Context-presence bits: the focus OHE alone can't express overlays (reward
-    # over a live combat/chest/event host; Colosseum's combat over an event).
+    # over a live combat/chest/event host; Colosseum's combat over an event)
     for i, ctx in enumerate((combat, reward, shop, event, rest_site, chest)):
         if ctx is not None:
             out[_OFF_PRESENCE + i] = 1.0

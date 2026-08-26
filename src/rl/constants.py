@@ -13,13 +13,15 @@ ASCENSION_LEVEL = 20
 # under per-step discounting, taxes potion-holding and biases toward early discards.
 FAST_MODE = False
 
-# Actor encoding limits
-BLOCK_MAX_CHARACTER = 20
-BLOCK_MAX_MONSTER = 40  # Spheric Guardian starts at 40 and lives there (Barricade)
+# Actor encoding limits. Monster and character share ENTITY caps: both encoders
+# must build a byte-identical health/block block so EntityProjector can share
+# its first-layer family weights (encoder import-time asserts enforce widths).
+BLOCK_MAX_ENTITY = 40  # Spheric Guardian starts at 40 and lives there (Barricade)
+HEALTH_MAX_ENTITY = 450  # From Champ at Ascension 9+ (440)
+BLOCK_MAX_CHARACTER = 20  # DEAD: superseded by BLOCK_MAX_ENTITY; kept for reference
 HEALTH_MAX_CHARACTER = (
-    100  # provisional: Silent 70 base + Face of Cleric/max-HP events (R4 harness)
+    100  # DEAD: superseded by HEALTH_MAX_ENTITY (was: Silent 70 base + max-HP events, R4)
 )
-HEALTH_MAX_MONSTER = 450  # From Champ at Ascension 9+ (440)
 
 # Energy encoding
 ENERGY_MIN = 0
@@ -83,11 +85,19 @@ MAX_SIZE_SHOP_CARDS = 8
 MAX_SHOP_RELICS = 4
 MAX_SHOP_POTIONS = 4
 MAX_EVENT_OPTIONS = 12
+# Per-state effect-row pool. Ragged per entity (0-5 effects), so rows are packed
+# per STATE with an owner segment rather than padded per entity: (B, 284, 5, D)
+# would cost ~6x this. Measured live: mean 16.9 rows/state, max 35.
+MAX_EFFECTS_STATE = 224
 MAX_SIZE_DISCOVER = 5
 
 # Normalization caps for new scalar features
 GOLD_CAP = 999
-SHOP_PRICE_CAP = 400
+# Exact pre-discount ceiling, derived from the engine's own pricing formula
+# (relics are the most expensive slot); discounts only lower prices.
+SHOP_PRICE_CAP = max(
+    _slai.SHOP_PRICE_CARD_MAX, _slai.SHOP_PRICE_RELIC_MAX, _slai.SHOP_PRICE_POTION_MAX
+)
 EVENT_STATE_CAP = 10
 
 
@@ -96,9 +106,9 @@ __all__ = [
     "ASCENSION_LEVEL",
     # Encoding limits
     "BLOCK_MAX_CHARACTER",
-    "BLOCK_MAX_MONSTER",
+    "BLOCK_MAX_ENTITY",
     "HEALTH_MAX_CHARACTER",
-    "HEALTH_MAX_MONSTER",
+    "HEALTH_MAX_ENTITY",
     "ENERGY_MIN",
     "ENERGY_MAX",
     # Game constants
@@ -122,6 +132,7 @@ __all__ = [
     "MAX_SIZE_SHOP_CARDS",
     "MAX_SHOP_RELICS",
     "MAX_SHOP_POTIONS",
+    "MAX_EFFECTS_STATE",
     "MAX_EVENT_OPTIONS",
     "MAX_SIZE_DISCOVER",
     "GOLD_CAP",

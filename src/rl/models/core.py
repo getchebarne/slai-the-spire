@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-from src.rl.encoding.ascension import ENCODING_DIM_ASCENSION
 from src.rl.encoding.card import SLICE_CARDS
 from src.rl.encoding.character import SLICE_CHARACTER
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
@@ -15,6 +14,7 @@ from src.rl.encoding.relic import SLICE_RELICS
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.screen import ENCODING_DIM_SCREEN
 from src.rl.encoding.shop import ENCODING_DIM_SHOP_META
+from src.rl.encoding.state import ENCODING_DIM_ASCENSION
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
@@ -26,7 +26,7 @@ from src.rl.types import TGameState
 from src.rl.types import TPadded
 
 
-# Cat order = global token order; ROOM last (GNN node features, projected with the rest).
+# Cat order = global token order; ROOM last (GNN node features, projected with the rest)
 SLICE_ALL = (
     SLICE_CARDS
     + SLICE_RELICS
@@ -62,7 +62,7 @@ class Core(nn.Module):
         transformer_num_blocks: int,
         gnn_num_layers: int,
         map_encoder_dim: int,
-    ):
+    ) -> None:
         super().__init__()
 
         self._dim_entity = dim_entity
@@ -75,11 +75,11 @@ class Core(nn.Module):
         self._type_emb = nn.Embedding(len(SLICE_ALL), dim_entity)
         self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim)
 
-        # Learned global token, refined with the entities (replaces pooling).
+        # Learned global token, refined with the entities (replaces pooling)
         self._entity_global = nn.Parameter(torch.empty(1, 1, dim_entity))
         nn.init.normal_(self._entity_global, std=0.02)
 
-        # Global context: global token + character + map readout + per-slice counts + raw flats.
+        # Global context: global token + character + map readout + per-slice counts + raw flats
         global_input_dim = (
             dim_entity  # global token (attention-aggregated entities)
             + dim_entity  # character (refined singleton)
@@ -93,6 +93,7 @@ class Core(nn.Module):
             + ENCODING_DIM_REWARD_META
             + ENCODING_DIM_SHOP_META  # shop purge price triple + purged flag
             + ENCODING_DIM_EVENT_META
+            + dim_entity  # pooled pending-halt effect (EntityProjector)
         )
         self._global_projection = nn.Sequential(
             nn.Linear(global_input_dim, dim_global),
@@ -100,7 +101,7 @@ class Core(nn.Module):
             nn.Linear(dim_global, dim_global),
         )
 
-        # token slot -> SLICE_ALL index; derived from layout, excluded from checkpoints.
+        # token slot -> SLICE_ALL index; derived from layout, excluded from checkpoints
         t_type_idx = torch.tensor(
             [i for i, s in enumerate(SLICE_ALL) for _ in range(s.size)], dtype=torch.long
         ).unsqueeze(0)
@@ -121,7 +122,9 @@ class Core(nn.Module):
         t_refined = self._refine_tokens(t_tokens)
 
         return TCoreOutput(
-            global_=self._global_context(t_game_state, t_refined, t_map_readout),
+            global_=self._global_context(
+                t_game_state, t_refined, t_map_readout, t_blocks.pending
+            ),
             pool={kind: t_refined.x[:, _SLICE_OFFSETS[kind]] for kind in _SELECTABLE},
         )
 
@@ -165,7 +168,7 @@ class Core(nn.Module):
         # recompilation penalty for a per-batch width. The int(max) is a per-forward host sync,
         # but it measured ~free on GPU (2026-07 probe) — and the alternatives lost: no-pack
         # ballooned the update (199-token attention, 12.0 s/iter) and a fixed width paid ~2.3x
-        # the transformer for widths that are typically 20-31 tokens.
+        # the transformer for widths that are typically 20-31 tokens
         pack_width = int(t_tokens.mask.sum(dim=1).max())
 
         # Gather valid elements across each sample in the batch
@@ -181,13 +184,17 @@ class Core(nn.Module):
 
         # Scatter the refined tokens back to their original slots. Padding must be zeroed (not
         # empty_like): downstream masks multiply (x*0), and NaN*0=NaN, so uninitialized NaN-pattern
-        # bytes propagate — observed crashing the x86 CPU path with NaN-pattern garbage.
+        # bytes propagate — observed crashing the x86 CPU path with NaN-pattern garbage
         t_scattered = torch.zeros_like(t_tokens.x)
         t_scattered.scatter_(1, t_idx_keep_x, t_tokens_ref.x)
         return TPadded(t_scattered, t_tokens.mask)
 
     def _global_context(
-        self, t_game_state: TGameState, t_refined: TPadded, t_map_readout: torch.Tensor
+        self,
+        t_game_state: TGameState,
+        t_refined: TPadded,
+        t_map_readout: torch.Tensor,
+        t_pending: torch.Tensor,
     ) -> torch.Tensor:
         t_entity_global = t_refined.x[:, -1]
         t_character = t_refined.x[:, _SLICE_OFFSETS[SliceKind.CHARACTER]].squeeze(1)
@@ -206,6 +213,7 @@ class Core(nn.Module):
                     t_game_state.reward_meta,
                     t_game_state.shop_meta,
                     t_game_state.event_meta,
+                    t_pending,
                 ],
                 dim=1,
             )

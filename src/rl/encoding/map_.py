@@ -116,7 +116,7 @@ def _encode_map_meta_into(
     rooms: list[list[Room | None]],
     y_current: int | None,
     x_current: int | None,
-    boss,
+    boss: MonsterEncounter,
     act: int,
     out: np.ndarray,
 ) -> None:

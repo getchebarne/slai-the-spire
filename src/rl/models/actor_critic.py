@@ -12,7 +12,6 @@ from src.rl.models.heads import HeadPointerSelect
 from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
 from src.rl.reward import REWARD_STREAMS
-from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import ACTION_TYPE_POOL
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
@@ -20,6 +19,34 @@ from src.rl.types import TAction
 from src.rl.types import TCoreOutput
 from src.rl.types import TGameState
 from src.rl.types import TMask
+
+
+# L2 pool -> the pointer-key net that scores its tokens. Every pool in
+# ACTION_TYPE_POOL must appear (asserted at import)
+_POOL_KEY_NET: dict[SliceKind, str] = {
+    SliceKind.CARD_HAND: "_pointer_key_card",
+    SliceKind.CARD_DRAW: "_pointer_key_card",
+    SliceKind.CARD_DISCARD: "_pointer_key_card",
+    SliceKind.CARD_EXHAUST: "_pointer_key_card",
+    SliceKind.CARD_DECK: "_pointer_key_card",
+    SliceKind.CARD_DISCOVER: "_pointer_key_card",
+    SliceKind.CARD_REWARD: "_pointer_key_card",
+    SliceKind.CARD_SHOP: "_pointer_key_card",
+    SliceKind.CARD_EVENT: "_pointer_key_card",
+    SliceKind.RELIC_REWARD: "_pointer_key_relic",
+    SliceKind.RELIC_SHOP: "_pointer_key_relic",
+    SliceKind.RELIC_EVENT: "_pointer_key_relic",
+    SliceKind.POTION_OWNED: "_pointer_key_potion",
+    SliceKind.POTION_REWARD: "_pointer_key_potion",
+    SliceKind.POTION_SHOP: "_pointer_key_potion",
+    SliceKind.POTION_EVENT: "_pointer_key_potion",
+    SliceKind.EVENT_OPTIONS: "_pointer_key_event",
+    SliceKind.ROOMS: "_pointer_key_room",
+}
+assert set(ACTION_TYPE_POOL.values()) <= set(_POOL_KEY_NET), (
+    "every L2 pool needs a pointer-key net: missing "
+    f"{sorted(k.name for k in set(ACTION_TYPE_POOL.values()) - set(_POOL_KEY_NET))}"
+)
 
 
 class ActorCritic(nn.Module):
@@ -49,7 +76,7 @@ class ActorCritic(nn.Module):
             map_encoder_dim=map_encoder_dim,
         )
 
-        # L1: one masked categorical over ActionType, screen-gated (GLU); a halt has an empty mask.
+        # L1: one masked categorical over ActionType, screen-gated (GLU); a halt has an empty mask
         self._head_action_type = HeadActionType(
             self.core.dim_global,
             dim_ff_primary,
@@ -60,10 +87,10 @@ class ActorCritic(nn.Module):
         self._head_level_3 = HeadPointerSelect(self.core.dim_global, dim_entity, dim_key)
         self._head_value = HeadValue(self.core.dim_global, dim_ff_value, len(REWARD_STREAMS))
 
-        # L2/L3 pointer selection: one key net per entity class + a shared query net per level.
+        # L2/L3 pointer selection: one key net per entity class + a shared query net per level
         self._action_type_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
         # One key net per entity class; every SliceKind of that class shares it, so an entity maps
-        # to the same key in every selection context. _pointer_key_for routes a pool to its net.
+        # to the same key in every selection context. _pointer_key_for routes a pool to its net
         self._pointer_key_card = PointerKeys(dim_entity, dim_key)
         self._pointer_key_relic = PointerKeys(dim_entity, dim_key)
         self._pointer_key_potion = PointerKeys(dim_entity, dim_key)
@@ -87,42 +114,20 @@ class ActorCritic(nn.Module):
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_value._network[-1].weight, gain=1.0)
 
+        # Resolve the pool -> key-net names once; getattr on nn.Module walks
+        # _parameters/_buffers/_modules on every miss
+        self._key_nets = {name: getattr(self, name) for name in set(_POOL_KEY_NET.values())}
+
     def _pointer_key_for(self, action_type: int) -> PointerKeys:
-        match ACTION_TYPE_BY_INT[action_type]:
-            case (
-                ActionType.CardBottle
-                | ActionType.CardDiscard
-                | ActionType.CardDiscover
-                | ActionType.CardDuplicate
-                | ActionType.CardExhaust
-                | ActionType.CardMoveToHand
-                | ActionType.CardNightmare
-                | ActionType.CardPlay
-                | ActionType.CardPurge
-                | ActionType.CardRetain
-                | ActionType.CardSetup
-                | ActionType.CardTransform
-                | ActionType.CardUpgrade
-                | ActionType.RewardSingingBowl
-                | ActionType.RewardTakeCard
-                | ActionType.ShopBuyCard
-                | ActionType.ShopPurge
-            ):
-                return self._pointer_key_card
-            case ActionType.RewardTakeRelic | ActionType.ShopBuyRelic:
-                return self._pointer_key_relic
-            case (
-                ActionType.PotionDiscard
-                | ActionType.PotionUse
-                | ActionType.RewardTakePotion
-                | ActionType.ShopBuyPotion
-            ):
-                return self._pointer_key_potion
-            case ActionType.EventOptionSelect:
-                return self._pointer_key_event
-            case ActionType.RoomSelect:
-                return self._pointer_key_room
-        raise ValueError(f"no pointer key net for {ACTION_TYPE_BY_INT[action_type]}")
+        """The key net for a policy action type, chosen by the entity class of
+        its L2 pool. Table-driven off ACTION_TYPE_POOL so the virtual pending
+        types route themselves — a pending pick over the draw pile scores card
+        tokens, one over the staked relics scores relic tokens."""
+        pool = ACTION_TYPE_POOL.get(action_type)
+        name = _POOL_KEY_NET.get(pool)
+        if name is None:
+            raise ValueError(f"no pointer key net for policy action type {action_type}")
+        return self._key_nets[name]
 
     def _categorical_step(
         self,
@@ -148,7 +153,7 @@ class ActorCritic(nn.Module):
         # KL(uniform‖π) over the legal set — the anti-collapse barrier. Entropy's
         # restoring force on a dying action vanishes with its probability (∝ p·|log p|);
         # this gradient tends to a constant ~1/n instead, flooring legal-action probs
-        # near coef/(n·|A|) (log-barrier regularization, Agarwal et al. 2021).
+        # near coef/(n·|A|) (log-barrier regularization, Agarwal et al. 2021)
         t_n_legal = t_mask.sum(-1).clamp(min=1).float()  # min=1: empty/singleton rows → KL 0
         t_kl_uniform = -dist.logits.masked_fill(~t_mask, 0.0).sum(-1) / t_n_legal - t_n_legal.log()
 
@@ -192,7 +197,7 @@ class ActorCritic(nn.Module):
         t_kl_uniform_l2 = torch.zeros(batch_size, device=device)
 
         for action_type in t_idx_at.unique().tolist():
-            pool = ACTION_TYPE_POOL.get(ACTION_TYPE_BY_INT[action_type])
+            pool = ACTION_TYPE_POOL.get(action_type)
             if pool is None:  # terminal type — no index
                 continue
 
@@ -341,12 +346,10 @@ class ActorCritic(nn.Module):
 
 def _get_target_mask_for(action_type: int, t_mask: TMask) -> torch.Tensor | None:
     """The L3 monster-target mask for an action's selection pool, or None if it takes no target."""
-    match ACTION_TYPE_BY_INT[action_type]:
-        case ActionType.CardPlay:
-            return t_mask.mask_target_card
-        case ActionType.PotionUse:
-            return t_mask.mask_target_potion
-
+    if action_type == int(ActionType.CardPlay):
+        return t_mask.mask_target_card
+    if action_type == int(ActionType.PotionUse):
+        return t_mask.mask_target_potion
     return None
 
 
