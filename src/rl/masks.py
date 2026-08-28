@@ -13,7 +13,8 @@ from src.rl.constants import MAX_SIZE_HAND
 from src.rl.encoding.card import SLICE_CARDS
 from src.rl.encoding.card import SLICE_KIND_CARDS
 from src.rl.encoding.card import _get_card_entities
-from src.rl.encoding.card import card_selection_identity
+from src.rl.encoding.card import card_key
+from src.rl.encoding.effect import effect_key
 from src.rl.encoding.event import SLICE_EVENTS
 from src.rl.encoding.map_ import SLICE_ROOMS
 from src.rl.encoding.potion import SLICE_KIND_POTIONS
@@ -25,7 +26,6 @@ from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import Slice
 from src.rl.types import SliceKind
 from src.rl.types import TMask
-from src.rl.utils import reward_card_prefix
 from src.rl.utils import pending_virtual_int
 from src.rl.utils import reward_slot
 
@@ -38,13 +38,13 @@ BY_KIND: dict[SliceKind, Slice] = {
 }
 # Per-policy-type l1 mask width (the pool's cap), for the selecting actions
 ACTION_TYPE_SIZE: dict[int, int] = {
-    at: BY_KIND[pool].size for at, pool in ACTION_TYPE_POOL.items()
+    at: sum(BY_KIND[kind].size for kind in kinds) for at, kinds in ACTION_TYPE_POOL.items()
 }
 # Policy action types with an l1 selection (engine + virtual pending)
 SELECTING_ACTION_TYPES: list[int] = list(ACTION_TYPE_POOL)
 
-# The reward-card actions: their L1 slot is a position in the bundle-flattened
-# CARD_REWARD slice (translation via utils.reward_slot / reward_card_prefix)
+# The reward-card actions: their L1 slot is a position in the concatenated
+# per-bundle reward slices (translation via utils.reward_slot)
 _AT_REWARD_CARD = frozenset((int(ActionType.RewardTakeCard), int(ActionType.RewardSingingBowl)))
 # The only action types whose second engine idx is a monster target (L3)
 _AT_MONSTER_TARGETED = frozenset((int(ActionType.CardPlay), int(ActionType.PotionUse)))
@@ -53,28 +53,33 @@ _AT_MONSTER_TARGETED = frozenset((int(ActionType.CardPlay), int(ActionType.Potio
 def card_identity_ids(cards: list[Card]) -> list[int]:
     """Contiguous group ids over a pile; same-identity cards share an id (selection dedup).
 
-    Groups by card_selection_identity, not by the Card object: the engine's
-    __hash__ now covers the arena `id`, so keying on the object makes every card
-    distinct and the dedup a no-op."""
+    Groups by (card_key, effect_key) — the card row plus the effect rows, the
+    card's full model-visible identity. Two same-name cards can carry different
+    effects (Glass Knife decay, Ritual Dagger bumps) and are NOT interchangeable
+    picks. Not keyed on the Card object: the engine's __hash__ covers the arena
+    `id`, which would make every card distinct and the dedup a no-op."""
     seen: dict[tuple, int] = {}
-    return [seen.setdefault(card_selection_identity(card), len(seen)) for card in cards]
+    return [
+        seen.setdefault((card_key(card), effect_key(card.effects)), len(seen)) for card in cards
+    ]
 
 
 def _pile_ids(
-    state: slai.GameState, combat: "slai.Combat | None", target_kind: "SliceKind | None"
+    state: slai.GameState,
+    combat: "slai.Combat | None",
+    target_kinds: "tuple[SliceKind, ...] | None",
 ) -> list[int]:
     """Identity group-ids for a card target's dedup pile; [] if the target doesn't dedup.
 
-    `combat` is the caller's hoisted `state.combat` (FFI accesses deep-clone)."""
-    if target_kind not in SLICE_KIND_CARDS:
+    Multi-slice pools are the reward bundles and never dedup: the same card
+    offered in two bundles is two DIFFERENT actions (taking one consumes its
+    whole bundle). `combat` is the caller's hoisted `state.combat`."""
+    if target_kinds is None or len(target_kinds) > 1:
         return []
-    if target_kind is SliceKind.CARD_REWARD:
-        # No dedup across bundles: the same card offered in two bundles is two
-        # DIFFERENT actions (taking one consumes its whole bundle)
+    kind = target_kinds[0]
+    if kind not in SLICE_KIND_CARDS:
         return []
-    return card_identity_ids(
-        _get_card_entities(target_kind, state, combat)[: BY_KIND[target_kind].size]
-    )
+    return card_identity_ids(_get_card_entities(kind, state, combat)[: BY_KIND[kind].size])
 
 
 # Action types already warned about dropped selections — truncation is never silent
@@ -94,7 +99,6 @@ def build_masks(
     np_potion_l2 = np.zeros((B, MAX_POTION_SLOTS, MAX_MONSTERS), dtype=bool)
 
     for i, state in enumerate(states):
-        prefix = reward_card_prefix(state)  # cheap outside reward states ([0])
         combat = state.combat  # hoisted once: FFI context accesses deep-clone
         pending_at = pending_virtual_int(state)  # likewise: one halt per state
         for action in legal_actions_batch[i]:
@@ -108,12 +112,12 @@ def build_masks(
             else:
                 at = int(action.action_type)
             idxs = action.idxs
-            target_kind = ACTION_TYPE_POOL.get(at)
-            if target_kind is not None and idxs:
-                # L1 slot: bundle-flattened for the reward-card actions, the raw
+            target_kinds = ACTION_TYPE_POOL.get(at)
+            if target_kinds is not None and idxs:
+                # L1 slot: region-placed for the reward-card actions, the raw
                 # engine index everywhere else
                 if at in _AT_REWARD_CARD:
-                    slot = reward_slot(prefix, action.action_type, idxs)
+                    slot = reward_slot(action.action_type, idxs)
                 else:
                     slot = idxs[0]
                 if slot >= ACTION_TYPE_SIZE[at]:
@@ -129,9 +133,9 @@ def build_masks(
                 # L3: only CardPlay/PotionUse carry a monster target as idxs[1]
                 # (RewardTakeCard's idxs[1] is a card-within-bundle, folded above)
                 if at in _AT_MONSTER_TARGETED and len(idxs) == 2 and idxs[1] < MAX_MONSTERS:
-                    if target_kind in SLICE_KIND_CARDS:
+                    if target_kinds[0] in SLICE_KIND_CARDS:
                         np_card_l2[i, slot, idxs[1]] = True
-                    elif target_kind in SLICE_KIND_POTIONS:
+                    elif target_kinds[0] in SLICE_KIND_POTIONS:
                         np_potion_l2[i, slot, idxs[1]] = True
             np_action_type[i, at] = True  # ActionType: every legal kind the masks can express
         if not np_action_type[i].any():
@@ -143,11 +147,11 @@ def build_masks(
             )
 
         # Dedup each type's l1 mask by identity pile (copies collapse); non-dedup pools return []
-        for at, target_kind in ACTION_TYPE_POOL.items():
+        for at, target_kinds in ACTION_TYPE_POOL.items():
             np_row = np_l1[at][i]
             if not np_row.any():
                 continue
-            ids = _pile_ids(state, combat, target_kind)
+            ids = _pile_ids(state, combat, target_kinds)
             if not ids:
                 continue
             seen: set = set()

@@ -5,7 +5,6 @@ from slai import Map
 from slai import MonsterEncounter
 from slai import Room
 from slai import RoomKind
-from slai import members
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
@@ -17,7 +16,7 @@ from src.rl.types import SliceKind
 SLICE_ROOMS = [Slice(SliceKind.ROOMS, MAP_WIDTH)]
 
 # int() keying: declaration-order discriminant, stable across engine bumps
-_MAP_ROOM_KIND = {room_kind: int(room_kind) for room_kind in members(RoomKind)}
+_MAP_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
 # The six act bosses (I then II); a boss outside this table fails loud below
 _MAP_MONSTER_ENCOUNTER = {
     MonsterEncounter.TheGuardian: 0,

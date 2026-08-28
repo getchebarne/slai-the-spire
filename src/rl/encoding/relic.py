@@ -1,11 +1,11 @@
 from collections.abc import Iterator
+
 import numpy as np
 import torch
 from slai import Effect
 from slai import GameState
 from slai import Relic
 from slai import RelicName
-from slai import members
 
 from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
@@ -27,14 +27,10 @@ NUM_RELIC_TOKENS = sum(slice_.size for slice_ in SLICE_RELICS)
 
 
 # int() keying: declaration-order discriminant, stable across engine bumps
-_RELIC_NAME_TO_IDX = {relic_name: int(relic_name) for relic_name in members(RelicName)}
+_RELIC_NAME_TO_IDX = {relic_name: int(relic_name) for relic_name in RelicName.members()}
 _COUNTER_MAX = 10  # Nunchaku 10, Girya 3, Matryoshka 2, Incense Burner 6, Sundial 3
 
-ENCODING_DIM_RELIC = (
-    len(_RELIC_NAME_TO_IDX)  # Name OHE
-    + 1  # Used up
-    + 1  # Counter scalar
-)
+ENCODING_DIM_RELIC = len(_RELIC_NAME_TO_IDX) + 1 + 1  # Name OHE  # Used up  # Counter scalar
 
 # Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}

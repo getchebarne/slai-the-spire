@@ -1,13 +1,12 @@
-from collections.abc import Iterator
 import warnings
+from collections.abc import Iterator
 
 import numpy as np
 import torch
 from slai import Effect
 from slai import Event
-from slai import GameState
 from slai import EventName
-from slai import members
+from slai import GameState
 
 from src.rl.constants import EVENT_STATE_CAP
 from src.rl.constants import MAX_EVENT_OPTIONS
@@ -19,7 +18,7 @@ from src.rl.types import SliceKind
 SLICE_EVENTS = [Slice(SliceKind.EVENT_OPTIONS, MAX_EVENT_OPTIONS)]
 
 # int() keying: declaration-order discriminant, stable across engine bumps
-_EVENT_NAME_TO_IDX = {name: int(name) for name in members(EventName)}
+_EVENT_NAME_TO_IDX = {name: int(name) for name in EventName.members()}
 
 # The old per-kind payloads are flattened onto Event: one `stage` progress
 # scalar and DeadAdventurer's found_* flags. Knowing Skull's escalating asks

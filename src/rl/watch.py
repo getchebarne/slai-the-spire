@@ -14,6 +14,7 @@ Usage:
     python -m src.rl.watch --random            # untrained model, no checkpoint
 """
 
+from typing import Any
 import curses
 import random
 import sys
@@ -49,7 +50,14 @@ def _random_seed() -> int:
     return random.randint(0, 2**31 - 1)
 
 
-def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) -> None:
+def _loop(
+    stdscr: Any,
+    model: ActorCritic,
+    device: torch.device,
+    ascension: int,
+    delay: float,
+    fast_mode: bool,
+) -> None:
     curses.curs_set(0)
     init_colors()
     _probe_acs(stdscr)
@@ -139,7 +147,14 @@ def _loop(stdscr, model, device, ascension: int, delay: float, fast_mode: bool) 
 @click.option(
     "--no-fast-mode", is_flag=True, help="Show every state (don't auto-skip trivial nodes)"
 )
-def main(exp_path, use_random, ascension, delay, device, no_fast_mode):
+def main(
+    exp_path: str,
+    use_random: bool,
+    ascension: int,
+    delay: float,
+    device: str,
+    no_fast_mode: bool,
+) -> None:
     """Watch a trained agent play in the curses TUI."""
     if use_random:
         model = ActorCritic(

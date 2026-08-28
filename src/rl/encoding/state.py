@@ -11,7 +11,7 @@ from src.rl.encoding.card import encode_batch_cards
 from src.rl.encoding.card import iter_effect_owners as _card_effect_owners
 from src.rl.encoding.character import encode_batch_character
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
-from src.rl.encoding.effect import encode_effect_row_into
+from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.energy import encode_batch_energy
 from src.rl.encoding.event import encode_batch_events
@@ -71,7 +71,7 @@ def _encode_batch_effects(batch_game_state: list[GameState], device: torch.devic
         n = 0
         pending = game_state.effect_pending
         if pending is not None:
-            encode_effect_row_into(pending, np_x[b, n])
+            encode_effect_row_into_w_cache(pending, np_x[b, n])
             np_segment[b, n] = EFFECT_SEGMENT_PENDING
             np_mask[b, n] = True
             n += 1
@@ -86,7 +86,7 @@ def _encode_batch_effects(batch_game_state: list[GameState], device: torch.devic
                                 "deep card piles dropped (constants.MAX_EFFECTS_STATE)"
                             )
                         break
-                    encode_effect_row_into(effect, np_x[b, n])
+                    encode_effect_row_into_w_cache(effect, np_x[b, n])
                     np_segment[b, n] = base + slot
                     np_mask[b, n] = True
                     n += 1

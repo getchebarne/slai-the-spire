@@ -5,6 +5,7 @@ Usage:
     poetry run python -m src.rl.test_agent --exp-path experiments/ppo_hierarchical_v1
 """
 
+from collections.abc import Sequence
 import os
 import random
 import sys
@@ -13,7 +14,10 @@ import time
 import click
 import slai
 import torch
+from slai import Card
+from slai import Effect
 from slai import IntentKind
+from slai import Potion
 
 
 _INTENT_BLOCK_KINDS = frozenset({IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff})
@@ -25,11 +29,17 @@ _INTENT_DEBUFF_KINDS = frozenset(
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
 from src.rl.encoding.screen import Focus
+from src.rl.describe import PENDING_POOL_SOURCE
+from src.rl.describe import PENDING_VERB
+from src.rl.describe import describe_pending_pick
+from src.rl.describe import variant_name
+from src.rl.encoding.screen import EFFECT_PENDING
 from src.rl.encoding.screen import derive_focus
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import cumulative_floor
+from src.rl.types import PENDING_POOL_SLICE
 from src.rl.types import SliceKind
 from src.rl.types import TGameState
 from src.rl.types import TMask
@@ -63,22 +73,22 @@ def _ansi_len(s: str) -> int:
     return len(s.replace(_RED, "").replace(_CYAN, "").replace(_RESET, ""))
 
 
-def _variant_name(value: object) -> str:
-    """`ModifierKind.Strength` → `Strength` (slai pyclass enums repr that way)."""
-    s = repr(value)
-    return s.rsplit(".", 1)[-1] if "." in s else s
+# describe.py stays slai-only so src/llm/render.py does not pull torch; its two
+# tables are cross-checked here, where the imports are already paid for
+assert set(PENDING_POOL_SOURCE) == set(PENDING_POOL_SLICE), "halting-pool tables drifted"
+assert set(PENDING_VERB) == set(EFFECT_PENDING), "halting-kind tables drifted"
 
 
 def _event_name(event: slai.Event) -> str:
-    """`EventKindWorldOfGoop` → `World of Goop`-ish (`WorldOfGoop`)."""
-    return type(event.kind).__name__.removeprefix("EventKind")
+    """`EventName.WorldOfGoop` → `WorldOfGoop`."""
+    return variant_name(event.name)
 
 
-def _effects_summary(effects) -> str:
+def _effects_summary(effects: Sequence[Effect]) -> str:
     return ", ".join(type(e).__name__.removeprefix("Effect") for e in effects)
 
 
-def is_card_playable(card, e) -> bool:
+def is_card_playable(card: Card, e: int) -> bool:
     return card.cost <= e and card.playable
 
 
@@ -130,7 +140,7 @@ _MOD_ABBR = {
 
 def _fmt_modifiers(mods: list) -> str:
     return "  ".join(
-        f"{_MOD_ABBR.get(m.kind, _variant_name(m.kind).lower())} {m.stacks}" for m in mods
+        f"{_MOD_ABBR.get(m.kind, variant_name(m.kind).lower())} {m.stacks}" for m in mods
     )
 
 
@@ -138,15 +148,13 @@ def _fmt_action(action: slai.Action) -> str:
     """Format a flat slai.Action for the log (idx meaning per ACTION_SPEC_REGISTRY)."""
     at = action.action_type
     i = action.idxs
-    name = _variant_name(at)
+    name = variant_name(at)
     if at == slai.ActionType.CardPlay:
         tgt = f", target={i[1]}" if len(i) > 1 else ""
         return f"CardPlay(hand={i[0]}{tgt})"
     if at == slai.ActionType.PotionUse:
         tgt = f", target={i[1]}" if len(i) > 1 else ""
         return f"PotionUse(slot={i[0]}{tgt})"
-    if at in (slai.ActionType.CardDiscard, slai.ActionType.CardRetain):
-        return f"{name}(indices={list(i)})"
     if at == slai.ActionType.PotionDiscard:
         return f"PotionDiscard(slot={i[0]})"
     if at == slai.ActionType.RoomSelect:
@@ -166,16 +174,16 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
     combat = view.combat
     hand = combat.hand if combat is not None else []
 
-    def card(pile, k):
-        return _variant_name(pile[k].name) if k < len(pile) else f"card #{k}"
+    def card(pile: Sequence[Card], k: int) -> str:
+        return variant_name(pile[k].name) if k < len(pile) else f"card #{k}"
 
-    def potion(pile, k):
-        return _variant_name(pile[k].name) if k < len(pile) else f"potion #{k}"
+    def potion(pile: Sequence[Potion | None], k: int) -> str:
+        return variant_name(pile[k].name) if k < len(pile) else f"potion #{k}"
 
     def target(s: str) -> str:
         monsters = combat.monsters if combat is not None else []
         if len(i) > 1 and i[1] < len(monsters):
-            return f"{s} targeting {_variant_name(monsters[i[1]].name)}"
+            return f"{s} targeting {variant_name(monsters[i[1]].name)}"
         return s
 
     if at == AT.CardPlay:
@@ -186,28 +194,12 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
         return target(f"drank {potion(view.potions, i[0])}")
     if at == AT.PotionDiscard:
         return f"discarded potion {potion(view.potions, i[0])}"
-    if at == AT.CardDiscard:
-        return f"discarded {card(hand, i[0])}"
-    if at == AT.CardRetain:
-        return f"retained {card(hand, i[0])}"
-    if at == AT.CardExhaust:
-        return f"exhausted {card(hand, i[0])}"
-    if at == AT.CardSetup:
-        return f"set aside {card(hand, i[0])} (Setup)"
-    if at == AT.CardNightmare:
-        return f"copied {card(hand, i[0])} (Nightmare)"
-    if at == AT.CardDiscover:
-        return f"discovered {card(combat.discover if combat is not None else [], i[0])}"
-    if at == AT.CardMoveToHand:
-        return f"moved {card(combat.pile_draw if combat is not None else [], i[0])} to hand"
-    if at == AT.CardBottle:
-        return f"bottled {card(view.deck, i[0])}"
     if at == AT.RoomSelect:
         y = 0 if view.map.y_current is None else view.map.y_current + 1
         rooms = view.map.rooms
         kind = ""
         if y < len(rooms) and i[0] < len(rooms[y]) and rooms[y][i[0]] is not None:
-            kind = f" ({_variant_name(rooms[y][i[0]].room_kind)})"
+            kind = f" ({variant_name(rooms[y][i[0]].room_kind)})"
         return f"moved to column {i[0]}{kind} on floor {y}"
     if at == AT.RoomExit:
         return "left the room"
@@ -223,14 +215,10 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
         return "burned a card (Peace Pipe)"
     if at == AT.PickSkip:
         return "skipped the pick"
-    if at == AT.CardUpgrade:
-        return f"upgraded {card(view.deck, i[0])}"
-    if at == AT.CardPurge:
-        return f"purged {card(view.deck, i[0])}"
-    if at == AT.CardTransform:
-        return f"transformed {card(view.deck, i[0])}"
-    if at == AT.CardDuplicate:
-        return f"duplicated {card(view.deck, i[0])}"
+    if at == AT.EffectPendingResolve:
+        return describe_pending_pick(view, i[0])
+    if at == AT.RestSmith:
+        return "chose to smith (Rest)"
     if at == AT.RewardTakeCard:
         r = view.reward
         if r is not None and i[0] < len(r.cards):
@@ -244,23 +232,25 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
     if at == AT.RewardTakeRelic:
         relics = view.reward.relics if view.reward is not None else []
         if i and i[0] < len(relics):
-            return f"took relic {_variant_name(relics[i[0]].name)}"
+            return f"took relic {variant_name(relics[i[0]].name)}"
         return "took the relic"
     if at == AT.RewardTakePotion:
         potions = view.reward.potions if view.reward is not None else []
         if i and i[0] < len(potions):
-            return f"took potion {_variant_name(potions[i[0]].name)}"
+            return f"took potion {variant_name(potions[i[0]].name)}"
         return "took the potion"
     if at == AT.ShopBuyCard:
         return f"bought {card(view.shop.cards, i[0])} for {view.shop.card_prices[i[0]]}g"
     if at == AT.ShopBuyRelic:
-        name = _variant_name(view.shop.relics[i[0]].name)
+        name = variant_name(view.shop.relics[i[0]].name)
         return f"bought relic {name} for {view.shop.relic_prices[i[0]]}g"
     if at == AT.ShopBuyPotion:
-        name = _variant_name(view.shop.potions[i[0]].name)
+        name = variant_name(view.shop.potions[i[0]].name)
         return f"bought potion {name} for {view.shop.potion_prices[i[0]]}g"
     if at == AT.ShopPurge:
-        return f"purged {card(view.deck, i[0])} at the shop for {view.shop.purge_cost}g"
+        # argless: the card itself is picked by the EffectPendingResolve halt it queues
+        cost = view.shop.purge_cost if view.shop is not None else "?"
+        return f"paid {cost}g to remove a card at the shop"
     if at == AT.EventOptionSelect:
         ev = view.event
         if ev is not None and i and i[0] < len(ev.options):
@@ -285,7 +275,7 @@ def _enemy_row(i: int, m: slai.Monster) -> str:
         intent_str = ""
     hp = _hp(f"HP {m.health}/{m.health_max}")
     blk = f"  {_block(f'Block {m.block}')}" if m.block > 0 else ""
-    return f"[{i}] {_variant_name(m.name)}: {hp}{blk}  → {intent_str}"
+    return f"[{i}] {variant_name(m.name)}: {hp}{blk}  → {intent_str}"
 
 
 def _format_view(view: slai.GameState) -> str:
@@ -296,10 +286,10 @@ def _format_view(view: slai.GameState) -> str:
     """
     combat = view.combat
     header = f"Focus: {derive_focus(view).name}  (act {view.act})"
-    if view.pending is not None:
-        header += f"  pending={type(view.pending).__name__}"
+    if view.effect_pending is not None:
+        header += f"  pending={type(view.effect_pending).__name__}"
     if combat is not None and combat.discover:
-        header += f"  discover={[_variant_name(c.name) for c in combat.discover]}"
+        header += f"  discover={[variant_name(c.name) for c in combat.discover]}"
     lines = [header]
 
     char_line = (
@@ -311,7 +301,7 @@ def _format_view(view: slai.GameState) -> str:
         lines.append(f"  modifiers: {_fmt_modifiers(view.character.modifiers)}")
 
     if view.relics:
-        relics_str = ", ".join(_variant_name(r.name) for r in view.relics)
+        relics_str = ", ".join(variant_name(r.name) for r in view.relics)
         lines.append(f"Relics: {relics_str}")
 
     if combat is not None and combat.monsters:
@@ -329,7 +319,7 @@ def _format_view(view: slai.GameState) -> str:
     if combat is not None:
         lines.append(f"Energy: {combat.energy.energy_current}/{combat.energy.energy_max}")
         if combat.pile_stasis:
-            lines.append(f"Stasis: {[_variant_name(c.name) for c in combat.pile_stasis]}")
+            lines.append(f"Stasis: {[variant_name(c.name) for c in combat.pile_stasis]}")
         if combat.bomb_countdown:
             lines.append(f"The Bomb: {combat.bomb_countdown} turns")
         if combat.hand:
@@ -338,20 +328,20 @@ def _format_view(view: slai.GameState) -> str:
             for i, c in enumerate(combat.hand):
                 tgt = " (target)" if c.requires_target else ""
                 playable = "" if is_card_playable(c, energy_current) else " (unplayable)"
-                lines.append(f"  [{i}] {_variant_name(c.name)} cost={c.cost}{tgt}{playable}")
+                lines.append(f"  [{i}] {variant_name(c.name)} cost={c.cost}{tgt}{playable}")
 
-    belt = [f"[{s}] {_variant_name(p.name)}" for s, p in enumerate(view.potions) if p is not None]
+    belt = [f"[{s}] {variant_name(p.name)}" for s, p in enumerate(view.potions) if p is not None]
     if belt:
         lines.append(f"Potions: {'  '.join(belt)}")
 
     if view.reward is not None:
         r = view.reward
         for bi, bundle in enumerate(r.cards):
-            lines.append(f"Reward cards [{bi}]: {[_variant_name(c.name) for c in bundle]}")
+            lines.append(f"Reward cards [{bi}]: {[variant_name(c.name) for c in bundle]}")
         if r.relics:
-            lines.append(f"Reward relics: {[_variant_name(x.name) for x in r.relics]}")
+            lines.append(f"Reward relics: {[variant_name(x.name) for x in r.relics]}")
         if r.potions:
-            lines.append(f"Reward potions: {[_variant_name(p.name) for p in r.potions]}")
+            lines.append(f"Reward potions: {[variant_name(p.name) for p in r.potions]}")
         if r.gold is not None:
             lines.append(f"Reward gold: {r.gold}")
 
@@ -359,13 +349,13 @@ def _format_view(view: slai.GameState) -> str:
         s = view.shop
         lines.append(f"Shop gold={view.character.gold} purge={s.purge_cost}")
         lines.append(
-            f"  cards: {[(_variant_name(c.name), p) for c, p in zip(s.cards, s.card_prices)]}"
+            f"  cards: {[(variant_name(c.name), p) for c, p in zip(s.cards, s.card_prices)]}"
         )
         lines.append(
-            f"  relics: {[(_variant_name(r.name), p) for r, p in zip(s.relics, s.relic_prices)]}"
+            f"  relics: {[(variant_name(r.name), p) for r, p in zip(s.relics, s.relic_prices)]}"
         )
         lines.append(
-            f"  potions: {[(_variant_name(p.name), pr) for p, pr in zip(s.potions, s.potion_prices)]}"
+            f"  potions: {[(variant_name(p.name), pr) for p, pr in zip(s.potions, s.potion_prices)]}"
         )
 
     if view.event is not None:
@@ -417,7 +407,7 @@ def format_card_probabilities(
     hand = view.combat.hand if view.combat is not None else []
     energy_current = view.combat.energy.energy_current if view.combat is not None else 0
     for idx, card in enumerate(hand):
-        display = _variant_name(card.name)
+        display = variant_name(card.name)
         if display not in seen:
             prob = t_probs[idx].item()
             if prob != prob:  # NaN guard
@@ -457,7 +447,7 @@ def get_action_from_model(
 
         card_probs_str = None
         combat = view.combat
-        in_combat = derive_focus(view) is Focus.COMBAT and view.pending is None
+        in_combat = derive_focus(view) is Focus.COMBAT and view.effect_pending is None
         if show_card_probs and in_combat and combat.hand:
             energy_current = combat.energy.energy_current
             if any(is_card_playable(c, energy_current) for c in combat.hand):
@@ -602,7 +592,7 @@ def main(
     greedy: bool,
     check_legal: bool,
     use_random: bool,
-):
+) -> None:
     """Test an agent by running games."""
     if use_random:
         model = ActorCritic(

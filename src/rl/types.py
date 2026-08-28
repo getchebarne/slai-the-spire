@@ -7,16 +7,7 @@ from typing import NamedTuple
 import torch
 from slai import ACTION_SPEC_REGISTRY
 from slai import ActionType
-from slai import CandidatePoolDeck
-from slai import CandidatePoolDiscover
-from slai import CandidatePoolEventRollCard
-from slai import CandidatePoolEventRollPotion
-from slai import CandidatePoolEventRollRelic
-from slai import CandidatePoolHand
-from slai import CandidatePoolPileDiscard
-from slai import CandidatePoolPileDraw
-from slai import CandidatePoolPileExhaust
-from slai import members
+from slai import CandidatePool
 from tensordict import TensorDict
 from tensordict import tensorclass
 
@@ -28,22 +19,37 @@ class SliceKind(Enum):
     CARD_EXHAUST = 3
     CARD_DECK = 4
     CARD_DISCOVER = 5
-    CARD_REWARD = 6
-    CARD_SHOP = 7
-    RELIC_OWNED = 8
-    RELIC_REWARD = 9
-    RELIC_SHOP = 10
-    POTION_OWNED = 11
-    POTION_REWARD = 12
-    POTION_SHOP = 13
-    MONSTERS = 14
-    EVENT_OPTIONS = 15
-    CHARACTER = 16
-    ROOMS = 17
-    CARD_STASIS = 18
-    CARD_EVENT = 19
-    POTION_EVENT = 20
-    RELIC_EVENT = 21
+    CARD_REWARD_0 = 6
+    CARD_REWARD_1 = 7
+    CARD_REWARD_2 = 8
+    CARD_REWARD_3 = 9
+    CARD_REWARD_4 = 10
+    CARD_SHOP = 11
+    RELIC_OWNED = 12
+    RELIC_REWARD = 13
+    RELIC_SHOP = 14
+    POTION_OWNED = 15
+    POTION_REWARD = 16
+    POTION_SHOP = 17
+    MONSTERS = 18
+    EVENT_OPTIONS = 19
+    CHARACTER = 20
+    ROOMS = 21
+    CARD_STASIS = 22
+    CARD_EVENT = 23
+    POTION_EVENT = 24
+    RELIC_EVENT = 25
+    CARD_PENDING_SELECTED = 26
+
+
+# One slice per reward bundle, in bundle order
+REWARD_SLICE_KINDS: tuple[SliceKind, ...] = (
+    SliceKind.CARD_REWARD_0,
+    SliceKind.CARD_REWARD_1,
+    SliceKind.CARD_REWARD_2,
+    SliceKind.CARD_REWARD_3,
+    SliceKind.CARD_REWARD_4,
+)
 
 
 class Slice(NamedTuple):
@@ -130,7 +136,7 @@ class TEntityProjection:
 @dataclass
 class TCoreOutput:
     global_: torch.Tensor
-    pool: dict[SliceKind, torch.Tensor]  # selectable slices: refined[:, core.GLOBAL[kind]]
+    pool: dict[tuple[SliceKind, ...], torch.Tensor]  # selectable slice groups, concatenated
 
 
 @tensorclass
@@ -177,10 +183,9 @@ class RolloutBuffer:
     advantages: torch.Tensor  # (N, 1), summed over streams, normalized
 
 
-# Sorted by int(): the engine's declaration-order discriminant, which is what
-# masks/utils/heads index by. members() is alphabetical (dir()) and diverged from
-# int() order when the engine appended action types — never use it positionally
-ACTION_TYPE_BY_INT = sorted(members(ActionType), key=int)
+# members() is declaration order == int() order, which is what masks/utils/heads
+# index by
+ACTION_TYPE_BY_INT = ActionType.members()
 NUM_ENGINE_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 
@@ -192,48 +197,49 @@ NUM_ENGINE_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 # one engine type into a virtual type per pool and folds/unfolds at the boundary
 # (masks.build_masks in, utils.engine_action out). At most one is ever legal:
 # the engine holds a single effect_pending
-PENDING_POOL_SLICE: dict[type, SliceKind] = {
-    CandidatePoolHand: SliceKind.CARD_HAND,
-    CandidatePoolPileDraw: SliceKind.CARD_DRAW,
-    CandidatePoolPileDiscard: SliceKind.CARD_DISCARD,
-    CandidatePoolPileExhaust: SliceKind.CARD_EXHAUST,
-    CandidatePoolDeck: SliceKind.CARD_DECK,
-    CandidatePoolDiscover: SliceKind.CARD_DISCOVER,
-    CandidatePoolEventRollCard: SliceKind.CARD_EVENT,
-    CandidatePoolEventRollRelic: SliceKind.RELIC_EVENT,
-    CandidatePoolEventRollPotion: SliceKind.POTION_EVENT,
+PENDING_POOL_SLICE: dict[CandidatePool, SliceKind] = {
+    CandidatePool.Hand: SliceKind.CARD_HAND,
+    CandidatePool.PileDraw: SliceKind.CARD_DRAW,
+    CandidatePool.PileDiscard: SliceKind.CARD_DISCARD,
+    CandidatePool.PileExhaust: SliceKind.CARD_EXHAUST,
+    CandidatePool.Deck: SliceKind.CARD_DECK,
+    CandidatePool.Discover: SliceKind.CARD_DISCOVER,
+    CandidatePool.EventRollCard: SliceKind.CARD_EVENT,
+    CandidatePool.EventRollRelic: SliceKind.RELIC_EVENT,
+    CandidatePool.EventRollPotion: SliceKind.POTION_EVENT,
 }
 # Policy ints: engine ints 0..N-1 keep their values (so
 # ACTION_TYPE_BY_INT.index(ActionType.X) still works), virtuals append
-PENDING_POOL_INT: dict[type, int] = {
+PENDING_POOL_INT: dict[CandidatePool, int] = {
     pool: NUM_ENGINE_ACTION_TYPES + i for i, pool in enumerate(PENDING_POOL_SLICE)
 }
 PENDING_INTS: frozenset = frozenset(PENDING_POOL_INT.values())
 NUM_ACTION_TYPES = NUM_ENGINE_ACTION_TYPES + len(PENDING_POOL_SLICE)
 
-# Each index-taking action -> the L2 pool its selection indexes into, keyed by
+# Each index-taking action -> the L2 pools its selection indexes into, keyed by
 # POLICY int (virtuals are not engine members). Terminal actions absent
-# RewardTakeCard is arity-2 (idx_bundle, idx_card): its L2 pick is a slot in the
-# bundle-flattened CARD_REWARD slice; masks/utils translate slot <-> (bundle, card)
-# via per-state prefix sums. RewardSingingBowl points at a bundle via its first-card
-# slot in the same slice. Only CardPlay/PotionUse have an L3 (monster target)
-_ENGINE_POOL: dict[ActionType, SliceKind] = {
-    ActionType.CardPlay: SliceKind.CARD_HAND,
-    ActionType.EventOptionSelect: SliceKind.EVENT_OPTIONS,
-    ActionType.PotionDiscard: SliceKind.POTION_OWNED,
-    ActionType.PotionUse: SliceKind.POTION_OWNED,
-    ActionType.RewardSingingBowl: SliceKind.CARD_REWARD,
-    ActionType.RewardTakeCard: SliceKind.CARD_REWARD,
-    ActionType.RewardTakePotion: SliceKind.POTION_REWARD,
-    ActionType.RewardTakeRelic: SliceKind.RELIC_REWARD,
-    ActionType.RoomSelect: SliceKind.ROOMS,
-    ActionType.ShopBuyCard: SliceKind.CARD_SHOP,
-    ActionType.ShopBuyPotion: SliceKind.POTION_SHOP,
-    ActionType.ShopBuyRelic: SliceKind.RELIC_SHOP,
+# A multi-slice pool scores the concatenation of its slices, in tuple order.
+# RewardTakeCard is arity-2 (idx_bundle, idx_card): its L1 slot lives in the
+# concatenated per-bundle reward slices; masks/utils translate slot <-> (bundle,
+# card) via the static region tables. RewardSingingBowl points at a bundle via
+# its first-card slot. Only CardPlay/PotionUse have an L3 (monster target)
+_ENGINE_POOL: dict[ActionType, tuple[SliceKind, ...]] = {
+    ActionType.CardPlay: (SliceKind.CARD_HAND,),
+    ActionType.EventOptionSelect: (SliceKind.EVENT_OPTIONS,),
+    ActionType.PotionDiscard: (SliceKind.POTION_OWNED,),
+    ActionType.PotionUse: (SliceKind.POTION_OWNED,),
+    ActionType.RewardSingingBowl: REWARD_SLICE_KINDS,
+    ActionType.RewardTakeCard: REWARD_SLICE_KINDS,
+    ActionType.RewardTakePotion: (SliceKind.POTION_REWARD,),
+    ActionType.RewardTakeRelic: (SliceKind.RELIC_REWARD,),
+    ActionType.RoomSelect: (SliceKind.ROOMS,),
+    ActionType.ShopBuyCard: (SliceKind.CARD_SHOP,),
+    ActionType.ShopBuyPotion: (SliceKind.POTION_SHOP,),
+    ActionType.ShopBuyRelic: (SliceKind.RELIC_SHOP,),
 }
-ACTION_TYPE_POOL: dict[int, SliceKind] = {
-    **{int(at): pool for at, pool in _ENGINE_POOL.items()},
-    **{PENDING_POOL_INT[pool]: kind for pool, kind in PENDING_POOL_SLICE.items()},
+ACTION_TYPE_POOL: dict[int, tuple[SliceKind, ...]] = {
+    **{int(at): pools for at, pools in _ENGINE_POOL.items()},
+    **{PENDING_POOL_INT[pool]: (kind,) for pool, kind in PENDING_POOL_SLICE.items()},
 }
 
 # Drift alarm: the engine's index-taking set must equal our engine-keyed entries
