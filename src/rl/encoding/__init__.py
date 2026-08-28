@@ -16,6 +16,8 @@ from src.rl.encoding.energy import encode_batch_energy
 from src.rl.encoding.event import ENCODING_DIM_EVENT_META
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.event import encode_batch_events
+from src.rl.encoding.focus import ENCODING_DIM_FOCUS
+from src.rl.encoding.focus import encode_batch_focus
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import encode_batch_map
@@ -27,8 +29,6 @@ from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.encoding.relic import encode_batch_relics
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.reward import encode_batch_rewards
-from src.rl.encoding.screen import ENCODING_DIM_SCREEN
-from src.rl.encoding.screen import encode_batch_screen
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.shop import encode_batch_shop
 from src.rl.encoding.state import encode_batch_game_state
@@ -47,9 +47,9 @@ __all__ = [
     "ENCODING_DIM_EFFECT",
     "encode_batch_energy",
     "ENCODING_DIM_ENERGY",
-    # Screen encoding
-    "encode_batch_screen",
-    "ENCODING_DIM_SCREEN",
+    # Focus encoding
+    "encode_batch_focus",
+    "ENCODING_DIM_FOCUS",
     # Map encoding
     "encode_batch_map",
     "NUM_CHANNELS",

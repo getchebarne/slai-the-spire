@@ -14,12 +14,12 @@ Usage:
     python -m src.rl.watch --random            # untrained model, no checkpoint
 """
 
-from typing import Any
 import curses
 import random
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import click
 import slai

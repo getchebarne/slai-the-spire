@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from slai import ActionType
 
-from src.rl.encoding.screen import ENCODING_DIM_SCREEN
+from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
@@ -84,12 +84,12 @@ class ActorCritic(nn.Module):
             map_encoder_dim=map_encoder_dim,
         )
 
-        # L1: one masked categorical over ActionType, screen-gated (GLU); a halt has an empty mask
+        # L1: one masked categorical over ActionType, focus-gated (GLU); a halt has an empty mask
         self._head_action_type = HeadActionType(
             self.core.dim_global,
             dim_ff_primary,
             num_choices=NUM_ACTION_TYPES,
-            dim_context=ENCODING_DIM_SCREEN,
+            dim_context=ENCODING_DIM_FOCUS,
         )
         self._head_level_2 = HeadPointerSelect(self.core.dim_global, dim_op, dim_key)
         self._head_level_3 = HeadPointerSelect(self.core.dim_global, dim_entity, dim_key)
@@ -175,9 +175,9 @@ class ActorCritic(nn.Module):
         greedy: bool,
         t_recorded: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Pick the `ActionType` for every row — one masked categorical, screen-gated."""
+        """Pick the `ActionType` for every row — one masked categorical, focus-gated."""
         t_logits = self._head_action_type(
-            t_core_out.global_, t_game_state.screen, t_mask.mask_action_type
+            t_core_out.global_, t_game_state.focus, t_mask.mask_action_type
         )
         return self._categorical_step(t_logits, t_mask.mask_action_type, t_recorded, greedy)
 

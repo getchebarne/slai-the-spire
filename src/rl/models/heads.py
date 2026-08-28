@@ -6,8 +6,8 @@ import torch.nn as nn
 
 class HeadActionType(nn.Module):
     """
-    L1 action-kind head: t_global gated by the screen context before scoring
-    (AlphaStar-style GLU — the action space is modal per screen, so the gate lets
+    L1 action-kind head: t_global gated by the focus context before scoring
+    (AlphaStar-style GLU — the action space is modal per focus, so the gate lets
     the head mute the global features irrelevant to the current mode).
     """
 

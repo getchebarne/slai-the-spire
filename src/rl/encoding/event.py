@@ -1,5 +1,7 @@
 import warnings
 from collections.abc import Iterator
+from enum import StrEnum
+from enum import auto
 
 import numpy as np
 import torch
@@ -12,26 +14,38 @@ from src.rl.constants import EVENT_STATE_CAP
 from src.rl.constants import MAX_EVENT_OPTIONS
 from src.rl.types import Slice
 from src.rl.types import SliceKind
+from src.rl.types import make_channel_allocator
 
 
 # Order = fill order = Core's global-offset order
 SLICE_EVENTS = [Slice(SliceKind.EVENT_OPTIONS, MAX_EVENT_OPTIONS)]
 
-# int() keying: declaration-order discriminant, stable across engine bumps
+
 _EVENT_NAME_TO_IDX = {name: int(name) for name in EventName.members()}
 
-# The old per-kind payloads are flattened onto Event: one `stage` progress
-# scalar and DeadAdventurer's found_* flags. Knowing Skull's escalating asks
-# and We Meet Again's gold ask no longer need meta mirrors — the engine bakes
-# the live prices into the option effect lists (HealthDelta/GoldDelta amounts)
-_OFF_CONSUMED = len(_EVENT_NAME_TO_IDX)
-_OFF_STAGE = _OFF_CONSUMED + 1
-_OFF_DA_FOUND = _OFF_STAGE + 1  # DeadAdventurer found_{gold,nothing,relic}
-ENCODING_DIM_EVENT_META = _OFF_DA_FOUND + 3
 
-ENCODING_DIM_EVENT_OPTION = MAX_EVENT_OPTIONS  # Slot-index OHE; effects are separate rows
-# (The old gated flag is gone with EventOption: option legality is masks-only
-# now, from env.get_legal_actions().)
+class EventMetaChannel(StrEnum):
+    NAME = auto()
+    CONSUMED = auto()
+    STAGE = auto()
+
+    # Dead Adventurer only
+    FOUND_GOLD = auto()
+    FOUND_NOTHING = auto()
+    FOUND_RELIC = auto()
+
+
+CHANNEL_LAYOUT_EVENT_META, _alloc = make_channel_allocator()
+OFF_EVENT_NAME = _alloc(EventMetaChannel.NAME, len(_EVENT_NAME_TO_IDX))
+OFF_EVENT_CONSUMED = _alloc(EventMetaChannel.CONSUMED)
+OFF_EVENT_STAGE = _alloc(EventMetaChannel.STAGE)
+OFF_EVENT_FOUND_GOLD = _alloc(EventMetaChannel.FOUND_GOLD)
+OFF_EVENT_FOUND_NOTHING = _alloc(EventMetaChannel.FOUND_NOTHING)
+OFF_EVENT_FOUND_RELIC = _alloc(EventMetaChannel.FOUND_RELIC)
+
+ENCODING_DIM_EVENT_META = sum(w for _, w in CHANNEL_LAYOUT_EVENT_META)
+
+ENCODING_DIM_EVENT_OPTION = MAX_EVENT_OPTIONS  # Slot-index OHE; Effects are separate rows
 
 _SLOT_OHE = np.eye(MAX_EVENT_OPTIONS, dtype=np.float32)
 
@@ -40,14 +54,12 @@ _WARNED_EVENT_TRUNCATED: set = set()
 
 
 def _encode_event_meta_into(event: Event, out: np.ndarray) -> None:
-    out[_EVENT_NAME_TO_IDX[event.name]] = 1.0
-    out[_OFF_CONSUMED] = float(event.consumed)
-    out[_OFF_STAGE] = min(event.stage, EVENT_STATE_CAP) / EVENT_STATE_CAP
-    out[_OFF_DA_FOUND] = float(event.found_gold)
-    out[_OFF_DA_FOUND + 1] = float(event.found_nothing)
-    out[_OFF_DA_FOUND + 2] = float(event.found_relic)
-    # (Staked picks are full entity tokens: the CARD_EVENT / POTION_EVENT /
-    # RELIC_EVENT slices in card.py / potion.py / relic.py.)
+    out[OFF_EVENT_NAME + _EVENT_NAME_TO_IDX[event.name]] = 1.0
+    out[OFF_EVENT_CONSUMED] = float(event.consumed)
+    out[OFF_EVENT_STAGE] = min(event.stage, EVENT_STATE_CAP) / EVENT_STATE_CAP
+    out[OFF_EVENT_FOUND_GOLD] = float(event.found_gold)
+    out[OFF_EVENT_FOUND_NOTHING] = float(event.found_nothing)
+    out[OFF_EVENT_FOUND_RELIC] = float(event.found_relic)
 
 
 def encode_batch_events(
@@ -74,11 +86,9 @@ def encode_batch_events(
             )
 
         _encode_event_meta_into(event, np_meta[b])
-        # The option row is only its slot OHE now; what the option DOES rides
-        # in its effect rows (effect.py)
-        n_options = min(len(event.options), MAX_EVENT_OPTIONS)
-        np_options[b, :n_options] = _SLOT_OHE[:n_options]
-        np_pad[b, :n_options] = True
+        num_options = min(len(event.options), MAX_EVENT_OPTIONS)
+        np_options[b, :num_options] = _SLOT_OHE[:num_options]
+        np_pad[b, :num_options] = True
 
     return (
         torch.from_numpy(np_meta).to(device),

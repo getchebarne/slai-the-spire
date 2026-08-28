@@ -94,7 +94,7 @@ def reward_slot(action_type: ActionType, idxs: Sequence[int]) -> int:
     return REWARD_REGION_OFFSETS[idxs[0]]
 
 
-def reward_idxs(action_type: ActionType, slot: int) -> list[int]:
+def _reward_idxs(action_type: ActionType, slot: int) -> list[int]:
     """CARD_REWARD slot -> engine idxs (inverse of reward_slot)."""
     if action_type == ActionType.RewardTakeCard:
         return [REWARD_SLOT_TO_BUNDLE[slot], REWARD_SLOT_TO_CARD[slot]]
@@ -154,7 +154,7 @@ def engine_action(
     if at_int not in ACTION_TYPE_POOL:
         idxs = []
     elif action_type in _REWARD_CARD_ACTIONS:
-        idxs = reward_idxs(action_type, selection_index)
+        idxs = _reward_idxs(action_type, selection_index)
     elif target_index >= 0:  # CardPlay / PotionUse with a monster target
         idxs = [selection_index, target_index]
     else:

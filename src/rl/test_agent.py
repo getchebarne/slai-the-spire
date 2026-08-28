@@ -5,11 +5,11 @@ Usage:
     poetry run python -m src.rl.test_agent --exp-path experiments/ppo_hierarchical_v1
 """
 
-from collections.abc import Sequence
 import os
 import random
 import sys
 import time
+from collections.abc import Sequence
 
 import click
 import slai
@@ -28,13 +28,13 @@ _INTENT_DEBUFF_KINDS = frozenset(
 
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
-from src.rl.encoding.screen import Focus
 from src.rl.describe import PENDING_POOL_SOURCE
 from src.rl.describe import PENDING_VERB
 from src.rl.describe import describe_pending_pick
 from src.rl.describe import variant_name
-from src.rl.encoding.screen import EFFECT_PENDING
-from src.rl.encoding.screen import derive_focus
+from src.rl.encoding.focus import EFFECT_PENDING
+from src.rl.encoding.focus import Focus
+from src.rl.encoding.focus import derive_focus
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic

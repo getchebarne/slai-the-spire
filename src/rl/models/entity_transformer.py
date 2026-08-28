@@ -5,7 +5,9 @@ from src.rl.types import TPadded
 
 
 class EntityTransformer(nn.Module):
-    def __init__(self, dim_embedding: int, dim_feed_forward: int, num_heads: int, num_blocks: int) -> None:
+    def __init__(
+        self, dim_embedding: int, dim_feed_forward: int, num_heads: int, num_blocks: int
+    ) -> None:
         super().__init__()
 
         self._dim_embedding = dim_embedding

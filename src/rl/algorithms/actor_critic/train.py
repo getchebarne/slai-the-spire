@@ -1,5 +1,3 @@
-from multiprocessing.queues import Queue
-from multiprocessing.synchronize import Event
 import math
 import multiprocessing as mp
 import os
@@ -10,7 +8,9 @@ import sys
 import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
+from multiprocessing.queues import Queue
 from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.synchronize import Event
 from types import FrameType
 
 import numpy as np
@@ -363,7 +363,7 @@ def _obs_tensor_items(x: TGameState) -> list[tuple[str, torch.Tensor]]:
         "room_node_idx",
         "room_mask",
         "map_meta",
-        "screen",
+        "focus",
         "ascension",
         "reward_meta",
         "shop_meta",
@@ -461,7 +461,7 @@ def _snapshot_to_device(
         room_node_idx=t("room_node_idx"),
         room_mask=t("room_mask"),
         map_meta=t("map_meta"),
-        screen=t("screen"),
+        focus=t("focus"),
         ascension=t("ascension"),
         reward_meta=t("reward_meta"),
         shop_meta=t("shop_meta"),
@@ -476,11 +476,7 @@ def _snapshot_to_device(
     mb = TMask(
         mask_action_type=t("mask_action_type"),
         mask_action_idx=TensorDict(
-            {
-                name.removeprefix("l1."): t(name)
-                for name in views
-                if name.startswith("l1.")
-            },
+            {name.removeprefix("l1."): t(name) for name in views if name.startswith("l1.")},
             batch_size=B,
         ),
         mask_target_card=t("mask_target_card"),
