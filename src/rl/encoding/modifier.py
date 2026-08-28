@@ -1,14 +1,13 @@
 import numpy as np
 from slai import Modifier
 from slai import ModifierKind
-from slai import members
 
 from src.rl.utils import get_sqrt_norm
 
 
 # int() keying: declaration-order discriminant, stable across engine bumps
 MODIFIER_KIND_TO_IDX = {
-    modifier_kind: int(modifier_kind) for modifier_kind in members(ModifierKind)
+    modifier_kind: int(modifier_kind) for modifier_kind in ModifierKind.members()
 }
 ENCODING_DIM_MODIFIERS = len(MODIFIER_KIND_TO_IDX)
 STACKS_MAX = 99

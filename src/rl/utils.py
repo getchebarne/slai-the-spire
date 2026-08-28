@@ -1,6 +1,5 @@
-from collections.abc import Sequence
 import math
-from bisect import bisect_right
+from collections.abc import Sequence
 from typing import Any
 
 import torch
@@ -10,6 +9,10 @@ from slai import Action
 from slai import ActionType
 from slai import GameState
 
+from src.rl.constants import REWARD_REGION_OFFSETS
+from src.rl.constants import REWARD_REGION_WIDTHS
+from src.rl.constants import REWARD_SLOT_TO_BUNDLE
+from src.rl.constants import REWARD_SLOT_TO_CARD
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import ACTION_TYPE_POOL
 from src.rl.types import PENDING_INTS
@@ -74,38 +77,28 @@ def init_optimizer(optimizer_name: str, model: nn.Module, **kwargs) -> torch.opt
 
 
 # ---- Reward-card slot translation ----
-# Reward.cards is ragged bundles (combat rolls <=4 cards, The Library rolls 20),
-# so the CARD_REWARD slice is the bundle-flattened concatenation and the L1 slot
-# <-> engine (idx_bundle[, idx_card]) translation runs through prefix sums. This
-# is the single home for both directions: masks.py folds legal actions forward,
-# action_from_actiontype unfolds picks back, and the fuzz oracle reuses both
+# Reward.cards is ragged bundles (combat rolls <=4 cards, The Library rolls 20).
+# Each bundle owns a fixed CARD_REWARD region (constants.REWARD_REGION_WIDTHS),
+# so the L1 slot <-> engine (idx_bundle[, idx_card]) translation is static
+# tables. This is the single home for both directions: masks.py folds legal
+# actions forward, action_from_actiontype unfolds picks back, and the fuzz
+# oracle reuses both
 
 
-def reward_card_prefix(state: GameState) -> list[int]:
-    """Cumulative token offsets of the reward-card bundles: bundle b's cards
-    occupy CARD_REWARD slots [prefix[b], prefix[b+1])."""
-    prefix = [0]
-    reward = state.reward
-    if reward is not None:
-        for bundle in reward.cards:
-            prefix.append(prefix[-1] + len(bundle))
-    return prefix
-
-
-def reward_slot(prefix: list[int], action_type: ActionType, idxs: Sequence[int]) -> int:
-    """Engine (idx_bundle[, idx_card]) -> flat CARD_REWARD slot. RewardSingingBowl
+def reward_slot(action_type: ActionType, idxs: Sequence[int]) -> int:
+    """Engine (idx_bundle[, idx_card]) -> CARD_REWARD slot. RewardSingingBowl
     points at a bundle via its first-card token."""
     if action_type == ActionType.RewardTakeCard:
-        return prefix[idxs[0]] + idxs[1]
-    return prefix[idxs[0]]
+        assert idxs[1] < REWARD_REGION_WIDTHS[idxs[0]], "reward card exceeds its region"
+        return REWARD_REGION_OFFSETS[idxs[0]] + idxs[1]
+    return REWARD_REGION_OFFSETS[idxs[0]]
 
 
-def reward_idxs(prefix: list[int], action_type: ActionType, slot: int) -> list[int]:
-    """Flat CARD_REWARD slot -> engine idxs (inverse of reward_slot)."""
-    bundle = bisect_right(prefix, slot) - 1
+def reward_idxs(action_type: ActionType, slot: int) -> list[int]:
+    """CARD_REWARD slot -> engine idxs (inverse of reward_slot)."""
     if action_type == ActionType.RewardTakeCard:
-        return [bundle, slot - prefix[bundle]]
-    return [bundle]
+        return [REWARD_SLOT_TO_BUNDLE[slot], REWARD_SLOT_TO_CARD[slot]]
+    return [REWARD_SLOT_TO_BUNDLE[slot]]
 
 
 _REWARD_CARD_ACTIONS = frozenset((ActionType.RewardTakeCard, ActionType.RewardSingingBowl))
@@ -128,10 +121,10 @@ def pending_virtual_int(state: GameState) -> int | None:
         return None
     if pending.target is None:
         raise RuntimeError("pending effect carries no Resolve target")
-    pool = type(pending.target.candidate_pool)
+    pool = pending.target.candidate_pool
     virtual = PENDING_POOL_INT.get(pool)
     if virtual is None:
-        raise ValueError(f"halt over an unmapped candidate pool: {pool.__name__}")
+        raise ValueError(f"halt over an unmapped candidate pool: {pool}")
     return virtual
 
 
@@ -153,15 +146,15 @@ def engine_action(
     (L2 = -1 when the action takes no monster target).
 
     `state` is the game state the mask was built from: the reward-card actions'
-    L1 slot is a position in the bundle-flattened CARD_REWARD slice and must be
-    split back into engine (idx_bundle, idx_card) via the same prefix sums."""
+    L1 slot is a position in the concatenated per-bundle reward slices and is
+    split back into engine (idx_bundle, idx_card) via the static region tables."""
     if at_int in PENDING_INTS:  # any virtual pending type folds back to the one resolver
         return Action(ActionType.EffectPendingResolve, [selection_index])
     action_type = ACTION_TYPE_BY_INT[at_int]
     if at_int not in ACTION_TYPE_POOL:
         idxs = []
     elif action_type in _REWARD_CARD_ACTIONS:
-        idxs = reward_idxs(reward_card_prefix(state), action_type, selection_index)
+        idxs = reward_idxs(action_type, selection_index)
     elif target_index >= 0:  # CardPlay / PotionUse with a monster target
         idxs = [selection_index, target_index]
     else:

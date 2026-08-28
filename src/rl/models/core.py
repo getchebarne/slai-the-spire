@@ -19,6 +19,7 @@ from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
 from src.rl.types import ACTION_TYPE_POOL
+from src.rl.types import REWARD_SLICE_KINDS
 from src.rl.types import SliceKind
 from src.rl.types import TCoreOutput
 from src.rl.types import TEntityProjection
@@ -49,7 +50,13 @@ def _build_token_layout() -> tuple[dict[SliceKind, slice], int]:
 
 
 _SLICE_OFFSETS, _NUM_TOKENS = _build_token_layout()
-_SELECTABLE = set(ACTION_TYPE_POOL.values()) | {SliceKind.MONSTERS}
+_SELECTABLE: set[tuple[SliceKind, ...]] = set(ACTION_TYPE_POOL.values()) | {(SliceKind.MONSTERS,)}
+
+
+def _pool_tokens(t_x: torch.Tensor, kinds: tuple[SliceKind, ...]) -> torch.Tensor:
+    if len(kinds) == 1:
+        return t_x[:, _SLICE_OFFSETS[kinds[0]]]
+    return torch.cat([t_x[:, _SLICE_OFFSETS[kind]] for kind in kinds], dim=1)
 
 
 class Core(nn.Module):
@@ -107,6 +114,15 @@ class Core(nn.Module):
         ).unsqueeze(0)
         self.register_buffer("_type_idx", t_type_idx, persistent=False)
 
+        # The per-bundle slices carry their own type rows; this shared embedding
+        # is the global CARD_REWARD identity summed on top of all of them
+        t_reward_idx = torch.zeros(_NUM_TOKENS, dtype=torch.long)
+        for kind in REWARD_SLICE_KINDS:
+            span = _SLICE_OFFSETS[kind]
+            t_reward_idx[span.start : span.stop] = 1
+        self.register_buffer("_reward_idx", t_reward_idx.unsqueeze(0), persistent=False)
+        self._reward_emb = nn.Embedding(2, dim_entity, padding_idx=0)
+
     @property
     def dim_global(self) -> int:
         return self._dim_global
@@ -122,10 +138,8 @@ class Core(nn.Module):
         t_refined = self._refine_tokens(t_tokens)
 
         return TCoreOutput(
-            global_=self._global_context(
-                t_game_state, t_refined, t_map_readout, t_blocks.pending
-            ),
-            pool={kind: t_refined.x[:, _SLICE_OFFSETS[kind]] for kind in _SELECTABLE},
+            global_=self._global_context(t_game_state, t_refined, t_map_readout, t_blocks.pending),
+            pool={kinds: _pool_tokens(t_refined.x, kinds) for kinds in _SELECTABLE},
         )
 
     def _assemble_tokens(self, t_blocks: TEntityProjection) -> TPadded:
@@ -142,7 +156,11 @@ class Core(nn.Module):
             ],
             dim=1,
         )
-        t_entities = t_entities + self._type_emb(self._type_idx.expand(batch, -1))
+        t_entities = (
+            t_entities
+            + self._type_emb(self._type_idx.expand(batch, -1))
+            + self._reward_emb(self._reward_idx.expand(batch, -1))
+        )
         t_valid = torch.cat(
             [
                 t_blocks.cards.mask,

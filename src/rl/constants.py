@@ -39,13 +39,21 @@ MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
 # Reward cards arrive as bundles (Reward.cards: list[list[Card]]): up to
 # MAX_REWARD_CARD_BUNDLES combat bundles of <= MAX_COMBAT_CARD_REWARD cards
 # (Orrery stages 5), or The Library's single MAX_CARD_REWARD_ROLL-card bundle.
-# The CARD_REWARD slice is the bundle-flattened concatenation; both extremes
-# land exactly at 20 tokens.
+# Each bundle owns its own CARD_REWARD_<b> slice — bundle 0 wide enough for
+# The Library, the rest hold combat rolls — so slot <-> (bundle, card) is
+# static, via the tables below
 MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
-MAX_REWARD_CARD_TOKENS = max(
-    _slai.GameEnv.MAX_REWARD_CARD_BUNDLES * _slai.GameEnv.MAX_COMBAT_CARD_REWARD,
-    _slai.GameEnv.MAX_CARD_REWARD_ROLL,
+REWARD_REGION_WIDTHS = (_slai.GameEnv.MAX_CARD_REWARD_ROLL,) + (
+    _slai.GameEnv.MAX_COMBAT_CARD_REWARD,
+) * (MAX_REWARD_CARD_BUNDLES - 1)
+REWARD_REGION_OFFSETS = tuple(
+    sum(REWARD_REGION_WIDTHS[:bundle]) for bundle in range(MAX_REWARD_CARD_BUNDLES)
 )
+REWARD_SLOT_TO_BUNDLE = tuple(
+    bundle for bundle, width in enumerate(REWARD_REGION_WIDTHS) for _ in range(width)
+)
+REWARD_SLOT_TO_CARD = tuple(idx for width in REWARD_REGION_WIDTHS for idx in range(width))
+MAX_REWARD_CARD_TOKENS = sum(REWARD_REGION_WIDTHS)
 
 # Cards exiled by Bronze Orb StasisSteal; the engine slot-parallels them to the
 # monster arena ([Option; MAX_MONSTERS]), so this cap is exact, not headroom.
@@ -117,6 +125,10 @@ __all__ = [
     "MAX_MONSTERS",
     "MAX_REWARD_CARD_BUNDLES",
     "MAX_REWARD_CARD_TOKENS",
+    "REWARD_REGION_WIDTHS",
+    "REWARD_REGION_OFFSETS",
+    "REWARD_SLOT_TO_BUNDLE",
+    "REWARD_SLOT_TO_CARD",
     "MAX_SIZE_STASIS",
     "MAX_SIZE_DECK",
     "MAX_SIZE_DISC_PILE",

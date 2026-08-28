@@ -30,7 +30,11 @@ _POOL_KEY_NET: dict[SliceKind, str] = {
     SliceKind.CARD_EXHAUST: "_pointer_key_card",
     SliceKind.CARD_DECK: "_pointer_key_card",
     SliceKind.CARD_DISCOVER: "_pointer_key_card",
-    SliceKind.CARD_REWARD: "_pointer_key_card",
+    SliceKind.CARD_REWARD_0: "_pointer_key_card",
+    SliceKind.CARD_REWARD_1: "_pointer_key_card",
+    SliceKind.CARD_REWARD_2: "_pointer_key_card",
+    SliceKind.CARD_REWARD_3: "_pointer_key_card",
+    SliceKind.CARD_REWARD_4: "_pointer_key_card",
     SliceKind.CARD_SHOP: "_pointer_key_card",
     SliceKind.CARD_EVENT: "_pointer_key_card",
     SliceKind.RELIC_REWARD: "_pointer_key_relic",
@@ -43,10 +47,14 @@ _POOL_KEY_NET: dict[SliceKind, str] = {
     SliceKind.EVENT_OPTIONS: "_pointer_key_event",
     SliceKind.ROOMS: "_pointer_key_room",
 }
-assert set(ACTION_TYPE_POOL.values()) <= set(_POOL_KEY_NET), (
+_POOLED_KINDS: set = set().union(*ACTION_TYPE_POOL.values())
+assert _POOLED_KINDS <= set(_POOL_KEY_NET), (
     "every L2 pool needs a pointer-key net: missing "
-    f"{sorted(k.name for k in set(ACTION_TYPE_POOL.values()) - set(_POOL_KEY_NET))}"
+    f"{sorted(k.name for k in _POOLED_KINDS - set(_POOL_KEY_NET))}"
 )
+assert all(
+    len({_POOL_KEY_NET[kind] for kind in kinds}) == 1 for kinds in ACTION_TYPE_POOL.values()
+), "a multi-slice pool must share one pointer-key net"
 
 
 class ActorCritic(nn.Module):
@@ -123,8 +131,8 @@ class ActorCritic(nn.Module):
         its L2 pool. Table-driven off ACTION_TYPE_POOL so the virtual pending
         types route themselves — a pending pick over the draw pile scores card
         tokens, one over the staked relics scores relic tokens."""
-        pool = ACTION_TYPE_POOL.get(action_type)
-        name = _POOL_KEY_NET.get(pool)
+        pools = ACTION_TYPE_POOL.get(action_type)
+        name = _POOL_KEY_NET.get(pools[0]) if pools else None
         if name is None:
             raise ValueError(f"no pointer key net for policy action type {action_type}")
         return self._key_nets[name]
@@ -249,7 +257,7 @@ class ActorCritic(nn.Module):
             # Score monsters for the surviving rows, conditioned on the selected entity
             t_mask_l2 = t_monster_mask[t_local]
             t_selected_card_or_pot = t_core_out.pool[pool][t_rows_l2, t_l1[t_local]]
-            t_keys = self._pointer_key_monster(t_core_out.pool[SliceKind.MONSTERS][t_rows_l2])
+            t_keys = self._pointer_key_monster(t_core_out.pool[(SliceKind.MONSTERS,)][t_rows_l2])
             t_logits = self._head_level_3(
                 t_keys, t_core_out.global_[t_rows_l2], t_selected_card_or_pot, t_mask_l2
             )
@@ -353,14 +361,16 @@ def _get_target_mask_for(action_type: int, t_mask: TMask) -> torch.Tensor | None
     return None
 
 
-def _get_shop_prices_for(pool: SliceKind, t_game_state: TGameState) -> torch.Tensor | None:
+def _get_shop_prices_for(
+    pools: tuple[SliceKind, ...], t_game_state: TGameState
+) -> torch.Tensor | None:
     """Per-item shop prices for a shop selection pool, or None if the pool isn't a shop."""
-    match pool:
-        case SliceKind.CARD_SHOP:
+    match pools:
+        case (SliceKind.CARD_SHOP,):
             return t_game_state.shop_card_prices
-        case SliceKind.RELIC_SHOP:
+        case (SliceKind.RELIC_SHOP,):
             return t_game_state.shop_relic_prices
-        case SliceKind.POTION_SHOP:
+        case (SliceKind.POTION_SHOP,):
             return t_game_state.shop_potion_prices
 
     return None

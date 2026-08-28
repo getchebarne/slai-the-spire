@@ -3,15 +3,7 @@ from typing import get_args
 
 import numpy as np
 import torch
-from slai import CandidatePoolDeck
-from slai import CandidatePoolDiscover
-from slai import CandidatePoolEventRollCard
-from slai import CandidatePoolEventRollPotion
-from slai import CandidatePoolEventRollRelic
-from slai import CandidatePoolHand
-from slai import CandidatePoolPileDiscard
-from slai import CandidatePoolPileDraw
-from slai import CandidatePoolPileExhaust
+from slai import CandidatePool
 from slai import Chest
 from slai import ChestKind
 from slai import Combat
@@ -23,7 +15,6 @@ from slai import Reward
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 from slai import Shop
-from slai import members
 
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISC_PILE
@@ -86,7 +77,7 @@ def derive_focus(state: GameState) -> Focus:
 EFFECT_PENDING = get_args(PendingEffect)
 _EFFECT_PENDING_TO_IDX = {cls: i for i, cls in enumerate(EFFECT_PENDING)}
 
-_NUM_CHEST_KINDS = len(members(ChestKind))
+_NUM_CHEST_KINDS = len(ChestKind.members())
 
 # Layout offsets
 _OFF_PENDING = len(Focus)
@@ -103,15 +94,15 @@ _BOMB_TURNS = 3.0  # The Bomb's fuse length (engine process_effect_turn_end.rs, 
 
 # Every pool the engine can halt over; the pick count normalizes against its slice cap
 _INPUT_POOL_CAP = {
-    CandidatePoolHand: MAX_SIZE_HAND,
-    CandidatePoolDeck: MAX_SIZE_DECK,
-    CandidatePoolDiscover: MAX_SIZE_DISCOVER,
-    CandidatePoolPileDraw: MAX_SIZE_DRAW_PILE,
-    CandidatePoolPileDiscard: MAX_SIZE_DISC_PILE,
-    CandidatePoolPileExhaust: MAX_SIZE_EXHAUST,
-    CandidatePoolEventRollCard: 1,
-    CandidatePoolEventRollRelic: 2,
-    CandidatePoolEventRollPotion: 1,
+    CandidatePool.Hand: MAX_SIZE_HAND,
+    CandidatePool.Deck: MAX_SIZE_DECK,
+    CandidatePool.Discover: MAX_SIZE_DISCOVER,
+    CandidatePool.PileDraw: MAX_SIZE_DRAW_PILE,
+    CandidatePool.PileDiscard: MAX_SIZE_DISC_PILE,
+    CandidatePool.PileExhaust: MAX_SIZE_EXHAUST,
+    CandidatePool.EventRollCard: 1,
+    CandidatePool.EventRollRelic: 2,
+    CandidatePool.EventRollPotion: 1,
 }
 assert set(_INPUT_POOL_CAP) == set(PENDING_POOL_SLICE), "halting-pool tables drifted"
 
@@ -140,10 +131,10 @@ def _encode_screen_into(state: GameState, out: np.ndarray) -> None:
         target = pending.target
         selection_kind = target.selection_kind if target is not None else None
         if isinstance(selection_kind, (SelectionKindInput, SelectionKindInputUpTo)):
-            cap = _INPUT_POOL_CAP.get(type(target.candidate_pool))
+            cap = _INPUT_POOL_CAP.get(target.candidate_pool)
             if cap is None:
                 raise ValueError(
-                    f"Input selection from unexpected pool {type(target.candidate_pool).__name__}"
+                    f"Input selection from unexpected pool {target.candidate_pool}"
                     f" (pending {type(pending).__name__})"
                 )
 

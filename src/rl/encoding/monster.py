@@ -3,7 +3,6 @@ import torch
 from slai import IntentKind
 from slai import Monster
 from slai import MonsterName
-from slai import members
 
 from src.rl.constants import BLOCK_MAX_ENTITY
 from src.rl.constants import HEALTH_MAX_ENTITY
@@ -23,8 +22,8 @@ from src.rl.utils import get_sqrt_norm
 SLICE_MONSTERS = [Slice(SliceKind.MONSTERS, MAX_MONSTERS)]
 
 # int() keying: declaration-order discriminant, stable across engine bumps
-_MAP_MONSTER_NAME = {name: int(name) for name in members(MonsterName)}
-_MAP_INTENT_KIND = {intent_kind: int(intent_kind) for intent_kind in members(IntentKind)}
+_MAP_MONSTER_NAME = {name: int(name) for name in MonsterName.members()}
+_MAP_INTENT_KIND = {intent_kind: int(intent_kind) for intent_kind in IntentKind.members()}
 _INTENT_BLOCK_KINDS = {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
 _INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
 _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}

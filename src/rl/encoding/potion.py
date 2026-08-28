@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+
 import numpy as np
 import torch
 from slai import Effect
@@ -6,7 +7,6 @@ from slai import GameState
 from slai import Potion
 from slai import PotionName
 from slai import PotionRarity
-from slai import members
 
 from src.rl.constants import MAX_POTION_REWARDS
 from src.rl.constants import MAX_POTION_SLOTS
@@ -28,8 +28,8 @@ SLICE_KIND_POTIONS = {slice_.kind for slice_ in SLICE_POTIONS}
 
 
 # int() keying: declaration-order discriminant, stable across engine bumps
-_POTION_NAME_TO_IDX = {potion_name: int(potion_name) for potion_name in members(PotionName)}
-_POTION_RARITY_TO_IDX = {rarity: int(rarity) for rarity in members(PotionRarity)}
+_POTION_NAME_TO_IDX = {potion_name: int(potion_name) for potion_name in PotionName.members()}
+_POTION_RARITY_TO_IDX = {rarity: int(rarity) for rarity in PotionRarity.members()}
 
 ENCODING_DIM_POTION = (
     len(_POTION_NAME_TO_IDX)  # Name OHE
