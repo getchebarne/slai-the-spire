@@ -1,3 +1,6 @@
+from enum import StrEnum
+from enum import auto
+
 import numpy as np
 import torch
 from slai import Card
@@ -8,10 +11,9 @@ from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
-from src.rl.encoding.modifier import ENCODING_DIM_MODIFIERS
-from src.rl.encoding.modifier import encode_modifiers_into
 from src.rl.types import Slice
 from src.rl.types import SliceKind
+from src.rl.types import make_channel_allocator
 from src.rl.utils import get_piecewise_bucket
 from src.rl.utils import get_piecewise_dim
 from src.rl.utils import get_sqrt_norm
@@ -21,13 +23,9 @@ from src.rl.utils import get_sqrt_norm
 SLICE_CHARACTER = [Slice(SliceKind.CHARACTER, 1)]
 
 
-_INCOMING_DAMAGE_MAX = 150  # summed multi-monster turn; sqrt-scaled
-# Health/block caps unified with the monster encoder (ENTITY caps) so both build
-# a byte-identical family block for EntityProjector's shared first-layer weights.
-# Character values only reach the low buckets; the tail stays cold (bucket index
-# is cap-independent below the cap — only the 3 hb scalars rescale).
+_INCOMING_DAMAGE_MAX = 150
 _HEALTH_MAX = HEALTH_MAX_ENTITY
-_HEALTH_MAX_CAP = 200  # sqrt cap for the max-HP magnitude scalar
+_HEALTH_MAX_CAP = 200
 _BLOCK_MAX = BLOCK_MAX_ENTITY
 _GOLD_MIN = 0
 _GOLD_MAX = 499
@@ -35,65 +33,67 @@ _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 _DIM_HEALTH_BLOCK = get_encoding_dim_health_block(_HEALTH_MAX, _BLOCK_MAX)
 
-ENCODING_DIM_CHARACTER = (
-    ENCODING_DIM_MODIFIERS  # Modifiers OHE
-    + _DIM_HEALTH_BLOCK  # Health and block OHE and scalars
-    + _GOLD_DIM  # Gold OHE
-    + 1  # Gold scalar
-    + 1  # Incoming damage
-    + 1  # Block >= incoming damage
-    + 1  # Incoming damage is lethal
-    + 1  # Health fraction of live max HP
-    + 1  # Max HP magnitude
-    + 1  # Net unblocked damage this turn
-    + 1  # Deck size
-    + 1  # Deck upgraded fraction
-)
 
-# Family-block positions (consumed by EntityProjector's shared first layer). The
-# balance assert ties the slices to _encode_character_into's write order.
-SLICE_MODIFIERS_CHARACTER = slice(0, ENCODING_DIM_MODIFIERS)
+class CharacterChannel(StrEnum):
+    HEALTH_BLOCK = auto()
+    GOLD = auto()
+    GOLD_SCALAR = auto()
+    INCOMING_DAMAGE = auto()
+    BLOCK_COVERS_INCOMING = auto()
+    INCOMING_IS_LETHAL = auto()
+    HEALTH_FRACTION = auto()
+    MAX_HEALTH_MAGNITUDE = auto()
+    NET_UNBLOCKED_DAMAGE = auto()
+    DECK_SIZE = auto()
+    DECK_UPGRADED_FRACTION = auto()
+
+
+CHANNEL_LAYOUT_CHARACTER, _alloc = make_channel_allocator()
+OFF_CHARACTER_HEALTH_BLOCK = _alloc(CharacterChannel.HEALTH_BLOCK, _DIM_HEALTH_BLOCK)
+OFF_CHARACTER_GOLD = _alloc(CharacterChannel.GOLD, _GOLD_DIM)
+OFF_CHARACTER_GOLD_SCALAR = _alloc(CharacterChannel.GOLD_SCALAR)
+OFF_CHARACTER_INCOMING_DAMAGE = _alloc(CharacterChannel.INCOMING_DAMAGE)
+OFF_CHARACTER_BLOCK_COVERS_INCOMING = _alloc(CharacterChannel.BLOCK_COVERS_INCOMING)
+OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc(CharacterChannel.INCOMING_IS_LETHAL)
+OFF_CHARACTER_HEALTH_FRACTION = _alloc(CharacterChannel.HEALTH_FRACTION)
+OFF_CHARACTER_MAX_HEALTH_MAGNITUDE = _alloc(CharacterChannel.MAX_HEALTH_MAGNITUDE)
+OFF_CHARACTER_NET_UNBLOCKED_DAMAGE = _alloc(CharacterChannel.NET_UNBLOCKED_DAMAGE)
+OFF_CHARACTER_DECK_SIZE = _alloc(CharacterChannel.DECK_SIZE)
+OFF_CHARACTER_DECK_UPGRADED_FRACTION = _alloc(CharacterChannel.DECK_UPGRADED_FRACTION)
+
+ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 SLICE_HEALTH_BLOCK_CHARACTER = slice(
-    ENCODING_DIM_MODIFIERS, ENCODING_DIM_MODIFIERS + _DIM_HEALTH_BLOCK
+    OFF_CHARACTER_HEALTH_BLOCK, OFF_CHARACTER_HEALTH_BLOCK + _DIM_HEALTH_BLOCK
 )
-_NUM_TAIL_SCALARS = 9  # gold scalar + the 8-scalar block in _encode_character_into
-assert SLICE_HEALTH_BLOCK_CHARACTER.stop == ENCODING_DIM_CHARACTER - (
-    _GOLD_DIM + _NUM_TAIL_SCALARS
-), "character row layout drifted: family slices no longer match ENCODING_DIM_CHARACTER"
 
 
 def _encode_character_into(
     character: Character, incoming_damage: int, deck: list[Card], out: np.ndarray
 ) -> None:
-    # Initialize current position pointer
-    pos = 0
-
-    # Modifiers OHE
-    pos = encode_modifiers_into(character.modifiers, pos, out)
-
-    # Health and block OHE and scalars
-    pos = encode_health_block_into(
-        character.health, character.block, _HEALTH_MAX, _BLOCK_MAX, pos, out
+    encode_health_block_into(
+        character.health, character.block, _HEALTH_MAX, _BLOCK_MAX, OFF_CHARACTER_HEALTH_BLOCK, out
     )
 
-    # Gold OHE
     gold_bucket = get_piecewise_bucket(
         character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD
     )
-    out[pos + gold_bucket] = 1.0
-    pos += _GOLD_DIM
+    out[OFF_CHARACTER_GOLD + gold_bucket] = 1.0
 
-    # Scalars
-    out[pos] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
-    out[pos + 1] = get_sqrt_norm(incoming_damage, _INCOMING_DAMAGE_MAX)
-    out[pos + 2] = float(character.block >= incoming_damage)
-    out[pos + 3] = float(incoming_damage >= character.health + character.block)
-    out[pos + 4] = character.health / max(character.health_max, 1)
-    out[pos + 5] = get_sqrt_norm(character.health_max, _HEALTH_MAX_CAP)
-    out[pos + 6] = get_sqrt_norm(max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX)
-    # Master-deck size/quality — always-on, covering combat where the deck token group is masked.
-    out[pos + 7] = get_sqrt_norm(len(deck), MAX_SIZE_DECK)
-    out[pos + 8] = sum(card.upgraded for card in deck) / max(len(deck), 1)
+    out[OFF_CHARACTER_GOLD_SCALAR] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
+    out[OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(incoming_damage, _INCOMING_DAMAGE_MAX)
+    out[OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(character.block >= incoming_damage)
+    out[OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
+        incoming_damage >= character.health + character.block
+    )
+    out[OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
+    out[OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(character.health_max, _HEALTH_MAX_CAP)
+    out[OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
+        max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX
+    )
+    out[OFF_CHARACTER_DECK_SIZE] = get_sqrt_norm(len(deck), MAX_SIZE_DECK)
+    out[OFF_CHARACTER_DECK_UPGRADED_FRACTION] = sum(card.upgraded for card in deck) / max(
+        len(deck), 1
+    )
 
 
 def encode_batch_character(
@@ -113,6 +113,6 @@ def encode_batch_character(
         _encode_character_into(character, incoming_damage, deck, np_out[b])
 
     # Singleton entity (always present): a seq dim of 1 + an all-valid mask, for a TPadded slice
-    x = torch.from_numpy(np_out).to(device).unsqueeze(1)
-    mask = torch.ones(batch_size, 1, dtype=torch.bool, device=device)
-    return x, mask
+    return torch.from_numpy(np_out).to(device).unsqueeze(1), torch.ones(
+        batch_size, 1, dtype=torch.bool, device=device
+    )

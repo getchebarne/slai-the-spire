@@ -16,6 +16,7 @@ Two rules the layout depends on:
 - **Normalization is vectorized and scoped** — see `normalize_effect_rows`.
 """
 
+import math
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
@@ -50,6 +51,7 @@ from slai import get_relic_templates
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_HAND
+from src.rl.types import make_channel_allocator
 
 
 # Live card/relic amounts arrive modifier-scaled, so a catalog maximum is a
@@ -180,144 +182,6 @@ _VOCAB_RELIC = _vocabulary(
 _VOCAB_MONSTER = _vocabulary(_field(slai.EffectMonsterSpawn, lambda e: e.name))
 
 
-# Contiguous groups; every column carries a cap and a mode
-class Channel(StrEnum):
-    # One-hot over the Effect union
-    EFFECT_KIND = auto()
-
-    # Target
-    TARGETED = auto()
-    CANDIDATE_POOL = auto()
-    SELECTION_KIND = auto()
-    SELECT_COUNT = auto()
-    CANDIDATE_FILTER = auto()
-
-    # Categorical params, named for the engine type they one-hot
-    MODIFIER_KIND = auto()
-    MODIFIER_BUFF = auto()
-    DELTA_SIGN = auto()
-    CARD_PILE = auto()
-    CARD_KIND = auto()
-    CARD_COLOR = auto()
-    CARD_RARITY = auto()
-    RELIC_TIER = auto()
-    COST_SCOPE = auto()
-    COST_ZERO_PRESENT = auto()
-
-    # Identity vocabularies, named for the engine name enum
-    CARD_NAME = auto()
-    RELIC_NAME = auto()
-    MONSTER_NAME = auto()
-    RELIC_POOL_SIZE = auto()
-
-    # Magnitudes, one per physical unit
-    DAMAGE = auto()
-    BLOCK = auto()
-    HEALTH_ABSOLUTE = auto()
-    HEALTH_RELATIVE = auto()
-    GOLD_ABSOLUTE = auto()
-    GOLD_RELATIVE = auto()
-    AMOUNT_IS_RANGE = auto()
-    ENERGY = auto()
-    STACKS = auto()
-    COUNT = auto()
-    DELTA = auto()
-    CHANCE = auto()
-    FACTOR = auto()
-    COST = auto()
-
-    # Boolean flags, named for the engine field
-    ADVANCE_ON_MISS = auto()
-    BOTTOM = auto()
-    CHOOSE_DISCARDS = auto()
-    COLORLESS = auto()
-    ESCAPED_CHARACTER = auto()
-    FALLBACK_CIRCLET = auto()
-    FREE = auto()
-    LIFESTEAL = auto()
-    LIMITED = auto()
-    ON_OWNER = auto()
-    ONLY_REDUCE = auto()
-    RANDOM = auto()
-    RARE_ONLY = auto()
-    UNIFORM = auto()
-    UPGRADED = auto()
-
-
-CHANNEL_LAYOUT: list[tuple[Channel, int]] = []
-
-
-def _alloc(name: Channel, width: int = 1) -> int:
-    offset = sum(w for _, w in CHANNEL_LAYOUT)
-    CHANNEL_LAYOUT.append((name, width))
-    return offset
-
-
-# Effect's kind
-OFF_EFFECT_KIND = _alloc(Channel.EFFECT_KIND, len(_INDEX_EFFECT))
-
-# Target
-OFF_TARGETED = _alloc(Channel.TARGETED)
-OFF_CANDIDATE_POOL = _alloc(Channel.CANDIDATE_POOL, len(_INDEX_CAND_POOL))
-OFF_SELECTION_KIND = _alloc(Channel.SELECTION_KIND, len(_INDEX_SELECTION_KIND))
-OFF_SELECT_COUNT = _alloc(Channel.SELECT_COUNT)
-OFF_CANDIDATE_FILTER = _alloc(Channel.CANDIDATE_FILTER, len(_INDEX_CAND_FILTER))
-
-# Categorical params
-OFF_MODIFIER_KIND = _alloc(Channel.MODIFIER_KIND, len(_INDEX_MODIFIER_KIND))
-OFF_MODIFIER_BUFF = _alloc(Channel.MODIFIER_BUFF)
-OFF_DELTA_SIGN = _alloc(Channel.DELTA_SIGN, len(_INDEX_DELTA_SIGN))
-OFF_CARD_PILE = _alloc(Channel.CARD_PILE, len(_INDEX_CARD_PILE))
-OFF_CARD_KIND = _alloc(Channel.CARD_KIND, len(_INDEX_CARD_KIND))
-OFF_CARD_COLOR = _alloc(Channel.CARD_COLOR, len(_INDEX_CARD_COLOR))
-OFF_CARD_RARITY = _alloc(Channel.CARD_RARITY, len(_INDEX_CARD_RARITY))
-OFF_RELIC_TIER = _alloc(Channel.RELIC_TIER, len(_INDEX_RELIC_TIER))
-OFF_COST_SCOPE = _alloc(Channel.COST_SCOPE, len(_INDEX_COST_SCOPE))
-OFF_COST_ZERO_PRESENT = _alloc(Channel.COST_ZERO_PRESENT)
-
-# Identity vocabularies (index 0 = unseen)
-OFF_CARD_NAME = _alloc(Channel.CARD_NAME, len(_VOCAB_CARD) + 1)
-OFF_RELIC_NAME = _alloc(Channel.RELIC_NAME, len(_VOCAB_RELIC) + 1)
-OFF_MONSTER_NAME = _alloc(Channel.MONSTER_NAME, len(_VOCAB_MONSTER) + 1)
-OFF_RELIC_POOL_SIZE = _alloc(Channel.RELIC_POOL_SIZE)
-
-# Magnitudes
-OFF_DAMAGE = _alloc(Channel.DAMAGE)
-OFF_BLOCK = _alloc(Channel.BLOCK)
-OFF_HEALTH_ABSOLUTE = _alloc(Channel.HEALTH_ABSOLUTE)
-OFF_HEALTH_RELATIVE = _alloc(Channel.HEALTH_RELATIVE)
-OFF_GOLD_ABSOLUTE = _alloc(Channel.GOLD_ABSOLUTE)
-OFF_GOLD_RELATIVE = _alloc(Channel.GOLD_RELATIVE)
-OFF_AMOUNT_IS_RANGE = _alloc(Channel.AMOUNT_IS_RANGE)
-OFF_ENERGY = _alloc(Channel.ENERGY)
-OFF_STACKS = _alloc(Channel.STACKS)
-OFF_COUNT = _alloc(Channel.COUNT)
-OFF_DELTA = _alloc(Channel.DELTA)
-OFF_CHANCE = _alloc(Channel.CHANCE)
-OFF_FACTOR = _alloc(Channel.FACTOR)
-OFF_COST = _alloc(Channel.COST)
-
-# Boolean flags
-OFF_ADVANCE_ON_MISS = _alloc(Channel.ADVANCE_ON_MISS)
-OFF_BOTTOM = _alloc(Channel.BOTTOM)
-OFF_CHOOSE_DISCARDS = _alloc(Channel.CHOOSE_DISCARDS)
-OFF_COLORLESS = _alloc(Channel.COLORLESS)
-OFF_ESCAPED_CHARACTER = _alloc(Channel.ESCAPED_CHARACTER)
-OFF_FALLBACK_CIRCLET = _alloc(Channel.FALLBACK_CIRCLET)
-OFF_FREE = _alloc(Channel.FREE)
-OFF_LIFESTEAL = _alloc(Channel.LIFESTEAL)
-OFF_LIMITED = _alloc(Channel.LIMITED)
-OFF_ON_OWNER = _alloc(Channel.ON_OWNER)
-OFF_ONLY_REDUCE = _alloc(Channel.ONLY_REDUCE)
-OFF_RANDOM = _alloc(Channel.RANDOM)
-OFF_RARE_ONLY = _alloc(Channel.RARE_ONLY)
-OFF_UNIFORM = _alloc(Channel.UNIFORM)
-OFF_UPGRADED = _alloc(Channel.UPGRADED)
-
-# Total
-ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT)
-
-
 # Caps
 _CAP_DAMAGE = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectDamagePhysical, lambda e: e.amount),
@@ -364,6 +228,160 @@ _CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda e: e.factor))
 _CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda e: e.amount))
 _CAP_SELECT_COUNT = float(MAX_SIZE_DECK)
 _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
+
+
+# Contiguous groups; every column carries a cap and a mode
+class Channel(StrEnum):
+    # One-hot over the Effect union
+    EFFECT_KIND = auto()
+
+    # Target
+    TARGETED = auto()
+    CANDIDATE_POOL = auto()
+    SELECTION_KIND = auto()
+    SELECT_COUNT = auto()
+    CANDIDATE_FILTER = auto()
+
+    # Categorical params, named for the engine type they one-hot
+    MODIFIER_KIND = auto()
+    MODIFIER_BUFF = auto()
+    DELTA_SIGN = auto()
+    CARD_PILE = auto()
+    CARD_KIND = auto()
+    CARD_COLOR = auto()
+    CARD_RARITY = auto()
+    RELIC_TIER = auto()
+    COST_SCOPE = auto()
+    COST_ZERO_PRESENT = auto()
+
+    # Identity vocabularies, named for the engine name enum
+    CARD_NAME = auto()
+    RELIC_NAME = auto()
+    MONSTER_NAME = auto()
+    RELIC_POOL_SIZE = auto()
+
+    # Magnitudes, one per physical unit
+    DAMAGE = auto()
+    DAMAGE_BUCKETS = auto()
+    BLOCK = auto()
+    HEALTH_ABSOLUTE = auto()
+    HEALTH_BUCKETS = auto()
+    HEALTH_RELATIVE = auto()
+    GOLD_ABSOLUTE = auto()
+    GOLD_BUCKETS = auto()
+    GOLD_RELATIVE = auto()
+    AMOUNT_IS_RANGE = auto()
+    ENERGY = auto()
+    STACKS = auto()
+    STACKS_NEGATIVE = auto()
+    STACKS_BUCKETS = auto()
+    COUNT = auto()
+    DELTA = auto()
+    CHANCE = auto()
+    FACTOR = auto()
+    COST = auto()
+
+    # Boolean flags, named for the engine field
+    ADVANCE_ON_MISS = auto()
+    BOTTOM = auto()
+    CHOOSE_DISCARDS = auto()
+    COLORLESS = auto()
+    ESCAPED_CHARACTER = auto()
+    FALLBACK_CIRCLET = auto()
+    FREE = auto()
+    LIFESTEAL = auto()
+    LIMITED = auto()
+    ON_OWNER = auto()
+    ONLY_REDUCE = auto()
+    RANDOM = auto()
+    RARE_ONLY = auto()
+    UNIFORM = auto()
+    UPGRADED = auto()
+
+
+def _bucket_width(cap: float) -> int:
+    return int(math.sqrt(cap)) + 1
+
+
+CHANNEL_LAYOUT, _alloc = make_channel_allocator()
+
+
+# Effect's kind
+OFF_EFFECT_KIND = _alloc(Channel.EFFECT_KIND, len(_INDEX_EFFECT))
+
+# Target
+OFF_TARGETED = _alloc(Channel.TARGETED)
+OFF_CANDIDATE_POOL = _alloc(Channel.CANDIDATE_POOL, len(_INDEX_CAND_POOL))
+OFF_SELECTION_KIND = _alloc(Channel.SELECTION_KIND, len(_INDEX_SELECTION_KIND))
+OFF_SELECT_COUNT = _alloc(Channel.SELECT_COUNT)
+OFF_CANDIDATE_FILTER = _alloc(Channel.CANDIDATE_FILTER, len(_INDEX_CAND_FILTER))
+
+# Categorical params
+OFF_MODIFIER_KIND = _alloc(Channel.MODIFIER_KIND, len(_INDEX_MODIFIER_KIND))
+OFF_MODIFIER_BUFF = _alloc(Channel.MODIFIER_BUFF)
+OFF_DELTA_SIGN = _alloc(Channel.DELTA_SIGN, len(_INDEX_DELTA_SIGN))
+OFF_CARD_PILE = _alloc(Channel.CARD_PILE, len(_INDEX_CARD_PILE))
+OFF_CARD_KIND = _alloc(Channel.CARD_KIND, len(_INDEX_CARD_KIND))
+OFF_CARD_COLOR = _alloc(Channel.CARD_COLOR, len(_INDEX_CARD_COLOR))
+OFF_CARD_RARITY = _alloc(Channel.CARD_RARITY, len(_INDEX_CARD_RARITY))
+OFF_RELIC_TIER = _alloc(Channel.RELIC_TIER, len(_INDEX_RELIC_TIER))
+OFF_COST_SCOPE = _alloc(Channel.COST_SCOPE, len(_INDEX_COST_SCOPE))
+OFF_COST_ZERO_PRESENT = _alloc(Channel.COST_ZERO_PRESENT)
+
+# Identity vocabularies (index 0 = unseen)
+OFF_CARD_NAME = _alloc(Channel.CARD_NAME, len(_VOCAB_CARD) + 1)
+OFF_RELIC_NAME = _alloc(Channel.RELIC_NAME, len(_VOCAB_RELIC) + 1)
+OFF_MONSTER_NAME = _alloc(Channel.MONSTER_NAME, len(_VOCAB_MONSTER) + 1)
+OFF_RELIC_POOL_SIZE = _alloc(Channel.RELIC_POOL_SIZE)
+
+# Magnitudes
+OFF_DAMAGE = _alloc(Channel.DAMAGE)
+OFF_DAMAGE_BUCKETS = _alloc(Channel.DAMAGE_BUCKETS, _bucket_width(_CAP_DAMAGE))
+OFF_BLOCK = _alloc(Channel.BLOCK)
+OFF_HEALTH_ABSOLUTE = _alloc(Channel.HEALTH_ABSOLUTE)
+OFF_HEALTH_BUCKETS = _alloc(Channel.HEALTH_BUCKETS, _bucket_width(_CAP_HEALTH))
+OFF_HEALTH_RELATIVE = _alloc(Channel.HEALTH_RELATIVE)
+OFF_GOLD_ABSOLUTE = _alloc(Channel.GOLD_ABSOLUTE)
+OFF_GOLD_BUCKETS = _alloc(Channel.GOLD_BUCKETS, _bucket_width(_CAP_GOLD))
+OFF_GOLD_RELATIVE = _alloc(Channel.GOLD_RELATIVE)
+OFF_AMOUNT_IS_RANGE = _alloc(Channel.AMOUNT_IS_RANGE)
+OFF_ENERGY = _alloc(Channel.ENERGY)
+OFF_STACKS = _alloc(Channel.STACKS)
+OFF_STACKS_NEGATIVE = _alloc(Channel.STACKS_NEGATIVE)
+OFF_STACKS_BUCKETS = _alloc(Channel.STACKS_BUCKETS, _bucket_width(_CAP_STACKS))
+OFF_COUNT = _alloc(Channel.COUNT)
+OFF_DELTA = _alloc(Channel.DELTA)
+OFF_CHANCE = _alloc(Channel.CHANCE)
+OFF_FACTOR = _alloc(Channel.FACTOR)
+OFF_COST = _alloc(Channel.COST)
+
+# Boolean flags
+OFF_ADVANCE_ON_MISS = _alloc(Channel.ADVANCE_ON_MISS)
+OFF_BOTTOM = _alloc(Channel.BOTTOM)
+OFF_CHOOSE_DISCARDS = _alloc(Channel.CHOOSE_DISCARDS)
+OFF_COLORLESS = _alloc(Channel.COLORLESS)
+OFF_ESCAPED_CHARACTER = _alloc(Channel.ESCAPED_CHARACTER)
+OFF_FALLBACK_CIRCLET = _alloc(Channel.FALLBACK_CIRCLET)
+OFF_FREE = _alloc(Channel.FREE)
+OFF_LIFESTEAL = _alloc(Channel.LIFESTEAL)
+OFF_LIMITED = _alloc(Channel.LIMITED)
+OFF_ON_OWNER = _alloc(Channel.ON_OWNER)
+OFF_ONLY_REDUCE = _alloc(Channel.ONLY_REDUCE)
+OFF_RANDOM = _alloc(Channel.RANDOM)
+OFF_RARE_ONLY = _alloc(Channel.RARE_ONLY)
+OFF_UNIFORM = _alloc(Channel.UNIFORM)
+OFF_UPGRADED = _alloc(Channel.UPGRADED)
+
+# (float channel, bucket block, cap) — buckets derive from the final raw floats
+_BUCKET_META: tuple[tuple[int, int, float], ...] = (
+    (OFF_DAMAGE, OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
+    (OFF_HEALTH_ABSOLUTE, OFF_HEALTH_BUCKETS, _CAP_HEALTH),
+    (OFF_GOLD_ABSOLUTE, OFF_GOLD_BUCKETS, _CAP_GOLD),
+    (OFF_STACKS, OFF_STACKS_BUCKETS, _CAP_STACKS),
+)
+
+# Total
+ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT)
 
 
 # Per-kind encoders
@@ -605,8 +623,8 @@ def _encode_strength_lose_temp(row: np.ndarray, e: slai.EffectStrengthLoseTemp) 
     row[OFF_STACKS] += e.stacks
 
 
-EffectWriter = Callable[[np.ndarray, Any], None]
-_ENCODERS: dict[type, EffectWriter] = {
+_EffectWriter = Callable[[np.ndarray, Any], None]
+_ENCODERS: dict[type, _EffectWriter] = {
     slai.EffectBlockGain: _encode_block_gain,
     slai.EffectCardAdd: _encode_card_add,
     slai.EffectCardAddRandom: _encode_card_add_random,
@@ -672,6 +690,15 @@ def encode_effect_row_into(effect: Effect, row: np.ndarray) -> None:
     if encode is not None:
         encode(row, effect)
 
+    # Buckets read the final raw floats; nothing may write those channels below
+    for off_float, off_bucket, cap in _BUCKET_META:
+        value = row[off_float]
+        if value:
+            row[off_bucket + int(math.sqrt(min(abs(value), cap)))] = 1.0
+
+    # Buckets are magnitude-only; keep negative stacks (Malaise) linearly separable
+    row[OFF_STACKS_NEGATIVE] = float(row[OFF_STACKS] < 0)
+
 
 # Per-effect RAW row cache. Effect pyclasses are frozen and hash by field
 # value, so an Effect object is its own value-key
@@ -696,26 +723,26 @@ def encode_effect_row_into_w_cache(effect: Effect, out: np.ndarray) -> None:
     out[:] = row
 
 
-class NormMode(StrEnum):
+class _NormMode(StrEnum):
     SQRT = auto()
     LINEAR = auto()
 
 
 # (offset, cap, mode) for every non-unit channel
-_NORM_META: tuple[tuple[int, float, NormMode], ...] = (
-    (OFF_SELECT_COUNT, _CAP_SELECT_COUNT, NormMode.LINEAR),
-    (OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, NormMode.LINEAR),
-    (OFF_DAMAGE, _CAP_DAMAGE, NormMode.SQRT),
-    (OFF_BLOCK, _CAP_BLOCK, NormMode.LINEAR),
-    (OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, NormMode.SQRT),
-    (OFF_GOLD_ABSOLUTE, _CAP_GOLD, NormMode.SQRT),
-    (OFF_ENERGY, _CAP_ENERGY, NormMode.LINEAR),
-    (OFF_STACKS, _CAP_STACKS, NormMode.SQRT),
-    (OFF_COUNT, _CAP_COUNT, NormMode.LINEAR),
-    (OFF_DELTA, _CAP_DELTA, NormMode.LINEAR),
-    (OFF_CHANCE, 100.0, NormMode.LINEAR),
-    (OFF_FACTOR, _CAP_FACTOR, NormMode.LINEAR),
-    (OFF_COST, _CAP_COST, NormMode.LINEAR),
+_NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
+    (OFF_SELECT_COUNT, _CAP_SELECT_COUNT, _NormMode.LINEAR),
+    (OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
+    (OFF_DAMAGE, _CAP_DAMAGE, _NormMode.SQRT),
+    (OFF_BLOCK, _CAP_BLOCK, _NormMode.LINEAR),
+    (OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, _NormMode.SQRT),
+    (OFF_GOLD_ABSOLUTE, _CAP_GOLD, _NormMode.SQRT),
+    (OFF_ENERGY, _CAP_ENERGY, _NormMode.LINEAR),
+    (OFF_STACKS, _CAP_STACKS, _NormMode.SQRT),
+    (OFF_COUNT, _CAP_COUNT, _NormMode.LINEAR),
+    (OFF_DELTA, _CAP_DELTA, _NormMode.LINEAR),
+    (OFF_CHANCE, 100.0, _NormMode.LINEAR),
+    (OFF_FACTOR, _CAP_FACTOR, _NormMode.LINEAR),
+    (OFF_COST, _CAP_COST, _NormMode.LINEAR),
 )
 
 _SCALED_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
@@ -724,7 +751,7 @@ _SQRT_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
 for _off, _cap_value, _mode in _NORM_META:
     _SCALED_MASK[_off] = True
     _CAPS[_off] = _cap_value
-    _SQRT_MASK[_off] = _mode == NormMode.SQRT
+    _SQRT_MASK[_off] = _mode == _NormMode.SQRT
 
 # Only the 13 magnitude channels need scaling at all
 _IDXS_SCALED = np.nonzero(_SCALED_MASK)[0]

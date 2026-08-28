@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.encoding.map_ import CH_EDGES
-from src.rl.encoding.map_ import CH_POSITION
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
+from src.rl.encoding.map_ import OFF_MAP_POSITION
+from src.rl.encoding.map_ import SLICE_MAP_EDGES
 from src.rl.types import TPadded
 
 
@@ -110,7 +110,7 @@ class MapGNN(nn.Module):
         """Computes the valid rooms matrix (higher than current floor and not None)"""
 
         t_room_exists = t_nodes.sum(-1) > 0  # (U, H * W)
-        t_pos = t_nodes[:, :, CH_POSITION]  # Current-position bit: (U, H * W)
+        t_pos = t_nodes[:, :, OFF_MAP_POSITION]  # Current-position bit: (U, H * W)
         t_row_current = (t_pos * self._row_of_node).sum(-1)  # (U,) / Current floor, 0 if none
         t_row_current = torch.where(
             condition=t_pos.sum(-1) > 0,  # (U,)
@@ -123,7 +123,7 @@ class MapGNN(nn.Module):
     def _adjacency(self, t_nodes: torch.Tensor) -> torch.Tensor:
         num_unique = t_nodes.shape[0]
 
-        t_edges = t_nodes[:, :, CH_EDGES]
+        t_edges = t_nodes[:, :, SLICE_MAP_EDGES]
         t_adj = torch.zeros(
             num_unique,
             _NUM_NODES,

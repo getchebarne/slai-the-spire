@@ -1,3 +1,6 @@
+from enum import StrEnum
+from enum import auto
+
 import numpy as np
 import torch
 from slai import Shop
@@ -6,20 +9,32 @@ from src.rl.constants import MAX_SHOP_POTIONS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.constants import SHOP_PRICE_CAP
+from src.rl.types import make_channel_allocator
 
 
-# Price feats, encoded alongside each item (the items go through their entity encoders).
-ENCODING_DIM_PRICE = 1 + 1 + 1  # Price scalar  # Affordable  # abs(gold - price)
+# Price feats, encoded alongside each item (the items go through their entity encoders)
+class PriceChannel(StrEnum):
+    PRICE = auto()
+    AFFORDABLE = auto()
+    GOLD_GAP = auto()  # abs(gold - price)
 
-# Shop meta: the purge-service price triple + the purged flag (one purge per
-# shop; the price itself is run-scoped and never resets across acts).
+
+CHANNEL_LAYOUT_PRICE, _alloc = make_channel_allocator()
+OFF_SHOP_PRICE = _alloc(PriceChannel.PRICE)
+OFF_SHOP_AFFORDABLE = _alloc(PriceChannel.AFFORDABLE)
+OFF_SHOP_GOLD_GAP = _alloc(PriceChannel.GOLD_GAP)
+
+ENCODING_DIM_PRICE = sum(w for _, w in CHANNEL_LAYOUT_PRICE)
+
+# Shop meta: the purge-service price triple + the purged flag
+OFF_SHOP_PURGED = ENCODING_DIM_PRICE
 ENCODING_DIM_SHOP_META = ENCODING_DIM_PRICE + 1
 
 
 def _encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
-    out[0] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
-    out[1] = float(gold >= price)
-    out[2] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+    out[OFF_SHOP_PRICE] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+    out[OFF_SHOP_AFFORDABLE] = float(gold >= price)
+    out[OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
 
 
 def encode_batch_shop(
@@ -29,8 +44,6 @@ def encode_batch_shop(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,]:
     """Per-item shop prices (aligned with the shop card/relic/potion segments) + meta."""
     batch_size = len(batch_shop)
-
-    # Pre-allocate NumPy arrays
     np_price_cards = np.zeros(
         (batch_size, MAX_SIZE_SHOP_CARDS, ENCODING_DIM_PRICE), dtype=np.float32
     )
@@ -55,7 +68,7 @@ def encode_batch_shop(
 
         # Purge service price (same features as the per-item prices) + purged flag
         _encode_price_into(shop.purge_cost, gold, np_meta[b])
-        np_meta[b, ENCODING_DIM_PRICE] = float(shop.purged)
+        np_meta[b, OFF_SHOP_PURGED] = float(shop.purged)
 
     return (
         torch.from_numpy(np_price_cards).to(device),

@@ -1,18 +1,12 @@
 import torch
 import torch.nn as nn
 
-from src.rl.encoding.card import SLICE_CARDS
-from src.rl.encoding.character import SLICE_CHARACTER
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
 from src.rl.encoding.event import ENCODING_DIM_EVENT_META
-from src.rl.encoding.event import SLICE_EVENTS
+from src.rl.encoding.focus import ENCODING_DIM_FOCUS
+from src.rl.encoding.layout import SLICE_ALL
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
-from src.rl.encoding.map_ import SLICE_ROOMS
-from src.rl.encoding.monster import SLICE_MONSTERS
-from src.rl.encoding.potion import SLICE_POTIONS
-from src.rl.encoding.relic import SLICE_RELICS
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
-from src.rl.encoding.screen import ENCODING_DIM_SCREEN
 from src.rl.encoding.shop import ENCODING_DIM_SHOP_META
 from src.rl.encoding.state import ENCODING_DIM_ASCENSION
 from src.rl.models.entity_projector import EntityProjector
@@ -25,18 +19,6 @@ from src.rl.types import TCoreOutput
 from src.rl.types import TEntityProjection
 from src.rl.types import TGameState
 from src.rl.types import TPadded
-
-
-# Cat order = global token order; ROOM last (GNN node features, projected with the rest)
-SLICE_ALL = (
-    SLICE_CARDS
-    + SLICE_RELICS
-    + SLICE_POTIONS
-    + SLICE_MONSTERS
-    + SLICE_EVENTS
-    + SLICE_CHARACTER
-    + SLICE_ROOMS
-)
 
 
 def _build_token_layout() -> tuple[dict[SliceKind, slice], int]:
@@ -94,7 +76,7 @@ class Core(nn.Module):
             + len(SLICE_ALL)
             - 1  # per-slice counts (mask.sum / size); CHARACTER excluded (const)
             + ENCODING_DIM_ENERGY  # energy (raw)
-            + ENCODING_DIM_SCREEN  # screen state
+            + ENCODING_DIM_FOCUS  # focus row
             + ENCODING_DIM_ASCENSION  # ascension thermometer (curriculum level)
             + ENCODING_DIM_MAP_META  # floor depth + act-boss + next-row kinds
             + ENCODING_DIM_REWARD_META
@@ -143,36 +125,15 @@ class Core(nn.Module):
         )
 
     def _assemble_tokens(self, t_blocks: TEntityProjection) -> TPadded:
-        batch = t_blocks.cards.x.shape[0]
-        t_entities = torch.cat(
-            [
-                t_blocks.cards.x,
-                t_blocks.relics.x,
-                t_blocks.potions.x,
-                t_blocks.monsters.x,
-                t_blocks.events.x,
-                t_blocks.character.x,
-                t_blocks.rooms.x,
-            ],
-            dim=1,
-        )
+        batch = t_blocks.entities.x.shape[0]
+        # entities is already the global token block; ROOMS follow, per SLICE_ALL
+        t_entities = torch.cat([t_blocks.entities.x, t_blocks.rooms.x], dim=1)
         t_entities = (
             t_entities
             + self._type_emb(self._type_idx.expand(batch, -1))
             + self._reward_emb(self._reward_idx.expand(batch, -1))
         )
-        t_valid = torch.cat(
-            [
-                t_blocks.cards.mask,
-                t_blocks.relics.mask,
-                t_blocks.potions.mask,
-                t_blocks.monsters.mask,
-                t_blocks.events.mask,
-                t_blocks.character.mask,
-                t_blocks.rooms.mask,
-            ],
-            dim=1,
-        )
+        t_valid = torch.cat([t_blocks.entities.mask, t_blocks.rooms.mask], dim=1)
 
         t_entity_global = self._entity_global.expand(batch, -1, -1)
         t_always_valid = torch.ones(batch, 1, dtype=torch.bool, device=t_entities.device)
@@ -225,7 +186,7 @@ class Core(nn.Module):
                     # Counts exclude the learned global token
                     _get_token_counts(t_refined.mask[:, :-1]),
                     t_game_state.energy,
-                    t_game_state.screen,
+                    t_game_state.focus,
                     t_game_state.ascension,
                     t_game_state.map_meta,
                     t_game_state.reward_meta,

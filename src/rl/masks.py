@@ -10,17 +10,13 @@ from tensordict import TensorDict
 from src.rl.constants import MAX_MONSTERS
 from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SIZE_HAND
-from src.rl.encoding.card import SLICE_CARDS
 from src.rl.encoding.card import SLICE_KIND_CARDS
 from src.rl.encoding.card import _get_card_entities
 from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
-from src.rl.encoding.event import SLICE_EVENTS
-from src.rl.encoding.map_ import SLICE_ROOMS
+from src.rl.encoding.focus import derive_focus
+from src.rl.encoding.layout import SLICE_ALL
 from src.rl.encoding.potion import SLICE_KIND_POTIONS
-from src.rl.encoding.potion import SLICE_POTIONS
-from src.rl.encoding.relic import SLICE_RELICS
-from src.rl.encoding.screen import derive_focus
 from src.rl.types import ACTION_TYPE_POOL
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import Slice
@@ -31,14 +27,10 @@ from src.rl.utils import reward_slot
 
 
 # Target-slice sizes; built here (masks is the only consumer)
-BY_KIND: dict[SliceKind, Slice] = {
-    slice_.kind: slice_
-    for table in (SLICE_CARDS, SLICE_RELICS, SLICE_POTIONS, SLICE_EVENTS, SLICE_ROOMS)
-    for slice_ in table
-}
+_BY_KIND: dict[SliceKind, Slice] = {slice_.kind: slice_ for slice_ in SLICE_ALL}
 # Per-policy-type l1 mask width (the pool's cap), for the selecting actions
 ACTION_TYPE_SIZE: dict[int, int] = {
-    at: sum(BY_KIND[kind].size for kind in kinds) for at, kinds in ACTION_TYPE_POOL.items()
+    at: sum(_BY_KIND[kind].size for kind in kinds) for at, kinds in ACTION_TYPE_POOL.items()
 }
 # Policy action types with an l1 selection (engine + virtual pending)
 SELECTING_ACTION_TYPES: list[int] = list(ACTION_TYPE_POOL)
@@ -79,7 +71,7 @@ def _pile_ids(
     kind = target_kinds[0]
     if kind not in SLICE_KIND_CARDS:
         return []
-    return card_identity_ids(_get_card_entities(kind, state, combat)[: BY_KIND[kind].size])
+    return card_identity_ids(_get_card_entities(kind, state, combat)[: _BY_KIND[kind].size])
 
 
 # Action types already warned about dropped selections — truncation is never silent

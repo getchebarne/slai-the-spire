@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+from enum import StrEnum
+from enum import auto
 from typing import get_args
 
 import numpy as np
@@ -17,6 +19,7 @@ from slai import EffectSetCostOverride
 from slai import GameState
 from slai import get_card_templates
 
+from src.rl.constants import MAX_EVENT_ROLL_CARDS
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.constants import MAX_SIZE_DISC_PILE
 from src.rl.constants import MAX_SIZE_DISCOVER
@@ -31,6 +34,7 @@ from src.rl.types import REWARD_SLICE_KINDS
 from src.rl.types import Slice
 from src.rl.types import SliceKind
 from src.rl.types import clip_to_slice
+from src.rl.types import make_channel_allocator
 
 
 # Order = fill order = Core's global-offset order
@@ -47,7 +51,7 @@ SLICE_CARDS = [
     ),
     Slice(SliceKind.CARD_SHOP, MAX_SIZE_SHOP_CARDS),
     Slice(SliceKind.CARD_STASIS, MAX_SIZE_STASIS),
-    Slice(SliceKind.CARD_EVENT, 1),
+    Slice(SliceKind.CARD_EVENT, MAX_EVENT_ROLL_CARDS),
     Slice(SliceKind.CARD_PENDING_SELECTED, MAX_SIZE_HAND),
 ]
 SLICE_KIND_CARDS = {slice_.kind for slice_ in SLICE_CARDS}
@@ -85,29 +89,52 @@ _COST_OFFSET_MAX = max(
     ),
 )
 
-# Per-card identity + energy. What the card DOES rides in its effect rows
-# (effect.py), pooled into this token model-side
-ENCODING_DIM_CARD = (
-    len(_MAP_CARD_NAME)  # Name OHE
-    + len(_MAP_CARD_KIND)  # Kind OHE
-    + len(_MAP_CARD_COLOR)  # Color OHE
-    + len(_MAP_CARD_RARITY)  # Rarity OHE
-    + len(_MAP_CARD_COST_KIND)  # Cost kind OHE
-    + len(_MAP_COST_SCOPE)  # Cost-override scope OHE (all-zero = no override)
-    + _COST_VECTOR_DIM  # Cost vector
-    + 1  # Cost scalar
-    + 1  # Upgraded
-    + 1  # Exhaust
-    + 1  # Innate
-    + 1  # Ethereal
-    + 1  # Retain
-    + 1  # Requires target
-    + 1  # Playable
-    + 1  # Signed energy delta (energy_current - cost)
-    + 1  # Cost base scalar
-    + 1  # Bottled
-    + 1  # X-Cost offset
-)
+
+# Per-card identity + energy
+class CardChannel(StrEnum):
+    NAME = auto()
+    KIND = auto()
+    COLOR = auto()
+    RARITY = auto()
+    COST_KIND = auto()
+    COST_SCOPE = auto()  # all-zero = no override
+    COST_VECTOR = auto()
+    COST_SCALAR = auto()
+    UPGRADED = auto()
+    EXHAUST = auto()
+    INNATE = auto()
+    ETHEREAL = auto()
+    RETAIN = auto()
+    REQUIRES_TARGET = auto()
+    PLAYABLE = auto()
+    ENERGY_DELTA = auto()  # signed: energy_current - cost
+    COST_BASE = auto()
+    BOTTLED = auto()
+    COST_OFFSET = auto()  # X-Cost offset
+
+
+CHANNEL_LAYOUT_CARD, _alloc = make_channel_allocator()
+OFF_CARD_NAME = _alloc(CardChannel.NAME, len(_MAP_CARD_NAME))
+OFF_CARD_KIND = _alloc(CardChannel.KIND, len(_MAP_CARD_KIND))
+OFF_CARD_COLOR = _alloc(CardChannel.COLOR, len(_MAP_CARD_COLOR))
+OFF_CARD_RARITY = _alloc(CardChannel.RARITY, len(_MAP_CARD_RARITY))
+OFF_CARD_COST_KIND = _alloc(CardChannel.COST_KIND, len(_MAP_CARD_COST_KIND))
+OFF_CARD_COST_SCOPE = _alloc(CardChannel.COST_SCOPE, len(_MAP_COST_SCOPE))
+OFF_CARD_COST_VECTOR = _alloc(CardChannel.COST_VECTOR, _COST_VECTOR_DIM)
+OFF_CARD_COST_SCALAR = _alloc(CardChannel.COST_SCALAR)
+OFF_CARD_UPGRADED = _alloc(CardChannel.UPGRADED)
+OFF_CARD_EXHAUST = _alloc(CardChannel.EXHAUST)
+OFF_CARD_INNATE = _alloc(CardChannel.INNATE)
+OFF_CARD_ETHEREAL = _alloc(CardChannel.ETHEREAL)
+OFF_CARD_RETAIN = _alloc(CardChannel.RETAIN)
+OFF_CARD_REQUIRES_TARGET = _alloc(CardChannel.REQUIRES_TARGET)
+OFF_CARD_PLAYABLE = _alloc(CardChannel.PLAYABLE)
+OFF_CARD_ENERGY_DELTA = _alloc(CardChannel.ENERGY_DELTA)
+OFF_CARD_COST_BASE = _alloc(CardChannel.COST_BASE)
+OFF_CARD_BOTTLED = _alloc(CardChannel.BOTTLED)
+OFF_CARD_COST_OFFSET = _alloc(CardChannel.COST_OFFSET)
+
+ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -118,53 +145,32 @@ def _cost_offset(card: Card) -> float:
     return float(card.cost_kind.offset if isinstance(card.cost_kind, CardCostKindXCost) else 0)
 
 
-def _encode_card_into(card: Card, energy_current: int, pos: int, out: np.ndarray) -> int:
-    # Name OHE
-    out[pos + _MAP_CARD_NAME[card.name]] = 1.0
-    pos += len(_MAP_CARD_NAME)
-
-    # Kind OHE
-    out[pos + _MAP_CARD_KIND[card.kind]] = 1.0
-    pos += len(_MAP_CARD_KIND)
-
-    # Color OHE
-    out[pos + _MAP_CARD_COLOR[card.color]] = 1.0
-    pos += len(_MAP_CARD_COLOR)
-
-    # Rarity OHE
-    out[pos + _MAP_CARD_RARITY[card.rarity]] = 1.0
-    pos += len(_MAP_CARD_RARITY)
-
-    # Cost kind OHE
-    out[pos + _MAP_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
-    pos += len(_MAP_CARD_COST_KIND)
-
-    # Cost-override scope OHE
+def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
+    out[OFF_CARD_NAME + _MAP_CARD_NAME[card.name]] = 1.0
+    out[OFF_CARD_KIND + _MAP_CARD_KIND[card.kind]] = 1.0
+    out[OFF_CARD_COLOR + _MAP_CARD_COLOR[card.color]] = 1.0
+    out[OFF_CARD_RARITY + _MAP_CARD_RARITY[card.rarity]] = 1.0
+    out[OFF_CARD_COST_KIND + _MAP_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
     if card.cost_override_scope is not None:
-        out[pos + _MAP_COST_SCOPE[card.cost_override_scope]] = 1.0
-    pos += len(_MAP_COST_SCOPE)
+        out[OFF_CARD_COST_SCOPE + _MAP_COST_SCOPE[card.cost_override_scope]] = 1.0
 
-    # Cost vector
     cost = max(_COST_MIN, min(card.cost, _COST_MAX))
-    out[pos + cost] = 1.0
-    pos += _COST_VECTOR_DIM
+    out[OFF_CARD_COST_VECTOR + cost] = 1.0
 
-    # Scalars
-    out[pos] = cost / _COST_MAX
-    out[pos + 1] = float(card.upgraded)
-    out[pos + 2] = float(card.exhaust)
-    out[pos + 3] = float(card.innate)
-    out[pos + 4] = float(card.ethereal)
-    out[pos + 5] = float(card.retain)
-    out[pos + 6] = float(card.requires_target)
-    out[pos + 7] = float(card.playable)
-    out[pos + 8] = max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
-    out[pos + 9] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
-    out[pos + 10] = float(card.bottled)
-    out[pos + 11] = _cost_offset(card) / _COST_OFFSET_MAX
-    pos += 12
-
-    return pos
+    out[OFF_CARD_COST_SCALAR] = cost / _COST_MAX
+    out[OFF_CARD_UPGRADED] = float(card.upgraded)
+    out[OFF_CARD_EXHAUST] = float(card.exhaust)
+    out[OFF_CARD_INNATE] = float(card.innate)
+    out[OFF_CARD_ETHEREAL] = float(card.ethereal)
+    out[OFF_CARD_RETAIN] = float(card.retain)
+    out[OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
+    out[OFF_CARD_PLAYABLE] = float(card.playable)
+    out[OFF_CARD_ENERGY_DELTA] = (
+        max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
+    )
+    out[OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
+    out[OFF_CARD_BOTTLED] = float(card.bottled)
+    out[OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
 
 
 def card_key(card: Card) -> tuple:
@@ -202,8 +208,7 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
     row = _CARD_ROW_CACHE.get(cache_key)
     if row is None:
         row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
-        pos = _encode_card_into(card, energy_current, 0, row)
-        assert pos == ENCODING_DIM_CARD, "card row layout drifted from ENCODING_DIM_CARD"
+        _encode_card_into(card, energy_current, row)
         row.flags.writeable = False  # guard the cached master copy
         if len(_CARD_ROW_CACHE) >= _CARD_ROW_CACHE_MAX:
             _CARD_ROW_CACHE.clear()
@@ -217,7 +222,7 @@ _REWARD_BUNDLE_OF_KIND = {kind: bundle for bundle, kind in enumerate(REWARD_SLIC
 def _get_card_entities(
     kind: SliceKind, game_state: GameState, combat: Combat | None
 ) -> list[Card]:
-    """The GameState card pile a card slice covers (used by slice_slots + masks dedup).
+    """The GameState card pile a card slice covers (used by _slice_slots + masks dedup).
 
     `combat` is the caller's hoisted `game_state.combat`: every context access
     deep-clones the whole snapshot across the FFI, so it is fetched once per
@@ -262,7 +267,7 @@ def _get_card_entities(
             raise ValueError(f"Unsupported `SliceKind`: {kind}")
 
 
-def slice_slots(
+def _slice_slots(
     slice_: Slice, game_state: GameState, combat: Combat | None
 ) -> Iterator[tuple[int, Card]]:
     """(slot-within-slice, Card) for one slice — the single placement authority."""
@@ -285,7 +290,7 @@ def encode_batch_cards(
         energy_current = combat.energy.energy_current if combat is not None else 0
         offset = 0
         for slice_ in SLICE_CARDS:
-            for slot, card in slice_slots(slice_, game_state, combat):
+            for slot, card in _slice_slots(slice_, game_state, combat):
                 encode_card_into_w_cache(card, energy_current, np_out[b, offset + slot])
                 np_pad[b, offset + slot] = True
 
@@ -305,7 +310,7 @@ def iter_effect_owners(game_state: GameState) -> Iterator[tuple[int, list[Effect
     combat = game_state.combat
     offset = 0
     for slice_ in SLICE_CARDS:
-        for slot, card in slice_slots(slice_, game_state, combat):
+        for slot, card in _slice_slots(slice_, game_state, combat):
             effects = card.effects  # bound once: each read clones the Vec
             if effects:
                 yield offset + slot, effects

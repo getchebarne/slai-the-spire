@@ -1,7 +1,9 @@
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from enum import IntEnum
+from enum import StrEnum
 from typing import NamedTuple
 
 import torch
@@ -57,6 +59,19 @@ class Slice(NamedTuple):
     size: int
 
 
+def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., int]]:
+    """A (layout, alloc) pair: alloc(channel, width=1) appends and returns the
+    offset, so offsets, widths and the total all derive from one list."""
+    layout: list[tuple[StrEnum, int]] = []
+
+    def alloc(channel: StrEnum, width: int = 1) -> int:
+        offset = sum(w for _, w in layout)
+        layout.append((channel, width))
+        return offset
+
+    return layout, alloc
+
+
 # Slice kinds that have already warned about overflow — truncation is never silent
 _WARNED_TRUNCATED: set[SliceKind] = set()
 
@@ -86,13 +101,23 @@ class TEffects:
     """Per-state pool of effect rows, flattened across entities.
 
     The per-entity axis is ragged (0-5 effects), so it is folded away: `segment`
-    carries the owning token slot and the model sum-pools rows back into their
-    owner. Pads are mask-False with segment 0, which aliases card slot 0 — only
-    maskless misuse could read them."""
+    carries the owner's GLOBAL token slot (layout.py TOKEN_OFFSET numbering) and
+    the model sum-pools rows back into their owner. Pads are mask-False with
+    segment 0, which aliases card slot 0 — only maskless misuse could read them."""
 
     x: torch.Tensor  # (B, MAX_EFFECTS_STATE, ENCODING_DIM_EFFECT) fp32
-    segment: torch.Tensor  # (B, E) long — owner token slot; EFFECT_SEGMENT_PENDING for the halt
+    segment: torch.Tensor  # (B, E) long — global token slot; EFFECT_SEGMENT_PENDING for the halt
     mask: torch.Tensor  # (B, E) bool
+
+
+@tensorclass
+class TModifiers:
+    """Per-state pool of Modifier rows across the Character and the Monsters;
+    `segment` is the owner's global token slot (layout.py TOKEN_OFFSET numbering)."""
+
+    x: torch.Tensor  # (B, MAX_MODIFIER_ROWS_STATE, ENCODING_DIM_MODIFIER) fp32
+    segment: torch.Tensor  # (B, N) long
+    mask: torch.Tensor  # (B, N) bool
 
 
 @tensorclass
@@ -104,12 +129,13 @@ class TGameState:
     event_options: TPadded
     character: TPadded
     effects: TEffects
+    modifiers: TModifiers
     energy: torch.Tensor
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
     room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
     room_mask: torch.Tensor  # (B, MAP_WIDTH) bool — next-row room non-padding mask
     map_meta: torch.Tensor
-    screen: torch.Tensor
+    focus: torch.Tensor
     ascension: torch.Tensor  # (B, ENCODING_DIM_ASCENSION) thermometer, bit i = level > i
     reward_meta: torch.Tensor
     shop_meta: torch.Tensor
@@ -121,13 +147,9 @@ class TGameState:
 
 @tensorclass
 class TEntityProjection:
-    # EntityProjector output: one embedded TPadded per entity type; Core cats them (never here)
-    cards: TPadded
-    relics: TPadded
-    potions: TPadded
-    monsters: TPadded
-    events: TPadded
-    character: TPadded
+    # EntityProjector output: the global entity block (B, NUM_ENTITY_TOKENS, D) in
+    # TOKEN_OFFSET order; Core appends rooms + the learned global token
+    entities: TPadded
     rooms: TPadded
     pending: torch.Tensor  # (B, dim) fp32 — pooled halt effect; zeros when no halt
 
@@ -186,7 +208,7 @@ class RolloutBuffer:
 # members() is declaration order == int() order, which is what masks/utils/heads
 # index by
 ACTION_TYPE_BY_INT = ActionType.members()
-NUM_ENGINE_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
+_NUM_ENGINE_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 
 # Halting candidate pool -> the L2 slice its idx indexes
@@ -211,10 +233,10 @@ PENDING_POOL_SLICE: dict[CandidatePool, SliceKind] = {
 # Policy ints: engine ints 0..N-1 keep their values (so
 # ACTION_TYPE_BY_INT.index(ActionType.X) still works), virtuals append
 PENDING_POOL_INT: dict[CandidatePool, int] = {
-    pool: NUM_ENGINE_ACTION_TYPES + i for i, pool in enumerate(PENDING_POOL_SLICE)
+    pool: _NUM_ENGINE_ACTION_TYPES + i for i, pool in enumerate(PENDING_POOL_SLICE)
 }
 PENDING_INTS: frozenset = frozenset(PENDING_POOL_INT.values())
-NUM_ACTION_TYPES = NUM_ENGINE_ACTION_TYPES + len(PENDING_POOL_SLICE)
+NUM_ACTION_TYPES = _NUM_ENGINE_ACTION_TYPES + len(PENDING_POOL_SLICE)
 
 # Each index-taking action -> the L2 pools its selection indexes into, keyed by
 # POLICY int (virtuals are not engine members). Terminal actions absent
@@ -246,7 +268,7 @@ ACTION_TYPE_POOL: dict[int, tuple[SliceKind, ...]] = {
 # plus the one resolver we split into the virtuals
 _ACTION_TYPE_ARITY: list = [ACTION_SPEC_REGISTRY[m].arity for m in ACTION_TYPE_BY_INT]
 _ENGINE_INDEX_TAKING = {
-    at for at in range(NUM_ENGINE_ACTION_TYPES) if _ACTION_TYPE_ARITY[at] != (0, 0)
+    at for at in range(_NUM_ENGINE_ACTION_TYPES) if _ACTION_TYPE_ARITY[at] != (0, 0)
 }
 assert _ENGINE_INDEX_TAKING == {int(a) for a in _ENGINE_POOL} | {
     int(ActionType.EffectPendingResolve)

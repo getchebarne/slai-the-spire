@@ -1,21 +1,42 @@
+from enum import StrEnum
+from enum import auto
+
 import numpy as np
 import torch
+from slai import GameEnv
 from slai import Reward
 
 from src.rl.constants import GOLD_CAP
+from src.rl.types import make_channel_allocator
 from src.rl.utils import get_sqrt_norm
 
 
-_GOLD_MAX = 100  # Offered gold (monster 10-20, elite 25-44, chest 25-75); sqrt-scaled
-# Gold scalar + gold-after-taking + boss-relic exclusivity flag
-ENCODING_DIM_REWARD_META = 1 + 1 + 1
+# Widest reward-gold offer (boss roll + Golden Idol); sqrt-scaled
+_GOLD_MAX = GameEnv.REWARD_GOLD_MAX
+
+
+class RewardMetaChannel(StrEnum):
+    GOLD = auto()
+    GOLD_AFTER_TAKING = auto()
+    RELICS_EXCLUSIVE = auto()  # boss rewards: take one relic, lose the rest
+
+
+CHANNEL_LAYOUT_REWARD_META, _alloc = make_channel_allocator()
+OFF_REWARD_GOLD = _alloc(RewardMetaChannel.GOLD)
+OFF_REWARD_GOLD_AFTER_TAKING = _alloc(RewardMetaChannel.GOLD_AFTER_TAKING)
+OFF_REWARD_RELICS_EXCLUSIVE = _alloc(RewardMetaChannel.RELICS_EXCLUSIVE)
+
+ENCODING_DIM_REWARD_META = sum(w for _, w in CHANNEL_LAYOUT_REWARD_META)
 
 
 def _encode_reward_meta_into(reward: Reward, character_gold: int, out: np.ndarray) -> None:
-    out[0] = get_sqrt_norm(reward.gold, _GOLD_MAX) if reward.gold is not None else 0.0
-    out[1] = get_sqrt_norm(character_gold + (reward.gold or 0), GOLD_CAP)
-    # Boss rewards: the offered relics are mutually exclusive (take one, lose the rest)
-    out[2] = float(reward.relics_exclusive)
+    out[OFF_REWARD_GOLD] = (
+        get_sqrt_norm(reward.gold, _GOLD_MAX) if reward.gold is not None else 0.0
+    )
+    out[OFF_REWARD_GOLD_AFTER_TAKING] = get_sqrt_norm(
+        character_gold + (reward.gold or 0), GOLD_CAP
+    )
+    out[OFF_REWARD_RELICS_EXCLUSIVE] = float(reward.relics_exclusive)
 
 
 def encode_batch_rewards(
@@ -26,7 +47,6 @@ def encode_batch_rewards(
     """Reward meta only — the offered card/relic/potion entities are encoded by
     their entity-class encoders (reward slices per the encoders)."""
     batch_size = len(batch_reward)
-
     np_meta = np.zeros((batch_size, ENCODING_DIM_REWARD_META), dtype=np.float32)
 
     for b, reward in enumerate(batch_reward):

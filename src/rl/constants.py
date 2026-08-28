@@ -4,6 +4,9 @@ Constants for the RL module.
 Centralizes magic numbers and configuration values used across the RL codebase.
 """
 
+import slai as _slai
+
+
 ASCENSION_LEVEL = 20
 
 # Skip trivial single-legal-action states in the engine (auto-advance). Used
@@ -16,23 +19,21 @@ FAST_MODE = False
 # Actor encoding limits. Monster and character share ENTITY caps: both encoders
 # must build a byte-identical health/block block so EntityProjector can share
 # its first-layer family weights (encoder import-time asserts enforce widths).
-BLOCK_MAX_ENTITY = 40  # Spheric Guardian starts at 40 and lives there (Barricade)
-HEALTH_MAX_ENTITY = 450  # From Champ at Ascension 9+ (440)
-BLOCK_MAX_CHARACTER = 20  # DEAD: superseded by BLOCK_MAX_ENTITY; kept for reference
-HEALTH_MAX_CHARACTER = (
-    100  # DEAD: superseded by HEALTH_MAX_ENTITY (was: Silent 70 base + max-HP events, R4)
+BLOCK_MAX_ENTITY = 40  # Spheric Guardian's opener; not derivable (templates expose no block)
+# The catalog's widest monster HP roll (Champ 440 at Ascension 9+); the
+# Character rides the same buckets far below
+HEALTH_MAX_ENTITY = max(
+    template.hp_range[1]
+    for ascension in range(ASCENSION_LEVEL + 1)
+    for template in _slai.get_monster_templates(ascension)
 )
-
-# Energy encoding
-ENERGY_MIN = 0
-ENERGY_MAX = 5
-
-
-import slai as _slai
 
 
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
+MAX_EVENT_ROLL_CARDS = _slai.GameEnv.MAX_EVENT_ROLL_CARDS
+MAX_EVENT_ROLL_POTIONS = _slai.GameEnv.MAX_EVENT_ROLL_POTIONS
+MAX_EVENT_ROLL_RELICS = _slai.GameEnv.MAX_EVENT_ROLL_RELICS
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
 MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
 
@@ -53,7 +54,6 @@ REWARD_SLOT_TO_BUNDLE = tuple(
     bundle for bundle, width in enumerate(REWARD_REGION_WIDTHS) for _ in range(width)
 )
 REWARD_SLOT_TO_CARD = tuple(idx for width in REWARD_REGION_WIDTHS for idx in range(width))
-MAX_REWARD_CARD_TOKENS = sum(REWARD_REGION_WIDTHS)
 
 # Cards exiled by Bronze Orb StasisSteal; the engine slot-parallels them to the
 # monster arena ([Option; MAX_MONSTERS]), so this cap is exact, not headroom.
@@ -72,9 +72,9 @@ MAX_SIZE_DRAW_PILE = 45
 # random play), so sized with real headroom; observational-only overflow.
 MAX_SIZE_EXHAUST = 40
 
-# Maximum number of relic-reward offers per RELIC_REWARD halt: boss rewards
-# roll 3 mutually exclusive relics (taking one discards the others).
-MAX_RELIC_REWARDS = 3
+# Relic-reward offers per RELIC_REWARD halt: boss rewards roll mutually
+# exclusive relics (taking one discards the others).
+MAX_RELIC_REWARDS = _slai.GameEnv.BOSS_RELIC_REWARD_COUNT
 
 # Cauldron stages CAULDRON_POTION_COUNT potions as one reward batch; combat
 # rewards offer at most 1.
@@ -85,19 +85,19 @@ MAX_POTION_REWARDS = _slai.GameEnv.CAULDRON_POTION_COUNT
 # Provisional two-act sizing (R4 harness).
 MAX_RELICS = 24
 
-# New-screen encoder/selection caps. Sized to current slai content with a
-# little headroom; masks/encoders enumerate up to these. slai shops offer
-# 7 cards / 3 relics / 3 potions; events up to ~9 options; discover ~3.
-MAX_POTION_SLOTS = 5  # belt 3 (2 at A11+) + Potion Belt's 2; unused slots masked empty
-MAX_SIZE_SHOP_CARDS = 8
-MAX_SHOP_RELICS = 4
-MAX_SHOP_POTIONS = 4
+# New-screen encoder/selection caps: engine slot counts + provisional headroom;
+# masks/encoders enumerate up to these. Events run up to ~9 options today.
+MAX_POTION_SLOTS = _slai.GameEnv.POTION_SLOTS_MAX  # unused slots masked empty
+MAX_SIZE_SHOP_CARDS = _slai.GameEnv.SHOP_SLOTS_CARD_TOTAL + 1
+MAX_SHOP_RELICS = _slai.GameEnv.SHOP_SLOTS_RELIC + 1
+MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
 # Per-state effect-row pool. Ragged per entity (0-5 effects), so rows are packed
 # per STATE with an owner segment rather than padded per entity: (B, 284, 5, D)
 # would cost ~6x this. Measured live: mean 16.9 rows/state, max 35.
 MAX_EFFECTS_STATE = 224
-MAX_SIZE_DISCOVER = 5
+MAX_MODIFIER_ROWS_STATE = 64
+MAX_SIZE_DISCOVER = _slai.GameEnv.DISCOVER_PICK_COUNT + 2
 
 # Normalization caps for new scalar features
 GOLD_CAP = 999
@@ -113,18 +113,16 @@ __all__ = [
     # Training
     "ASCENSION_LEVEL",
     # Encoding limits
-    "BLOCK_MAX_CHARACTER",
     "BLOCK_MAX_ENTITY",
-    "HEALTH_MAX_CHARACTER",
     "HEALTH_MAX_ENTITY",
-    "ENERGY_MIN",
-    "ENERGY_MAX",
     # Game constants
     "MAP_HEIGHT",
     "MAP_WIDTH",
+    "MAX_EVENT_ROLL_CARDS",
+    "MAX_EVENT_ROLL_POTIONS",
+    "MAX_EVENT_ROLL_RELICS",
     "MAX_MONSTERS",
     "MAX_REWARD_CARD_BUNDLES",
-    "MAX_REWARD_CARD_TOKENS",
     "REWARD_REGION_WIDTHS",
     "REWARD_REGION_OFFSETS",
     "REWARD_SLOT_TO_BUNDLE",
@@ -145,6 +143,7 @@ __all__ = [
     "MAX_SHOP_RELICS",
     "MAX_SHOP_POTIONS",
     "MAX_EFFECTS_STATE",
+    "MAX_MODIFIER_ROWS_STATE",
     "MAX_EVENT_OPTIONS",
     "MAX_SIZE_DISCOVER",
     "GOLD_CAP",

@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+from enum import StrEnum
+from enum import auto
 
 import numpy as np
 import torch
@@ -8,12 +10,14 @@ from slai import Potion
 from slai import PotionName
 from slai import PotionRarity
 
+from src.rl.constants import MAX_EVENT_ROLL_POTIONS
 from src.rl.constants import MAX_POTION_REWARDS
 from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SHOP_POTIONS
 from src.rl.types import Slice
 from src.rl.types import SliceKind
 from src.rl.types import clip_to_slice
+from src.rl.types import make_channel_allocator
 
 
 # Order = fill order = Core's global-offset order
@@ -21,22 +25,30 @@ SLICE_POTIONS = [
     Slice(SliceKind.POTION_OWNED, MAX_POTION_SLOTS),
     Slice(SliceKind.POTION_REWARD, MAX_POTION_REWARDS),
     Slice(SliceKind.POTION_SHOP, MAX_SHOP_POTIONS),
-    Slice(SliceKind.POTION_EVENT, 1),  # event.roll_potions (We Meet Again stakes 1)
+    Slice(SliceKind.POTION_EVENT, MAX_EVENT_ROLL_POTIONS),
 ]
 NUM_POTION_TOKENS = sum(slice_.size for slice_ in SLICE_POTIONS)
 SLICE_KIND_POTIONS = {slice_.kind for slice_ in SLICE_POTIONS}
 
 
-# int() keying: declaration-order discriminant, stable across engine bumps
 _POTION_NAME_TO_IDX = {potion_name: int(potion_name) for potion_name in PotionName.members()}
 _POTION_RARITY_TO_IDX = {rarity: int(rarity) for rarity in PotionRarity.members()}
 
-ENCODING_DIM_POTION = (
-    len(_POTION_NAME_TO_IDX)  # Name OHE
-    + len(_POTION_RARITY_TO_IDX)  # Rarity OHE
-    + 1  # Requires target
-    + 1  # Combat only
-)
+
+class PotionChannel(StrEnum):
+    NAME = auto()
+    RARITY = auto()
+    REQUIRES_TARGET = auto()
+    COMBAT_ONLY = auto()
+
+
+CHANNEL_LAYOUT_POTION, _alloc = make_channel_allocator()
+OFF_POTION_NAME = _alloc(PotionChannel.NAME, len(_POTION_NAME_TO_IDX))
+OFF_POTION_RARITY = _alloc(PotionChannel.RARITY, len(_POTION_RARITY_TO_IDX))
+OFF_POTION_REQUIRES_TARGET = _alloc(PotionChannel.REQUIRES_TARGET)
+OFF_POTION_COMBAT_ONLY = _alloc(PotionChannel.COMBAT_ONLY)
+
+ENCODING_DIM_POTION = sum(w for _, w in CHANNEL_LAYOUT_POTION)
 
 # Per-potion encoding cache keyed by name (rarity/target/effects are fixed by name)
 _POTION_ROW_CACHE: dict[PotionName, np.ndarray] = {}
@@ -44,11 +56,10 @@ _POTION_ROW_CACHE_MAX = 100_000
 
 
 def encode_potion_into(potion: Potion, out: np.ndarray) -> None:
-    scalars = len(_POTION_NAME_TO_IDX) + len(_POTION_RARITY_TO_IDX)
-    out[_POTION_NAME_TO_IDX[potion.name]] = 1.0
-    out[len(_POTION_NAME_TO_IDX) + _POTION_RARITY_TO_IDX[potion.rarity]] = 1.0
-    out[scalars] = float(potion.requires_target)
-    out[scalars + 1] = float(potion.combat_only)
+    out[OFF_POTION_NAME + _POTION_NAME_TO_IDX[potion.name]] = 1.0
+    out[OFF_POTION_RARITY + _POTION_RARITY_TO_IDX[potion.rarity]] = 1.0
+    out[OFF_POTION_REQUIRES_TARGET] = float(potion.requires_target)
+    out[OFF_POTION_COMBAT_ONLY] = float(potion.combat_only)
 
 
 def encode_potion_into_w_cache(potion: Potion, out: np.ndarray) -> None:
