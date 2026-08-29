@@ -19,7 +19,22 @@ FAST_MODE = False
 # Actor encoding limits. Monster and character share ENTITY caps: both encoders
 # must build a byte-identical health/block block so EntityProjector can share
 # its first-layer family weights (encoder import-time asserts enforce widths).
-BLOCK_MAX_ENTITY = 40  # Spheric Guardian's opener; not derivable (templates expose no block)
+# The catalog's widest single block source (Spheric Guardian's opener); Character
+# block accumulation clamps to the same scale
+BLOCK_MAX_ENTITY = max(
+    value
+    for ascension in range(ASCENSION_LEVEL + 1)
+    for template in _slai.get_monster_templates(ascension)
+    for value in (
+        template.block_start,
+        *(
+            effect.amount
+            for move in template.moves
+            for effect in move.effects
+            if isinstance(effect, _slai.EffectBlockGain)
+        ),
+    )
+)
 # The catalog's widest monster HP roll (Champ 440 at Ascension 9+); the
 # Character rides the same buckets far below
 HEALTH_MAX_ENTITY = max(
