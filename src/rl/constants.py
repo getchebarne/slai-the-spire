@@ -19,12 +19,23 @@ FAST_MODE = False
 # Actor encoding limits. Monster and character share ENTITY caps: both encoders
 # must build a byte-identical health/block block so EntityProjector can share
 # its first-layer family weights (encoder import-time asserts enforce widths).
+# Every Monster template across every ascension, for the catalog folds below
+_MONSTER_TEMPLATES = [
+    template
+    for ascension in range(ASCENSION_LEVEL + 1)
+    for template in _slai.get_monster_templates(ascension)
+]
+_MONSTER_MOVES = [move for template in _MONSTER_TEMPLATES for move in template.moves]
+
+# Character max-health normalization clamp (health grows via events/relics with no
+# engine ceiling); also the scale Hexaghost's Divider is bridged from
+CHARACTER_HEALTH_CAP = 200
+
 # The catalog's widest single block source (Spheric Guardian's opener); Character
 # block accumulation clamps to the same scale
 BLOCK_MAX_ENTITY = max(
     value
-    for ascension in range(ASCENSION_LEVEL + 1)
-    for template in _slai.get_monster_templates(ascension)
+    for template in _MONSTER_TEMPLATES
     for value in (
         template.block_start,
         *(
@@ -35,13 +46,35 @@ BLOCK_MAX_ENTITY = max(
         ),
     )
 )
+
 # The catalog's widest monster HP roll (Champ 440 at Ascension 9+); the
 # Character rides the same buckets far below
-HEALTH_MAX_ENTITY = max(
-    template.hp_range[1]
-    for ascension in range(ASCENSION_LEVEL + 1)
-    for template in _slai.get_monster_templates(ascension)
+HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
+
+# Widest raw intent hits. Hexaghost's Divider template carries a placeholder 0
+# (damage rolls at selection: character health / DIVISOR + 1), so it is bridged
+# from CHARACTER_HEALTH_CAP; vuln scaling is applied by the encoder caps
+_DIVIDER_HIT_MAX = CHARACTER_HEALTH_CAP // _slai.GameEnv.HEXAGHOST_DIVIDER_DIVISOR + 1
+INTENT_DAMAGE_HIT_MAX = max(
+    max(move.damage for move in _MONSTER_MOVES if move.damage is not None),
+    _DIVIDER_HIT_MAX,
 )
+INTENT_DAMAGE_TOTAL_MAX = max(
+    max(move.damage * move.instances for move in _MONSTER_MOVES if move.damage is not None),
+    _DIVIDER_HIT_MAX * _slai.GameEnv.HEXAGHOST_DIVIDER_HITS,
+)
+INTENT_INSTANCES_MAX = max(move.instances for move in _MONSTER_MOVES if move.instances is not None)
+# Thievery steals its stacks per landed attack (Looter/Mugger spawn modifier)
+# Widest spawn-rolled moveset (Book of Stabbing's Multi-Stab ramp); move-index OHE width
+MONSTER_MOVESET_MAX = max(len(template.moves) for template in _MONSTER_TEMPLATES)
+
+GOLD_STEAL_MAX = max(
+    spawn.stacks_max
+    for template in _MONSTER_TEMPLATES
+    for spawn in template.modifier_spawns
+    if spawn.kind is _slai.ModifierKind.Thievery
+)
+FACTOR_VULN = _slai.GameEnv.FACTOR_VULN
 
 
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
@@ -130,6 +163,13 @@ __all__ = [
     # Encoding limits
     "BLOCK_MAX_ENTITY",
     "HEALTH_MAX_ENTITY",
+    "CHARACTER_HEALTH_CAP",
+    "INTENT_DAMAGE_HIT_MAX",
+    "INTENT_DAMAGE_TOTAL_MAX",
+    "INTENT_INSTANCES_MAX",
+    "GOLD_STEAL_MAX",
+    "MONSTER_MOVESET_MAX",
+    "FACTOR_VULN",
     # Game constants
     "MAP_HEIGHT",
     "MAP_WIDTH",

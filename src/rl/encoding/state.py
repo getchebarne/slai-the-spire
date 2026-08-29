@@ -28,6 +28,7 @@ from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import encode_modifier_row_into
 from src.rl.encoding.monster import encode_batch_monsters
 from src.rl.encoding.monster import iter_effect_owners as _effect_owners_monster
+from src.rl.encoding.monster import iter_moveset_effect_owners as _effect_owners_moveset
 from src.rl.encoding.potion import encode_batch_potions
 from src.rl.encoding.potion import iter_effect_owners as _effect_owners_potion
 from src.rl.encoding.relic import encode_batch_relics
@@ -42,13 +43,15 @@ from src.rl.types import TPadded
 
 ENCODING_DIM_ASCENSION = ASCENSION_LEVEL  # thermometer: bit i = level > i
 
-# Fill priority: halt first, then decision contexts, so an overflow only eats deep card piles
+# Fill priority: halt first, then decision contexts; an overflow eats the static
+# movesets first, then deep card piles
 _EFFECT_SOURCES = (
     (TOKEN_OFFSET[EntityIdx.EVENT_OPTION], _effect_owners_event, OwnerContext.EVENT_OPTION),
     (TOKEN_OFFSET[EntityIdx.MONSTER], _effect_owners_monster, OwnerContext.MONSTER_MOVE),
     (TOKEN_OFFSET[EntityIdx.POTION], _effect_owners_potion, OwnerContext.POTION),
     (TOKEN_OFFSET[EntityIdx.RELIC], _effect_owners_relic, OwnerContext.RELIC),
     (TOKEN_OFFSET[EntityIdx.CARD], _effect_owners_card, OwnerContext.CARD),
+    (TOKEN_OFFSET[EntityIdx.MONSTER], _effect_owners_moveset, OwnerContext.MONSTER_MOVESET),
 )
 
 # Row families that have already warned about overflow — truncation is never silent
