@@ -251,6 +251,7 @@ class OwnerContext(IntEnum):
     EVENT_OPTION = 3
     MONSTER_MOVE = 4
     PENDING = 5
+    MONSTER_MOVESET = 6  # whole-moveset capability rows, not the live intent
 
 
 # Contiguous groups; every column carries a cap and a mode

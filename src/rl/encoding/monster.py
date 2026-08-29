@@ -1,3 +1,4 @@
+import math
 from collections.abc import Iterator
 from enum import StrEnum
 from enum import auto
@@ -9,10 +10,16 @@ from slai import GameState
 from slai import IntentKind
 from slai import Monster
 from slai import MonsterName
+from slai import get_monster_templates
 
 from src.rl.constants import BLOCK_MAX_ENTITY
+from src.rl.constants import FACTOR_VULN
+from src.rl.constants import GOLD_STEAL_MAX
 from src.rl.constants import HEALTH_MAX_ENTITY
+from src.rl.constants import INTENT_DAMAGE_HIT_MAX
+from src.rl.constants import INTENT_INSTANCES_MAX
 from src.rl.constants import MAX_MONSTERS
+from src.rl.constants import MONSTER_MOVESET_MAX
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
 from src.rl.types import Slice
@@ -33,12 +40,14 @@ _INTENT_BLOCK_KINDS = {IntentKind.Block, IntentKind.AttackBlock, IntentKind.Bloc
 _INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
 _INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
 
-# Normalization caps, bump when adding heavy hitters
-_DAMAGE_MAX = 96  # Bronze Automaton's Hyper Beam 50 x `FACTOR_VULN` 1.5 = 75
-_INSTANCES_MAX = 5  # The Guardian's Whirlwind
+# Normalization caps, catalog-anchored (constants.py folds over the Monster templates)
+_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_HIT_MAX * FACTOR_VULN)  # widest hit, Vulnerable-scaled
+_INSTANCES_MAX = INTENT_INSTANCES_MAX
 _HEALTH_MAX = HEALTH_MAX_ENTITY  # Champ 440 at A9+ (constants.py)
 _BLOCK_MAX = BLOCK_MAX_ENTITY  # Spheric Guardian lives at 40 (constants.py)
-_STOLEN_GOLD_MAX = 40  # Mugger/Looter thievery accumulation; sqrt-scaled
+
+# Thievery accumulation: Mug, Mug, Lunge — every attack before the Escape turn steals
+_STOLEN_GOLD_MAX = 3 * GOLD_STEAL_MAX
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 
@@ -60,6 +69,9 @@ class MonsterChannel(StrEnum):
     HEALTH_FRACTION = auto()
     GOLD_STOLEN = auto()
     INTENT_KIND = auto()
+    MOVE_CURRENT = auto()  # index into the spawn-rolled moveset
+    MOVE_PREV_1 = auto()  # one move back (move_history's last entry is the current move)
+    MOVE_PREV_2 = auto()
 
 
 CHANNEL_LAYOUT_MONSTER, _alloc = make_channel_allocator()
@@ -77,6 +89,9 @@ OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc(MonsterChannel.MAX_HEALTH_MAGNITUDE)
 OFF_MONSTER_HEALTH_FRACTION = _alloc(MonsterChannel.HEALTH_FRACTION)
 OFF_MONSTER_GOLD_STOLEN = _alloc(MonsterChannel.GOLD_STOLEN)
 OFF_MONSTER_INTENT_KIND = _alloc(MonsterChannel.INTENT_KIND, len(_MAP_INTENT_KIND))
+OFF_MONSTER_MOVE_CURRENT = _alloc(MonsterChannel.MOVE_CURRENT, MONSTER_MOVESET_MAX)
+OFF_MONSTER_MOVE_PREV_1 = _alloc(MonsterChannel.MOVE_PREV_1, MONSTER_MOVESET_MAX)
+OFF_MONSTER_MOVE_PREV_2 = _alloc(MonsterChannel.MOVE_PREV_2, MONSTER_MOVESET_MAX)
 
 ENCODING_DIM_MONSTER = sum(w for _, w in CHANNEL_LAYOUT_MONSTER)
 SLICE_HEALTH_BLOCK_MONSTER = slice(
@@ -117,6 +132,16 @@ def _encode_monster_into(
     # The intent category flags above miss Escape/Sleep/Stunned/Unknown
     out[OFF_MONSTER_INTENT_KIND + _MAP_INTENT_KIND[monster.intent.kind]] = 1.0
 
+    # Move identity: the current move + the two before it (history's last entry
+    # IS the current move, so the previous ones sit at [-2] and [-3])
+    if monster.move_current is not None:
+        out[OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
+    history = monster.move_history
+    if len(history) >= 2:
+        out[OFF_MONSTER_MOVE_PREV_1 + history[-2]] = 1.0
+    if len(history) >= 3:
+        out[OFF_MONSTER_MOVE_PREV_2 + history[-3]] = 1.0
+
 
 def encode_batch_monsters(
     batch_monster: list[list[Monster]],
@@ -155,5 +180,33 @@ def iter_effect_owners(game_state: GameState) -> Iterator[tuple[int, list[Effect
         return
     for i, monster in enumerate(combat.monsters[:MAX_MONSTERS]):
         effects = monster.move_effects  # bound once: each read clones the Vec
+        if effects:
+            yield i, effects
+
+
+# Whole-moveset Effects per (ascension, MonsterName) — static capability context,
+# resolved once from the templates (the spawn-rolled variants are flattened)
+_MOVESET_EFFECTS: dict[int, dict[MonsterName, list[Effect]]] = {}
+
+
+def _moveset_effects(ascension: int) -> dict[MonsterName, list[Effect]]:
+    by_name = _MOVESET_EFFECTS.get(ascension)
+    if by_name is None:
+        by_name = {
+            template.name: [effect for move in template.moves for effect in move.effects]
+            for template in get_monster_templates(ascension)
+        }
+        _MOVESET_EFFECTS[ascension] = by_name
+    return by_name
+
+
+def iter_moveset_effect_owners(game_state: GameState) -> Iterator[tuple[int, list[Effect]]]:
+    """(slot, whole-moveset Effects) per Monster — what it could do, not the live intent."""
+    combat = game_state.combat
+    if combat is None:
+        return
+    by_name = _moveset_effects(game_state.ascension)
+    for i, monster in enumerate(combat.monsters[:MAX_MONSTERS]):
+        effects = by_name[monster.name]
         if effects:
             yield i, effects

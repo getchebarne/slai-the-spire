@@ -1,3 +1,4 @@
+import math
 from enum import StrEnum
 from enum import auto
 
@@ -7,7 +8,10 @@ from slai import Card
 from slai import Character
 
 from src.rl.constants import BLOCK_MAX_ENTITY
+from src.rl.constants import CHARACTER_HEALTH_CAP
+from src.rl.constants import FACTOR_VULN
 from src.rl.constants import HEALTH_MAX_ENTITY
+from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import MAX_SIZE_DECK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.health_block import get_encoding_dim_health_block
@@ -23,9 +27,10 @@ from src.rl.utils import get_sqrt_norm
 SLICE_CHARACTER = [Slice(SliceKind.CHARACTER, 1)]
 
 
-_INCOMING_DAMAGE_MAX = 150
+# Widest catalog turn (damage x instances), Vulnerable-scaled; Strength ramps clamp
+_INCOMING_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)
 _HEALTH_MAX = HEALTH_MAX_ENTITY
-_HEALTH_MAX_CAP = 200
+_HEALTH_MAX_CAP = CHARACTER_HEALTH_CAP
 _BLOCK_MAX = BLOCK_MAX_ENTITY
 _GOLD_MIN = 0
 _GOLD_MAX = 499
