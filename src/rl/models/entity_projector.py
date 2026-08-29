@@ -166,8 +166,8 @@ class EntityProjector(nn.Module):
             t_batch, t_slot = t_idx_mask // num_entities, t_idx_mask % num_entities
             positions.append(t_batch * NUM_ENTITY_TOKENS + TOKEN_OFFSET[idx] + t_slot)
 
-        t_proj = torch.cat(firsts, dim=0) # (B', D)
-        t_position = torch.cat(positions) # (B', 1)
+        t_proj = torch.cat(firsts, dim=0)  # (B', D)
+        t_position = torch.cat(positions)  # (B', 1)
 
         # Global token slot -> fused row rank. Invalid slots stay 0; the encoder
         # only emits owners it also masks True (fuzz-asserted, not checked here:

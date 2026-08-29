@@ -1,8 +1,11 @@
+from collections.abc import Iterator
 from enum import StrEnum
 from enum import auto
 
 import numpy as np
 import torch
+from slai import Effect
+from slai import GameState
 from slai import IntentKind
 from slai import Monster
 from slai import MonsterName
@@ -143,3 +146,14 @@ def encode_batch_monsters(
         torch.from_numpy(np_pad).to(device),
         outgoing_damages,
     )
+
+
+def iter_effect_owners(game_state: GameState) -> Iterator[tuple[int, list[Effect]]]:
+    """(slot, move Effects) for every Monster whose intent is revealed."""
+    combat = game_state.combat
+    if combat is None:
+        return
+    for i, monster in enumerate(combat.monsters[:MAX_MONSTERS]):
+        effects = monster.move_effects  # bound once: each read clones the Vec
+        if effects:
+            yield i, effects

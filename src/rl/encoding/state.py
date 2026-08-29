@@ -12,6 +12,8 @@ from src.rl.encoding.card import encode_batch_cards
 from src.rl.encoding.card import iter_effect_owners as _effect_owners_card
 from src.rl.encoding.character import encode_batch_character
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
+from src.rl.encoding.effect import OFF_OWNER_CONTEXT
+from src.rl.encoding.effect import OwnerContext
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.energy import encode_batch_energy
@@ -25,6 +27,7 @@ from src.rl.encoding.map_ import encode_batch_map
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import encode_modifier_row_into
 from src.rl.encoding.monster import encode_batch_monsters
+from src.rl.encoding.monster import iter_effect_owners as _effect_owners_monster
 from src.rl.encoding.potion import encode_batch_potions
 from src.rl.encoding.potion import iter_effect_owners as _effect_owners_potion
 from src.rl.encoding.relic import encode_batch_relics
@@ -41,10 +44,11 @@ ENCODING_DIM_ASCENSION = ASCENSION_LEVEL  # thermometer: bit i = level > i
 
 # Fill priority: halt first, then decision contexts, so an overflow only eats deep card piles
 _EFFECT_SOURCES = (
-    (TOKEN_OFFSET[EntityIdx.EVENT_OPTION], _effect_owners_event),
-    (TOKEN_OFFSET[EntityIdx.POTION], _effect_owners_potion),
-    (TOKEN_OFFSET[EntityIdx.RELIC], _effect_owners_relic),
-    (TOKEN_OFFSET[EntityIdx.CARD], _effect_owners_card),
+    (TOKEN_OFFSET[EntityIdx.EVENT_OPTION], _effect_owners_event, OwnerContext.EVENT_OPTION),
+    (TOKEN_OFFSET[EntityIdx.MONSTER], _effect_owners_monster, OwnerContext.MONSTER_MOVE),
+    (TOKEN_OFFSET[EntityIdx.POTION], _effect_owners_potion, OwnerContext.POTION),
+    (TOKEN_OFFSET[EntityIdx.RELIC], _effect_owners_relic, OwnerContext.RELIC),
+    (TOKEN_OFFSET[EntityIdx.CARD], _effect_owners_card, OwnerContext.CARD),
 )
 
 # Row families that have already warned about overflow — truncation is never silent
@@ -160,12 +164,13 @@ def _encode_batch_effects(batch_game_state: list[GameState], device: torch.devic
         pending = game_state.effect_pending
         if pending is not None:
             encode_effect_row_into_w_cache(pending, np_effect[b, idx])
+            np_effect[b, idx, OFF_OWNER_CONTEXT + OwnerContext.PENDING] = 1.0
             np_segment[b, idx] = EFFECT_SEGMENT_PENDING
             np_mask[b, idx] = True
             idx += 1
 
         # Entity Effects
-        for offset, iter_effect_owners in _EFFECT_SOURCES:
+        for offset, iter_effect_owners, context in _EFFECT_SOURCES:
             for slot, effects in iter_effect_owners(game_state):
                 for effect in effects:
                     if idx >= MAX_EFFECTS_STATE:
@@ -178,6 +183,7 @@ def _encode_batch_effects(batch_game_state: list[GameState], device: torch.devic
                         break
 
                     encode_effect_row_into_w_cache(effect, np_effect[b, idx])
+                    np_effect[b, idx, OFF_OWNER_CONTEXT + context] = 1.0
                     np_segment[b, idx] = offset + slot
                     np_mask[b, idx] = True
                     idx += 1

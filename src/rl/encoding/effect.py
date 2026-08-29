@@ -20,6 +20,7 @@ import math
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
+from enum import IntEnum
 from enum import StrEnum
 from enum import auto
 from types import UnionType
@@ -45,6 +46,7 @@ from slai import RelicTier
 from slai import SelectionKind
 from slai import get_card_templates
 from slai import get_event_option_templates
+from slai import get_monster_templates
 from slai import get_potion_templates
 from slai import get_relic_templates
 
@@ -85,6 +87,13 @@ def catalog_rows() -> Iterator[tuple[str, Effect]]:
         for option in get_event_option_templates(ascension):
             for effect in option.effects:
                 yield f"event {option.event} a{ascension}", effect
+
+    # Monster moves
+    for ascension in _ASCENSIONS:
+        for template in get_monster_templates(ascension):
+            for move in template.moves:
+                for effect in move.effects:
+                    yield f"monster {template.name} {move.name} a{ascension}", effect
 
 
 # Bucketed by exact type once
@@ -179,7 +188,10 @@ _VOCAB_RELIC = _vocabulary(
     _field(slai.EffectRelicGrantSpecific, lambda e: e.name),
     _field(slai.EffectRelicGrantPool, lambda e: e.pool),
 )
-_VOCAB_MONSTER = _vocabulary(_field(slai.EffectMonsterSpawn, lambda e: e.name))
+_VOCAB_MONSTER = _vocabulary(
+    _field(slai.EffectMonsterSpawn, lambda e: e.name),
+    _field(slai.EffectMonsterSplit, lambda e: e.name),
+)
 
 
 # Caps
@@ -230,6 +242,17 @@ _CAP_SELECT_COUNT = float(MAX_SIZE_DECK)
 _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
 
 
+class OwnerContext(IntEnum):
+    """Which carrier a row is pooled into; stamped by state.py outside the row cache."""
+
+    CARD = 0
+    RELIC = 1
+    POTION = 2
+    EVENT_OPTION = 3
+    MONSTER_MOVE = 4
+    PENDING = 5
+
+
 # Contiguous groups; every column carries a cap and a mode
 class Channel(StrEnum):
     # One-hot over the Effect union
@@ -241,6 +264,7 @@ class Channel(StrEnum):
     SELECTION_KIND = auto()
     SELECT_COUNT = auto()
     CANDIDATE_FILTER = auto()
+    OWNER_CONTEXT = auto()  # written by state.py, not the row encoders
 
     # Categorical params, named for the engine type they one-hot
     MODIFIER_KIND = auto()
@@ -315,6 +339,7 @@ OFF_CANDIDATE_POOL = _alloc(Channel.CANDIDATE_POOL, len(_INDEX_CAND_POOL))
 OFF_SELECTION_KIND = _alloc(Channel.SELECTION_KIND, len(_INDEX_SELECTION_KIND))
 OFF_SELECT_COUNT = _alloc(Channel.SELECT_COUNT)
 OFF_CANDIDATE_FILTER = _alloc(Channel.CANDIDATE_FILTER, len(_INDEX_CAND_FILTER))
+OFF_OWNER_CONTEXT = _alloc(Channel.OWNER_CONTEXT, len(OwnerContext))
 
 # Categorical params
 OFF_MODIFIER_KIND = _alloc(Channel.MODIFIER_KIND, len(_INDEX_MODIFIER_KIND))
@@ -556,6 +581,19 @@ def _encode_monster_spawn(row: np.ndarray, e: slai.EffectMonsterSpawn) -> None:
     row[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(e.name, 0)] = 1.0
 
 
+def _encode_monster_split(row: np.ndarray, e: slai.EffectMonsterSplit) -> None:
+    row[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(e.name, 0)] = 1.0
+
+
+def _encode_modifier_remove(row: np.ndarray, e: slai.EffectModifierRemove) -> None:
+    row[OFF_MODIFIER_KIND + _INDEX_MODIFIER_KIND[e.kind]] = 1.0
+    row[OFF_MODIFIER_BUFF] = float(e.kind.is_buff)
+
+
+def _encode_hexaghost_burn_increase(row: np.ndarray, e: slai.EffectHexaghostBurnIncrease) -> None:
+    row[OFF_COUNT] += e.count
+
+
 def _encode_potion_add_random(row: np.ndarray, e: slai.EffectPotionAddRandom) -> None:
     if e.limited:
         row[OFF_LIMITED] = 1.0
@@ -654,6 +692,9 @@ _ENCODERS: dict[type, _EffectWriter] = {
     slai.EffectModifierGain: _encode_modifier_gain,
     slai.EffectModifierMultiply: _encode_modifier_multiply,
     slai.EffectMonsterSpawn: _encode_monster_spawn,
+    slai.EffectMonsterSplit: _encode_monster_split,
+    slai.EffectModifierRemove: _encode_modifier_remove,
+    slai.EffectHexaghostBurnIncrease: _encode_hexaghost_burn_increase,
     slai.EffectPotionAddRandom: _encode_potion_add_random,
     slai.EffectRelicGrantPool: _encode_relic_grant_pool,
     slai.EffectRelicGrantRandom: _encode_relic_grant_random,
