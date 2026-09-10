@@ -1,24 +1,23 @@
 import math
-from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import yaml
 from slai import Action
 from slai import ActionType
+from slai import Card
 from slai import GameState
 
-from src.rl.constants import REWARD_REGION_OFFSETS
-from src.rl.constants import REWARD_REGION_WIDTHS
-from src.rl.constants import REWARD_SLOT_TO_BUNDLE
-from src.rl.constants import REWARD_SLOT_TO_CARD
+from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import ACTION_TYPE_POOL
 from src.rl.types import PENDING_INTS
 from src.rl.types import PENDING_POOL_INT
 from src.rl.types import RolloutBuffer
-from src.rl.types import TAction
+from src.rl.types import SliceKind
+from src.rl.types import X_Action
 
 
 def get_piecewise_dim(val_min: int, val_max: int, threshold: int) -> int:
@@ -76,39 +75,11 @@ def init_optimizer(optimizer_name: str, model: nn.Module, **kwargs) -> torch.opt
     return getattr(torch.optim, optimizer_name)(**kwargs, params=model.parameters())
 
 
-# ---- Reward-card slot translation ----
-# Reward.cards is ragged bundles (combat rolls <=4 cards, The Library rolls 20).
-# Each bundle owns a fixed CARD_REWARD region (constants.REWARD_REGION_WIDTHS),
-# so the L1 slot <-> engine (idx_bundle[, idx_card]) translation is static
-# tables. This is the single home for both directions: masks.py folds legal
-# actions forward, action_from_actiontype unfolds picks back, and the fuzz
-# oracle reuses both
-
-
-def reward_slot(action_type: ActionType, idxs: Sequence[int]) -> int:
-    """Engine (idx_bundle[, idx_card]) -> CARD_REWARD slot. RewardSingingBowl
-    points at a bundle via its first-card token."""
-    if action_type == ActionType.RewardTakeCard:
-        assert idxs[1] < REWARD_REGION_WIDTHS[idxs[0]], "reward card exceeds its region"
-        return REWARD_REGION_OFFSETS[idxs[0]] + idxs[1]
-    return REWARD_REGION_OFFSETS[idxs[0]]
-
-
-def _reward_idxs(action_type: ActionType, slot: int) -> list[int]:
-    """CARD_REWARD slot -> engine idxs (inverse of reward_slot)."""
-    if action_type == ActionType.RewardTakeCard:
-        return [REWARD_SLOT_TO_BUNDLE[slot], REWARD_SLOT_TO_CARD[slot]]
-    return [REWARD_SLOT_TO_BUNDLE[slot]]
-
-
-_REWARD_CARD_ACTIONS = frozenset((ActionType.RewardTakeCard, ActionType.RewardSingingBowl))
-
-
 # ---- Pending-halt fold/unfold ----
 # The engine resolves every halt with one EffectPendingResolve; the policy
-# splits it per candidate pool (types.PENDING_POOL_SLICE) so each type keeps a
-# single static L2 width. Both directions live here, next to the reward-card
-# translation, for the same reason: masks folds forward, engine_action unfolds
+# splits it per candidate pool (types.PENDING_POOL_SLICE) so each halt scores
+# exactly its pool's kind. Both directions live here: masks folds forward,
+# engine_action unfolds
 
 
 def pending_virtual_int(state: GameState) -> int | None:
@@ -139,33 +110,72 @@ def virtual_action_int(action: Action, state: GameState) -> int:
     return virtual
 
 
+def card_pile_draw_offset(card_pile_draw: list[Card]) -> int:
+    """Engine index of the draw pile's first token. The tokens are the pile's top
+    MAX_SIZE_CARD_PILE_DRAW cards in engine order (bottom first), so token rank r
+    is engine index offset + r, and a card below the offset has no token."""
+    return max(0, len(card_pile_draw) - MAX_SIZE_CARD_PILE_DRAW)
+
+
+# The kinds each policy action type may pick from (the decode assert)
+_POOL_KIND_VALUES: dict[int, frozenset[int]] = {
+    at: frozenset(kind for kind in kinds) for at, kinds in ACTION_TYPE_POOL.items()
+}
+
+
 def engine_action(
-    at_int: int, selection_index: int, target_index: int, state: GameState
+    at_int: int,
+    kind: int,
+    rank: int,
+    target: int,
+    room_idxs_row: np.ndarray,
+    state: GameState,
 ) -> Action:
-    """Build a `slai.Action` from the raw hierarchy picks [ActionType, L1, L2]
-    (L2 = -1 when the action takes no monster target).
+    """Build a `slai.Action` from the raw hierarchy picks [ActionType, kind, rank,
+    target] (kind/rank = -1 when the type takes no pick, target = -1 when it takes
+    no monster target).
 
-    `state` is the game state the mask was built from: the reward-card actions'
-    L1 slot is a position in the concatenated per-bundle reward slices and is
-    split back into engine (idx_bundle, idx_card) via the static region tables."""
-    if at_int in PENDING_INTS:  # any virtual pending type folds back to the one resolver
-        return Action(ActionType.EffectPendingResolve, [selection_index])
-    action_type = ACTION_TYPE_BY_INT[at_int]
+    A pick names the rank-th token of its kind, and that rank is the engine index —
+    except for a room, which the engine names by map column: the rank-th reachable
+    column of `room_idxs_row`, the state's rooms row."""
     if at_int not in ACTION_TYPE_POOL:
-        idxs = []
-    elif action_type in _REWARD_CARD_ACTIONS:
-        idxs = _reward_idxs(action_type, selection_index)
-    elif target_index >= 0:  # CardPlay / PotionUse with a monster target
-        idxs = [selection_index, target_index]
-    else:
-        idxs = [selection_index]
-    return Action(action_type, idxs)
+        return Action(ACTION_TYPE_BY_INT[at_int], [])
+
+    assert kind in _POOL_KIND_VALUES[at_int], f"pick kind {kind} is not in pool {at_int}"
+    idx = rank
+    if kind == SliceKind.ROOMS:
+        idx = int(np.flatnonzero(room_idxs_row >= 0)[rank])
+    elif kind == SliceKind.CARD_PILE_DRAW:
+        # The draw pile's tokens are its top cards: rank 0 sits at the pile's offset
+        combat = state.combat
+        assert combat is not None, "a draw-pile pick outside combat"
+        idx = rank + card_pile_draw_offset(combat.card_pile_draw)
+
+    if at_int in PENDING_INTS:  # any virtual pending type folds back to the one resolver
+        return Action(ActionType.EffectPendingResolve, [idx])
+    action_type = ACTION_TYPE_BY_INT[at_int]
+    if action_type is ActionType.RewardTakeCard:
+        return Action(action_type, [kind - SliceKind.CARD_REWARD_0, idx])
+    if action_type is ActionType.RewardSingingBowl:
+        return Action(action_type, [kind - SliceKind.CARD_REWARD_0])
+    if target >= 0:  # CardPlay / PotionUse with a monster target
+        return Action(action_type, [idx, target])
+    return Action(action_type, [idx])
 
 
-def action_from_actiontype(t_action: TAction, i: int, state: GameState) -> Action:
-    """Decode row `i` of a batched `TAction` into a `slai.Action`."""
-    at_int, selection_index, target_index = t_action.idxs[i].tolist()
-    return engine_action(at_int, selection_index, target_index, state)
+def action_from_actiontype(
+    x_action: X_Action, i: int, room_idxs_row: np.ndarray, state: GameState
+) -> Action:
+    """Decode row `i` of a batched `X_Action` into a `slai.Action`; `room_idxs_row`
+    is that state's rooms row."""
+    return engine_action(
+        int(x_action.action_type[i]),
+        int(x_action.kind[i]),
+        int(x_action.rank[i]),
+        int(x_action.target[i]),
+        room_idxs_row,
+        state,
+    )
 
 
 def shuffle_rollout_buffer(buffer: RolloutBuffer, device: torch.device) -> RolloutBuffer:

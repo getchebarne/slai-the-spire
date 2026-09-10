@@ -4,278 +4,312 @@ import torch.nn.functional as F
 
 from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
-from src.rl.encoding.character import SLICE_HEALTH_BLOCK_CHARACTER
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
-from src.rl.encoding.layout import EFFECT_SEGMENT_PENDING
-from src.rl.encoding.layout import NUM_ENTITY_TOKENS
-from src.rl.encoding.layout import TOKEN_OFFSET
-from src.rl.encoding.layout import EntityIdx
-from src.rl.encoding.layout import get_encodings_for_idx
+from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
-from src.rl.encoding.monster import SLICE_HEALTH_BLOCK_MONSTER
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.types import TEffects
-from src.rl.types import TEntityProjection
-from src.rl.types import TGameState
-from src.rl.types import TModifiers
-from src.rl.types import TPadded
-
-
-_DIM_HEALTH_BLOCK = SLICE_HEALTH_BLOCK_MONSTER.stop - SLICE_HEALTH_BLOCK_MONSTER.start
+from src.rl.types import OWNER_PENDING
+from src.rl.types import EntityKind
+from src.rl.types import X_Entity
+from src.rl.types import X_GameState
 
 
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) entity embedder.
 
-    First layer: each type's weight matrix is assembled from column blocks, and
-    the feature families byte-aligned across encoders — health/block and
-    modifiers (monster/character) — are projected by SHARED blocks, so every
-    consumer's gradients accumulate into one parameter. Composition is by
-    weight-cat: each type still costs a single GEMM, bit-identical to a dense
-    layer. The second layer + LayerNorm are shared by all token types and run on
-    one fused row tensor. Rooms come deep-processed from the GNN, so they keep a
-    1-layer lift into the same LayerNorm.
+    First layer: each type has a private block. The health/block family the
+    monsters and the character share arrives as its own rows
+    (`X_GameState.health_block`) and goes through ONE shared block whose output
+    is added to the type's private projection (per-block linear-and-sum, as in
+    AlphaStar's unit encoder), so both consumers' gradients accumulate into one
+    parameter. The second layer + LayerNorm are shared by all token types and
+    run on one fused row tensor.
+    Rooms come deep-processed from the GNN and join as the seventh block. The
+    output is the window as ONE X_Entity — the six blocks then the rooms, the kind
+    row cat'd beside the features — plus the pooled pending halt.
 
     Effects no longer live in the entity row. They arrive as their own rows
-    (`TGameState.effects`), go through `_effects_mlp` as ONE batched GEMM for
-    the whole minibatch, and are sum-pooled into their owning token before the
-    shared ReLU — so an entity's effects share its normalization. The MLP must
-    stay >=2 layers: a linear encoder would make pooling additive in the input
-    factors, and `kind x target x amount` binding would not survive the sum.
+    (`X_GameState.effects`), go through `_effects_mlp` as ONE batched GEMM for
+    the whole minibatch, and are sum-pooled into their owning token — named by
+    (idx_type, offset): the owner's type and its packed position in that type's
+    block — before the shared ReLU, so an entity's effects share its
+    normalization. The MLP must stay >=2 layers: a linear encoder would make
+    pooling additive in the input factors, and `kind x target x amount` binding
+    would not survive the sum.
     """
 
     def __init__(self, dim_embedding: int, dim_map: int) -> None:
         super().__init__()
 
         self._dim_embedding = dim_embedding
+        self._dim_map = dim_map
 
-        # Shared family block (first layer). Bias-free: each type's single bias
-        # lives on its private block
-        self._fam_health_block = nn.Linear(_DIM_HEALTH_BLOCK, dim_embedding, bias=False)
-
-        # Per-type private blocks (identity OHEs + type-specific scalars), sized
-        # from the encoder slice exports — no literals
+        # Per-`EntityKind` private blocks
         self._pre_card = nn.Linear(ENCODING_DIM_CARD, dim_embedding)
         self._pre_relic = nn.Linear(ENCODING_DIM_RELIC, dim_embedding)
         self._pre_potion = nn.Linear(ENCODING_DIM_POTION, dim_embedding)
         self._pre_event_option = nn.Linear(ENCODING_DIM_EVENT_OPTION, dim_embedding)
-        self._post_monster = nn.Linear(
-            ENCODING_DIM_MONSTER - SLICE_HEALTH_BLOCK_MONSTER.stop, dim_embedding
-        )
-        self._post_character = nn.Linear(
-            ENCODING_DIM_CHARACTER - SLICE_HEALTH_BLOCK_CHARACTER.stop, dim_embedding
-        )
+        self._pre_monster = nn.Linear(ENCODING_DIM_MONSTER, dim_embedding)
+        self._pre_character = nn.Linear(ENCODING_DIM_CHARACTER, dim_embedding)
+        self._pre_room = nn.Linear(
+            dim_map, dim_embedding
+        )  # Rooms come already-processed by `MapGNN`
 
-        # Per-effect embedder. >=2 layers is load-bearing (see the class
-        # docstring); the bias-free tail keeps pooling from manufacturing a
-        # per-effect-count offset
+        # Health+Block's mapper is shared between the Character and the Monsters
+        self._pre_health_block = nn.Linear(ENCODING_DIM_HEALTH_BLOCK, dim_embedding, bias=False)
+
+        # Per-Effect embedder w/ >=2 layers is a must due to OHE-summing semantics
         self._effects_mlp = nn.Sequential(
-            nn.Linear(ENCODING_DIM_EFFECT, dim_embedding),
+            nn.Linear(ENCODING_DIM_EFFECT, 2 * dim_embedding),
             nn.ReLU(),
-            nn.Linear(dim_embedding, dim_embedding, bias=False),
+            nn.Linear(2 * dim_embedding, dim_embedding, bias=False),
         )
 
-        # >=2 layers for the same reason as _effects_mlp: kind x stacks
-        # binding would not survive a linear sum-pool
+        # Per-Modifier embedder, same shape / logic as the Effects'
         self._modifiers_mlp = nn.Sequential(
-            nn.Linear(ENCODING_DIM_MODIFIER, dim_embedding),
+            nn.Linear(ENCODING_DIM_MODIFIER, 2 * dim_embedding),
             nn.ReLU(),
-            nn.Linear(dim_embedding, dim_embedding, bias=False),
+            nn.Linear(2 * dim_embedding, dim_embedding, bias=False),
         )
 
         # Shared second layer (after ReLU, on the fused all-types row tensor)
-        self._proj_shared = nn.Linear(dim_embedding, dim_embedding)
-        # Rooms come deep-processed from the GNN, so a 1-layer lift
-        self._proj_room = nn.Linear(dim_map, dim_embedding)
+        self._post_shared = nn.Linear(dim_embedding, dim_embedding)
 
-        self._norm = nn.LayerNorm(dim_embedding)
+        self._layer_norm = nn.LayerNorm(dim_embedding)
 
-        # (row_dim, ordered (columns, block) pairs) per type. The dict aliases the
-        # registered modules (Module.to() mutates parameters in place)
-        self._layouts = {
-            EntityIdx.CARD: (ENCODING_DIM_CARD, ((slice(0, ENCODING_DIM_CARD), self._pre_card),)),
-            EntityIdx.RELIC: (
-                ENCODING_DIM_RELIC,
-                ((slice(0, ENCODING_DIM_RELIC), self._pre_relic),),
-            ),
-            EntityIdx.POTION: (
-                ENCODING_DIM_POTION,
-                ((slice(0, ENCODING_DIM_POTION), self._pre_potion),),
-            ),
-            EntityIdx.MONSTER: (
-                ENCODING_DIM_MONSTER,
-                (
-                    (SLICE_HEALTH_BLOCK_MONSTER, self._fam_health_block),
-                    (
-                        slice(SLICE_HEALTH_BLOCK_MONSTER.stop, ENCODING_DIM_MONSTER),
-                        self._post_monster,
-                    ),
-                ),
-            ),
-            EntityIdx.EVENT_OPTION: (
-                ENCODING_DIM_EVENT_OPTION,
-                ((slice(0, ENCODING_DIM_EVENT_OPTION), self._pre_event_option),),
-            ),
-            EntityIdx.CHARACTER: (
-                ENCODING_DIM_CHARACTER,
-                (
-                    (SLICE_HEALTH_BLOCK_CHARACTER, self._fam_health_block),
-                    (
-                        slice(SLICE_HEALTH_BLOCK_CHARACTER.stop, ENCODING_DIM_CHARACTER),
-                        self._post_character,
-                    ),
-                ),
-            ),
-        }
-        for dim_row, blocks in self._layouts.values():
-            offset = 0
-            for slice_, block in blocks:
-                assert slice_.start == offset and block.in_features == slice_.stop - slice_.start
-                offset = slice_.stop
-            assert offset == dim_row, "blocks must tile the row exactly"
-            assert sum(block.bias is not None for _, block in blocks) == 1, "one bias per type"
-        assert list(self._layouts) == list(EntityIdx), "layouts must cover EntityIdx in order"
+    def forward(
+        self, x_game_state: X_GameState, x_rooms: X_Entity
+    ) -> tuple[X_Entity, torch.Tensor]:
+        batch_size = x_game_state.cards.x.shape[0]
+        device = x_game_state.cards.x.device
 
-    def forward(self, t_game_state: TGameState, t_rooms: TPadded) -> TEntityProjection:
-        batch_size = t_game_state.cards.x.shape[0]
-        device = t_game_state.cards.x.device
-
-        # First layer: per type, gather the valid rows and run ONE GEMM against the
-        # weight assembled from the family + private column blocks. Every valid row
-        # gets its global token position: (b, slot) -> b * WIDTH + TOKEN_OFFSET + slot
-        # First pass
-        firsts, positions = [], []
-        for idx in EntityIdx:
-            t_padded = get_encodings_for_idx(t_game_state, idx)
-
-            _, layers = self._layouts[idx]
-            _, num_entities, dim = t_padded.x.shape
-
-            t_idx_mask = torch.nonzero(torch.flatten(t_padded.mask), as_tuple=True)[0]
-            t_valid = t_padded.x.reshape(batch_size * num_entities, dim)[t_idx_mask]
-
-            # Extract weights and biases for each Linear layer
-            t_weight = torch.cat([layer.weight for _, layer in layers], dim=1)
-            t_bias = next(layer.bias for _, layer in layers if layer.bias is not None)
-
-            #
-            firsts.append(F.linear(t_valid, t_weight, t_bias))
-            t_batch, t_slot = t_idx_mask // num_entities, t_idx_mask % num_entities
-            positions.append(t_batch * NUM_ENTITY_TOKENS + TOKEN_OFFSET[idx] + t_slot)
-
-        t_proj = torch.cat(firsts, dim=0)  # (B', D)
-        t_position = torch.cat(positions)  # (B', 1)
-
-        # Global token slot -> fused row rank. Invalid slots stay 0; the encoder
-        # only emits owners it also masks True (fuzz-asserted, not checked here:
-        # it would sync)
-        rank_grid = torch.zeros(batch_size * NUM_ENTITY_TOKENS, dtype=torch.long, device=device)
-        rank_grid[t_position] = torch.arange(t_position.shape[0], device=device)
-
-        # Effects/Modifiers: ONE batched GEMM each, then sum-pool every row into its
-        # owner's fused row. Deliberately before the shared ReLU/LayerNorm so an
-        # entity's pooled rows share its normalization
-        t_pending = self._pool_effects(t_game_state.effects, rank_grid, t_proj)
-        self._pool_modifiers(t_game_state.modifiers, rank_grid, t_proj)
-
-        # Shared second layer + norm on the fused tensor (never empty: the
-        # character mask is all-True)
-        t_hidden = self._norm(self._proj_shared(F.relu(t_proj)))
-
-        # One scatter into the global entity block. Zeros buffer in the INPUT dtype:
-        # pad rows stay exact zeros (downstream masks multiply, and NaN*0=NaN), and
-        # the fp32 LayerNorm output lands in an fp32 buffer under bf16 autocast.
-        # Explicit upcast: CUDA autocast runs LayerNorm in fp32 but CPU autocast
-        # emits bf16, and index_put requires matching dtypes
-        t_entities = torch.zeros(
-            batch_size * NUM_ENTITY_TOKENS,
-            self._dim_embedding,
-            dtype=t_game_state.cards.x.dtype,
-            device=device,
+        # Health+Block
+        x_batch_hb, x_slot_hb = torch.nonzero(
+            x_game_state.health_block.x_entity_kind >= 0, as_tuple=True
         )
-        t_entities[t_position] = t_hidden.to(t_entities.dtype)
-        t_mask = torch.zeros(batch_size * NUM_ENTITY_TOKENS, dtype=torch.bool, device=device)
-        t_mask[t_position] = True
+        x_hb = self._pre_health_block(x_game_state.health_block.x[x_batch_hb, x_slot_hb])
+        x_entity_kind_hb = x_game_state.health_block.x_entity_kind[x_batch_hb, x_slot_hb]
+        x_offset_hb = x_game_state.health_block.x_offset[x_batch_hb, x_slot_hb]
 
-        return TEntityProjection(
-            entities=TPadded(
-                t_entities.reshape(batch_size, NUM_ENTITY_TOKENS, self._dim_embedding),
-                t_mask.reshape(batch_size, NUM_ENTITY_TOKENS),
-            ),
-            rooms=_project_sparse(self._proj_room, self._norm, t_rooms, self._dim_embedding),
-            pending=t_pending,
+        # Entities / Cards
+        x_cards = self._project_type(x_game_state.cards, self._pre_card)
+
+        # Entities / Relics
+        x_relics = self._project_type(x_game_state.relics, self._pre_relic)
+
+        # Entities / Potions
+        x_potions = self._project_type(x_game_state.potions, self._pre_potion)
+
+        # Entities / Monsters
+        x_monsters = self._project_type(x_game_state.monsters, self._pre_monster)
+        # Health+Block
+        x_sel = x_entity_kind_hb == EntityKind.MONSTER
+        x_pos = x_batch_hb[x_sel] * x_monsters.shape[1] + x_offset_hb[x_sel]
+        x_monsters.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, x_hb[x_sel].to(x_monsters.dtype)
         )
 
-    def _pool_effects(
-        self, t_effects: TEffects, rank_grid: torch.Tensor, t_proj: torch.Tensor
-    ) -> torch.Tensor:
-        """Embed every effect row once, add it into its owner's fused row in
-        place, and return the pooled halt row."""
-        batch_size = t_effects.x.shape[0]
-        t_pending = torch.zeros(
-            batch_size, self._dim_embedding, dtype=torch.float32, device=t_effects.x.device
+        # Entities / Event Options
+        x_event_options = self._project_type(x_game_state.event_options, self._pre_event_option)
+
+        # Entities / Character
+        x_character = self._project_type(x_game_state.character, self._pre_character)
+        # Health+Block
+        x_sel = x_entity_kind_hb == EntityKind.CHARACTER
+        x_pos = x_batch_hb[x_sel] * x_character.shape[1] + x_offset_hb[x_sel]
+        x_character.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, x_hb[x_sel].to(x_character.dtype)
         )
-        t_batch, t_slot = torch.nonzero(t_effects.mask, as_tuple=True)
-        if not t_batch.numel():
-            return t_pending
 
-        t_hidden = self._effects_mlp(t_effects.x[t_batch, t_slot])
-        t_segment = t_effects.segment[t_batch, t_slot]
+        # Entities / Rooms
+        x_rooms_x = self._project_type(x_rooms, self._pre_room)
 
-        # No emptiness guards: index_add_ with a zero-length index is a no-op,
-        # while `bool(t_sel.any())` would force a device sync
-        t_sel = t_segment == EFFECT_SEGMENT_PENDING
+        # Effects/Modifiers: ONE batched GEMM each, then every row is sum-pooled
+        # into its owner's slot of the owner TYPE's block, keyed by (idx_type,
+        # offset) — no window position exists. Deliberately before the shared
+        # ReLU/LayerNorm so an entity's pooled rows share its normalization
+        # Effects
+        x_batch_eff, x_slot_eff = torch.nonzero(
+            x_game_state.effects.x_entity_kind >= 0, as_tuple=True
+        )
+        x_effs = self._effects_mlp(
+            x_game_state.effects.x[x_batch_eff, x_slot_eff]
+        )  # (N_eff, ENCODING_DIM_EFFECT)
+
+        # Modifiers
+        x_batch_mod, x_slot_mod = torch.nonzero(
+            x_game_state.modifiers.x_entity_kind >= 0, as_tuple=True
+        )
+        x_mods = self._modifiers_mlp(
+            x_game_state.modifiers.x[x_batch_mod, x_slot_mod]
+        )  # (N_mod, ENCODING_DIM_MODIFIER)
+
+        # Pool Effects and Modifiers and add them to their respective Entities
+        x_entity_kind_eff = x_game_state.effects.x_entity_kind[x_batch_eff, x_slot_eff]
+        x_offset_eff = x_game_state.effects.x_offset[x_batch_eff, x_slot_eff]
+        x_entity_kind_mod = x_game_state.modifiers.x_entity_kind[x_batch_mod, x_slot_mod]
+        x_offset_mod = x_game_state.modifiers.x_offset[x_batch_mod, x_slot_mod]
 
         # The halt owns no entity, so it becomes a global-context input instead
-        t_pending.index_add_(0, t_batch[t_sel], t_hidden[t_sel].to(torch.float32))
+        x_sel = x_entity_kind_eff == OWNER_PENDING
+        x_pending = torch.zeros(
+            batch_size, self._dim_embedding, dtype=torch.float32, device=device
+        )
+        x_nb = torch.bincount(x_batch_eff[x_sel], minlength=batch_size)[x_batch_eff[x_sel]]
+        x_pending.index_add_(
+            0,
+            x_batch_eff[x_sel],
+            x_effs[x_sel].to(torch.float32) / x_nb.to(torch.float32).sqrt().unsqueeze(1),
+        )
 
-        t_own = ~t_sel
-        t_pos = rank_grid[t_batch[t_own] * NUM_ENTITY_TOKENS + t_segment[t_own]]
-        t_proj.index_add_(0, t_pos, t_hidden[t_own].to(t_proj.dtype))
-        return t_pending
+        # Cards
+        x_sel = x_entity_kind_eff == EntityKind.CARD
+        x_pos = x_batch_eff[x_sel] * x_cards.shape[1] + x_offset_eff[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_cards.shape[0] * x_cards.shape[1])[x_pos]
+        x_scale = x_n.to(x_effs.dtype).sqrt().unsqueeze(1)
+        x_cards.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_effs[x_sel] / x_scale).to(x_cards.dtype)
+        )
 
-    def _pool_modifiers(
-        self, t_modifiers: TModifiers, rank_grid: torch.Tensor, t_proj: torch.Tensor
-    ) -> None:
-        """Embed every Modifier row once and add it into its owner's fused row
-        in place (same placement rules as _pool_effects)."""
-        t_batch, t_slot = torch.nonzero(t_modifiers.mask, as_tuple=True)
-        if not t_batch.numel():
-            return
+        # Relics
+        x_sel = x_entity_kind_eff == EntityKind.RELIC
+        x_pos = x_batch_eff[x_sel] * x_relics.shape[1] + x_offset_eff[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_relics.shape[0] * x_relics.shape[1])[x_pos]
+        x_scale = x_n.to(x_effs.dtype).sqrt().unsqueeze(1)
+        x_relics.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_effs[x_sel] / x_scale).to(x_relics.dtype)
+        )
 
-        t_hidden = self._modifiers_mlp(t_modifiers.x[t_batch, t_slot])
-        t_segment = t_modifiers.segment[t_batch, t_slot]
-        t_pos = rank_grid[t_batch * NUM_ENTITY_TOKENS + t_segment]
-        t_proj.index_add_(0, t_pos, t_hidden.to(t_proj.dtype))
+        # Potions
+        x_sel = x_entity_kind_eff == EntityKind.POTION
+        x_pos = x_batch_eff[x_sel] * x_potions.shape[1] + x_offset_eff[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_potions.shape[0] * x_potions.shape[1])[x_pos]
+        x_scale = x_n.to(x_effs.dtype).sqrt().unsqueeze(1)
+        x_potions.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_effs[x_sel] / x_scale).to(x_potions.dtype)
+        )
 
+        # Monsters / Effects
+        x_sel = x_entity_kind_eff == EntityKind.MONSTER
+        x_pos = x_batch_eff[x_sel] * x_monsters.shape[1] + x_offset_eff[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_monsters.shape[0] * x_monsters.shape[1])[x_pos]
+        x_scale = x_n.to(x_effs.dtype).sqrt().unsqueeze(1)
+        x_monsters.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_effs[x_sel] / x_scale).to(x_monsters.dtype)
+        )
 
-# Project only the valid (non-pad) rows of a padded entity tensor
-def _project_sparse(
-    proj: nn.Module,
-    norm: nn.Module,
-    t_padded: TPadded,
-    dim_embedding: int,
-) -> TPadded:
-    t_x = t_padded.x
-    t_mask = t_padded.mask
+        # Monsters / Modifiers
+        x_sel = x_entity_kind_mod == EntityKind.MONSTER
+        x_pos = x_batch_mod[x_sel] * x_monsters.shape[1] + x_offset_mod[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_monsters.shape[0] * x_monsters.shape[1])[x_pos]
+        x_scale = x_n.to(x_mods.dtype).sqrt().unsqueeze(1)
+        x_monsters.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_mods[x_sel] / x_scale).to(x_monsters.dtype)
+        )
 
-    # Initialize empty result tensor w/ one row per batch-entity
-    batch_size, num_entities, dim_entity = t_x.shape
-    t_out = torch.zeros(
-        batch_size * num_entities, dim_embedding, dtype=t_x.dtype, device=t_x.device
-    )
+        # Event options
+        x_sel = x_entity_kind_eff == EntityKind.EVENT_OPTION
+        x_pos = x_batch_eff[x_sel] * x_event_options.shape[1] + x_offset_eff[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_event_options.shape[0] * x_event_options.shape[1])[
+            x_pos
+        ]
+        x_scale = x_n.to(x_effs.dtype).sqrt().unsqueeze(1)
+        x_event_options.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_effs[x_sel] / x_scale).to(x_event_options.dtype)
+        )
 
-    # Compute which rows actually need to be projected
-    t_row_idxs = torch.nonzero(torch.flatten(t_mask), as_tuple=True)[0]
+        # Character / Effects
+        x_sel = x_entity_kind_eff == EntityKind.CHARACTER
+        x_pos = x_batch_eff[x_sel] * x_character.shape[1] + x_offset_eff[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_character.shape[0] * x_character.shape[1])[x_pos]
+        x_scale = x_n.to(x_effs.dtype).sqrt().unsqueeze(1)
+        x_character.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_effs[x_sel] / x_scale).to(x_character.dtype)
+        )
 
-    # Compute projection
-    if t_row_idxs.numel():
-        t_flat = t_x.reshape(batch_size * num_entities, dim_entity)
-        t_out[t_row_idxs] = norm(proj(t_flat[t_row_idxs])).to(t_out.dtype)
+        # Character / Modifiers
+        x_sel = x_entity_kind_mod == EntityKind.CHARACTER
+        x_pos = x_batch_mod[x_sel] * x_character.shape[1] + x_offset_mod[x_sel]
+        x_n = torch.bincount(x_pos, minlength=x_character.shape[0] * x_character.shape[1])[x_pos]
+        x_scale = x_n.to(x_mods.dtype).sqrt().unsqueeze(1)
+        x_character.view(-1, self._dim_embedding).index_add_(
+            0, x_pos, (x_mods[x_sel] / x_scale).to(x_character.dtype)
+        )
 
-    # Reshape to original (B, S, D)
-    t_out = t_out.reshape(batch_size, num_entities, dim_embedding)
-    return TPadded(t_out, t_mask)
+        x_blocks = [
+            x_cards,
+            x_relics,
+            x_potions,
+            x_monsters,
+            x_event_options,
+            x_character,
+            x_rooms_x,
+        ]
+        # EntityKind order: the list above IS the window's entity order, the order
+        # every consumer cats the kind rows in. Effects before modifiers — float
+        # sums are order-sensitive
+        x_grid = torch.cat(x_blocks, dim=1)
+        num_tokens = x_grid.shape[1]
+        x_grid = x_grid.reshape(batch_size * num_tokens, self._dim_embedding)
+        x_idxs = torch.cat(
+            [
+                x_game_state.cards.x_slice_kind,
+                x_game_state.relics.x_slice_kind,
+                x_game_state.potions.x_slice_kind,
+                x_game_state.monsters.x_slice_kind,
+                x_game_state.event_options.x_slice_kind,
+                x_game_state.character.x_slice_kind,
+                x_rooms.x_slice_kind,
+            ],
+            dim=1,
+        )
+        x_mask = (x_idxs >= 0).flatten()
+
+        # Shared second layer + norm, on the valid rows only (never empty: the
+        # character mask is all-True). Running it on pads would turn their exact
+        # zeros into a bias, and downstream masks multiply (NaN*0=NaN)
+        x_row = torch.nonzero(x_mask, as_tuple=True)[0]
+        x_hidden = self._layer_norm(self._post_shared(F.relu(x_grid[x_row])))
+
+        # Zeros buffer in the INPUT dtype: the fp32 LayerNorm output lands in an
+        # fp32 buffer under bf16 autocast. Explicit upcast: CUDA autocast runs
+        # LayerNorm in fp32 but CPU autocast emits bf16, and index_put requires
+        # matching dtypes
+        x_entities = torch.zeros(
+            batch_size * num_tokens,
+            self._dim_embedding,
+            dtype=x_game_state.cards.x.dtype,
+            device=device,
+        )
+        x_entities[x_row] = x_hidden.to(x_entities.dtype)
+
+        # The window: the six blocks then the rooms, the kind row cat'd beside the
+        # features (long: the model indexes with it)
+        x_window = X_Entity(
+            x_entities.reshape(batch_size, num_tokens, self._dim_embedding), x_idxs.long()
+        )
+        return x_window, x_pending
+
+    def _project_type(self, x_entity: X_Entity, block: nn.Linear) -> torch.Tensor:
+        """One entity type's valid rows through its private block, put back into
+        the type's own (B, W, D) block. Pad rows stay exact zeros."""
+        batch_size, num_entities, dim = x_entity.x.shape
+
+        # Calculate non-padding tokens
+        x_row = torch.nonzero(torch.flatten(x_entity.mask), as_tuple=True)[0]
+        x_valid = x_entity.x.reshape(batch_size * num_entities, dim)[x_row]
+
+        # Forward pass
+        x_first = block(x_valid)
+
+        x_block = torch.zeros(
+            batch_size * num_entities,
+            self._dim_embedding,
+            dtype=x_first.dtype,
+            device=x_first.device,
+        )
+        x_block[x_row] = x_first
+        return x_block.reshape(batch_size, num_entities, self._dim_embedding)

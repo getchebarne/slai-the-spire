@@ -10,13 +10,23 @@ from src.rl.constants import MAP_HEIGHT
 # Cumulative floor of Act II's first row: reaching it ⟺ beat the Act I boss.
 ACT2_FLOOR_MIN = MAP_HEIGHT + 1
 
+# Final boss room: reaching it splits the act-2 plateau into reach x conversion
+BOSS_FLOOR_MIN = 2 * ACT2_FLOOR_MIN - 1
+
 
 @dataclass
 class EpisodeStats:
-    stream_rewards: np.ndarray  # (K,) per-stream episode totals
+    stream_rewards: np.ndarray  # (K,) per-stream episode totals, undiscounted
     length: int
     won: bool
     floor: int  # run-CUMULATIVE floor (reward.cumulative_floor), 0..31
+    stream_returns: np.ndarray  # (K,) per-stream DISCOUNTED returns (γ^t·r_t sums)
+    gold_gained: int  # sum of positive gold deltas over the episode
+    gold_spent: int  # gold spent at shops (reward.shop_gold_spent) over the episode
+    potion_wastes: int  # discards of a holdable Potion (belt not full)
+    deck_size: int  # deck size at episode end
+    cards_added: int  # deck-size increases over the episode
+    purges: int  # ShopPurge actions over the episode
 
     @property
     def total_reward(self) -> float:
@@ -34,6 +44,13 @@ KEY_LENGTH_AVG = "length_avg"
 KEY_REWARD_AVG = "reward_avg"
 KEY_REWARD_STD = "reward_std"
 KEY_ACT2_RATE = "act2_rate"
+KEY_GOLD_AVG = "gold_avg"
+KEY_GOLD_SPENT_AVG = "gold_spent_avg"
+KEY_POTION_WASTES_AVG = "potion_wastes_avg"
+KEY_BOSS_RATE = "boss_rate"
+KEY_DECK_SIZE_AVG = "deck_size_avg"
+KEY_CARDS_ADDED_AVG = "cards_added_avg"
+KEY_PURGES_AVG = "purges_avg"
 
 
 def aggregate_episodes(episodes: list[EpisodeStats]) -> dict[str, float]:
@@ -49,4 +66,11 @@ def aggregate_episodes(episodes: list[EpisodeStats]) -> dict[str, float]:
         # Wins are two-act by definition now; this is the Act-I-cleared rate —
         # the progress signal through the expected long low-win-rate phase.
         KEY_ACT2_RATE: sum(e.floor >= ACT2_FLOOR_MIN for e in episodes) / n,
+        KEY_GOLD_AVG: sum(e.gold_gained for e in episodes) / n,
+        KEY_GOLD_SPENT_AVG: sum(e.gold_spent for e in episodes) / n,
+        KEY_POTION_WASTES_AVG: sum(e.potion_wastes for e in episodes) / n,
+        KEY_BOSS_RATE: sum(e.floor >= BOSS_FLOOR_MIN for e in episodes) / n,
+        KEY_DECK_SIZE_AVG: sum(e.deck_size for e in episodes) / n,
+        KEY_CARDS_ADDED_AVG: sum(e.cards_added for e in episodes) / n,
+        KEY_PURGES_AVG: sum(e.purges for e in episodes) / n,
     }

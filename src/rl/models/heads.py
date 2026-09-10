@@ -6,7 +6,7 @@ import torch.nn as nn
 
 class HeadActionType(nn.Module):
     """
-    L1 action-kind head: t_global gated by the focus context before scoring
+    L1 action-kind head: x_global gated by the focus context before scoring
     (AlphaStar-style GLU — the action space is modal per focus, so the gate lets
     the head mute the global features irrelevant to the current mode).
     """
@@ -22,13 +22,13 @@ class HeadActionType(nn.Module):
         )
 
     def forward(
-        self, t_global: torch.Tensor, t_context: torch.Tensor, t_mask: torch.Tensor
+        self, x_global: torch.Tensor, x_context: torch.Tensor, x_mask: torch.Tensor
     ) -> torch.Tensor:
         """Score the action-type choices; returns masked logits (sampling/recompute
         is the caller's job)."""
-        t_gated = torch.sigmoid(self._gate(t_context)) * t_global
-        t_logits = self._scorer(t_gated)
-        return t_logits.masked_fill(~t_mask, float("-inf"))
+        x_gated = torch.sigmoid(self._gate(x_context)) * x_global
+        x_logits = self._scorer(x_gated)
+        return x_logits.masked_fill(~x_mask, float("-inf"))
 
 
 class PointerKeys(nn.Module):
@@ -48,9 +48,9 @@ class PointerKeys(nn.Module):
             nn.Linear(dim_in, dim_key),
         )
 
-    def forward(self, t_entities: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_entities: torch.Tensor) -> torch.Tensor:
         """Project entity embeddings (B, N, dim_in) to pointer keys (B, N, dim_key)."""
-        return self._net(t_entities)
+        return self._net(x_entities)
 
 
 class HeadPointerSelect(nn.Module):
@@ -85,17 +85,17 @@ class HeadPointerSelect(nn.Module):
 
     def forward(
         self,
-        t_keys: torch.Tensor,
-        t_global: torch.Tensor,
-        t_cond: torch.Tensor,
-        t_mask: torch.Tensor,
+        x_keys: torch.Tensor,
+        x_global: torch.Tensor,
+        x_cond: torch.Tensor,
+        x_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Score entities by scaled key·query; returns masked logits. `t_keys` is
-        (B, N, dim_key) from PointerKeys; identity dedup is baked into `t_mask`
+        """Score entities by scaled key·query; returns masked logits. `x_keys` is
+        (B, N, dim_key) from PointerKeys; identity dedup is baked into `x_mask`
         (masks.py); sampling is the caller's job."""
-        t_query = self._query_net(torch.cat([t_global, t_cond], dim=-1))  # (B, dim_key)
-        t_logits = torch.bmm(t_keys, t_query.unsqueeze(-1)).squeeze(-1) * self._scale  # (B, N)
-        return t_logits.masked_fill(~t_mask, float("-inf"))
+        x_query = self._query_net(torch.cat([x_global, x_cond], dim=-1))  # (B, dim_key)
+        x_logits = torch.bmm(x_keys, x_query.unsqueeze(-1)).squeeze(-1) * self._scale  # (B, N)
+        return x_logits.masked_fill(~x_mask, float("-inf"))
 
 
 class HeadValue(nn.Module):
@@ -123,14 +123,14 @@ class HeadValue(nn.Module):
             nn.Linear(dim_ff, num_streams),
         )
 
-    def forward(self, t_global: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_global: torch.Tensor) -> torch.Tensor:
         """
         Estimate per-stream state values.
 
         Args:
-            t_global: Global context vector (B, dim_global)
+            x_global: Global context vector (B, dim_global)
 
         Returns:
             Value estimates (B, num_streams)
         """
-        return self._network(t_global)
+        return self._network(x_global)

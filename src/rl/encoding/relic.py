@@ -9,30 +9,31 @@ from slai import GameState
 from slai import Relic
 from slai import RelicName
 from slai import RelicTier
+from slai import get_relic_templates
 
-from src.rl.constants import MAX_EVENT_ROLL_RELICS
 from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
-from src.rl.types import Slice
+from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.types import EffectSource
 from src.rl.types import SliceKind
-from src.rl.types import clip_to_slice
 from src.rl.types import make_channel_allocator
 
 
-# Order = fill order = Core's global-offset order
-SLICE_RELICS = [
-    Slice(SliceKind.RELIC_OWNED, MAX_RELICS),
-    Slice(SliceKind.RELIC_REWARD, MAX_RELIC_REWARDS),
-    Slice(SliceKind.RELIC_SHOP, MAX_SHOP_RELICS),
-    Slice(SliceKind.RELIC_EVENT, MAX_EVENT_ROLL_RELICS),
-]
-NUM_RELIC_TOKENS = sum(slice_.size for slice_ in SLICE_RELICS)
+# Pack order within the relic block: decision pools first, the owned relics last
+SLICE_KINDS_RELIC = (
+    SliceKind.RELIC_REWARD,
+    SliceKind.RELIC_SHOP,
+    SliceKind.RELIC_EVENT_ROLL,
+    SliceKind.RELIC_OWNED,
+)
 
 
 _RELIC_NAME_TO_IDX = {relic_name: int(relic_name) for relic_name in RelicName.members()}
 _RELIC_TIER_TO_IDX = {tier: int(tier) for tier in RelicTier.members()}
-_COUNTER_MAX = 10  # Nunchaku 10, Girya 3, Matryoshka 2, Incense Burner 6, Sundial 3
+# Widest firing threshold in the catalog (Nunchaku/Ink Bottle 10); Girya (3) and
+# Matryoshka (2) count without firing and sit far below
+_COUNTER_MAX = max(template.counter_reset for template in get_relic_templates())
 
 
 class RelicChannel(StrEnum):
@@ -40,6 +41,7 @@ class RelicChannel(StrEnum):
     TIER = auto()
     USED_UP = auto()
     COUNTER = auto()
+    COUNTER_PROGRESS = auto()  # counter / counter_reset for firing counters, else 0
 
 
 CHANNEL_LAYOUT_RELIC, _alloc = make_channel_allocator()
@@ -47,6 +49,7 @@ OFF_RELIC_NAME = _alloc(RelicChannel.NAME, len(_RELIC_NAME_TO_IDX))
 OFF_RELIC_TIER = _alloc(RelicChannel.TIER, len(_RELIC_TIER_TO_IDX))
 OFF_RELIC_USED_UP = _alloc(RelicChannel.USED_UP)
 OFF_RELIC_COUNTER = _alloc(RelicChannel.COUNTER)
+OFF_RELIC_COUNTER_PROGRESS = _alloc(RelicChannel.COUNTER_PROGRESS)
 
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
@@ -60,6 +63,9 @@ def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
     out[OFF_RELIC_TIER + _RELIC_TIER_TO_IDX[relic.tier]] = 1.0
     out[OFF_RELIC_USED_UP] = float(relic.used_up)
     out[OFF_RELIC_COUNTER] = min(relic.counter, _COUNTER_MAX) / _COUNTER_MAX
+    counter_reset = relic.counter_reset
+    if counter_reset > 0:
+        out[OFF_RELIC_COUNTER_PROGRESS] = max(relic.counter, 0) / counter_reset
 
 
 def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
@@ -77,53 +83,65 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
 
 
 def _get_relic_entities(kind: SliceKind, game_state: GameState) -> list:
+    # Each collection truncated to its own cap: a relic past it has no token
     match kind:
         case SliceKind.RELIC_OWNED:
-            return game_state.relics
+            return game_state.relics[:MAX_RELICS]
         case SliceKind.RELIC_REWARD:
             reward = game_state.reward
-            return reward.relics if reward is not None else []
+            return reward.relics[:MAX_RELIC_REWARDS] if reward is not None else []
         case SliceKind.RELIC_SHOP:
-            return game_state.shop.relics if game_state.shop is not None else []
-        case SliceKind.RELIC_EVENT:
+            shop = game_state.shop
+            return shop.relics[:MAX_SHOP_RELICS] if shop is not None else []
+        case SliceKind.RELIC_EVENT_ROLL:
             event = game_state.event
             if event is not None and not event.consumed:
-                return event.roll_relics
+                return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
             return []
         case _:
-            raise ValueError(f"not a relic slice: {kind}")
+            raise ValueError(f"not a relic kind: {kind}")
+
+
+def iter_packed_relics(game_state: GameState) -> Iterator[tuple[int, SliceKind, Relic]]:
+    """(w, kind, relic) for every relic token: the kinds back to back in
+    SLICE_KINDS_RELIC order, each collection in engine order."""
+    w = 0
+    for kind in SLICE_KINDS_RELIC:
+        for relic in _get_relic_entities(kind, game_state):
+            yield w, kind, relic
+            w += 1
 
 
 def encode_batch_relics(
-    batch_game_state: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Encode all relic slices into one (B, NUM_RELIC_TOKENS, ENCODING_DIM_RELIC) tensor + mask."""
-    batch_size = len(batch_game_state)
-    np_out = np.zeros((batch_size, NUM_RELIC_TOKENS, ENCODING_DIM_RELIC), dtype=np.float32)
-    np_pad = np.zeros((batch_size, NUM_RELIC_TOKENS), dtype=bool)
+    game_states: list[GameState], device: torch.device
+) -> tuple[torch.Tensor, np.ndarray, list[list[tuple[int, EffectSource, Effect]]]]:
+    """(B, W, ENCODING_DIM_RELIC) rows + the (B, W) kind of each token + each state's
+    (offset, source, effect) rows (every trigger's, per relic), keyed by the same w
+    as the token they belong to; W is the batch's longest packed relic sequence."""
+    batch_tokens = [list(iter_packed_relics(game_state)) for game_state in game_states]
+    width = max((len(tokens) for tokens in batch_tokens), default=0)
+    np_out = np.zeros((len(game_states), width, ENCODING_DIM_RELIC), dtype=np.float32)
+    np_idxs = np.full((len(game_states), width), -1, dtype=np.int16)
+    batch_effect_rows: list[list[tuple[int, EffectSource, Effect]]] = []
 
-    for b, game_state in enumerate(batch_game_state):
-        offset = 0
-        for slice_ in SLICE_RELICS:
-            relics = clip_to_slice(_get_relic_entities(slice_.kind, game_state), slice_)
-            for i, relic in enumerate(relics):
-                encode_relic_into_w_cache(relic, np_out[b, offset + i])
-                np_pad[b, offset + i] = True
-            offset += slice_.size
+    for b, tokens in enumerate(batch_tokens):
+        effect_rows: list[tuple[int, EffectSource, Effect]] = []
+        for w, kind, relic in tokens:
+            encode_relic_into_w_cache(relic, np_out[b, w])
+            np_idxs[b, w] = kind
+            effect_rows += [
+                (w, source, effect)
+                for effects, source in (
+                    (relic.effects_combat_start, EffectSource.RELIC_COMBAT_START),
+                    (relic.effects_turn_start, EffectSource.RELIC_TURN_START),
+                    (relic.effects_turn_end, EffectSource.RELIC_TURN_END),
+                    (relic.effects_pickup, EffectSource.RELIC_PICKUP),
+                    (relic.effects_rest, EffectSource.RELIC_REST),
+                    (relic.effects_counter, EffectSource.RELIC_COUNTER),
+                    (relic.effects_combat_end, EffectSource.RELIC_COMBAT_END),
+                )
+                for effect in effects
+            ]
+        batch_effect_rows.append(effect_rows)
 
-    return (
-        torch.from_numpy(np_out).to(device),
-        torch.from_numpy(np_pad).to(device),
-    )
-
-
-def iter_effect_owners(game_state: GameState) -> Iterator[tuple[int, list[Effect]]]:
-    """(slot, effects) for every relic token with combat-start effects."""
-    offset = 0
-    for slice_ in SLICE_RELICS:
-        relics = clip_to_slice(_get_relic_entities(slice_.kind, game_state), slice_)
-        for i, relic in enumerate(relics):
-            effects = relic.effects_combat_start  # bound once: each read clones the Vec
-            if effects:
-                yield offset + i, effects
-        offset += slice_.size
+    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows

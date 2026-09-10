@@ -16,9 +16,12 @@ ASCENSION_LEVEL = 20
 # under per-step discounting, taxes potion-holding and biases toward early discards.
 FAST_MODE = False
 
-# Actor encoding limits. Monster and character share ENTITY caps: both encoders
-# must build a byte-identical health/block block so EntityProjector can share
-# its first-layer family weights (encoder import-time asserts enforce widths).
+# Start runs with Neow's blessing (choice states + bonuses). Enabled 2026-08-30
+# for EFFECT-II; EFFECT-I and earlier trained without it.
+NEOW = True
+
+# Actor encoding limits. Monster and character share ENTITY caps: health_block.py
+# builds the one health/block row both feed EntityProjector's shared family block.
 # Every Monster template across every ascension, for the catalog folds below
 _MONSTER_TEMPLATES = [
     template
@@ -59,11 +62,22 @@ INTENT_DAMAGE_HIT_MAX = max(
     max(move.damage for move in _MONSTER_MOVES if move.damage is not None),
     _DIVIDER_HIT_MAX,
 )
+# Book of Stabbing's Multi-Stab template carries a placeholder 0 hits (the count
+# locks at selection and grows with every use), so it is bridged at the
+# engine's former 20-hit ceiling
+MULTI_STAB_INSTANCES_MAX = 20
+_MULTI_STAB_HIT_MAX = max(
+    move.damage for move in _MONSTER_MOVES if move.name == "Multi-Stab" and move.damage is not None
+)
 INTENT_DAMAGE_TOTAL_MAX = max(
     max(move.damage * move.instances for move in _MONSTER_MOVES if move.damage is not None),
     _DIVIDER_HIT_MAX * _slai.GameEnv.HEXAGHOST_DIVIDER_HITS,
+    _MULTI_STAB_HIT_MAX * MULTI_STAB_INSTANCES_MAX,
 )
-INTENT_INSTANCES_MAX = max(move.instances for move in _MONSTER_MOVES if move.instances is not None)
+INTENT_INSTANCES_MAX = max(
+    max(move.instances for move in _MONSTER_MOVES if move.instances is not None),
+    MULTI_STAB_INSTANCES_MAX,
+)
 # Thievery steals its stacks per landed attack (Looter/Mugger spawn modifier)
 # Widest spawn-rolled moveset (Book of Stabbing's Multi-Stab ramp); move-index OHE width
 MONSTER_MOVESET_MAX = max(len(template.moves) for template in _MONSTER_TEMPLATES)
@@ -79,46 +93,21 @@ FACTOR_VULN = _slai.GameEnv.FACTOR_VULN
 
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
-MAX_EVENT_ROLL_CARDS = _slai.GameEnv.MAX_EVENT_ROLL_CARDS
-MAX_EVENT_ROLL_POTIONS = _slai.GameEnv.MAX_EVENT_ROLL_POTIONS
-MAX_EVENT_ROLL_RELICS = _slai.GameEnv.MAX_EVENT_ROLL_RELICS
+MAX_SIZE_CARD_PILE_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_CARD_PILE_EVENT_ROLL
+MAX_SIZE_POTION_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_POTION_EVENT_ROLL
+MAX_SIZE_RELIC_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_RELIC_EVENT_ROLL
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
-MAX_SIZE_HAND = _slai.GameEnv.MAX_SIZE_HAND
+MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
 
 # Reward cards arrive as bundles (Reward.cards: list[list[Card]]): up to
-# MAX_REWARD_CARD_BUNDLES combat bundles of <= MAX_COMBAT_CARD_REWARD cards
-# (Orrery stages 5), or The Library's single MAX_CARD_REWARD_ROLL-card bundle.
-# Each bundle owns its own CARD_REWARD_<b> slice — bundle 0 wide enough for
-# The Library, the rest hold combat rolls — so slot <-> (bundle, card) is
-# static, via the tables below
+# MAX_REWARD_CARD_BUNDLES of them (Orrery stages 5). Each bundle is its own
+# CARD_REWARD_<b> kind, so a reward token's kind names its bundle
 MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
-REWARD_REGION_WIDTHS = (_slai.GameEnv.MAX_CARD_REWARD_ROLL,) + (
-    _slai.GameEnv.MAX_COMBAT_CARD_REWARD,
-) * (MAX_REWARD_CARD_BUNDLES - 1)
-REWARD_REGION_OFFSETS = tuple(
-    sum(REWARD_REGION_WIDTHS[:bundle]) for bundle in range(MAX_REWARD_CARD_BUNDLES)
-)
-REWARD_SLOT_TO_BUNDLE = tuple(
-    bundle for bundle, width in enumerate(REWARD_REGION_WIDTHS) for _ in range(width)
-)
-REWARD_SLOT_TO_CARD = tuple(idx for width in REWARD_REGION_WIDTHS for idx in range(width))
 
-# Cards exiled by Bronze Orb StasisSteal; the engine slot-parallels them to the
-# monster arena ([Option; MAX_MONSTERS]), so this cap is exact, not headroom.
-MAX_SIZE_STASIS = MAX_MONSTERS
-
-# Encoder-side caps. slai's deck and draw/discard piles grow unboundedly;
-# these are the maximum sizes the encoder pads to (overflow warns + drops the
-# affected actions, see masks.py/card.py). Draw/discard must hold a full deck,
-# so all three move together. Provisional two-act sizing (R4 harness confirms).
-MAX_SIZE_DECK = 45
-MAX_SIZE_DISC_PILE = 45
-MAX_SIZE_DRAW_PILE = 45
-
-# Tighter than the deck caps (tokens are costly), but two acts of exhaust
-# cycling run deeper than Act 1 did. R6's on-policy smoke hit 32 (vs 24 from
-# random play), so sized with real headroom; observational-only overflow.
-MAX_SIZE_EXHAUST = 40
+# Size ceiling for the master deck, used to normalize deck-scale counts (deck
+# size, halt picks over the deck and the combat piles it feeds). A trained
+# agent's deep runs hit 46 (EFFECT-II iter ~4040)
+MAX_SIZE_CARD_PILE_DECK = 55
 
 # Relic-reward offers per RELIC_REWARD halt: boss rewards roll mutually
 # exclusive relics (taking one discards the others).
@@ -128,24 +117,44 @@ MAX_RELIC_REWARDS = _slai.GameEnv.BOSS_RELIC_REWARD_COUNT
 # rewards offer at most 1.
 MAX_POTION_REWARDS = _slai.GameEnv.CAULDRON_POTION_COUNT
 
-# Max owned relics encoded as entities. No duplicate relics, so the true
-# ceiling is RelicName::COUNT; sized with headroom, bump as content grows.
-# Provisional two-act sizing (R4 harness).
-MAX_RELICS = 24
-
-# New-screen encoder/selection caps: engine slot counts + provisional headroom;
-# masks/encoders enumerate up to these. Events run up to ~9 options today.
-MAX_POTION_SLOTS = _slai.GameEnv.POTION_SLOTS_MAX  # unused slots masked empty
+# Engine slot counts + provisional headroom. Events run up to ~9 options today.
+MAX_POTION_SLOTS = _slai.GameEnv.POTION_SLOTS_MAX  # belt capacity; the FFI list is dense
 MAX_SIZE_SHOP_CARDS = _slai.GameEnv.SHOP_SLOTS_CARD_TOTAL + 1
 MAX_SHOP_RELICS = _slai.GameEnv.SHOP_SLOTS_RELIC + 1
 MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
 # Per-state effect-row pool. Ragged per entity (0-5 effects), so rows are packed
 # per STATE with an owner segment rather than padded per entity: (B, 284, 5, D)
-# would cost ~6x this. Measured live: mean 16.9 rows/state, max 35.
+# would cost ~6x this. Measured under EFFECT-II@4100 (trained agent, deep act-2
+# runs) with moveset variants deduped: mean 52, p99 109, max 116
 MAX_EFFECTS_STATE = 224
 MAX_MODIFIER_ROWS_STATE = 64
-MAX_SIZE_DISCOVER = _slai.GameEnv.DISCOVER_PICK_COUNT + 2
+MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_PICK_COUNT + 2
+
+# Per-collection caps for the collections the engine does not bound itself. Each
+# encoder slices its pile to the cap under that kind's `case` arm; a type's block
+# is as wide as the batch's longest packed sequence, and only the rollout
+# transport (train.py shared memory) is sized to a type's summed caps.
+# Draw/discard must hold a full deck, so they move with MAX_SIZE_CARD_PILE_DECK; a trained
+# agent's deep runs hit 46 cards (EFFECT-II iter ~4040). Exhaust: two acts of
+# exhaust cycling ran 41-42 under EFFECT-II. Stasis is slot-parallel to the
+# monster arena in the engine, so that cap is exact.
+MAX_SIZE_CARD_PILE_DRAW = 55
+MAX_SIZE_CARD_PILE_DISCARD = 55
+MAX_SIZE_CARD_PILE_EXHAUST = 45
+MAX_SIZE_CARD_PILE_STASIS = MAX_MONSTERS
+# Staged picks of an open multi-pick halt: at most a hand's worth
+MAX_PENDING_SELECTED = MAX_SIZE_CARD_PILE_HAND
+# Queued plays (replays, top-of-draw plays, end-of-turn self-plays) and the
+# nightmare pile: at most a hand's worth; past it they warn and drop
+MAX_SIZE_CARD_PLAY_QUEUE = MAX_SIZE_CARD_PILE_HAND
+MAX_SIZE_CARD_PILE_NIGHTMARE = MAX_SIZE_CARD_PILE_HAND
+# Owned relics: no duplicates, so the true ceiling is the catalog; sized with headroom
+MAX_RELICS = 24
+# Reward bundle widths: bundle 0 must hold The Library's single wide roll, the
+# rest hold combat rolls
+MAX_CARD_REWARD_ROLL = _slai.GameEnv.MAX_CARD_REWARD_ROLL
+MAX_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 
 # Normalization caps for new scalar features
 GOLD_CAP = 999
@@ -167,32 +176,36 @@ __all__ = [
     "INTENT_DAMAGE_HIT_MAX",
     "INTENT_DAMAGE_TOTAL_MAX",
     "INTENT_INSTANCES_MAX",
+    "MULTI_STAB_INSTANCES_MAX",
     "GOLD_STEAL_MAX",
     "MONSTER_MOVESET_MAX",
     "FACTOR_VULN",
     # Game constants
     "MAP_HEIGHT",
     "MAP_WIDTH",
-    "MAX_EVENT_ROLL_CARDS",
-    "MAX_EVENT_ROLL_POTIONS",
-    "MAX_EVENT_ROLL_RELICS",
+    "MAX_SIZE_CARD_PILE_EVENT_ROLL",
+    "MAX_SIZE_POTION_EVENT_ROLL",
+    "MAX_SIZE_RELIC_EVENT_ROLL",
     "MAX_MONSTERS",
     "MAX_REWARD_CARD_BUNDLES",
-    "REWARD_REGION_WIDTHS",
-    "REWARD_REGION_OFFSETS",
-    "REWARD_SLOT_TO_BUNDLE",
-    "REWARD_SLOT_TO_CARD",
-    "MAX_SIZE_STASIS",
-    "MAX_SIZE_DECK",
-    "MAX_SIZE_DISC_PILE",
-    "MAX_SIZE_DRAW_PILE",
-    "MAX_SIZE_EXHAUST",
-    "MAX_SIZE_HAND",
+    "MAX_SIZE_CARD_PILE_DECK",
+    "MAX_SIZE_CARD_PILE_HAND",
     "MAX_RELIC_REWARDS",
     "MAX_POTION_REWARDS",
+    # Per-collection caps
+    "MAX_SIZE_CARD_PILE_DRAW",
+    "MAX_SIZE_CARD_PILE_DISCARD",
+    "MAX_SIZE_CARD_PILE_EXHAUST",
+    "MAX_SIZE_CARD_PILE_STASIS",
+    "MAX_PENDING_SELECTED",
+    "MAX_SIZE_CARD_PLAY_QUEUE",
+    "MAX_SIZE_CARD_PILE_NIGHTMARE",
     "MAX_RELICS",
+    "MAX_CARD_REWARD_ROLL",
+    "MAX_COMBAT_CARD_REWARD",
     # Training flags + new-screen caps
     "FAST_MODE",
+    "NEOW",
     "MAX_POTION_SLOTS",
     "MAX_SIZE_SHOP_CARDS",
     "MAX_SHOP_RELICS",
@@ -200,7 +213,7 @@ __all__ = [
     "MAX_EFFECTS_STATE",
     "MAX_MODIFIER_ROWS_STATE",
     "MAX_EVENT_OPTIONS",
-    "MAX_SIZE_DISCOVER",
+    "MAX_SIZE_CARD_PILE_DISCOVER",
     "GOLD_CAP",
     "SHOP_PRICE_CAP",
     "EVENT_STATE_CAP",

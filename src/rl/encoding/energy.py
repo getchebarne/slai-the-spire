@@ -4,6 +4,7 @@ from enum import auto
 import numpy as np
 import torch
 from slai import Energy
+from slai import GameState
 
 from src.rl.types import make_channel_allocator
 
@@ -32,14 +33,15 @@ def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
     out[OFF_ENERGY_SCALAR] = min(energy.energy_current / _ENERGY_MAX, 1.0)
 
 
-def encode_batch_energy(batch_energy: list[Energy | None], device: torch.device) -> torch.Tensor:
-    batch_size = len(batch_energy)
+def encode_batch_energy(game_states: list[GameState], device: torch.device) -> torch.Tensor:
+    batch_size = len(game_states)
 
     # Pre-allocate NumPy array
     np_out = np.zeros((batch_size, ENCODING_DIM_ENERGY), dtype=np.float32)
 
-    for b, energy in enumerate(batch_energy):
-        if energy is not None:
-            _encode_energy_into(energy, np_out[b])
+    for b, game_state in enumerate(game_states):
+        combat = game_state.combat
+        if combat is not None:
+            _encode_energy_into(combat.energy, np_out[b])
 
     return torch.from_numpy(np_out).to(device)

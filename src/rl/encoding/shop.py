@@ -3,16 +3,15 @@ from enum import auto
 
 import numpy as np
 import torch
-from slai import Shop
+from slai import GameState
 
-from src.rl.constants import MAX_SHOP_POTIONS
-from src.rl.constants import MAX_SHOP_RELICS
-from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.constants import SHOP_PRICE_CAP
+from src.rl.types import SliceKind
 from src.rl.types import make_channel_allocator
 
 
-# Price feats, encoded alongside each item (the items go through their entity encoders)
+# Price feats, written at each shop item's window token (items themselves go
+# through their own entity encoders)
 class PriceChannel(StrEnum):
     PRICE = auto()
     AFFORDABLE = auto()
@@ -38,41 +37,46 @@ def _encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
 
 
 def encode_batch_shop(
-    batch_shop: list[Shop | None],
-    batch_gold: list[int],
+    game_states: list[GameState],
+    np_cards_idxs: np.ndarray,
+    np_relics_idxs: np.ndarray,
+    np_potions_idxs: np.ndarray,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,]:
-    """Per-item shop prices (aligned with the shop card/relic/potion segments) + meta."""
-    batch_size = len(batch_shop)
-    np_price_cards = np.zeros(
-        (batch_size, MAX_SIZE_SHOP_CARDS, ENCODING_DIM_PRICE), dtype=np.float32
-    )
-    np_price_relics = np.zeros((batch_size, MAX_SHOP_RELICS, ENCODING_DIM_PRICE), dtype=np.float32)
-    np_price_potions = np.zeros(
-        (batch_size, MAX_SHOP_POTIONS, ENCODING_DIM_PRICE), dtype=np.float32
-    )
+) -> tuple[torch.Tensor, np.ndarray, torch.Tensor]:
+    """Price rows for the shop items that have a token, packed per state in kind
+    order (cards, relics, potions) — (B, S, ENCODING_DIM_PRICE) rows + their (B, S)
+    kind row — plus the shop meta. The i-th item of a kind prices the i-th token
+    of that kind (the `np_*_idxs` are the selling types' kind rows), so an item
+    the encoder dropped gets no price either."""
+    batch_size = len(game_states)
+    batch_shop = [game_state.shop for game_state in game_states]  # hoisted: reads clone
+    items: list[list[tuple[SliceKind, int]]] = []
+    for b, shop in enumerate(batch_shop):
+        rows: list[tuple[SliceKind, int]] = []
+        if shop is not None:
+            for kind, np_idxs, prices in (
+                (SliceKind.CARD_SHOP, np_cards_idxs, shop.card_prices),
+                (SliceKind.RELIC_SHOP, np_relics_idxs, shop.relic_prices),
+                (SliceKind.POTION_SHOP, np_potions_idxs, shop.potion_prices),
+            ):
+                num_tokens = int(np.count_nonzero(np_idxs[b] == kind))
+                rows += [(kind, price) for price in prices[:num_tokens]]
+        items.append(rows)
+    width = max((len(rows) for rows in items), default=0)
+    np_prices = np.zeros((batch_size, width, ENCODING_DIM_PRICE), dtype=np.float32)
+    np_kinds = np.full((batch_size, width), -1, dtype=np.int16)
     np_meta = np.zeros((batch_size, ENCODING_DIM_SHOP_META), dtype=np.float32)
 
-    for b, (shop, gold) in enumerate(zip(batch_shop, batch_gold)):
+    for b, (game_state, shop) in enumerate(zip(game_states, batch_shop)):
         if shop is None:
             continue
-
-        for i, price in enumerate(shop.card_prices):
-            _encode_price_into(price, gold, np_price_cards[b, i])
-
-        for i, price in enumerate(shop.relic_prices):
-            _encode_price_into(price, gold, np_price_relics[b, i])
-
-        for i, price in enumerate(shop.potion_prices):
-            _encode_price_into(price, gold, np_price_potions[b, i])
+        gold = game_state.character.gold
+        for k, (kind, price) in enumerate(items[b]):
+            _encode_price_into(price, gold, np_prices[b, k])
+            np_kinds[b, k] = kind
 
         # Purge service price (same features as the per-item prices) + purged flag
         _encode_price_into(shop.purge_cost, gold, np_meta[b])
         np_meta[b, OFF_SHOP_PURGED] = float(shop.purged)
 
-    return (
-        torch.from_numpy(np_price_cards).to(device),
-        torch.from_numpy(np_price_relics).to(device),
-        torch.from_numpy(np_price_potions).to(device),
-        torch.from_numpy(np_meta).to(device),
-    )
+    return torch.from_numpy(np_prices).to(device), np_kinds, torch.from_numpy(np_meta).to(device)

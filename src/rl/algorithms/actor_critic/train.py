@@ -31,19 +31,53 @@ from src.rl.algorithms.actor_critic.evals import EVAL_WIN_RATE
 from src.rl.algorithms.actor_critic.evals import eval_battery_worker
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import FAST_MODE
+from src.rl.constants import MAP_WIDTH
+from src.rl.constants import MAX_CARD_REWARD_ROLL
+from src.rl.constants import MAX_COMBAT_CARD_REWARD
+from src.rl.constants import MAX_EFFECTS_STATE
+from src.rl.constants import MAX_EVENT_OPTIONS
+from src.rl.constants import MAX_MODIFIER_ROWS_STATE
+from src.rl.constants import MAX_MONSTERS
+from src.rl.constants import MAX_PENDING_SELECTED
+from src.rl.constants import MAX_POTION_REWARDS
+from src.rl.constants import MAX_POTION_SLOTS
+from src.rl.constants import MAX_RELIC_REWARDS
+from src.rl.constants import MAX_RELICS
+from src.rl.constants import MAX_REWARD_CARD_BUNDLES
+from src.rl.constants import MAX_SHOP_POTIONS
+from src.rl.constants import MAX_SHOP_RELICS
+from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
+from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
+from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
+from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
+from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_CARD_PILE_EXHAUST
+from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
+from src.rl.constants import MAX_SIZE_CARD_PILE_NIGHTMARE
+from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
+from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
+from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_SHOP_CARDS
+from src.rl.constants import NEOW
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.reward import cumulative_floor
+from src.rl.reward import shop_gold_spent
+from src.rl.reward import wasted_potion_discard
 from src.rl.types import ACTION_TYPE_BY_INT
-from src.rl.types import Level
 from src.rl.types import RolloutBuffer
-from src.rl.types import TEffects
-from src.rl.types import TGameState
-from src.rl.types import TMask
-from src.rl.types import TPadded
+from src.rl.types import X_Effects
+from src.rl.types import X_Entity
+from src.rl.types import X_EntityMask
+from src.rl.types import X_GameState
+from src.rl.types import X_HealthBlock
+from src.rl.types import X_Mask
+from src.rl.types import X_Modifiers
+from src.rl.types import X_ShopPrices
 from src.rl.utils import action_from_actiontype
 from src.rl.utils import engine_action
 from src.rl.utils import init_optimizer
@@ -98,7 +132,13 @@ class EnvPool:
     envs: list[slai.GameEnv]
     obs: list[slai.GameState]
     ep_rewards: list[np.ndarray]  # (K,) per env, accumulated across the episode
+    ep_returns: list[np.ndarray]  # (K,) per env, discounted (γ^t·r_t) accumulation
     ep_lengths: list[int]
+    ep_gold: list[int]  # positive gold deltas accumulated across the episode
+    ep_spent: list[int]  # shop gold spend accumulated across the episode
+    ep_wastes: list[int]  # holdable-Potion discards across the episode
+    ep_cards_added: list[int]  # deck-size increases across the episode
+    ep_purges: list[int]  # ShopPurge actions across the episode
     completed: list[EpisodeStats]
     gamma: float
     ascension_c: float  # soft-curriculum position; envs adopt their level on reset
@@ -111,7 +151,7 @@ class EnvPool:
 
 
 def _make_env(ascension: int) -> tuple[slai.GameEnv, slai.GameState]:
-    env = slai.GameEnv(ascension=ascension, fast_mode=FAST_MODE)
+    env = slai.GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
     obs = env.reset(seed=random.randint(0, 2**31 - 1))
     return env, obs
 
@@ -136,7 +176,13 @@ def make_env_pool(
         envs=envs,
         obs=obs,
         ep_rewards=[np.zeros(len(REWARD_STREAMS)) for _ in range(num_envs)],
+        ep_returns=[np.zeros(len(REWARD_STREAMS)) for _ in range(num_envs)],
         ep_lengths=[0] * num_envs,
+        ep_gold=[0] * num_envs,
+        ep_spent=[0] * num_envs,
+        ep_wastes=[0] * num_envs,
+        ep_cards_added=[0] * num_envs,
+        ep_purges=[0] * num_envs,
         completed=[],
         gamma=gamma,
         ascension_c=ascension,
@@ -153,9 +199,15 @@ def legal_actions(pool: EnvPool) -> list[list[slai.Action]]:
 def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarray, bool]:
     prev = pool.obs[env_idx]
     nxt, terminated = pool.envs[env_idx].step(action)
-    reward = compute_reward(prev, nxt, terminated, pool.gamma)  # (K,)
+    reward = compute_reward(prev, nxt, terminated, pool.gamma, action)  # (K,)
     pool.ep_rewards[env_idx] += reward
+    pool.ep_returns[env_idx] += pool.gamma ** pool.ep_lengths[env_idx] * reward
     pool.ep_lengths[env_idx] += 1
+    pool.ep_gold[env_idx] += max(0, nxt.character.gold - prev.character.gold)
+    pool.ep_spent[env_idx] += shop_gold_spent(prev, nxt, action)
+    pool.ep_wastes[env_idx] += wasted_potion_discard(prev, action)
+    pool.ep_cards_added[env_idx] += max(0, len(nxt.card_pile_deck) - len(prev.card_pile_deck))
+    pool.ep_purges[env_idx] += action.action_type == slai.ActionType.ShopPurge
     if terminated:
         # nxt is still the pre-reset terminal snapshot here
         pool.completed.append(
@@ -164,10 +216,23 @@ def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarr
                 pool.ep_lengths[env_idx],
                 won=nxt.character.health > 0,
                 floor=cumulative_floor(nxt),
+                stream_returns=pool.ep_returns[env_idx],
+                gold_gained=pool.ep_gold[env_idx],
+                gold_spent=pool.ep_spent[env_idx],
+                potion_wastes=pool.ep_wastes[env_idx],
+                deck_size=len(nxt.card_pile_deck),
+                cards_added=pool.ep_cards_added[env_idx],
+                purges=pool.ep_purges[env_idx],
             )
         )
         pool.ep_rewards[env_idx] = np.zeros(len(REWARD_STREAMS))
+        pool.ep_returns[env_idx] = np.zeros(len(REWARD_STREAMS))
         pool.ep_lengths[env_idx] = 0
+        pool.ep_gold[env_idx] = 0
+        pool.ep_spent[env_idx] = 0
+        pool.ep_wastes[env_idx] = 0
+        pool.ep_cards_added[env_idx] = 0
+        pool.ep_purges[env_idx] = 0
         pool.envs[env_idx], nxt = _make_env(
             _env_level(
                 pool.ascension_c,
@@ -228,10 +293,12 @@ def _collect_rollout(
     T = rollout_length
     N = T * E
     K = len(REWARD_STREAMS)
-    buf_x = buf_mb = None  # allocated from the first step's shapes
-    idx_at = torch.empty(N, dtype=torch.long, device=device)
-    idx_l1 = torch.empty(N, dtype=torch.long, device=device)
-    idx_l2 = torch.empty(N, dtype=torch.long, device=device)
+    steps_x: list[X_GameState] = []  # per-step encodes, padded to the rollout's widths at the end
+    steps_mb: list[X_Mask] = []
+    action_type = torch.empty(N, dtype=torch.long, device=device)
+    kind = torch.empty(N, dtype=torch.long, device=device)
+    rank = torch.empty(N, dtype=torch.long, device=device)
+    target = torch.empty(N, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
     values = torch.empty(T, E, K, device=device)
     rewards = torch.empty(T, E, K, device=device)
@@ -248,31 +315,31 @@ def _collect_rollout(
             views = pool.obs
             legal = legal_actions(pool)
             x = encode_batch_game_state(views, device)
-            mb = build_masks(views, legal, device)
-            out, t_values = model(x, mb, greedy=False)
+            mb = build_masks(views, legal, x, device)
+            out, x_values = model(x, mb, greedy=False)
 
-            if buf_x is None:
-                buf_x = x.new_empty(N)
-                buf_mb = mb.new_empty(N)
+            steps_x.append(x)
+            steps_mb.append(mb)
             rows = slice(t * E, (t + 1) * E)
-            buf_x[rows] = x
-            buf_mb[rows] = mb
-            idx_at[rows] = out.idxs[:, Level.ACTION_TYPE]
-            idx_l1[rows] = out.idxs[:, Level.L1]
-            idx_l2[rows] = out.idxs[:, Level.L2]
+            action_type[rows] = out.action_type
+            kind[rows] = out.kind
+            rank[rows] = out.rank
+            target[rows] = out.target
             log_probs[rows] = out.log_prob.sum(-1)
-            values[t] = t_values  # (E, K)
+            values[t] = x_values  # (E, K)
 
             # Campfire decision: both Rest and RestSmith legal — which was chosen?
             both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_SMITH]
-            chosen = out.idxs[:, Level.ACTION_TYPE]
+            chosen = out.action_type
             rest_picks += (both & (chosen == _AT_REST)).sum()
             upgrade_picks += (both & (chosen == _AT_SMITH)).sum()
 
-            # Decode actions on CPU once (one device->host transfer, not per-env), then step.
+            # Decode actions on CPU once (one device->host transfer, not per-env), then step
             out_cpu = out.cpu()
+            np_rooms = x.room_idxs.cpu().numpy()
             for i in range(E):
-                reward, done = step_env(pool, i, action_from_actiontype(out_cpu, i, views[i]))
+                action = action_from_actiontype(out_cpu, i, np_rooms[i], views[i])
+                reward, done = step_env(pool, i, action)
                 rewards[t, i] = torch.from_numpy(reward)
                 dones[t, i] = float(done)
 
@@ -280,9 +347,8 @@ def _collect_rollout(
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
         views = pool.obs
         legal = legal_actions(pool)
-        _, bootstrap = model(
-            encode_batch_game_state(views, device), build_masks(views, legal, device), greedy=True
-        )  # bootstrap (E, K)
+        x = encode_batch_game_state(views, device)
+        _, bootstrap = model(x, build_masks(views, legal, x, device), greedy=True)  # (E, K)
 
     # Set model to training mode
     model.train()
@@ -307,11 +373,12 @@ def _collect_rollout(
 
     return (
         RolloutBuffer(
-            game_state=buf_x,
-            mask_batch=buf_mb,
-            idx_at=idx_at,
-            idx_l1=idx_l1,
-            idx_l2=idx_l2,
+            game_state=_pad_cat_states(steps_x),
+            mask_batch=_pad_cat_masks(steps_mb),
+            action_type=action_type,
+            kind=kind,
+            rank=rank,
+            target=target,
             log_probs_old=log_probs,
             values=values.reshape(-1, K),
             returns=returns.reshape(-1, K),
@@ -323,66 +390,215 @@ def _collect_rollout(
     )
 
 
+def _pad_cat(tensors: list[torch.Tensor], dim: int, fill: float) -> torch.Tensor:
+    """Pad every tensor along `dim` to the longest with `fill`, then cat along the
+    batch dim: per-step encodes are as wide as their own batch, the buffer as wide
+    as the rollout."""
+    width = max(t.shape[dim] for t in tensors)
+    padded = []
+    for t in tensors:
+        if t.shape[dim] < width:
+            shape = list(t.shape)
+            shape[dim] = width - t.shape[dim]
+            t = torch.cat([t, t.new_full(shape, fill)], dim=dim)
+        padded.append(t)
+    return torch.cat(padded, dim=0)
+
+
+def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
+    """The rollout's states as one batch: every block padded to the rollout's
+    widest (x zeros, kinds -1), the per-state tensors just concatenated."""
+    batch_size = [sum(len(x) for x in steps)]
+
+    def entity(name: str) -> X_Entity:
+        return X_Entity(
+            _pad_cat([getattr(x, name).x for x in steps], 1, 0.0),
+            _pad_cat([getattr(x, name).x_slice_kind for x in steps], 1, -1),
+            batch_size=batch_size,
+        )
+
+    def rows(name: str, cls):
+        return cls(
+            x=_pad_cat([getattr(x, name).x for x in steps], 1, 0.0),
+            x_entity_kind=_pad_cat([getattr(x, name).x_entity_kind for x in steps], 1, -1),
+            x_offset=_pad_cat([getattr(x, name).x_offset for x in steps], 1, 0),
+            batch_size=batch_size,
+        )
+
+    def flat(name: str) -> torch.Tensor:
+        return torch.cat([getattr(x, name) for x in steps], dim=0)
+
+    return X_GameState(
+        cards=entity("cards"),
+        relics=entity("relics"),
+        potions=entity("potions"),
+        monsters=entity("monsters"),
+        event_options=entity("event_options"),
+        character=entity("character"),
+        health_block=rows("health_block", X_HealthBlock),
+        effects=rows("effects", X_Effects),
+        modifiers=rows("modifiers", X_Modifiers),
+        energy=flat("energy"),
+        map_grid=flat("map_grid"),
+        room_node_idx=flat("room_node_idx"),
+        room_idxs=flat("room_idxs"),
+        map_meta=flat("map_meta"),
+        focus=flat("focus"),
+        ascension=flat("ascension"),
+        reward_meta=flat("reward_meta"),
+        shop_meta=flat("shop_meta"),
+        event_meta=flat("event_meta"),
+        shop_prices=X_ShopPrices(
+            _pad_cat([x.shop_prices.x for x in steps], 1, 0.0),
+            _pad_cat([x.shop_prices.idxs for x in steps], 1, -1),
+            batch_size=batch_size,
+        ),
+        batch_size=batch_size,
+    )
+
+
+def _pad_cat_masks(steps: list[X_Mask]) -> X_Mask:
+    """The rollout's masks as one batch, each block padded (False) to the same
+    width as its entity block in _pad_cat_states."""
+    batch_size = [sum(len(mb) for mb in steps)]
+
+    def block(name: str) -> X_EntityMask:
+        return X_EntityMask(
+            legal=_pad_cat([getattr(mb, name).legal for mb in steps], 2, False),
+            needs_target=_pad_cat([getattr(mb, name).needs_target for mb in steps], 1, False),
+            is_target=_pad_cat([getattr(mb, name).is_target for mb in steps], 1, False),
+            batch_size=batch_size,
+        )
+
+    return X_Mask(
+        mask_action_type=torch.cat([mb.mask_action_type for mb in steps], dim=0),
+        **{name: block(name) for name in _BLOCKS},
+        batch_size=batch_size,
+    )
+
+
 # ---- Sharded rollout (config rollout_workers > 0) ----
 # The rollout's CPU work (engine step + reward + encode + masks) is sharded
 # across worker processes; the model forward and sampling stay central. Workers
 # write encoded observations/masks straight into one SharedMemory block (no
 # pickling — the pipe transfer is what sank the 2026-07 overlap probe), and
-# receive the sampled [ActionType, L1, L2] ints back through the same block
-# (the engine-Action back-map needs the pre-step state, which the worker holds).
+# receive the sampled [ActionType, kind, rank, target] ints back through the same
+# block (the engine-Action back-map only needs the pre-step rooms row, which the
+# worker holds). Every field is as wide as its collections' summed caps; the
+# workers pad their batch-max encodes into it and the master trims the snapshot
+# back to the batch's widths.
 # With double_buffer, envs split into two gangs: the GPU forwards one gang
 # while the other gang's workers step+encode (Sample Factory's double-buffered
 # sampling; exactly on-policy, staleness 0).
 
+# Immutable checkpoint snapshots (checkpoint-{iter}.pth): EFFECT-I's peak was
+# lost to the single overwritten checkpoint.pth
+ARCHIVE_EVERY = 1000
+
 _OP_STOP, _OP_ENCODE, _OP_STEP_ENCODE = 0, 1, 2
 
+_ENTITIES = ("cards", "relics", "potions", "monsters", "event_options", "character")
+_BLOCKS = _ENTITIES + ("rooms",)
+# The transport's capacity per block: the sum of the caps its encoder slices each
+# collection to (a token axis can never exceed it); the model only ever sees the
+# batch's widths
+_SHM_WIDTH = {
+    "cards": (
+        MAX_SIZE_CARD_PILE_HAND
+        + MAX_SIZE_CARD_PILE_DISCOVER
+        + MAX_PENDING_SELECTED
+        + MAX_CARD_REWARD_ROLL
+        + (MAX_REWARD_CARD_BUNDLES - 1) * MAX_COMBAT_CARD_REWARD
+        + MAX_SIZE_SHOP_CARDS
+        + MAX_SIZE_CARD_PILE_EVENT_ROLL
+        + 1  # Match and Keep's face-up card
+        + MAX_SIZE_CARD_PILE_STASIS
+        + MAX_SIZE_CARD_PLAY_QUEUE
+        + MAX_SIZE_CARD_PILE_NIGHTMARE
+        + MAX_SIZE_CARD_PILE_DRAW
+        + MAX_SIZE_CARD_PILE_DISCARD
+        + MAX_SIZE_CARD_PILE_EXHAUST
+        + MAX_SIZE_CARD_PILE_DECK
+    ),
+    "relics": MAX_RELIC_REWARDS + MAX_SHOP_RELICS + MAX_SIZE_RELIC_EVENT_ROLL + MAX_RELICS,
+    "potions": MAX_POTION_SLOTS
+    + MAX_POTION_REWARDS
+    + MAX_SHOP_POTIONS
+    + MAX_SIZE_POTION_EVENT_ROLL,
+    "monsters": MAX_MONSTERS,
+    "event_options": MAX_EVENT_OPTIONS,
+    "character": 1,
+    "rooms": MAP_WIDTH,
+    "health_block": MAX_MONSTERS + 1,
+    "effects": MAX_EFFECTS_STATE,
+    "modifiers": MAX_MODIFIER_ROWS_STATE,
+    "shop_prices": MAX_SIZE_SHOP_CARDS + MAX_SHOP_RELICS + MAX_SHOP_POTIONS,
+}
 
-def _obs_tensor_items(x: TGameState) -> list[tuple[str, torch.Tensor]]:
+
+def _obs_tensor_items(x: X_GameState) -> list[tuple[str, torch.Tensor]]:
     """Deterministic (name, tensor) walk of the observation — the shared-memory
-    field layout. Padded pairs flatten to `.x`/`.mask`."""
+    field layout."""
     items: list[tuple[str, torch.Tensor]] = []
-    for name in (
-        "cards",
-        "relics",
-        "potions",
-        "monsters",
-        "event_options",
-        "character",
-    ):
-        padded: TPadded = getattr(x, name)
-        items.append((f"{name}.x", padded.x))
-        items.append((f"{name}.mask", padded.mask))
-    # Effects carry a third field (the owner segment); int64 rides shm fine —
+    for name in _ENTITIES:
+        entity: X_Entity = getattr(x, name)
+        items.append((f"{name}.x", entity.x))
+        items.append((f"{name}.x_slice_kind", entity.x_slice_kind))
+    items.append(("health_block.x", x.health_block.x))
+    items.append(("health_block.x_entity_kind", x.health_block.x_entity_kind))
+    items.append(("health_block.x_offset", x.health_block.x_offset))
+    items.append(("shop_prices.x", x.shop_prices.x))
+    items.append(("shop_prices.idxs", x.shop_prices.idxs))
+    # Effects/modifiers carry their owner keys; int64 rides shm fine —
     # room_node_idx is the precedent.
     items.append(("effects.x", x.effects.x))
-    items.append(("effects.segment", x.effects.segment))
-    items.append(("effects.mask", x.effects.mask))
+    items.append(("effects.x_entity_kind", x.effects.x_entity_kind))
+    items.append(("effects.x_offset", x.effects.x_offset))
+    items.append(("modifiers.x", x.modifiers.x))
+    items.append(("modifiers.x_entity_kind", x.modifiers.x_entity_kind))
+    items.append(("modifiers.x_offset", x.modifiers.x_offset))
     for name in (
         "energy",
         "map_grid",
         "room_node_idx",
-        "room_mask",
+        "room_idxs",
         "map_meta",
         "focus",
         "ascension",
         "reward_meta",
         "shop_meta",
         "event_meta",
-        "shop_card_prices",
-        "shop_relic_prices",
-        "shop_potion_prices",
     ):
         items.append((name, getattr(x, name)))
     return items
 
 
-def _mask_tensor_items(mb: TMask) -> list[tuple[str, torch.Tensor]]:
+def _mask_tensor_items(mb: X_Mask) -> list[tuple[str, torch.Tensor]]:
     items = [("mask_action_type", mb.mask_action_type)]
-    for key in sorted(mb.mask_action_idx.keys(), key=int):
-        items.append((f"l1.{key}", mb.mask_action_idx[key]))
-    items.append(("mask_target_card", mb.mask_target_card))
-    items.append(("mask_target_potion", mb.mask_target_potion))
+    for name in _BLOCKS:
+        block: X_EntityMask = getattr(mb, name)
+        items.append((f"{name}.legal", block.legal))
+        items.append((f"{name}.needs_target", block.needs_target))
+        items.append((f"{name}.is_target", block.is_target))
     return items
+
+
+def _shm_shape(name: str, shape: tuple[int, ...]) -> tuple[int, ...]:
+    """A field's per-env shape in shared memory: the probe's, with the token axis
+    widened to the block's capacity (`legal` carries it last, the rest first)."""
+    base, _, field = name.partition(".")
+    if base not in _SHM_WIDTH:
+        return shape
+    if field == "legal":
+        return (shape[0], _SHM_WIDTH[base])
+    return (_SHM_WIDTH[base], *shape[1:])
+
+
+def _write_padded(view: np.ndarray, np_t: np.ndarray, fill: float) -> None:
+    """Write a batch-max-width tensor into its capacity-wide shared rows: the
+    data in the leading slice, `fill` past it."""
+    view[...] = fill
+    view[tuple(slice(0, size) for size in np_t.shape)] = np_t
 
 
 @dataclass
@@ -392,13 +608,14 @@ class ShardLayout:
 
 
 def _build_shard_layout(num_envs: int, num_workers: int) -> ShardLayout:
-    """Size every shared field from a 1-env probe encode (dims are config-derived;
-    a fresh throwaway env keeps this layout-source-of-truth-free)."""
-    env = slai.GameEnv(ascension=0, fast_mode=FAST_MODE)
+    """Size every shared field from a 1-env probe encode (dtypes and feature dims)
+    and the blocks' capacities (token axes); a fresh throwaway env keeps this
+    layout-source-of-truth-free."""
+    env = slai.GameEnv(ascension=0, fast_mode=FAST_MODE, neow=NEOW)
     obs = env.reset(seed=0)
     cpu = torch.device("cpu")
     probe_x = encode_batch_game_state([obs], cpu)
-    probe_mb = build_masks([obs], [env.get_legal_actions()], cpu)
+    probe_mb = build_masks([obs], [env.get_legal_actions()], probe_x, cpu)
 
     fields: dict[str, tuple[int, tuple[int, ...], np.dtype]] = {}
     offset = 0
@@ -411,8 +628,8 @@ def _build_shard_layout(num_envs: int, num_workers: int) -> ShardLayout:
 
     for name, t in _obs_tensor_items(probe_x) + _mask_tensor_items(probe_mb):
         np_dtype = np.dtype(str(t.dtype).removeprefix("torch."))
-        add(name, (num_envs, *t.shape[1:]), np_dtype)
-    add("_actions", (num_envs, 3), np.dtype(np.int64))
+        add(name, (num_envs, *_shm_shape(name, tuple(t.shape[1:]))), np_dtype)
+    add("_actions", (num_envs, 4), np.dtype(np.int64))
     add("_rewards", (num_envs, len(REWARD_STREAMS)), np.dtype(np.float32))
     add("_dones", (num_envs,), np.dtype(np.float32))
     add("_ctrl_c", (1,), np.dtype(np.float64))  # live curriculum position
@@ -431,56 +648,77 @@ def _np_views(shm: SharedMemory, layout: ShardLayout) -> dict[str, np.ndarray]:
 
 def _snapshot_to_device(
     views: dict[str, np.ndarray], lo: int, hi: int, device: torch.device
-) -> tuple[TGameState, TMask]:
+) -> tuple[X_GameState, X_Mask]:
     """Copy the shard rows [lo, hi) out of shared memory onto the device as a
-    TGameState/TMask pair. The .to(device) copy IS the snapshot boundary — the
-    workers only overwrite these rows after the next signal."""
+    X_GameState/X_Mask pair, each block trimmed from the transport's capacity to
+    the rows' widest valid prefix. The `.copy()` IS the snapshot boundary: the
+    chunks live until the rollout's buffer is assembled, while the workers
+    overwrite these rows after the next signal (on CPU, .to(device) alone would
+    alias the shared memory)."""
     B = [hi - lo]
 
-    def t(name: str) -> torch.Tensor:
-        return torch.from_numpy(views[name][lo:hi]).to(device)
+    def width(name: str) -> int:
+        """The widest valid prefix of a kind/owner row across the rows."""
+        return int((views[name][lo:hi] >= 0).sum(1).max())
 
-    def padded(name: str) -> TPadded:
-        return TPadded(t(f"{name}.x"), t(f"{name}.mask"), batch_size=B)
+    def t(name: str, w: int | None = None, axis: int = 1) -> torch.Tensor:
+        arr = views[name][lo:hi]
+        if w is not None:
+            arr = arr[(slice(None),) * axis + (slice(0, w),)]
+        return torch.from_numpy(arr.copy()).to(device)
 
-    x = TGameState(
-        cards=padded("cards"),
-        relics=padded("relics"),
-        potions=padded("potions"),
-        monsters=padded("monsters"),
-        event_options=padded("event_options"),
-        character=padded("character"),
-        effects=TEffects(
-            x=t("effects.x"),
-            segment=t("effects.segment"),
-            mask=t("effects.mask"),
+    def entity(name: str) -> X_Entity:
+        w = width(f"{name}.x_slice_kind")
+        return X_Entity(t(f"{name}.x", w), t(f"{name}.x_slice_kind", w), batch_size=B)
+
+    def rows(name: str, cls):
+        w = width(f"{name}.x_entity_kind")
+        return cls(
+            x=t(f"{name}.x", w),
+            x_entity_kind=t(f"{name}.x_entity_kind", w),
+            x_offset=t(f"{name}.x_offset", w),
             batch_size=B,
-        ),
+        )
+
+    w_shop = width("shop_prices.idxs")
+    x = X_GameState(
+        cards=entity("cards"),
+        relics=entity("relics"),
+        potions=entity("potions"),
+        monsters=entity("monsters"),
+        event_options=entity("event_options"),
+        character=entity("character"),
+        health_block=rows("health_block", X_HealthBlock),
+        effects=rows("effects", X_Effects),
+        modifiers=rows("modifiers", X_Modifiers),
         energy=t("energy"),
         map_grid=t("map_grid"),
         room_node_idx=t("room_node_idx"),
-        room_mask=t("room_mask"),
+        room_idxs=t("room_idxs"),
         map_meta=t("map_meta"),
         focus=t("focus"),
         ascension=t("ascension"),
         reward_meta=t("reward_meta"),
         shop_meta=t("shop_meta"),
         event_meta=t("event_meta"),
-        shop_card_prices=t("shop_card_prices"),
-        shop_relic_prices=t("shop_relic_prices"),
-        shop_potion_prices=t("shop_potion_prices"),
+        shop_prices=X_ShopPrices(
+            t("shop_prices.x", w_shop), t("shop_prices.idxs", w_shop), batch_size=B
+        ),
         batch_size=B,
     )
-    from tensordict import TensorDict
 
-    mb = TMask(
-        mask_action_type=t("mask_action_type"),
-        mask_action_idx=TensorDict(
-            {name.removeprefix("l1."): t(name) for name in views if name.startswith("l1.")},
+    def block(name: str) -> X_EntityMask:
+        w = getattr(x, name).x_slice_kind.shape[1] if name != "rooms" else MAP_WIDTH
+        return X_EntityMask(
+            legal=t(f"{name}.legal", w, axis=2),
+            needs_target=t(f"{name}.needs_target", w),
+            is_target=t(f"{name}.is_target", w),
             batch_size=B,
-        ),
-        mask_target_card=t("mask_target_card"),
-        mask_target_potion=t("mask_target_potion"),
+        )
+
+    mb = X_Mask(
+        mask_action_type=t("mask_action_type"),
+        **{name: block(name) for name in _BLOCKS},
         batch_size=B,
     )
     return x, mb
@@ -521,6 +759,7 @@ def _shard_worker(
     actions = views["_actions"]
     rewards = views["_rewards"]
     dones = views["_dones"]
+    x = None  # last encode; _OP_ENCODE primes it before any _OP_STEP_ENCODE
 
     while True:
         req.wait()
@@ -530,17 +769,28 @@ def _shard_worker(
             break
         pool.ascension_c = float(views["_ctrl_c"][0])  # promotions apply on reset
         if op == _OP_STEP_ENCODE:
+            # The rows the master scored are this shard's previous encode; decoding a
+            # room pick needs its rooms row
+            np_rooms = x.room_idxs.numpy()
             for j in range(hi - lo):
-                at, l1, l2 = actions[lo + j]
-                action = engine_action(int(at), int(l1), int(l2), pool.obs[j])
+                at, kind, rank, target = actions[lo + j]
+                action = engine_action(
+                    int(at), int(kind), int(rank), int(target), np_rooms[j], pool.obs[j]
+                )
                 reward, terminated = step_env(pool, j, action)
                 rewards[lo + j] = reward
                 dones[lo + j] = float(terminated)
         legal = legal_actions(pool)
         x = encode_batch_game_state(pool.obs, cpu)
-        mb = build_masks(pool.obs, legal, cpu)
+        mb = build_masks(pool.obs, legal, x, cpu)
         for name, t in _obs_tensor_items(x) + _mask_tensor_items(mb):
-            views[name][lo:hi] = t.numpy()
+            # Kind/owner rows pad with -1, everything else with 0/False
+            fill = (
+                -1
+                if name.endswith((".idxs", ".x_slice_kind", ".x_entity_kind", "room_idxs"))
+                else 0
+            )
+            _write_padded(views[name][lo:hi], t.numpy(), fill)
         for stats in drain_completed(pool):
             ep_queue.put(stats)
         done.set()
@@ -688,10 +938,12 @@ def _collect_rollout_sharded(
     N = T * E
     K = len(REWARD_STREAMS)
     sr.views["_ctrl_c"][0] = ascension_c
-    buf_x = buf_mb = None
-    idx_at = torch.empty(N, dtype=torch.long, device=device)
-    idx_l1 = torch.empty(N, dtype=torch.long, device=device)
-    idx_l2 = torch.empty(N, dtype=torch.long, device=device)
+    chunks_x: list[X_GameState] = []  # per (step, gang), in row order
+    chunks_mb: list[X_Mask] = []
+    action_type = torch.empty(N, dtype=torch.long, device=device)
+    kind = torch.empty(N, dtype=torch.long, device=device)
+    rank = torch.empty(N, dtype=torch.long, device=device)
+    target = torch.empty(N, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
     values = torch.empty(T, E, K, device=device)
     rewards = torch.empty(T, E, K, device=device)
@@ -713,28 +965,27 @@ def _collect_rollout_sharded(
         ]
 
         def forward_and_dispatch(g: int, t: int) -> None:
-            nonlocal buf_x, buf_mb
             lo, hi = _gang_range(sr, sr.gangs[g])
             x, mb = snaps[g]
-            out, t_values = model(x, mb, greedy=False)
-            if buf_x is None:
-                buf_x = x.new_empty(N)
-                buf_mb = mb.new_empty(N)
+            out, x_values = model(x, mb, greedy=False)
+            chunks_x.append(x)
+            chunks_mb.append(mb)
             rows = slice(t * E + lo, t * E + hi)
-            buf_x[rows] = x
-            buf_mb[rows] = mb
-            idx_at[rows] = out.idxs[:, Level.ACTION_TYPE]
-            idx_l1[rows] = out.idxs[:, Level.L1]
-            idx_l2[rows] = out.idxs[:, Level.L2]
+            action_type[rows] = out.action_type
+            kind[rows] = out.kind
+            rank[rows] = out.rank
+            target[rows] = out.target
             log_probs[rows] = out.log_prob.sum(-1)
-            values[t, lo:hi] = t_values
+            values[t, lo:hi] = x_values
 
             both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_SMITH]
-            chosen = out.idxs[:, Level.ACTION_TYPE]
+            chosen = out.action_type
             rest_picks.add_((both & (chosen == _AT_REST)).sum())
             upgrade_picks.add_((both & (chosen == _AT_SMITH)).sum())
 
-            sr.views["_actions"][lo:hi] = out.idxs.cpu().numpy()
+            sr.views["_actions"][lo:hi] = (
+                torch.stack([out.action_type, out.kind, out.rank, out.target], dim=1).cpu().numpy()
+            )
             _signal(sr, sr.gangs[g], _OP_STEP_ENCODE)
 
         def collect_and_snapshot(g: int, t: int) -> None:
@@ -775,11 +1026,12 @@ def _collect_rollout_sharded(
 
     return (
         RolloutBuffer(
-            game_state=buf_x,
-            mask_batch=buf_mb,
-            idx_at=idx_at,
-            idx_l1=idx_l1,
-            idx_l2=idx_l2,
+            game_state=_pad_cat_states(chunks_x),
+            mask_batch=_pad_cat_masks(chunks_mb),
+            action_type=action_type,
+            kind=kind,
+            rank=rank,
+            target=target,
             log_probs_old=log_probs,
             values=values.reshape(-1, K),
             returns=returns.reshape(-1, K),
@@ -901,9 +1153,10 @@ def _update_ppo(
     # rollout-time values — which return stream the critic can predict (EV → 1)
     # and which carries the residual noise (typically the outcome stream).
     ev = 1.0 - (buffer.returns - buffer.values).var(dim=0) / (buffer.returns.var(dim=0) + 1e-8)
-    epochs_run = 0
+    epochs_run = 0.0
     for _ in range(num_epochs):
         epoch_start = len(records)
+        stopped = False
         ep = shuffle_rollout_buffer(buffer, device)
         for start in range(0, len(buffer), minibatch_size):
             rows = slice(start, start + minibatch_size)
@@ -916,9 +1169,10 @@ def _update_ppo(
                 log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
                     ep.game_state[rows],
                     ep.mask_batch[rows],
-                    ep.idx_at[rows],
-                    ep.idx_l1[rows],
-                    ep.idx_l2[rows],
+                    ep.action_type[rows],
+                    ep.kind[rows],
+                    ep.rank[rows],
+                    ep.target[rows],
                 )
             if amp:
                 log_probs_new = log_probs_new.float()
@@ -983,7 +1237,18 @@ def _update_ppo(
                     clip_eps,
                 )
             )
-        epochs_run += 1
+
+            # Minibatch-granular trust region (IIIe): an epoch is many unchecked
+            # optimizer steps, and IIId's FIRST epoch alone ran median KL 0.30
+            # (10x target) while the epoch-level stop watched. 3x (not 1.5x):
+            # single-minibatch KL estimates are noisy
+            if target_kl is not None and records[-1]["update/approx_kl"] > 3.0 * target_kl:
+                stopped = True
+                break
+        mb_total = (len(buffer) + minibatch_size - 1) // minibatch_size
+        epochs_run += (len(records) - epoch_start) / mb_total
+        if stopped:
+            break
         # Target-KL early-stop (XIV fix #3): the clip bounds each sample's incentive,
         # not the cumulative drift across epochs on frozen log_probs_old — stop
         # squeezing this batch once realized movement exceeds the trust region.
@@ -1007,6 +1272,7 @@ def _save_checkpoint(
     iteration: int,
     total_steps: int,
     curriculum_c: float,
+    lr_scale: float = 1.0,
 ) -> None:
     torch.save(
         {
@@ -1015,6 +1281,7 @@ def _save_checkpoint(
             "iteration": iteration,
             "total_steps": total_steps,
             "curriculum_c": curriculum_c,
+            "lr_scale": lr_scale,
         },
         path,
     )
@@ -1051,6 +1318,7 @@ def train(
     device: torch.device,
     start_iteration: int = 0,
     total_steps: int = 0,
+    lr_scale: float = 1.0,
     overlap_rollout: bool = False,
     amp: bool = False,
     rollout_workers: int = 0,
@@ -1113,6 +1381,9 @@ def train(
     else:
         pool = make_env_pool(num_envs, gamma, ascension=c, ascension_max=ascension_max)
 
+    # Adaptive-KL lr: base recovered from the (possibly resumed-scaled) group lr
+    base_lr = optimizer.param_groups[0]["lr"] / lr_scale
+
     try:
         for iteration in range(start_iteration, num_iterations):
             # Entropy coef keyed to env steps (not iterations), linear decay to the
@@ -1153,6 +1424,20 @@ def train(
                 amp,
             )
             t_update = time.perf_counter()
+
+            # Adaptive-KL lr (IIIe): the early stops bound epochs, not the first
+            # epoch's step size — at a fixed lr IIId sat 10x over target and
+            # stalled. Shrink on overshoot, recover toward base inside the region
+            if target_kl is not None:
+                kl_real = metrics["update/approx_kl"]
+                if kl_real > 2.0 * target_kl:
+                    lr_scale = max(lr_scale / 1.5, 1.0 / 64.0)
+                elif kl_real < 0.5 * target_kl:
+                    lr_scale = min(lr_scale * 1.5, 1.0)
+                for group in optimizer.param_groups:
+                    group["lr"] = base_lr * lr_scale
+                metrics["update/lr_scale"] = lr_scale
+
             # Eval battery (persistent worker): drain a finished one and, on the save
             # cadence when idle, launch a new one - both non-blocking. Logged at eval_iter.
             if eval_busy and eval_conn.poll():
@@ -1179,7 +1464,11 @@ def train(
                     ascension_max,
                 )
                 if c != c_prev:
-                    if not overlap_rollout:
+                    # Serial path only: `pool` exists solely in the workers==0 arm.
+                    # The sharded path ships c via _ctrl_c every collect; the old
+                    # bare not-overlap guard NameError'd on the first promotion
+                    # under sharded rollout (all EFFECT runs; found 2026-09-03)
+                    if not overlap_rollout and rollout_workers == 0:
                         pool.ascension_c = c  # envs graduate on their next reset
                     print(f"  curriculum: c={c:.2f}, frontier A{_eval_level(c, ascension_max)}")
             if iteration % save_every == 0 and not eval_busy:
@@ -1210,6 +1499,15 @@ def train(
                             sum(e.stream_rewards[k] for e in completed) / len(completed),
                             iteration,
                         )
+
+                        # Discounted per-stream returns: the optimizer's actual
+                        # objective — undiscounted sums shift with episode length
+                        # (the EFFECT-II dip read as a reward gain through that lens)
+                        writer.add_scalar(
+                            f"{PREFIX_TRAIN}reward_ret_{name}",
+                            sum(e.stream_returns[k] for e in completed) / len(completed),
+                            iteration,
+                        )
                     # Floor-stream acceptance diagnostic: returns should be ordered by
                     # death depth (the analog of the XIV corr(finalHP, return) check).
                     floors = [e.floor for e in completed]
@@ -1221,10 +1519,15 @@ def train(
                             iteration,
                         )
             if iteration % save_every == 0:
-                _save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps, c)
+                _save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps, c, lr_scale)
+            if iteration > 0 and iteration % ARCHIVE_EVERY == 0:
+                archive_path = f"experiments/{exp_name}/checkpoint-{iteration}.pth"
+                _save_checkpoint(
+                    archive_path, model, optimizer, iteration, total_steps, c, lr_scale
+                )
     except KeyboardInterrupt:
         print("\nTraining interrupted. Saving checkpoint...")
-        _save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps, c)
+        _save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps, c, lr_scale)
     finally:
         if overlap_rollout and rollout_worker.is_alive():
             try:
@@ -1250,11 +1553,12 @@ def _load_checkpoint(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
     seed: int,
-) -> tuple[int, int, float | None]:
+) -> tuple[int, int, float | None, float]:
     """Resume model/optimizer/RNG from `ckpt_path` if it exists; returns
-    (start_iteration, total_steps, curriculum_c), or (0, 0, None) for a fresh run."""
+    (start_iteration, total_steps, curriculum_c, lr_scale), or (0, 0, None, 1.0)
+    for a fresh run."""
     if not os.path.exists(ckpt_path):
-        return 0, 0, None
+        return 0, 0, None, 1.0
 
     ckpt = torch.load(ckpt_path, weights_only=True)
     model.load_state_dict(ckpt["model"])
@@ -1265,7 +1569,7 @@ def _load_checkpoint(
     random.seed(seed + start_iteration)
     torch.manual_seed(seed + start_iteration)
     print(f"Resuming from {ckpt_path}: iteration {start_iteration}, {total_steps} steps")
-    return start_iteration, total_steps, ckpt.get("curriculum_c")
+    return start_iteration, total_steps, ckpt.get("curriculum_c"), ckpt.get("lr_scale", 1.0)
 
 
 if __name__ == "__main__":
@@ -1293,9 +1597,15 @@ if __name__ == "__main__":
 
     # Load checkpoint
     ckpt_path = f"experiments/{config['exp_name']}/checkpoint.pth"
-    start_iteration, total_steps, curriculum_c = _load_checkpoint(
+    start_iteration, total_steps, curriculum_c, lr_scale = _load_checkpoint(
         ckpt_path, model, optimizer, seed
     )
+
+    # In-place compile AFTER the load: Module.compile keeps state_dict keys
+    # unprefixed, so checkpoints/eval-worker sends stay compatible. dynamic=True:
+    # the forward's shapes vary per batch (valid-token gathers, pack widths)
+    if config.get("compile", False):
+        model.compile(dynamic=True)
 
     print(f"Starting training: {config['exp_name']}")
     n_params = sum(p.numel() for p in model.parameters())
@@ -1331,6 +1641,7 @@ if __name__ == "__main__":
         promote_streak=int(config["promote_streak"]),
         curriculum_step=config["curriculum_step"],
         target_kl=config["target_kl"],
+        lr_scale=lr_scale,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         start_iteration=start_iteration,
         total_steps=total_steps,

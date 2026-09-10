@@ -13,12 +13,15 @@ from src.rl.algorithms.actor_critic.episode import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.episode import aggregate_episodes
 from src.rl.constants import FAST_MODE
+from src.rl.constants import NEOW
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.reward import cumulative_floor
+from src.rl.reward import shop_gold_spent
+from src.rl.reward import wasted_potion_discard
 from src.rl.utils import action_from_actiontype
 
 
@@ -44,10 +47,16 @@ def run_eval_battery(
     episodes: list[EpisodeStats] = []
     with torch.no_grad():
         for seed in _EVAL_SEEDS:
-            env = slai.GameEnv(ascension=ascension, fast_mode=FAST_MODE)
+            env = slai.GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
             obs = env.reset(seed=seed)
             stream_rewards = np.zeros(len(REWARD_STREAMS))
+            stream_returns = np.zeros(len(REWARD_STREAMS))
             length = 0
+            gold_gained = 0
+            gold_spent = 0
+            potion_wastes = 0
+            cards_added = 0
+            purges = 0
             terminated = False
             while not terminated and length < _EVAL_MAX_STEPS:
                 legal = env.get_legal_actions()
@@ -57,14 +66,24 @@ def run_eval_battery(
                     )
 
                 # Greedy step: Encode -> Mask -> Forward
-                t_game_state = encode_batch_game_state([obs], device)
-                t_mask = build_masks([obs], [legal], device)
-                t_action, _ = model(t_game_state, t_mask, greedy=True)
+                x_game_state = encode_batch_game_state([obs], device)
+                x_mask = build_masks([obs], [legal], x_game_state, device)
+                x_action, _ = model(x_game_state, x_mask, greedy=True)
 
-                # Game step
+                # Game step (a room pick decodes through the rooms row)
                 prev = obs
-                obs, terminated = env.step(action_from_actiontype(t_action, 0, obs))
-                stream_rewards += compute_reward(prev, obs, terminated, gamma)
+                action = action_from_actiontype(
+                    x_action, 0, x_game_state.room_idxs[0].cpu().numpy(), obs
+                )
+                obs, terminated = env.step(action)
+                reward = compute_reward(prev, obs, terminated, gamma, action)
+                stream_rewards += reward
+                stream_returns += gamma**length * reward
+                gold_gained += max(0, obs.character.gold - prev.character.gold)
+                gold_spent += shop_gold_spent(prev, obs, action)
+                potion_wastes += wasted_potion_discard(prev, action)
+                cards_added += max(0, len(obs.card_pile_deck) - len(prev.card_pile_deck))
+                purges += action.action_type == slai.ActionType.ShopPurge
                 length += 1
 
             episodes.append(
@@ -73,6 +92,13 @@ def run_eval_battery(
                     length=length,
                     won=bool(terminated and obs.character.health > 0),
                     floor=cumulative_floor(obs),
+                    stream_returns=stream_returns,
+                    gold_gained=gold_gained,
+                    gold_spent=gold_spent,
+                    potion_wastes=potion_wastes,
+                    deck_size=len(obs.card_pile_deck),
+                    cards_added=cards_added,
+                    purges=purges,
                 )
             )
 
