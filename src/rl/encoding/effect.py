@@ -17,10 +17,11 @@ Two rules the layout depends on:
 """
 
 import math
+import warnings
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
-from enum import IntEnum
+from collections.abc import Sequence
 from enum import StrEnum
 from enum import auto
 from types import UnionType
@@ -28,6 +29,7 @@ from typing import Any, Protocol, SupportsInt, TypeVar, get_args
 
 import numpy as np
 import slai
+import torch
 from slai import Amount
 from slai import AmountAbsolute
 from slai import AmountRange
@@ -41,8 +43,13 @@ from slai import CardRarity
 from slai import CostScope
 from slai import DeltaSign
 from slai import Effect
+from slai import GameState
 from slai import ModifierKind
+from slai import ReadAt
+from slai import RelicExclusion
 from slai import RelicTier
+from slai import RewardRollTrigger
+from slai import Rounding
 from slai import SelectionKind
 from slai import get_card_templates
 from slai import get_event_option_templates
@@ -51,8 +58,14 @@ from slai import get_potion_templates
 from slai import get_relic_templates
 
 from src.rl.constants import ASCENSION_LEVEL
-from src.rl.constants import MAX_SIZE_DECK
-from src.rl.constants import MAX_SIZE_HAND
+from src.rl.constants import MAX_EFFECTS_STATE
+from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
+from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
+from src.rl.constants import MULTI_STAB_INSTANCES_MAX
+from src.rl.types import OWNER_PENDING
+from src.rl.types import EffectSource
+from src.rl.types import EntityKind
+from src.rl.types import X_Effects
 from src.rl.types import make_channel_allocator
 
 
@@ -69,18 +82,27 @@ def catalog_rows() -> Iterator[tuple[str, Effect]]:
     # Cards
     for template in get_card_templates():
         label = f"card {template.name}{'+' if template.upgraded else ''}"
-        for effect in template.effects:
+        for effect in (*template.effects_play, *template.effects_discard, *template.effects_draw):
             yield label, effect
 
     # Potions
-    for template in get_potion_templates():
-        for effect in template.effects:
-            yield f"potion {template.name}", effect
+    for potion in get_potion_templates():
+        for effect in potion.effects:
+            yield f"potion {potion.name}", effect
 
-    # Relics
-    for template in get_relic_templates():
-        for effect in template.effects_combat_start:
-            yield f"relic {template.name}", effect
+    # Relics, one sweep per trigger field
+    for relic in get_relic_templates():
+        for trigger, effects in (
+            ("combat_start", relic.effects_combat_start),
+            ("turn_start", relic.effects_turn_start),
+            ("turn_end", relic.effects_turn_end),
+            ("combat_end", relic.effects_combat_end),
+            ("pickup", relic.effects_pickup),
+            ("rest", relic.effects_rest),
+            ("counter", relic.effects_counter),
+        ):
+            for effect in effects:
+                yield f"relic {relic.name} {trigger}", effect
 
     # Event Options
     for ascension in _ASCENSIONS:
@@ -90,10 +112,10 @@ def catalog_rows() -> Iterator[tuple[str, Effect]]:
 
     # Monster moves
     for ascension in _ASCENSIONS:
-        for template in get_monster_templates(ascension):
-            for move in template.moves:
+        for monster in get_monster_templates(ascension):
+            for move in monster.moves:
                 for effect in move.effects:
-                    yield f"monster {template.name} {move.name} a{ascension}", effect
+                    yield f"monster {monster.name} {move.name} a{ascension}", effect
 
 
 # Bucketed by exact type once
@@ -175,18 +197,23 @@ _INDEX_CAND_POOL = _index_enum(CandidatePool)
 _INDEX_SELECTION_KIND = _index_union(SelectionKind)
 _INDEX_CAND_FILTER = _index_enum(CandidateFilter)
 _INDEX_MODIFIER_KIND = _index_enum(ModifierKind)
+_INDEX_REWARD_ROLL_TRIGGER = _index_enum(RewardRollTrigger)
 _INDEX_DELTA_SIGN = _index_enum(DeltaSign)
 _INDEX_CARD_PILE = _index_enum(CardPile)
 _INDEX_CARD_KIND = _index_enum(CardKind)
 _INDEX_CARD_COLOR = _index_enum(CardColor)
 _INDEX_CARD_RARITY = _index_enum(CardRarity)
 _INDEX_RELIC_TIER = _index_enum(RelicTier)
+_INDEX_RELIC_EXCLUSION = _index_enum(RelicExclusion)
 _INDEX_COST_SCOPE = _index_enum(CostScope)
+_INDEX_READ_AT = _index_enum(ReadAt)
+_INDEX_ROUNDING = _index_enum(Rounding)
 
 _VOCAB_CARD = _vocabulary(_field(slai.EffectCardAdd, lambda e: e.card_name))
 _VOCAB_RELIC = _vocabulary(
     _field(slai.EffectRelicGrantSpecific, lambda e: e.name),
     _field(slai.EffectRelicGrantPool, lambda e: e.pool),
+    _field(slai.EffectRewardRollRelic, lambda e: e.pool),
 )
 _VOCAB_MONSTER = _vocabulary(
     _field(slai.EffectMonsterSpawn, lambda e: e.name),
@@ -200,8 +227,15 @@ _CAP_DAMAGE = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectDamagePhysicalIfPoisoned, lambda e: e.amount),
     _field(slai.EffectDamageFinisher, lambda e: e.damage),
     _field(slai.EffectDamageFlechettes, lambda e: e.damage),
+    _field(slai.EffectDamageMindBlast, lambda e: e.damage),
+    _field(slai.EffectBombArm, lambda e: e.damage),
     _field(slai.EffectRitualDaggerProc, lambda e: e.bump),
     _field(slai.EffectGlassKnifeDecay, lambda e: e.delta),
+)
+# The catalog's Multi-Stab is a 0-hit placeholder, so its live hit count is bridged
+_CAP_INSTANCES = max(
+    _cap(_field(slai.EffectDamagePhysical, lambda e: e.instances)),
+    float(MULTI_STAB_INSTANCES_MAX),
 )
 _CAP_BLOCK = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectBlockGain, lambda e: e.amount),
@@ -214,44 +248,35 @@ _CAP_HEALTH = _cap(
 _CAP_GOLD = _cap(
     _field(slai.EffectGoldDelta, lambda e: e.amount),
     _field(slai.EffectHandOfGreedProc, lambda e: e.gold),
+    _field(slai.EffectRewardRollGold, lambda e: e.amount),
 )
 _CAP_ENERGY = _cap(
     _field(slai.EffectEnergyDelta, lambda e: e.amount),
     _field(slai.EffectSneakyStrikeProc, lambda e: e.energy),
 )
 _CAP_STACKS = _cap(
-    _field(slai.EffectModifierGain, lambda e: e.stacks),
+    _field(slai.EffectModifierDelta, lambda e: e.stacks),
     _field(slai.EffectStrengthLoseTemp, lambda e: e.stacks),
 )
 _CAP_COUNT = max(
     _cap(
         _field(slai.EffectCardAdd, lambda e: e.count),
         _field(slai.EffectCardAddRandom, lambda e: e.count),
+        _field(slai.EffectCardDiscoverPick, lambda e: e.copies),
         _field(slai.EffectCardDraw, lambda e: e.count),
         _field(slai.EffectCardDrawIfNoAttacks, lambda e: e.count),
         _field(slai.EffectCardDrawUpTo, lambda e: e.amount),
         _field(slai.EffectCardDiscoverRoll, lambda e: e.count),
         _field(slai.EffectRewardRollPotions, lambda e: e.count),
     ),
-    float(MAX_SIZE_HAND),
+    float(MAX_SIZE_CARD_PILE_HAND),
 )
 _CAP_DELTA = _cap(_field(slai.EffectEventAdvanceState, lambda e: e.delta))
 _CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda e: e.factor))
 _CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda e: e.amount))
-_CAP_SELECT_COUNT = float(MAX_SIZE_DECK)
+_CAP_TURNS = float(slai.GameEnv.BOMB_FUSE_TURNS)
+_CAP_SELECT_COUNT = float(MAX_SIZE_CARD_PILE_DECK)
 _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
-
-
-class OwnerContext(IntEnum):
-    """Which carrier a row is pooled into; stamped by state.py outside the row cache."""
-
-    CARD = 0
-    RELIC = 1
-    POTION = 2
-    EVENT_OPTION = 3
-    MONSTER_MOVE = 4
-    PENDING = 5
-    MONSTER_MOVESET = 6  # whole-moveset capability rows, not the live intent
 
 
 # Contiguous groups; every column carries a cap and a mode
@@ -265,7 +290,7 @@ class Channel(StrEnum):
     SELECTION_KIND = auto()
     SELECT_COUNT = auto()
     CANDIDATE_FILTER = auto()
-    OWNER_CONTEXT = auto()  # written by state.py, not the row encoders
+    EFFECT_SOURCE = auto()  # written by state.py, not the row encoders
 
     # Categorical params, named for the engine type they one-hot
     MODIFIER_KIND = auto()
@@ -276,8 +301,12 @@ class Channel(StrEnum):
     CARD_COLOR = auto()
     CARD_RARITY = auto()
     RELIC_TIER = auto()
+    RELIC_EXCLUSION = auto()
     COST_SCOPE = auto()
     COST_ZERO_PRESENT = auto()
+    REWARD_ROLL_TRIGGER = auto()
+    READ_AT = auto()
+    ROUNDING = auto()
 
     # Identity vocabularies, named for the engine name enum
     CARD_NAME = auto()
@@ -288,6 +317,7 @@ class Channel(StrEnum):
     # Magnitudes, one per physical unit
     DAMAGE = auto()
     DAMAGE_BUCKETS = auto()
+    INSTANCES = auto()
     BLOCK = auto()
     HEALTH_ABSOLUTE = auto()
     HEALTH_BUCKETS = auto()
@@ -305,21 +335,19 @@ class Channel(StrEnum):
     CHANCE = auto()
     FACTOR = auto()
     COST = auto()
+    TURNS = auto()
 
     # Boolean flags, named for the engine field
     ADVANCE_ON_MISS = auto()
     BOTTOM = auto()
     CHOOSE_DISCARDS = auto()
-    COLORLESS = auto()
     ESCAPED_CHARACTER = auto()
-    FALLBACK_CIRCLET = auto()
     FREE = auto()
     LIFESTEAL = auto()
     LIMITED = auto()
     ON_OWNER = auto()
     ONLY_REDUCE = auto()
     RANDOM = auto()
-    RARE_ONLY = auto()
     UNIFORM = auto()
     UPGRADED = auto()
 
@@ -340,7 +368,7 @@ OFF_CANDIDATE_POOL = _alloc(Channel.CANDIDATE_POOL, len(_INDEX_CAND_POOL))
 OFF_SELECTION_KIND = _alloc(Channel.SELECTION_KIND, len(_INDEX_SELECTION_KIND))
 OFF_SELECT_COUNT = _alloc(Channel.SELECT_COUNT)
 OFF_CANDIDATE_FILTER = _alloc(Channel.CANDIDATE_FILTER, len(_INDEX_CAND_FILTER))
-OFF_OWNER_CONTEXT = _alloc(Channel.OWNER_CONTEXT, len(OwnerContext))
+OFF_EFFECT_SOURCE = _alloc(Channel.EFFECT_SOURCE, len(EffectSource))
 
 # Categorical params
 OFF_MODIFIER_KIND = _alloc(Channel.MODIFIER_KIND, len(_INDEX_MODIFIER_KIND))
@@ -351,8 +379,12 @@ OFF_CARD_KIND = _alloc(Channel.CARD_KIND, len(_INDEX_CARD_KIND))
 OFF_CARD_COLOR = _alloc(Channel.CARD_COLOR, len(_INDEX_CARD_COLOR))
 OFF_CARD_RARITY = _alloc(Channel.CARD_RARITY, len(_INDEX_CARD_RARITY))
 OFF_RELIC_TIER = _alloc(Channel.RELIC_TIER, len(_INDEX_RELIC_TIER))
+OFF_RELIC_EXCLUSION = _alloc(Channel.RELIC_EXCLUSION, len(_INDEX_RELIC_EXCLUSION))
 OFF_COST_SCOPE = _alloc(Channel.COST_SCOPE, len(_INDEX_COST_SCOPE))
 OFF_COST_ZERO_PRESENT = _alloc(Channel.COST_ZERO_PRESENT)
+OFF_REWARD_ROLL_TRIGGER = _alloc(Channel.REWARD_ROLL_TRIGGER, len(_INDEX_REWARD_ROLL_TRIGGER))
+OFF_READ_AT = _alloc(Channel.READ_AT, len(_INDEX_READ_AT))
+OFF_ROUNDING = _alloc(Channel.ROUNDING, len(_INDEX_ROUNDING))
 
 # Identity vocabularies (index 0 = unseen)
 OFF_CARD_NAME = _alloc(Channel.CARD_NAME, len(_VOCAB_CARD) + 1)
@@ -363,6 +395,7 @@ OFF_RELIC_POOL_SIZE = _alloc(Channel.RELIC_POOL_SIZE)
 # Magnitudes
 OFF_DAMAGE = _alloc(Channel.DAMAGE)
 OFF_DAMAGE_BUCKETS = _alloc(Channel.DAMAGE_BUCKETS, _bucket_width(_CAP_DAMAGE))
+OFF_INSTANCES = _alloc(Channel.INSTANCES)
 OFF_BLOCK = _alloc(Channel.BLOCK)
 OFF_HEALTH_ABSOLUTE = _alloc(Channel.HEALTH_ABSOLUTE)
 OFF_HEALTH_BUCKETS = _alloc(Channel.HEALTH_BUCKETS, _bucket_width(_CAP_HEALTH))
@@ -380,21 +413,19 @@ OFF_DELTA = _alloc(Channel.DELTA)
 OFF_CHANCE = _alloc(Channel.CHANCE)
 OFF_FACTOR = _alloc(Channel.FACTOR)
 OFF_COST = _alloc(Channel.COST)
+OFF_TURNS = _alloc(Channel.TURNS)
 
 # Boolean flags
 OFF_ADVANCE_ON_MISS = _alloc(Channel.ADVANCE_ON_MISS)
 OFF_BOTTOM = _alloc(Channel.BOTTOM)
 OFF_CHOOSE_DISCARDS = _alloc(Channel.CHOOSE_DISCARDS)
-OFF_COLORLESS = _alloc(Channel.COLORLESS)
 OFF_ESCAPED_CHARACTER = _alloc(Channel.ESCAPED_CHARACTER)
-OFF_FALLBACK_CIRCLET = _alloc(Channel.FALLBACK_CIRCLET)
 OFF_FREE = _alloc(Channel.FREE)
 OFF_LIFESTEAL = _alloc(Channel.LIFESTEAL)
 OFF_LIMITED = _alloc(Channel.LIMITED)
 OFF_ON_OWNER = _alloc(Channel.ON_OWNER)
 OFF_ONLY_REDUCE = _alloc(Channel.ONLY_REDUCE)
 OFF_RANDOM = _alloc(Channel.RANDOM)
-OFF_RARE_ONLY = _alloc(Channel.RARE_ONLY)
 OFF_UNIFORM = _alloc(Channel.UNIFORM)
 OFF_UPGRADED = _alloc(Channel.UPGRADED)
 
@@ -418,6 +449,10 @@ def _write_amount(row: np.ndarray, value: Amount, off_abs: int, off_rel: int) ->
     row[off_rel] += relative
     if is_range:
         row[OFF_AMOUNT_IS_RANGE] = 1.0
+    # A fraction also says which value it reads and how it rounds
+    if isinstance(value, AmountRelative):
+        row[OFF_READ_AT + _INDEX_READ_AT[value.read_at]] = 1.0
+        row[OFF_ROUNDING + _INDEX_ROUNDING[value.rounding]] = 1.0
 
 
 def _cost_zero(row: np.ndarray, value: CostScope | None) -> None:
@@ -431,10 +466,15 @@ def _encode_block_gain(row: np.ndarray, e: slai.EffectBlockGain) -> None:
     row[OFF_BLOCK] += e.amount
 
 
+def _encode_bomb_arm(row: np.ndarray, e: slai.EffectBombArm) -> None:
+    row[OFF_DAMAGE] += e.damage
+    row[OFF_TURNS] += e.turns
+
+
 def _encode_card_add(row: np.ndarray, e: slai.EffectCardAdd) -> None:
     row[OFF_CARD_NAME + _VOCAB_CARD.get(e.card_name, 0)] = 1.0
     row[OFF_COUNT] += e.count
-    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.pile]] = 1.0
+    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.card_pile]] = 1.0
     if e.upgraded:
         row[OFF_UPGRADED] = 1.0
 
@@ -445,7 +485,7 @@ def _encode_card_add_random(row: np.ndarray, e: slai.EffectCardAddRandom) -> Non
     row[OFF_COUNT] += e.count
     if e.kind is not None:
         row[OFF_CARD_KIND + _INDEX_CARD_KIND[e.kind]] = 1.0
-    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.pile]] = 1.0
+    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.card_pile]] = 1.0
     if e.rarity is not None:
         row[OFF_CARD_RARITY + _INDEX_CARD_RARITY[e.rarity]] = 1.0
     if e.upgraded:
@@ -453,8 +493,9 @@ def _encode_card_add_random(row: np.ndarray, e: slai.EffectCardAddRandom) -> Non
 
 
 def _encode_card_discover_pick(row: np.ndarray, e: slai.EffectCardDiscoverPick) -> None:
+    row[OFF_COUNT] += e.copies
     _cost_zero(row, e.cost_zero)
-    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.pile]] = 1.0
+    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.card_pile]] = 1.0
 
 
 def _encode_card_discover_roll(row: np.ndarray, e: slai.EffectCardDiscoverRoll) -> None:
@@ -476,9 +517,13 @@ def _encode_card_draw_up_to(row: np.ndarray, e: slai.EffectCardDrawUpTo) -> None
     row[OFF_COUNT] += e.amount
 
 
+def _encode_card_duplicate(row: np.ndarray, e: slai.EffectCardDuplicate) -> None:
+    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.card_pile]] = 1.0
+
+
 def _encode_card_move(row: np.ndarray, e: slai.EffectCardMove) -> None:
     _cost_zero(row, e.cost_zero)
-    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.pile]] = 1.0
+    row[OFF_CARD_PILE + _INDEX_CARD_PILE[e.card_pile]] = 1.0
 
 
 def _encode_card_setup_pick(row: np.ndarray, e: slai.EffectCardSetupPick) -> None:
@@ -506,7 +551,18 @@ def _encode_damage_flechettes(row: np.ndarray, e: slai.EffectDamageFlechettes) -
     row[OFF_DAMAGE] += e.damage
 
 
+def _encode_damage_mind_blast(row: np.ndarray, e: slai.EffectDamageMindBlast) -> None:
+    row[OFF_DAMAGE] += e.damage
+
+
 def _encode_damage_physical(row: np.ndarray, e: slai.EffectDamagePhysical) -> None:
+    row[OFF_DAMAGE] += e.amount
+    row[OFF_INSTANCES] += e.instances
+    if e.lifesteal:
+        row[OFF_LIFESTEAL] = 1.0
+
+
+def _encode_damage_deal(row: np.ndarray, e: slai.EffectDamageDeal) -> None:
     row[OFF_DAMAGE] += e.amount
     if e.lifesteal:
         row[OFF_LIFESTEAL] = 1.0
@@ -564,7 +620,7 @@ def _encode_max_health_delta(row: np.ndarray, e: slai.EffectMaxHealthDelta) -> N
     row[OFF_DELTA_SIGN + _INDEX_DELTA_SIGN[e.sign]] = 1.0
 
 
-def _encode_modifier_gain(row: np.ndarray, e: slai.EffectModifierGain) -> None:
+def _encode_modifier_delta(row: np.ndarray, e: slai.EffectModifierDelta) -> None:
     row[OFF_MODIFIER_KIND + _INDEX_MODIFIER_KIND[e.kind]] = 1.0
     if e.kind.is_buff:
         row[OFF_MODIFIER_BUFF] = 1.0
@@ -580,6 +636,11 @@ def _encode_modifier_multiply(row: np.ndarray, e: slai.EffectModifierMultiply) -
 
 def _encode_monster_spawn(row: np.ndarray, e: slai.EffectMonsterSpawn) -> None:
     row[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(e.name, 0)] = 1.0
+
+
+def _encode_reward_roll_cards(row: np.ndarray, e: slai.EffectRewardRollCards) -> None:
+    row[OFF_COUNT] += e.bundles
+    row[OFF_REWARD_ROLL_TRIGGER + _INDEX_REWARD_ROLL_TRIGGER[e.trigger]] = 1.0
 
 
 def _encode_monster_split(row: np.ndarray, e: slai.EffectMonsterSplit) -> None:
@@ -598,6 +659,8 @@ def _encode_hexaghost_burn_increase(row: np.ndarray, e: slai.EffectHexaghostBurn
 def _encode_potion_add_random(row: np.ndarray, e: slai.EffectPotionAddRandom) -> None:
     if e.limited:
         row[OFF_LIMITED] = 1.0
+    if e.uniform:
+        row[OFF_UNIFORM] = 1.0
 
 
 def _encode_relic_grant_pool(row: np.ndarray, e: slai.EffectRelicGrantPool) -> None:
@@ -607,27 +670,28 @@ def _encode_relic_grant_pool(row: np.ndarray, e: slai.EffectRelicGrantPool) -> N
 
 
 def _encode_relic_grant_random(row: np.ndarray, e: slai.EffectRelicGrantRandom) -> None:
+    row[OFF_RELIC_EXCLUSION + _INDEX_RELIC_EXCLUSION[e.exclusion]] = 1.0
     if e.tier is not None:
         row[OFF_RELIC_TIER + _INDEX_RELIC_TIER[e.tier]] = 1.0
 
 
 def _encode_relic_grant_specific(row: np.ndarray, e: slai.EffectRelicGrantSpecific) -> None:
-    if e.fallback_circlet:
-        row[OFF_FALLBACK_CIRCLET] = 1.0
     row[OFF_RELIC_NAME + _VOCAB_RELIC.get(e.name, 0)] = 1.0
 
 
-def _encode_reward_roll_neow_cards(row: np.ndarray, e: slai.EffectRewardRollNeowCards) -> None:
-    if e.colorless:
-        row[OFF_COLORLESS] = 1.0
-    if e.rare_only:
-        row[OFF_RARE_ONLY] = 1.0
+def _encode_reward_roll_gold(row: np.ndarray, e: slai.EffectRewardRollGold) -> None:
+    _write_amount(row, e.amount, OFF_GOLD_ABSOLUTE, OFF_GOLD_RELATIVE)
 
 
 def _encode_reward_roll_potions(row: np.ndarray, e: slai.EffectRewardRollPotions) -> None:
     row[OFF_COUNT] += e.count
-    if e.uniform:
-        row[OFF_UNIFORM] = 1.0
+    row[OFF_REWARD_ROLL_TRIGGER + _INDEX_REWARD_ROLL_TRIGGER[e.trigger]] = 1.0
+
+
+def _encode_reward_roll_relic(row: np.ndarray, e: slai.EffectRewardRollRelic) -> None:
+    for name in e.pool:
+        row[OFF_RELIC_NAME + _VOCAB_RELIC.get(name, 0)] = 1.0
+    row[OFF_RELIC_POOL_SIZE] += len(e.pool)
 
 
 def _encode_ritual_dagger_proc(row: np.ndarray, e: slai.EffectRitualDaggerProc) -> None:
@@ -665,6 +729,7 @@ def _encode_strength_lose_temp(row: np.ndarray, e: slai.EffectStrengthLoseTemp) 
 _EffectWriter = Callable[[np.ndarray, Any], None]
 _ENCODERS: dict[type, _EffectWriter] = {
     slai.EffectBlockGain: _encode_block_gain,
+    slai.EffectBombArm: _encode_bomb_arm,
     slai.EffectCardAdd: _encode_card_add,
     slai.EffectCardAddRandom: _encode_card_add_random,
     slai.EffectCardDiscoverPick: _encode_card_discover_pick,
@@ -672,12 +737,14 @@ _ENCODERS: dict[type, _EffectWriter] = {
     slai.EffectCardDraw: _encode_card_draw,
     slai.EffectCardDrawIfNoAttacks: _encode_card_draw_if_no_attacks,
     slai.EffectCardDrawUpTo: _encode_card_draw_up_to,
+    slai.EffectCardDuplicate: _encode_card_duplicate,
     slai.EffectCardMove: _encode_card_move,
     slai.EffectCardSetupPick: _encode_card_setup_pick,
     slai.EffectCardTransform: _encode_card_transform,
     slai.EffectCombatEnd: _encode_combat_end,
     slai.EffectDamageFinisher: _encode_damage_finisher,
     slai.EffectDamageFlechettes: _encode_damage_flechettes,
+    slai.EffectDamageMindBlast: _encode_damage_mind_blast,
     slai.EffectDamagePhysical: _encode_damage_physical,
     slai.EffectDamagePhysicalIfPoisoned: _encode_damage_physical_if_poisoned,
     slai.EffectEnergyDelta: _encode_energy_delta,
@@ -690,18 +757,21 @@ _ENCODERS: dict[type, _EffectWriter] = {
     slai.EffectHealthDelta: _encode_health_delta,
     slai.EffectJoustBet: _encode_joust_bet,
     slai.EffectMaxHealthDelta: _encode_max_health_delta,
-    slai.EffectModifierGain: _encode_modifier_gain,
+    slai.EffectModifierDelta: _encode_modifier_delta,
     slai.EffectModifierMultiply: _encode_modifier_multiply,
     slai.EffectMonsterSpawn: _encode_monster_spawn,
     slai.EffectMonsterSplit: _encode_monster_split,
+    slai.EffectRewardRollCards: _encode_reward_roll_cards,
+    slai.EffectDamageDeal: _encode_damage_deal,
     slai.EffectModifierRemove: _encode_modifier_remove,
     slai.EffectHexaghostBurnIncrease: _encode_hexaghost_burn_increase,
     slai.EffectPotionAddRandom: _encode_potion_add_random,
     slai.EffectRelicGrantPool: _encode_relic_grant_pool,
     slai.EffectRelicGrantRandom: _encode_relic_grant_random,
     slai.EffectRelicGrantSpecific: _encode_relic_grant_specific,
-    slai.EffectRewardRollNeowCards: _encode_reward_roll_neow_cards,
+    slai.EffectRewardRollGold: _encode_reward_roll_gold,
     slai.EffectRewardRollPotions: _encode_reward_roll_potions,
+    slai.EffectRewardRollRelic: _encode_reward_roll_relic,
     slai.EffectRitualDaggerProc: _encode_ritual_dagger_proc,
     slai.EffectScrapOozeReach: _encode_scrap_ooze_reach,
     slai.EffectSetCostOverride: _encode_set_cost_override,
@@ -726,7 +796,9 @@ def encode_effect_row_into(effect: Effect, row: np.ndarray) -> None:
         row[OFF_CANDIDATE_POOL + _INDEX_CAND_POOL[target.candidate_pool]] = 1.0
         row[OFF_SELECTION_KIND + _INDEX_SELECTION_KIND[type(target.selection_kind)]] = 1.0
         row[OFF_SELECT_COUNT] = float(getattr(target.selection_kind, "count", 1))
-        row[OFF_CANDIDATE_FILTER + _INDEX_CAND_FILTER[target.filter]] = 1.0
+        # Multi-hot over the target's filters; an empty list keeps every candidate
+        for candidate_filter in target.filters:
+            row[OFF_CANDIDATE_FILTER + _INDEX_CAND_FILTER[candidate_filter]] = 1.0
 
     encode = _ENCODERS.get(type(effect))
     if encode is not None:
@@ -775,6 +847,7 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (OFF_SELECT_COUNT, _CAP_SELECT_COUNT, _NormMode.LINEAR),
     (OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
     (OFF_DAMAGE, _CAP_DAMAGE, _NormMode.SQRT),
+    (OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
     (OFF_BLOCK, _CAP_BLOCK, _NormMode.LINEAR),
     (OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, _NormMode.SQRT),
     (OFF_GOLD_ABSOLUTE, _CAP_GOLD, _NormMode.SQRT),
@@ -785,6 +858,7 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (OFF_CHANCE, 100.0, _NormMode.LINEAR),
     (OFF_FACTOR, _CAP_FACTOR, _NormMode.LINEAR),
     (OFF_COST, _CAP_COST, _NormMode.LINEAR),
+    (OFF_TURNS, _CAP_TURNS, _NormMode.LINEAR),
 )
 
 _SCALED_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
@@ -832,3 +906,66 @@ def encode_effect_rows(effects: list) -> np.ndarray:
 
     normalize_effect_rows(rows)
     return rows
+
+
+# Row families that have already warned about overflow — truncation is never silent
+_WARNED_OVERFLOW: set[str] = set()
+
+
+def encode_batch_effects(
+    game_states: list[GameState],
+    sources: Sequence[tuple[EntityKind, list[list[tuple[int, EffectSource, Effect]]]]],
+    device: torch.device,
+) -> X_Effects:
+    """Every state's effect rows as one (B, E, D) block with their owner keys.
+
+    `sources` is (owner kind, per-state (offset, source, effect) rows) in fill
+    priority: the pending halt goes first, then the sources in order, so a state
+    past MAX_EFFECTS_STATE drops its last sources' rows."""
+    batch_size = len(game_states)
+    np_effect = np.zeros((batch_size, MAX_EFFECTS_STATE, ENCODING_DIM_EFFECT), dtype=np.float32)
+    np_entity_kind = np.full((batch_size, MAX_EFFECTS_STATE), -1, dtype=np.int64)
+    np_offset = np.zeros((batch_size, MAX_EFFECTS_STATE), dtype=np.int64)
+
+    idx_used = 0
+    for b, game_state in enumerate(game_states):
+        idx = 0
+
+        # Pending Effect: owns no token
+        pending = game_state.effect_pending
+        if pending is not None:
+            encode_effect_row_into_w_cache(pending, np_effect[b, idx])
+            np_effect[b, idx, OFF_EFFECT_SOURCE + EffectSource.PENDING] = 1.0
+            np_entity_kind[b, idx] = OWNER_PENDING
+            idx += 1
+
+        for entity_kind, batch_rows in sources:
+            for offset, source, effect in batch_rows[b]:
+                if idx == MAX_EFFECTS_STATE:
+                    if "effects" not in _WARNED_OVERFLOW:
+                        _WARNED_OVERFLOW.add("effects")
+                        warnings.warn(
+                            f"effect rows exceeded {MAX_EFFECTS_STATE} in one state; "
+                            "deep card piles dropped (constants.MAX_EFFECTS_STATE)"
+                        )
+                    break
+
+                encode_effect_row_into_w_cache(effect, np_effect[b, idx])
+                np_effect[b, idx, OFF_EFFECT_SOURCE + source] = 1.0
+                np_entity_kind[b, idx] = entity_kind
+                np_offset[b, idx] = offset
+                idx += 1
+
+        idx_used = max(idx_used, idx)
+
+    # The batch's used rows only: the transport pads back to MAX_EFFECTS_STATE
+    np_effect = np.ascontiguousarray(np_effect[:, :idx_used])
+    normalize_effect_rows(np_effect)
+    return X_Effects(
+        x=torch.from_numpy(np_effect).to(device),
+        x_entity_kind=torch.from_numpy(np.ascontiguousarray(np_entity_kind[:, :idx_used])).to(
+            device
+        ),
+        x_offset=torch.from_numpy(np.ascontiguousarray(np_offset[:, :idx_used])).to(device),
+        batch_size=[batch_size],
+    )

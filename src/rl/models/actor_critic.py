@@ -2,7 +2,6 @@ import math
 
 import torch
 import torch.nn as nn
-from slai import ActionType
 
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
@@ -13,40 +12,47 @@ from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
 from src.rl.reward import REWARD_STREAMS
 from src.rl.types import ACTION_TYPE_POOL
+from src.rl.types import AT_MONSTER_TARGETED
+from src.rl.types import AT_SHOP
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
-from src.rl.types import TAction
-from src.rl.types import TCoreOutput
-from src.rl.types import TGameState
-from src.rl.types import TMask
+from src.rl.types import X_Action
+from src.rl.types import X_CoreOutput
+from src.rl.types import X_GameState
+from src.rl.types import X_Mask
+from src.rl.types import X_ShopPrices
 
 
-# L2 pool -> the pointer-key net that scores its tokens. Every pool in
-# ACTION_TYPE_POOL must appear (asserted at import)
+# L2 pool kind -> the pointer-key net that scores the window for it. Every kind
+# in ACTION_TYPE_POOL must appear (asserted at import)
 _POOL_KEY_NET: dict[SliceKind, str] = {
-    SliceKind.CARD_HAND: "_pointer_key_card",
-    SliceKind.CARD_DRAW: "_pointer_key_card",
-    SliceKind.CARD_DISCARD: "_pointer_key_card",
-    SliceKind.CARD_EXHAUST: "_pointer_key_card",
-    SliceKind.CARD_DECK: "_pointer_key_card",
-    SliceKind.CARD_DISCOVER: "_pointer_key_card",
+    SliceKind.CARD_PILE_HAND: "_pointer_key_card",
+    SliceKind.CARD_PILE_DRAW: "_pointer_key_card",
+    SliceKind.CARD_PILE_DISCARD: "_pointer_key_card",
+    SliceKind.CARD_PILE_EXHAUST: "_pointer_key_card",
+    SliceKind.CARD_PILE_DECK: "_pointer_key_card",
+    SliceKind.CARD_PILE_DISCOVER: "_pointer_key_card",
     SliceKind.CARD_REWARD_0: "_pointer_key_card",
     SliceKind.CARD_REWARD_1: "_pointer_key_card",
     SliceKind.CARD_REWARD_2: "_pointer_key_card",
     SliceKind.CARD_REWARD_3: "_pointer_key_card",
     SliceKind.CARD_REWARD_4: "_pointer_key_card",
     SliceKind.CARD_SHOP: "_pointer_key_card",
-    SliceKind.CARD_EVENT: "_pointer_key_card",
+    SliceKind.CARD_PILE_EVENT_ROLL: "_pointer_key_card",
     SliceKind.RELIC_REWARD: "_pointer_key_relic",
     SliceKind.RELIC_SHOP: "_pointer_key_relic",
-    SliceKind.RELIC_EVENT: "_pointer_key_relic",
+    SliceKind.RELIC_EVENT_ROLL: "_pointer_key_relic",
     SliceKind.POTION_OWNED: "_pointer_key_potion",
     SliceKind.POTION_REWARD: "_pointer_key_potion",
     SliceKind.POTION_SHOP: "_pointer_key_potion",
-    SliceKind.POTION_EVENT: "_pointer_key_potion",
+    SliceKind.POTION_EVENT_ROLL: "_pointer_key_potion",
     SliceKind.EVENT_OPTIONS: "_pointer_key_event",
     SliceKind.ROOMS: "_pointer_key_room",
 }
+# Barrier probability floor: each legal action's −log p contribution to the
+# uniform-KL barrier caps at −log(1e-4) ≈ 9.2 nats
+_KL_UNIFORM_LOG_P_FLOOR = math.log(1e-4)
+
 _POOLED_KINDS: set = set().union(*ACTION_TYPE_POOL.values())
 assert _POOLED_KINDS <= set(_POOL_KEY_NET), (
     "every L2 pool needs a pointer-key net: missing "
@@ -54,7 +60,7 @@ assert _POOLED_KINDS <= set(_POOL_KEY_NET), (
 )
 assert all(
     len({_POOL_KEY_NET[kind] for kind in kinds}) == 1 for kinds in ACTION_TYPE_POOL.values()
-), "a multi-slice pool must share one pointer-key net"
+), "a multi-kind pool must share one pointer-key net"
 
 
 class ActorCritic(nn.Module):
@@ -71,6 +77,7 @@ class ActorCritic(nn.Module):
         dim_ff_value: int,
         dim_op: int,
         dim_key: int,
+        checkpoint_privileged: bool = False,
     ) -> None:
         super().__init__()
 
@@ -82,6 +89,7 @@ class ActorCritic(nn.Module):
             transformer_num_blocks=transformer_num_blocks,
             gnn_num_layers=gnn_num_layers,
             map_encoder_dim=map_encoder_dim,
+            checkpoint_privileged=checkpoint_privileged,
         )
 
         # L1: one masked categorical over ActionType, focus-gated (GLU); a halt has an empty mask
@@ -117,6 +125,11 @@ class ActorCritic(nn.Module):
                 nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
                 if m.bias is not None:  # _shop_price_keys is bias-free
                     nn.init.zeros_(m.bias)
+            if isinstance(m, nn.MultiheadAttention):
+                # in_proj is a raw Parameter, not a Linear — the isinstance walk
+                # above misses it and left the Q/K/V projections at xavier
+                nn.init.orthogonal_(m.in_proj_weight, gain=math.sqrt(2))
+                nn.init.zeros_(m.in_proj_bias)
         nn.init.orthogonal_(self._head_action_type._scorer[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_2._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)
@@ -139,238 +152,295 @@ class ActorCritic(nn.Module):
 
     def _categorical_step(
         self,
-        t_logits: torch.Tensor,
-        t_mask: torch.Tensor,
-        t_recorded_idx: torch.Tensor | None = None,
+        x_logits: torch.Tensor,
+        x_mask: torch.Tensor,
+        x_recorded_idx: torch.Tensor | None = None,
         greedy: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        t_masked_logits = t_logits.masked_fill(~t_mask, float("-inf"))
-        dist = torch.distributions.Categorical(logits=t_masked_logits)
+        x_masked_logits = x_logits.masked_fill(~x_mask, float("-inf"))
+        dist = torch.distributions.Categorical(logits=x_masked_logits)
 
         # Determine which index to sample
-        if t_recorded_idx is not None:
+        if x_recorded_idx is not None:
             # PPO recompute path
-            t_idx = t_recorded_idx
+            x_idx = x_recorded_idx
         elif greedy:
             # Highest logit
-            t_idx = torch.argmax(t_masked_logits, dim=-1)
+            x_idx = torch.argmax(x_masked_logits, dim=-1)
         else:
             # Sample from distribution
-            t_idx = dist.sample()
+            x_idx = dist.sample()
 
         # KL(uniform‖π) over the legal set — the anti-collapse barrier. Entropy's
         # restoring force on a dying action vanishes with its probability (∝ p·|log p|);
         # this gradient tends to a constant ~1/n instead, flooring legal-action probs
-        # near coef/(n·|A|) (log-barrier regularization, Agarwal et al. 2021)
-        t_n_legal = t_mask.sum(-1).clamp(min=1).float()  # min=1: empty/singleton rows → KL 0
-        t_kl_uniform = -dist.logits.masked_fill(~t_mask, 0.0).sum(-1) / t_n_legal - t_n_legal.log()
+        # near coef/(n·|A|) (log-barrier regularization, Agarwal et al. 2021).
+        # −log p is clamped at the floor: unbounded, the barrier dominated the loss
+        # once a head neared determinism (EFFECT-I L2 at 153; IIIc L3 at 10 with
+        # dead-target −log p ≈ 21) while grad clipping neutered its restoring force.
+        # Below ε the action is conceded and the loss stays bounded
+        x_n_legal = x_mask.sum(-1).clamp(min=1).float()  # min=1: empty/singleton rows → KL 0
+        x_logp = dist.logits.clamp(min=_KL_UNIFORM_LOG_P_FLOOR)
+        x_kl_uniform = -x_logp.masked_fill(~x_mask, 0.0).sum(-1) / x_n_legal - x_n_legal.log()
 
-        return t_idx, dist.log_prob(t_idx), dist.entropy(), t_kl_uniform
+        return x_idx, dist.log_prob(x_idx), dist.entropy(), x_kl_uniform
 
     def _compute_action_type(
         self,
-        t_game_state: TGameState,
-        t_core_out: TCoreOutput,
-        t_mask: TMask,
+        x_game_state: X_GameState,
+        x_core_out: X_CoreOutput,
+        x_mask: X_Mask,
         greedy: bool,
-        t_recorded: torch.Tensor | None = None,
+        x_recorded: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Pick the `ActionType` for every row — one masked categorical, focus-gated."""
-        t_logits = self._head_action_type(
-            t_core_out.global_, t_game_state.focus, t_mask.mask_action_type
+        x_logits = self._head_action_type(
+            x_core_out.global_, x_game_state.focus, x_mask.mask_action_type
         )
-        return self._categorical_step(t_logits, t_mask.mask_action_type, t_recorded, greedy)
+        return self._categorical_step(x_logits, x_mask.mask_action_type, x_recorded, greedy)
 
     def _compute_action_idxs(
         self,
-        t_idx_at: torch.Tensor,
-        t_game_state: TGameState,
-        t_core_out: TCoreOutput,
-        t_mask: TMask,
+        x_idx_at: torch.Tensor,
+        x_game_state: X_GameState,
+        x_core_out: X_CoreOutput,
+        x_mask: X_Mask,
         greedy: bool,
-        t_recorded_l1: torch.Tensor | None = None,
-        t_recorded_l2: torch.Tensor | None = None,
+        x_recorded_kind: torch.Tensor | None = None,
+        x_recorded_rank: torch.Tensor | None = None,
+        x_recorded_target: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, ...]:
-        batch_size = t_idx_at.shape[0]
-        device = t_idx_at.device
+        batch_size = x_idx_at.shape[0]
+        device = x_idx_at.device
+        x_idxs = x_core_out.entities.x_slice_kind
 
-        # Initialize tensors to store index results
-        t_idx_l1 = torch.full((batch_size,), -1, dtype=torch.long, device=device)
-        t_log_prob_l1 = torch.zeros(batch_size, device=device)
-        t_entropy_l1 = torch.zeros(batch_size, device=device)
-        t_kl_uniform_l1 = torch.zeros(batch_size, device=device)
-        t_idx_l2 = torch.full((batch_size,), -1, dtype=torch.long, device=device)
-        t_log_prob_l2 = torch.zeros(batch_size, device=device)
-        t_entropy_l2 = torch.zeros(batch_size, device=device)
-        t_kl_uniform_l2 = torch.zeros(batch_size, device=device)
+        # The masks over the window: the blocks cat in field order, exactly as the tokens
+        blocks = (
+            x_mask.cards,
+            x_mask.relics,
+            x_mask.potions,
+            x_mask.monsters,
+            x_mask.event_options,
+            x_mask.character,
+            x_mask.rooms,
+        )
+        x_legal = torch.cat([block.legal for block in blocks], dim=-1)
+        x_needs_target = torch.cat([block.needs_target for block in blocks], dim=-1)
+        x_is_target = torch.cat([block.is_target for block in blocks], dim=-1)
 
-        for action_type in t_idx_at.unique().tolist():
-            pool = ACTION_TYPE_POOL.get(action_type)
-            if pool is None:  # terminal type — no index
+        # Initialize tensors to store the picks (engine-facing: kind + rank) and stats
+        x_kind = torch.full((batch_size,), -1, dtype=torch.long, device=device)
+        x_rank = torch.full((batch_size,), -1, dtype=torch.long, device=device)
+        x_log_prob_l1 = torch.zeros(batch_size, device=device)
+        x_entropy_l1 = torch.zeros(batch_size, device=device)
+        x_kl_uniform_l1 = torch.zeros(batch_size, device=device)
+        x_target = torch.full((batch_size,), -1, dtype=torch.long, device=device)
+        x_log_prob_l2 = torch.zeros(batch_size, device=device)
+        x_entropy_l2 = torch.zeros(batch_size, device=device)
+        x_kl_uniform_l2 = torch.zeros(batch_size, device=device)
+
+        for action_type in x_idx_at.unique().tolist():
+            if action_type not in ACTION_TYPE_POOL:  # terminal type — no index
                 continue
 
             # Selection mask keeping samples for the current `ActionType` in the loop
-            t_rows = (t_idx_at == action_type).nonzero(as_tuple=True)[0]
+            x_rows = (x_idx_at == action_type).nonzero(as_tuple=True)[0]
+            x_tokens = x_core_out.entities.x[x_rows]
+            x_idxs_rows = x_idxs[x_rows]
 
-            # Level 1: score the action's pool, gated by its `ActionType` embedding
-            t_mask_l1 = t_mask.mask_action_idx[str(action_type)][t_rows]
-            t_keys = self._pointer_key_for(action_type)(t_core_out.pool[pool][t_rows])
-            t_action_type_emb = self._action_type_embedding(torch.full_like(t_rows, action_type))
+            # Level 1: score the whole window, gated by the `ActionType` embedding;
+            # the mask keeps exactly the type's pool
+            x_mask_l1 = x_legal[x_rows, action_type]
+            x_keys = self._pointer_key_for(action_type)(x_tokens)
+            x_action_type_emb = self._action_type_embedding(torch.full_like(x_rows, action_type))
 
-            # Add price key iff we're scoring a shop purchase
-            t_prices = _get_shop_prices_for(pool, t_game_state)
-            if t_prices is not None:  # shop purchase: additive price-key term
-                t_keys = t_keys + self._shop_price_keys(t_prices[t_rows])
+            # Shop purchase: additive price-key term at the shop tokens (zero elsewhere)
+            if action_type in AT_SHOP:
+                x_keys = x_keys + self._shop_price_terms(
+                    x_game_state.shop_prices[x_rows], x_idxs_rows, x_keys
+                )
 
-            # Calculate pool's logits & sample from them
-            t_logits = self._head_level_2(
-                t_keys, t_core_out.global_[t_rows], t_action_type_emb, t_mask_l1
+            # Recorded picks are (kind, rank); the pointer scores positions
+            x_recorded_pos = None
+            if x_recorded_kind is not None:
+                x_recorded_pos = self._position(
+                    x_idxs_rows, x_recorded_kind[x_rows], x_recorded_rank[x_rows]
+                )
+
+            # Calculate the window's logits & sample from them
+            x_logits = self._head_level_2(
+                x_keys, x_core_out.global_[x_rows], x_action_type_emb, x_mask_l1
             )
             (
-                t_idx_l1[t_rows],
-                t_log_prob_l1[t_rows],
-                t_entropy_l1[t_rows],
-                t_kl_uniform_l1[t_rows],
-            ) = self._categorical_step(
-                t_logits, t_mask_l1, self._rows(t_recorded_l1, t_rows), greedy
-            )
+                x_pos,
+                x_log_prob_l1[x_rows],
+                x_entropy_l1[x_rows],
+                x_kl_uniform_l1[x_rows],
+            ) = self._categorical_step(x_logits, x_mask_l1, x_recorded_pos, greedy)
+            x_kind[x_rows], x_rank[x_rows] = self._kind_rank(x_idxs_rows, x_pos)
 
             # Level 2: monster target, only for actions that take one (CardPlay / PotionUse)
-            t_target_mask = _get_target_mask_for(action_type, t_mask)
-            if t_target_mask is None:
+            if action_type not in AT_MONSTER_TARGETED:
                 continue
 
-            # Keep only rows whose committed L1 selection has a legal target
-            t_l1 = t_idx_l1[t_rows]
-            t_monster_mask = t_target_mask[t_rows, t_l1]
-            t_recorded_rows = self._rows(t_recorded_l2, t_rows)
-            t_has_target = (
-                t_recorded_rows >= 0 if t_recorded_rows is not None else t_monster_mask.any(dim=-1)
+            # Keep only rows whose committed L1 selection takes a target: at recompute
+            # the recorded pick says so (-1 = none), at sample time the mask does
+            x_recorded_rows = self._rows(x_recorded_target, x_rows)
+            x_has_target = (
+                x_recorded_rows >= 0
+                if x_recorded_rows is not None
+                else x_needs_target[x_rows, x_pos]
             )
-            t_local = torch.nonzero(t_has_target, as_tuple=True)[0]
-            if t_local.numel() == 0:
+            x_local = torch.nonzero(x_has_target, as_tuple=True)[0]
+            if x_local.numel() == 0:
                 continue
 
             # Subset of `ActionType`-specifc samples that also require targeting
-            t_rows_l2 = t_rows[t_local]
+            x_rows_l2 = x_rows[x_local]
+            x_idxs_l2 = x_idxs_rows[x_local]
 
-            # Score monsters for the surviving rows, conditioned on the selected entity
-            t_mask_l2 = t_monster_mask[t_local]
-            t_selected_card_or_pot = t_core_out.pool[pool][t_rows_l2, t_l1[t_local]]
-            t_keys = self._pointer_key_monster(t_core_out.pool[(SliceKind.MONSTERS,)][t_rows_l2])
-            t_logits = self._head_level_3(
-                t_keys, t_core_out.global_[t_rows_l2], t_selected_card_or_pot, t_mask_l2
+            # Score the whole window like L2 — the mask keeps the alive monster
+            # tokens — conditioned on the selected card/potion token
+            x_mask_l2 = x_is_target[x_rows_l2]
+            x_selected_card_or_pot = x_tokens[x_local, x_pos[x_local]]
+            x_keys = self._pointer_key_monster(x_tokens[x_local])
+            x_logits = self._head_level_3(
+                x_keys, x_core_out.global_[x_rows_l2], x_selected_card_or_pot, x_mask_l2
             )
-            t_recorded_local = t_recorded_rows[t_local] if t_recorded_rows is not None else None
+            x_recorded_local = None
+            if x_recorded_rows is not None:
+                x_monsters = torch.full_like(x_local, SliceKind.MONSTERS)
+                x_recorded_local = self._position(x_idxs_l2, x_monsters, x_recorded_rows[x_local])
             (
-                t_idx_l2[t_rows_l2],
-                t_log_prob_l2[t_rows_l2],
-                t_entropy_l2[t_rows_l2],
-                t_kl_uniform_l2[t_rows_l2],
-            ) = self._categorical_step(t_logits, t_mask_l2, t_recorded_local, greedy)
+                x_pos_l2,
+                x_log_prob_l2[x_rows_l2],
+                x_entropy_l2[x_rows_l2],
+                x_kl_uniform_l2[x_rows_l2],
+            ) = self._categorical_step(x_logits, x_mask_l2, x_recorded_local, greedy)
+            # The target is the monster's rank among the monster tokens = its engine index
+            x_target[x_rows_l2] = self._kind_rank(x_idxs_l2, x_pos_l2)[1]
 
         return (
-            t_idx_l1,
-            t_log_prob_l1,
-            t_entropy_l1,
-            t_kl_uniform_l1,
-            t_idx_l2,
-            t_log_prob_l2,
-            t_entropy_l2,
-            t_kl_uniform_l2,
+            x_kind,
+            x_rank,
+            x_log_prob_l1,
+            x_entropy_l1,
+            x_kl_uniform_l1,
+            x_target,
+            x_log_prob_l2,
+            x_entropy_l2,
+            x_kl_uniform_l2,
         )
 
+    def _shop_price_terms(
+        self, x_prices: X_ShopPrices, x_idxs: torch.Tensor, x_keys: torch.Tensor
+    ) -> torch.Tensor:
+        """The price-key term per window token: `_shop_price_keys` of the item's
+        price row at its shop token, zeros elsewhere. Row k of a kind prices the
+        k-th token of that kind — both sides are (row, rank)-ordered prefixes."""
+        x_price_keys = self._shop_price_keys(x_prices.x)
+        x_terms = torch.zeros_like(x_keys)
+        for kind in (SliceKind.CARD_SHOP, SliceKind.RELIC_SHOP, SliceKind.POTION_SHOP):
+            x_terms[x_idxs == kind] = x_price_keys[x_prices.idxs == kind]
+        return x_terms
+
     @staticmethod
-    def _rows(t_recorded: torch.Tensor | None, t_rows: torch.Tensor) -> torch.Tensor | None:
-        """Recorded indices for `t_rows`, or None when nothing was recorded (sampling)."""
-        return None if t_recorded is None else t_recorded[t_rows]
+    def _position(
+        x_idxs: torch.Tensor, x_kind: torch.Tensor, x_rank: torch.Tensor
+    ) -> torch.Tensor:
+        """The window position of the rank-th token of `kind`, per row."""
+        x_match = x_idxs == x_kind.unsqueeze(1)
+        x_hit = x_match & (x_match.cumsum(1) == x_rank.unsqueeze(1) + 1)
+        return x_hit.long().argmax(1)
+
+    @staticmethod
+    def _kind_rank(x_idxs: torch.Tensor, x_pos: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """A window position's kind and its rank within that kind, per row."""
+        x_kind = x_idxs.gather(1, x_pos.unsqueeze(1)).squeeze(1)
+        x_before = torch.arange(x_idxs.shape[1], device=x_idxs.device) < x_pos.unsqueeze(1)
+        return x_kind, ((x_idxs == x_kind.unsqueeze(1)) & x_before).sum(1)
+
+    @staticmethod
+    def _rows(x_recorded: torch.Tensor | None, x_rows: torch.Tensor) -> torch.Tensor | None:
+        """Recorded indices for `x_rows`, or None when nothing was recorded (sampling)."""
+        return None if x_recorded is None else x_recorded[x_rows]
 
     def _run(
         self,
-        t_game_state: TGameState,
-        t_core_out: TCoreOutput,
-        t_mask: TMask,
+        x_game_state: X_GameState,
+        x_core_out: X_CoreOutput,
+        x_mask: X_Mask,
         greedy: bool,
-        t_recorded_action_type: torch.Tensor | None = None,
-        t_recorded_l1: torch.Tensor | None = None,
-        t_recorded_l2: torch.Tensor | None = None,
-    ) -> TAction:
+        x_recorded_action_type: torch.Tensor | None = None,
+        x_recorded_kind: torch.Tensor | None = None,
+        x_recorded_rank: torch.Tensor | None = None,
+        x_recorded_target: torch.Tensor | None = None,
+    ) -> X_Action:
         # Compute `ActionType` first
-        t_idx_at, t_log_prob_at, t_entropy_at, t_kl_uniform_at = self._compute_action_type(
-            t_game_state, t_core_out, t_mask, greedy, t_recorded_action_type
+        x_idx_at, x_log_prob_at, x_entropy_at, x_kl_uniform_at = self._compute_action_type(
+            x_game_state, x_core_out, x_mask, greedy, x_recorded_action_type
         )
 
-        # Compute the `Action`'s indexes from the chosen `ActionType`
+        # Compute the `Action`'s picks from the chosen `ActionType`
         (
-            t_idx_l1,
-            t_log_prob_l1,
-            t_entropy_l1,
-            t_kl_uniform_l1,
-            t_idx_l2,
-            t_log_prob_l2,
-            t_entropy_l2,
-            t_kl_uniform_l2,
+            x_kind,
+            x_rank,
+            x_log_prob_l1,
+            x_entropy_l1,
+            x_kl_uniform_l1,
+            x_target,
+            x_log_prob_l2,
+            x_entropy_l2,
+            x_kl_uniform_l2,
         ) = self._compute_action_idxs(
-            t_idx_at, t_game_state, t_core_out, t_mask, greedy, t_recorded_l1, t_recorded_l2
+            x_idx_at,
+            x_game_state,
+            x_core_out,
+            x_mask,
+            greedy,
+            x_recorded_kind,
+            x_recorded_rank,
+            x_recorded_target,
         )
 
         # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
-        return TAction(
-            idxs=torch.stack([t_idx_at, t_idx_l1, t_idx_l2], dim=1),
-            log_prob=torch.stack([t_log_prob_at, t_log_prob_l1, t_log_prob_l2], dim=1),
-            entropy=torch.stack([t_entropy_at, t_entropy_l1, t_entropy_l2], dim=1),
-            kl_uniform=torch.stack([t_kl_uniform_at, t_kl_uniform_l1, t_kl_uniform_l2], dim=1),
-            batch_size=[t_idx_at.shape[0]],
+        return X_Action(
+            action_type=x_idx_at,
+            kind=x_kind,
+            rank=x_rank,
+            target=x_target,
+            log_prob=torch.stack([x_log_prob_at, x_log_prob_l1, x_log_prob_l2], dim=1),
+            entropy=torch.stack([x_entropy_at, x_entropy_l1, x_entropy_l2], dim=1),
+            kl_uniform=torch.stack([x_kl_uniform_at, x_kl_uniform_l1, x_kl_uniform_l2], dim=1),
+            batch_size=[x_idx_at.shape[0]],
         )
 
     def forward(
-        self, t_game_state: TGameState, t_mask: TMask, greedy: bool = False
-    ) -> tuple[TAction, torch.Tensor]:
-        t_core_out = self.core(t_game_state)
-        t_values = self._head_value(t_core_out.global_)
-        return self._run(t_game_state, t_core_out, t_mask, greedy), t_values
+        self, x_game_state: X_GameState, x_mask: X_Mask, greedy: bool = False
+    ) -> tuple[X_Action, torch.Tensor]:
+        x_core_out = self.core(x_game_state)
+        x_values = self._head_value(x_core_out.global_value)
+        return self._run(x_game_state, x_core_out, x_mask, greedy), x_values
 
     def evaluate_actions(
         self,
-        t_game_state: TGameState,
-        t_mask: TMask,
-        t_idx_at: torch.Tensor,
-        t_idx_l1: torch.Tensor,
-        t_idx_l2: torch.Tensor,
+        x_game_state: X_GameState,
+        x_mask: X_Mask,
+        x_action_type: torch.Tensor,
+        x_kind: torch.Tensor,
+        x_rank: torch.Tensor,
+        x_target: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        t_core_out = self.core(t_game_state)
-        t_values = self._head_value(t_core_out.global_)
-        t_actions = self._run(
-            t_game_state,
-            t_core_out,
-            t_mask,
+        x_core_out = self.core(x_game_state)
+        x_values = self._head_value(x_core_out.global_value)
+        x_actions = self._run(
+            x_game_state,
+            x_core_out,
+            x_mask,
             greedy=True,
-            t_recorded_action_type=t_idx_at,
-            t_recorded_l1=t_idx_l1,
-            t_recorded_l2=t_idx_l2,
+            x_recorded_action_type=x_action_type,
+            x_recorded_kind=x_kind,
+            x_recorded_rank=x_rank,
+            x_recorded_target=x_target,
         )
-        return t_actions.log_prob.sum(-1), t_actions.entropy, t_actions.kl_uniform, t_values
-
-
-def _get_target_mask_for(action_type: int, t_mask: TMask) -> torch.Tensor | None:
-    """The L3 monster-target mask for an action's selection pool, or None if it takes no target."""
-    if action_type == int(ActionType.CardPlay):
-        return t_mask.mask_target_card
-    if action_type == int(ActionType.PotionUse):
-        return t_mask.mask_target_potion
-    return None
-
-
-def _get_shop_prices_for(
-    pools: tuple[SliceKind, ...], t_game_state: TGameState
-) -> torch.Tensor | None:
-    """Per-item shop prices for a shop selection pool, or None if the pool isn't a shop."""
-    match pools:
-        case (SliceKind.CARD_SHOP,):
-            return t_game_state.shop_card_prices
-        case (SliceKind.RELIC_SHOP,):
-            return t_game_state.shop_relic_prices
-        case (SliceKind.POTION_SHOP,):
-            return t_game_state.shop_potion_prices
-
-    return None
+        return x_actions.log_prob.sum(-1), x_actions.entropy, x_actions.kl_uniform, x_values

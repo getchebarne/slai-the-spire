@@ -32,7 +32,7 @@ from src.rl.encoding.reward import encode_batch_rewards
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.shop import encode_batch_shop
 from src.rl.encoding.state import encode_batch_game_state
-from src.rl.types import TGameState
+from src.rl.types import X_GameState
 
 
 __all__ = [
@@ -75,5 +75,5 @@ __all__ = [
     "ENCODING_DIM_EVENT_OPTION",
     # Full state encoding
     "encode_batch_game_state",
-    "TGameState",
+    "X_GameState",
 ]

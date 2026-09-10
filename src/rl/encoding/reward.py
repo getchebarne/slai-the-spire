@@ -4,6 +4,7 @@ from enum import auto
 import numpy as np
 import torch
 from slai import GameEnv
+from slai import GameState
 from slai import Reward
 
 from src.rl.constants import GOLD_CAP
@@ -19,12 +20,16 @@ class RewardMetaChannel(StrEnum):
     GOLD = auto()
     GOLD_AFTER_TAKING = auto()
     RELICS_EXCLUSIVE = auto()  # boss rewards: take one relic, lose the rest
+    GOLD_STOLEN = auto()  # the thieves' purse, offered apart from the room's gold
+    CARDS_FORCED = auto()  # The Library: one pick, no skip
 
 
 CHANNEL_LAYOUT_REWARD_META, _alloc = make_channel_allocator()
 OFF_REWARD_GOLD = _alloc(RewardMetaChannel.GOLD)
 OFF_REWARD_GOLD_AFTER_TAKING = _alloc(RewardMetaChannel.GOLD_AFTER_TAKING)
 OFF_REWARD_RELICS_EXCLUSIVE = _alloc(RewardMetaChannel.RELICS_EXCLUSIVE)
+OFF_REWARD_GOLD_STOLEN = _alloc(RewardMetaChannel.GOLD_STOLEN)
+OFF_REWARD_CARDS_FORCED = _alloc(RewardMetaChannel.CARDS_FORCED)
 
 ENCODING_DIM_REWARD_META = sum(w for _, w in CHANNEL_LAYOUT_REWARD_META)
 
@@ -37,22 +42,23 @@ def _encode_reward_meta_into(reward: Reward, character_gold: int, out: np.ndarra
         character_gold + (reward.gold or 0), GOLD_CAP
     )
     out[OFF_REWARD_RELICS_EXCLUSIVE] = float(reward.relics_exclusive)
+    out[OFF_REWARD_GOLD_STOLEN] = (
+        get_sqrt_norm(reward.gold_stolen, _GOLD_MAX) if reward.gold_stolen is not None else 0.0
+    )
+    out[OFF_REWARD_CARDS_FORCED] = float(reward.cards_forced)
 
 
-def encode_batch_rewards(
-    batch_reward: list[Reward | None],
-    batch_gold: list[int],
-    device: torch.device,
-) -> torch.Tensor:
+def encode_batch_rewards(game_states: list[GameState], device: torch.device) -> torch.Tensor:
     """Reward meta only — the offered card/relic/potion entities are encoded by
     their entity-class encoders (reward slices per the encoders)."""
-    batch_size = len(batch_reward)
+    batch_size = len(game_states)
     np_meta = np.zeros((batch_size, ENCODING_DIM_REWARD_META), dtype=np.float32)
 
-    for b, reward in enumerate(batch_reward):
+    for b, game_state in enumerate(game_states):
+        reward = game_state.reward
         if reward is None:
             continue
 
-        _encode_reward_meta_into(reward, batch_gold[b], np_meta[b])
+        _encode_reward_meta_into(reward, game_state.character.gold, np_meta[b])
 
     return torch.from_numpy(np_meta).to(device)

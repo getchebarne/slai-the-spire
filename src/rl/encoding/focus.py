@@ -9,25 +9,25 @@ from slai import CandidatePool
 from slai import Chest
 from slai import ChestKind
 from slai import Combat
+from slai import EffectBombArm
 from slai import Event
 from slai import GameEnv
 from slai import GameState
 from slai import PendingEffect
+from slai import RelicName
 from slai import RestSite
 from slai import Reward
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 from slai import Shop
 
-from src.rl.constants import MAX_EVENT_ROLL_CARDS
-from src.rl.constants import MAX_EVENT_ROLL_POTIONS
-from src.rl.constants import MAX_EVENT_ROLL_RELICS
-from src.rl.constants import MAX_SIZE_DECK
-from src.rl.constants import MAX_SIZE_DISC_PILE
-from src.rl.constants import MAX_SIZE_DISCOVER
-from src.rl.constants import MAX_SIZE_DRAW_PILE
-from src.rl.constants import MAX_SIZE_EXHAUST
-from src.rl.constants import MAX_SIZE_HAND
+from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
+from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
+from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
+from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.encoding.effect import catalog_rows
 from src.rl.types import PENDING_POOL_SLICE
 from src.rl.types import make_channel_allocator
 
@@ -74,6 +74,11 @@ def derive_focus(state: GameState) -> Focus:
     )
 
 
+def draw_order_visible(state: GameState) -> bool:
+    """Frozen Eye shows the draw pile's order."""
+    return any(relic.name == RelicName.FrozenEye for relic in state.relics)
+
+
 # The engine's halting kinds, straight from the FFI: `pending` is typed
 # PyPendingEffect, so a new halting kind widens this tuple automatically instead
 # of raising the "unencoded pending halt kind" ValueError below
@@ -88,39 +93,46 @@ class FocusChannel(StrEnum):
     PENDING_KIND = auto()  # all-zero = no pending halt
     PENDING_COUNT = auto()
     PENDING_SKIPPABLE = auto()  # InputUpTo is exactly when PickSkip is legal
-    BOMB_COUNTDOWN = auto()
+    BOMB_DAMAGE_DUE = auto()  # per fuse turn left: the damage the bombs deal then
     CHEST_KIND = auto()
     CHEST_OPENED = auto()
     REST_DONE = auto()
     PRESENCE = auto()  # context-presence bits: combat/reward/shop/event/rest/chest
+    DRAW_ORDER_VISIBLE = auto()  # Frozen Eye: the actor may see the draw pile's order
 
+
+_BOMB_TURNS = GameEnv.BOMB_FUSE_TURNS  # The Bomb's fuse length
+# The catalog's biggest bomb; bombs due on the same turn add up and clamp to it
+_BOMB_DAMAGE_MAX = max(
+    effect.damage for _, effect in catalog_rows() if isinstance(effect, EffectBombArm)
+)
 
 CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
 OFF_FOCUS_KIND = _alloc(FocusChannel.KIND, len(Focus))
 OFF_FOCUS_PENDING_KIND = _alloc(FocusChannel.PENDING_KIND, len(EFFECT_PENDING))
 OFF_FOCUS_PENDING_COUNT = _alloc(FocusChannel.PENDING_COUNT)
 OFF_FOCUS_PENDING_SKIPPABLE = _alloc(FocusChannel.PENDING_SKIPPABLE)
-OFF_FOCUS_BOMB_COUNTDOWN = _alloc(FocusChannel.BOMB_COUNTDOWN)
+OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc(FocusChannel.BOMB_DAMAGE_DUE, _BOMB_TURNS)
 OFF_FOCUS_CHEST_KIND = _alloc(FocusChannel.CHEST_KIND, _NUM_CHEST_KINDS)
 OFF_FOCUS_CHEST_OPENED = _alloc(FocusChannel.CHEST_OPENED)
 OFF_FOCUS_REST_DONE = _alloc(FocusChannel.REST_DONE)
 OFF_FOCUS_PRESENCE = _alloc(FocusChannel.PRESENCE, 6)
+OFF_FOCUS_DRAW_ORDER_VISIBLE = _alloc(FocusChannel.DRAW_ORDER_VISIBLE)
 
 ENCODING_DIM_FOCUS = sum(w for _, w in CHANNEL_LAYOUT_FOCUS)
 
-_BOMB_TURNS = GameEnv.BOMB_FUSE_TURNS  # The Bomb's fuse length
-
-# Every pool the engine can halt over; the pick count normalizes against its slice cap
+# Every pool the engine can halt over; the pick count normalizes against the
+# pool's size ceiling (combat piles are bounded by the deck)
 _INPUT_POOL_CAP = {
-    CandidatePool.Hand: MAX_SIZE_HAND,
-    CandidatePool.Deck: MAX_SIZE_DECK,
-    CandidatePool.Discover: MAX_SIZE_DISCOVER,
-    CandidatePool.PileDraw: MAX_SIZE_DRAW_PILE,
-    CandidatePool.PileDiscard: MAX_SIZE_DISC_PILE,
-    CandidatePool.PileExhaust: MAX_SIZE_EXHAUST,
-    CandidatePool.EventRollCard: MAX_EVENT_ROLL_CARDS,
-    CandidatePool.EventRollRelic: MAX_EVENT_ROLL_RELICS,
-    CandidatePool.EventRollPotion: MAX_EVENT_ROLL_POTIONS,
+    CandidatePool.CardPileHand: MAX_SIZE_CARD_PILE_HAND,
+    CandidatePool.CardPileDeck: MAX_SIZE_CARD_PILE_DECK,
+    CandidatePool.CardPileDiscover: MAX_SIZE_CARD_PILE_DISCOVER,
+    CandidatePool.CardPileDraw: MAX_SIZE_CARD_PILE_DECK,
+    CandidatePool.CardPileDiscard: MAX_SIZE_CARD_PILE_DECK,
+    CandidatePool.CardPileExhaust: MAX_SIZE_CARD_PILE_DECK,
+    CandidatePool.CardPileEventRoll: MAX_SIZE_CARD_PILE_EVENT_ROLL,
+    CandidatePool.RelicEventRoll: MAX_SIZE_RELIC_EVENT_ROLL,
+    CandidatePool.PotionEventRoll: MAX_SIZE_POTION_EVENT_ROLL,
 }
 assert set(_INPUT_POOL_CAP) == set(PENDING_POOL_SLICE), "halting-pool tables drifted"
 
@@ -159,7 +171,10 @@ def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
                 out[OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
 
     if combat is not None:
-        out[OFF_FOCUS_BOMB_COUNTDOWN] = combat.bomb_countdown / _BOMB_TURNS
+        for turns_left, damage in combat.bombs:
+            out[OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
+        due = out[OFF_FOCUS_BOMB_DAMAGE_DUE : OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
+        due[:] = np.minimum(due, _BOMB_DAMAGE_MAX) / _BOMB_DAMAGE_MAX
 
     if chest is not None:
         out[OFF_FOCUS_CHEST_KIND + int(chest.kind)] = 1.0
@@ -172,6 +187,8 @@ def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
     for i, ctx in enumerate((combat, reward, shop, event, rest_site, chest)):
         if ctx is not None:
             out[OFF_FOCUS_PRESENCE + i] = 1.0
+
+    out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(state))
 
 
 def encode_batch_focus(batch_state: list[GameState], device: torch.device) -> torch.Tensor:

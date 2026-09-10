@@ -1,4 +1,4 @@
-exp_name: ppo/NEWERA-XIX
+exp_name: ppo/EFFECT-IIIf  # warm from IIIe@~52.5k: amp off — bf16 KL-gauge phantom starved learning
 seed: 0
 num_iterations: 1.0e+6
 log_every: 10
@@ -36,11 +36,24 @@ clip_eps: 0.20
 clip_value_loss: false
 # bf16 autocast on the update forward; loss math stays fp32. 4090-measured:
 # update 3.07 -> 2.59 s/iter at mb 2048.
-amp: true
+# OFF for IIIf: at IIIe's saturation (entropy/L3 0.001) bf16 logit jitter reads
+# as k3 approx_kl 0.018-0.027 at IDENTICAL weights (identical-weights probe,
+# 2026-09-02) — 60-90% of target_kl. The adaptive-lr controller throttled to its
+# 1/64 floor chasing that phantom and updates truncated to <1 epoch. fp32 vs
+# fp32 measures exactly 0.0
+amp: false
 # 2048 -> 4096: fewer optimizer steps, better GPU regime. 4090-measured: update
 # 2.59 -> 2.07 s/iter. Side effect: realized approx_kl roughly halves (smoother
 # steps) — factor this into any future lr retuning.
-minibatch_size: 4096
+# Walked back to 2048: OOM at EFFECT-II iter ~4450 — activation memory scales with
+# token width (transformer packs to the batch's max), and a competent agent's deep
+# runs (act2 0.81, 46-card decks) roughly double it vs the early-run states 4096
+# was sized on. 24 GB fits mb4096 only until the agent gets good.
+# mb2048/fp32 (amp off doubles activations) OOM'd the 24 GB 4090 3x at
+# floor-29 widths (2026-09-03); on the 5090's 32 GB it peaked 23.8 GB.
+# mb4096 there peaked 30.9 GB and OOM'd in its first updates — 3072 is the
+# largest that fits fp32 on 32 GB at deep-run widths
+minibatch_size: 3072
 num_epochs: 4
 # Rollout(t+1) collected in a side process during update(t), staleness 1. Measured a
 # WASH on the 4-P-core M4 post-packing (hidden rollout reappears as update contention:
@@ -54,7 +67,10 @@ overlap_rollout: false
 # 3.71 vs 3.45 — the rollout forward is launch-latency-bound, so two half-batch
 # forwards cost more than one full one. Re-measure only if the forward becomes
 # compute-bound (bigger model). Full ladder incl. amp+mb4096: 5.32 -> 3.45.
-rollout_workers: 8
+# 2026-08-29 Tier-0 ladder (48-thread pod, post row-block cache): workers 8->16
+# rollout 1.29 -> 1.08 s (24/32 flat); num_envs 512 OOMs the on-device rollout
+# buffer at 24 GB; torch.compile(dynamic) a wash. Update (2.7 s) is the wall.
+rollout_workers: 16
 double_buffer: false
 
 model:
@@ -63,9 +79,14 @@ model:
   dim_global: 1024
   transformer_dim_ff: 512
   transformer_num_heads: 4
-  transformer_num_blocks: 2
+  transformer_num_blocks: 3  # 2 -> 3 for EFFECT-III (AlphaStar depth; blocks are pre-LN now)
   gnn_num_layers: 15  # map GNN depth = MAP_HEIGHT → full downstream lookahead per room
   map_encoder_dim: 256  # GNN internal width (lifted to dim_entity in entity_projector); depth unchanged
+  # The value head's privileged pass sees the draw order, so it is a second transformer
+  # pass over almost every combat row. true: those rows run apart from the actor's in
+  # the update and recompute in the backward, keeping the update near one pass's
+  # activation memory for one more forward of them. Measure with scripts/probe_memory.py
+  checkpoint_privileged: false
 
   # Head dimensions
   dim_ff_primary: 1024
@@ -76,7 +97,10 @@ model:
 optimizer:
   name: Adam
   kwargs:
-    # 2.5x fill-the-trust-region bump (XVIII ran approx_kl ~0.006 vs target 0.03
-    # with the 1.5x early-stop never engaging — see the XVIII post-mortem).
+    # Walked back from EFFECT-I's 1.5e-4 (the 2.5x XVIII bump): approx_kl ran
+    # chronically above target from ~iter 7k and the L2 uniform-KL barrier
+    # diverged — see the EFFECT-I post-mortem (2026-08-30).
     # update/approx_kl + update/epochs_run are the guardrail telemetry.
-    lr: 2.5e-4
+    # Halved 1e-4 -> 5e-5 with the IIId barrier clamp: approx_kl ran 0.09 in a
+    # single epoch (epochs_run pinned ~1) under win-jackpot sharpening
+    lr: 5.0e-5

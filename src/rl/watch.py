@@ -40,6 +40,7 @@ from play.__main__ import reset_if_phase_changed  # noqa: E402
 from play.__main__ import write  # noqa: E402
 
 from src.rl.constants import FAST_MODE  # noqa: E402
+from src.rl.constants import NEOW  # noqa: E402
 from src.rl.models import ActorCritic  # noqa: E402
 from src.rl.test_agent import _describe_action  # noqa: E402
 from src.rl.test_agent import get_action_from_model  # noqa: E402
@@ -65,7 +66,7 @@ def _loop(
     stdscr.nodelay(True)  # non-blocking input so we can auto-advance on a timer
 
     seed = _random_seed()
-    env = slai.GameEnv(ascension, fast_mode=fast_mode)
+    env = slai.GameEnv(ascension, fast_mode=fast_mode, neow=NEOW)
     view = env.reset(seed=seed)
     cursor = Cursor()
     paused = True  # start paused: [n] steps, [space] runs
