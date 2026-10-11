@@ -90,15 +90,15 @@ _NUM_CHEST_KINDS = len(ChestKind.members())
 
 class FocusChannel(StrEnum):
     KIND = auto()
-    PENDING_KIND = auto()  # all-zero = no pending halt
+    PENDING_KIND = auto()  # All-zero = no pending halt
     PENDING_COUNT = auto()
-    PENDING_SKIPPABLE = auto()  # InputUpTo is exactly when PickSkip is legal
-    BOMB_DAMAGE_DUE = auto()  # per fuse turn left: the damage the bombs deal then
+    PENDING_SKIPPABLE = auto()  # `InputUpTo` is exactly when `PickSkip` is legal
+    BOMB_DAMAGE_DUE = auto()  # Per fuse turn left: the damage the bombs deal then
     CHEST_KIND = auto()
     CHEST_OPENED = auto()
     REST_DONE = auto()
-    PRESENCE = auto()  # context-presence bits: combat/reward/shop/event/rest/chest
-    DRAW_ORDER_VISIBLE = auto()  # Frozen Eye: the actor may see the draw pile's order
+    PRESENCE = auto()  # Context-presence bits: combat/reward/shop/event/rest/chest
+    DRAW_ORDER_VISIBLE = auto()  # Frozen Eye: the Actor may see the draw pile's order
 
 
 _BOMB_TURNS = GameEnv.BOMB_FUSE_TURNS  # The Bomb's fuse length
@@ -108,16 +108,16 @@ _BOMB_DAMAGE_MAX = max(
 )
 
 CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
-OFF_FOCUS_KIND = _alloc(FocusChannel.KIND, len(Focus))
-OFF_FOCUS_PENDING_KIND = _alloc(FocusChannel.PENDING_KIND, len(EFFECT_PENDING))
-OFF_FOCUS_PENDING_COUNT = _alloc(FocusChannel.PENDING_COUNT)
-OFF_FOCUS_PENDING_SKIPPABLE = _alloc(FocusChannel.PENDING_SKIPPABLE)
-OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc(FocusChannel.BOMB_DAMAGE_DUE, _BOMB_TURNS)
-OFF_FOCUS_CHEST_KIND = _alloc(FocusChannel.CHEST_KIND, _NUM_CHEST_KINDS)
-OFF_FOCUS_CHEST_OPENED = _alloc(FocusChannel.CHEST_OPENED)
-OFF_FOCUS_REST_DONE = _alloc(FocusChannel.REST_DONE)
-OFF_FOCUS_PRESENCE = _alloc(FocusChannel.PRESENCE, 6)
-OFF_FOCUS_DRAW_ORDER_VISIBLE = _alloc(FocusChannel.DRAW_ORDER_VISIBLE)
+OFF_KIND = _alloc(FocusChannel.KIND, len(Focus))
+OFF_PENDING_KIND = _alloc(FocusChannel.PENDING_KIND, len(EFFECT_PENDING))
+OFF_PENDING_COUNT = _alloc(FocusChannel.PENDING_COUNT)
+OFF_PENDING_SKIPPABLE = _alloc(FocusChannel.PENDING_SKIPPABLE)
+OFF_BOMB_DAMAGE_DUE = _alloc(FocusChannel.BOMB_DAMAGE_DUE, _BOMB_TURNS)
+OFF_CHEST_KIND = _alloc(FocusChannel.CHEST_KIND, _NUM_CHEST_KINDS)
+OFF_CHEST_OPENED = _alloc(FocusChannel.CHEST_OPENED)
+OFF_REST_DONE = _alloc(FocusChannel.REST_DONE)
+OFF_PRESENCE = _alloc(FocusChannel.PRESENCE, 6)
+OFF_DRAW_ORDER_VISIBLE = _alloc(FocusChannel.DRAW_ORDER_VISIBLE)
 
 ENCODING_DIM_FOCUS = sum(w for _, w in CHANNEL_LAYOUT_FOCUS)
 
@@ -134,7 +134,7 @@ _INPUT_POOL_CAP = {
     CandidatePool.RelicEventRoll: MAX_SIZE_RELIC_EVENT_ROLL,
     CandidatePool.PotionEventRoll: MAX_SIZE_POTION_EVENT_ROLL,
 }
-assert set(_INPUT_POOL_CAP) == set(PENDING_POOL_SLICE), "halting-pool tables drifted"
+assert set(_INPUT_POOL_CAP) == set(PENDING_POOL_SLICE), "Halting-pool tables drifted"
 
 
 def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
@@ -146,7 +146,7 @@ def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
     event = state.event
     pending = state.effect_pending
 
-    out[OFF_FOCUS_KIND + _focus_from(reward, combat, shop, chest, rest_site, event)] = 1.0
+    out[OFF_KIND + _focus_from(reward, combat, shop, chest, rest_site, event)] = 1.0
 
     # Pending input
     if pending is not None:
@@ -154,7 +154,7 @@ def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
         if idx is None:
             raise ValueError(f"Unsupported pending halt kind: {type(pending).__name__}")
 
-        out[OFF_FOCUS_PENDING_KIND + idx] = 1.0
+        out[OFF_PENDING_KIND + idx] = 1.0
 
         target = pending.target
         selection_kind = target.selection_kind if target is not None else None
@@ -166,29 +166,29 @@ def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
                     f" (pending {type(pending).__name__})"
                 )
 
-            out[OFF_FOCUS_PENDING_COUNT] = selection_kind.count / cap
+            out[OFF_PENDING_COUNT] = selection_kind.count / cap
             if isinstance(selection_kind, SelectionKindInputUpTo):
-                out[OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
+                out[OFF_PENDING_SKIPPABLE] = 1.0
 
     if combat is not None:
         for turns_left, damage in combat.bombs:
-            out[OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
-        due = out[OFF_FOCUS_BOMB_DAMAGE_DUE : OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
+            out[OFF_BOMB_DAMAGE_DUE + turns_left - 1] += damage
+        due = out[OFF_BOMB_DAMAGE_DUE : OFF_BOMB_DAMAGE_DUE + _BOMB_TURNS]
         due[:] = np.minimum(due, _BOMB_DAMAGE_MAX) / _BOMB_DAMAGE_MAX
 
     if chest is not None:
-        out[OFF_FOCUS_CHEST_KIND + int(chest.kind)] = 1.0
-        out[OFF_FOCUS_CHEST_OPENED] = float(chest.opened)
+        out[OFF_CHEST_KIND + int(chest.kind)] = 1.0
+        out[OFF_CHEST_OPENED] = float(chest.opened)
 
     if rest_site is not None:
-        out[OFF_FOCUS_REST_DONE] = float(rest_site.done)
+        out[OFF_REST_DONE] = float(rest_site.done)
 
-    # Context-presence bits: the focus OHE alone can't express overlays
+    # Context-presence bits: the Focus OHE alone can't express overlays
     for i, ctx in enumerate((combat, reward, shop, event, rest_site, chest)):
         if ctx is not None:
-            out[OFF_FOCUS_PRESENCE + i] = 1.0
+            out[OFF_PRESENCE + i] = 1.0
 
-    out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(state))
+    out[OFF_DRAW_ORDER_VISIBLE] = float(draw_order_visible(state))
 
 
 def encode_batch_focus(batch_state: list[GameState], device: torch.device) -> torch.Tensor:

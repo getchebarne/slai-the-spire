@@ -5,6 +5,8 @@ import slai
 import torch
 from slai import ActionType
 from slai import Card
+from slai import PotionName
+from slai import RelicName
 
 from src.rl.encoding.card import SLICE_KINDS_CARD
 from src.rl.encoding.card import _get_card_entities
@@ -95,6 +97,22 @@ def _kind_and_index(at: int, action: slai.Action) -> tuple[SliceKind, int]:
     return ACTION_TYPE_POOL[at][0], idxs[0]
 
 
+def wasted_potion_discard(state: slai.GameState, action: slai.Action) -> bool:
+    """True when `action` discards a Potion while nothing needs the room: no Potion can
+    arrive under Sozu, and with a free belt slot the discard only pays as a reroll
+    before drinking an Entropic Brew held in another slot."""
+    if action.action_type is not ActionType.PotionDiscard:
+        return False
+    if any(relic.name == RelicName.Sozu for relic in state.relics):
+        return True
+    potions = state.potions
+    return len(potions) < state.potion_slots_max and not any(
+        potion.name == PotionName.EntropicBrew
+        for i, potion in enumerate(potions)
+        if i != action.idxs[0]
+    )
+
+
 # Action types already warned about dropped selections — truncation is never silent
 _WARNED_DROPPED: set[int] = set()
 
@@ -106,6 +124,7 @@ def build_masks(
     device: torch.device,
 ) -> X_Mask:
     """Build a X_Mask from each state's legal actions, one X_EntityMask per block.
+    Wasted Potion discards are engine-legal but masked.
 
     A pick's position in its block is the engine-index-th token of its kind in
     that block's kind row, so the masks read the encoder's placement rather than
@@ -136,6 +155,9 @@ def build_masks(
         num_monsters = len(positions[SliceKind.MONSTERS])
 
         for action in legal_actions_batch[b]:
+            if wasted_potion_discard(state, action):
+                continue
+
             # Fold the halt resolver onto its pool's virtual type (types.PENDING_POOL_INT)
             if action.action_type is ActionType.EffectPendingResolve:
                 if pending_at is None:

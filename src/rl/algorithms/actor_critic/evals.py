@@ -7,7 +7,6 @@ import torch
 from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
-from src.rl.algorithms.actor_critic.episode import KEY_REWARD_STD
 from src.rl.algorithms.actor_critic.episode import KEY_WIN_RATE
 from src.rl.algorithms.actor_critic.episode import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
@@ -21,8 +20,8 @@ from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.reward import cumulative_floor
 from src.rl.reward import shop_gold_spent
-from src.rl.reward import wasted_potion_discard
 from src.rl.utils import action_from_actiontype
+from src.rl.utils import step_scripted
 
 
 # Greedy deterministic play can loop; cap so a hung eval can't wedge its worker.
@@ -38,7 +37,6 @@ EVAL_WIN_RATE = PREFIX_EVAL + KEY_WIN_RATE
 EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
 EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
 EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
-EVAL_REWARD_STD = PREFIX_EVAL + KEY_REWARD_STD
 
 
 def run_eval_battery(
@@ -54,7 +52,6 @@ def run_eval_battery(
             length = 0
             gold_gained = 0
             gold_spent = 0
-            potion_wastes = 0
             cards_added = 0
             purges = 0
             terminated = False
@@ -75,13 +72,12 @@ def run_eval_battery(
                 action = action_from_actiontype(
                     x_action, 0, x_game_state.room_idxs[0].cpu().numpy(), obs
                 )
-                obs, terminated = env.step(action)
+                obs, terminated = step_scripted(env, action)
                 reward = compute_reward(prev, obs, terminated, gamma, action)
                 stream_rewards += reward
                 stream_returns += gamma**length * reward
                 gold_gained += max(0, obs.character.gold - prev.character.gold)
                 gold_spent += shop_gold_spent(prev, obs, action)
-                potion_wastes += wasted_potion_discard(prev, action)
                 cards_added += max(0, len(obs.card_pile_deck) - len(prev.card_pile_deck))
                 purges += action.action_type == slai.ActionType.ShopPurge
                 length += 1
@@ -95,7 +91,6 @@ def run_eval_battery(
                     stream_returns=stream_returns,
                     gold_gained=gold_gained,
                     gold_spent=gold_spent,
-                    potion_wastes=potion_wastes,
                     deck_size=len(obs.card_pile_deck),
                     cards_added=cards_added,
                     purges=purges,

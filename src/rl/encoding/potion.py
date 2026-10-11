@@ -4,7 +4,6 @@ from enum import auto
 
 import numpy as np
 import torch
-from slai import Effect
 from slai import GameState
 from slai import Potion
 from slai import PotionName
@@ -14,7 +13,11 @@ from src.rl.constants import MAX_POTION_REWARDS
 from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SHOP_POTIONS
 from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
+from src.rl.types import BatchEffectRows
+from src.rl.types import BatchPriceRows
+from src.rl.types import EffectRow
 from src.rl.types import EffectSource
+from src.rl.types import PriceRow
 from src.rl.types import SliceKind
 from src.rl.types import make_channel_allocator
 
@@ -37,7 +40,7 @@ class PotionChannel(StrEnum):
     RARITY = auto()
     REQUIRES_TARGET = auto()
     COMBAT_ONLY = auto()
-    DOUBLED = auto()  # Sacred Bark: its effect rows already carry the doubled amounts
+    DOUBLED = auto()  # Sacred Bark: its Effect rows already carry the doubled amounts
 
 
 CHANNEL_LAYOUT_POTION, _alloc = make_channel_allocator()
@@ -96,36 +99,54 @@ def _get_potion_entities(kind: SliceKind, game_state: GameState) -> list:
             raise ValueError(f"not a potion kind: {kind}")
 
 
-def iter_packed_potions(game_state: GameState) -> Iterator[tuple[int, SliceKind, Potion]]:
-    """(w, kind, potion) for every potion token: the kinds back to back in
+def iter_packed_potions(game_state: GameState) -> Iterator[tuple[SliceKind, Potion]]:
+    """(kind, potion) for every potion token: the kinds back to back in
     SLICE_KINDS_POTION order, each collection in engine order."""
-    w = 0
     for kind in SLICE_KINDS_POTION:
         for potion in _get_potion_entities(kind, game_state):
-            yield w, kind, potion
-            w += 1
+            yield kind, potion
 
 
 def encode_batch_potions(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray, list[list[tuple[int, EffectSource, Effect]]]]:
+) -> tuple[torch.Tensor, np.ndarray, BatchEffectRows, BatchPriceRows]:
     """(B, W, ENCODING_DIM_POTION) rows + the (B, W) kind of each token + each state's
-    (offset, source, effect) rows, keyed by the same w as the token they belong to;
-    W is the batch's longest packed potion sequence."""
+    (offset, source, effect) rows and its shop tokens' (offset, price) rows, keyed by the
+    same w as the token they belong to; W is the batch's longest packed potion sequence."""
     batch_tokens = [list(iter_packed_potions(game_state)) for game_state in game_states]
+    batch_potion_prices = []
+    for game_state in game_states:
+        shop = game_state.shop
+        batch_potion_prices.append(shop.potion_prices if shop is not None else [])
+
     width = max((len(tokens) for tokens in batch_tokens), default=0)
     np_out = np.zeros((len(game_states), width, ENCODING_DIM_POTION), dtype=np.float32)
     np_idxs = np.full((len(game_states), width), -1, dtype=np.int16)
-    batch_effect_rows: list[list[tuple[int, EffectSource, Effect]]] = []
+    batch_effect_rows: BatchEffectRows = []
+    batch_price_rows: BatchPriceRows = []
 
     for b, tokens in enumerate(batch_tokens):
-        effect_rows: list[tuple[int, EffectSource, Effect]] = []
-        for w, kind, potion in tokens:
+        effect_rows: list[EffectRow] = []
+        price_rows: list[PriceRow] = []
+
+        # Shop tokens come in shop order, so they take the parallel price list in step
+        potion_prices = iter(batch_potion_prices[b])
+        for w, (kind, potion) in enumerate(tokens):
             encode_potion_into_w_cache(potion, np_out[b, w])
+
+            # `SliceKind`
             np_idxs[b, w] = kind
-            effects = potion.effects  # bound once: each read clones the Vec
+
+            # Price
+            if kind == SliceKind.POTION_SHOP:
+                price_rows.append((w, next(potion_prices)))
+
+            # Effects
+            effects = potion.effects  # Bound once: each read clones the Vec
             if effects:
                 effect_rows += [(w, EffectSource.POTION_USE, effect) for effect in effects]
+        
         batch_effect_rows.append(effect_rows)
+        batch_price_rows.append(price_rows)
 
-    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows
+    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows, batch_price_rows

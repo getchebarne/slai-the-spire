@@ -45,6 +45,7 @@ from src.rl.models import ActorCritic  # noqa: E402
 from src.rl.test_agent import _describe_action  # noqa: E402
 from src.rl.test_agent import get_action_from_model  # noqa: E402
 from src.rl.utils import load_config  # noqa: E402
+from src.rl.utils import step_scripted  # noqa: E402
 
 
 def _random_seed() -> int:
@@ -124,7 +125,7 @@ def _loop(
 
         try:
             last_act = _describe_action(view, pending)
-            view, _terminated = env.step(pending)
+            view, _terminated = step_scripted(env, pending)
             cursor.error = None
         except Exception as e:  # surface engine rejection in the UI
             cursor.error = str(e)

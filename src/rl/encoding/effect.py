@@ -63,13 +63,14 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.types import OWNER_PENDING
+from src.rl.types import BatchEffectRows
 from src.rl.types import EffectSource
 from src.rl.types import EntityKind
 from src.rl.types import X_Effects
 from src.rl.types import make_channel_allocator
 
 
-# Live card/relic amounts arrive modifier-scaled, so a catalog maximum is a
+# Live Card / Relic amounts arrive Modifier-scaled, so a catalog maximum is a
 # floor rather than a ceiling; past this the channel clamps
 _LIVE_SCALE_HEADROOM = 1.5
 _ASCENSIONS = range(ASCENSION_LEVEL + 1)
@@ -152,8 +153,7 @@ M = TypeVar("M", bound=_MirrorEnum)
 
 
 def _field(cls: type[E], get: Callable[[E], V]) -> Iterator[V]:
-    """One field across every catalog instance of a kind. The typed accessor is
-    the point: mypy checks each `lambda e: e.x` against the kind's stub."""
+    """One field across every catalog instance of an Effect type"""
     effects: list[E] = _BY_TYPE.get(cls, [])
     for effect in effects:
         yield get(effect)
@@ -449,6 +449,7 @@ def _write_amount(row: np.ndarray, value: Amount, off_abs: int, off_rel: int) ->
     row[off_rel] += relative
     if is_range:
         row[OFF_AMOUNT_IS_RANGE] = 1.0
+    
     # A fraction also says which value it reads and how it rounds
     if isinstance(value, AmountRelative):
         row[OFF_READ_AT + _INDEX_READ_AT[value.read_at]] = 1.0
@@ -726,8 +727,7 @@ def _encode_strength_lose_temp(row: np.ndarray, e: slai.EffectStrengthLoseTemp) 
     row[OFF_STACKS] += e.stacks
 
 
-_EffectWriter = Callable[[np.ndarray, Any], None]
-_ENCODERS: dict[type, _EffectWriter] = {
+_ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
     slai.EffectBlockGain: _encode_block_gain,
     slai.EffectBombArm: _encode_bomb_arm,
     slai.EffectCardAdd: _encode_card_add,
@@ -796,10 +796,12 @@ def encode_effect_row_into(effect: Effect, row: np.ndarray) -> None:
         row[OFF_CANDIDATE_POOL + _INDEX_CAND_POOL[target.candidate_pool]] = 1.0
         row[OFF_SELECTION_KIND + _INDEX_SELECTION_KIND[type(target.selection_kind)]] = 1.0
         row[OFF_SELECT_COUNT] = float(getattr(target.selection_kind, "count", 1))
+        
         # Multi-hot over the target's filters; an empty list keeps every candidate
         for candidate_filter in target.filters:
             row[OFF_CANDIDATE_FILTER + _INDEX_CAND_FILTER[candidate_filter]] = 1.0
 
+    # Effect Type encoder
     encode = _ENCODERS.get(type(effect))
     if encode is not None:
         encode(row, effect)
@@ -898,23 +900,13 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
     rows[..., _IDXS_SCALED] = rows_gather
 
 
-def encode_effect_rows(effects: list) -> np.ndarray:
-    """Fold an effect list into an (n, ENCODING_DIM_EFFECT) float32 block."""
-    rows = np.zeros((len(effects), ENCODING_DIM_EFFECT), dtype=np.float32)
-    for i, effect in enumerate(effects):
-        encode_effect_row_into_w_cache(effect, rows[i])
-
-    normalize_effect_rows(rows)
-    return rows
-
-
 # Row families that have already warned about overflow — truncation is never silent
 _WARNED_OVERFLOW: set[str] = set()
 
 
 def encode_batch_effects(
     game_states: list[GameState],
-    sources: Sequence[tuple[EntityKind, list[list[tuple[int, EffectSource, Effect]]]]],
+    sources: Sequence[tuple[EntityKind, BatchEffectRows]],
     device: torch.device,
 ) -> X_Effects:
     """Every state's effect rows as one (B, E, D) block with their owner keys.
@@ -923,6 +915,8 @@ def encode_batch_effects(
     priority: the pending halt goes first, then the sources in order, so a state
     past MAX_EFFECTS_STATE drops its last sources' rows."""
     batch_size = len(game_states)
+
+    # Initialize NumPy arrays
     np_effect = np.zeros((batch_size, MAX_EFFECTS_STATE, ENCODING_DIM_EFFECT), dtype=np.float32)
     np_entity_kind = np.full((batch_size, MAX_EFFECTS_STATE), -1, dtype=np.int64)
     np_offset = np.zeros((batch_size, MAX_EFFECTS_STATE), dtype=np.int64)
@@ -939,8 +933,8 @@ def encode_batch_effects(
             np_entity_kind[b, idx] = OWNER_PENDING
             idx += 1
 
-        for entity_kind, batch_rows in sources:
-            for offset, source, effect in batch_rows[b]:
+        for entity_kind, batch_effect_rows in sources:
+            for offset, source, effect in batch_effect_rows[b]:
                 if idx == MAX_EFFECTS_STATE:
                     if "effects" not in _WARNED_OVERFLOW:
                         _WARNED_OVERFLOW.add("effects")

@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -13,14 +12,12 @@ from src.rl.models.heads import PointerKeys
 from src.rl.reward import REWARD_STREAMS
 from src.rl.types import ACTION_TYPE_POOL
 from src.rl.types import AT_MONSTER_TARGETED
-from src.rl.types import AT_SHOP
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
 from src.rl.types import X_Action
 from src.rl.types import X_CoreOutput
 from src.rl.types import X_GameState
 from src.rl.types import X_Mask
-from src.rl.types import X_ShopPrices
 
 
 # L2 pool kind -> the pointer-key net that scores the window for it. Every kind
@@ -114,8 +111,6 @@ class ActorCritic(nn.Module):
         self._pointer_key_room = PointerKeys(dim_entity, dim_key)
         self._pointer_key_monster = PointerKeys(dim_entity, dim_key)
 
-        self._shop_price_keys = nn.Linear(ENCODING_DIM_PRICE, dim_key, bias=False)
-
         self._init_weights()
 
     def _init_weights(self) -> None:
@@ -123,7 +118,7 @@ class ActorCritic(nn.Module):
         for m in self.modules():
             if isinstance(m, (nn.Linear, nn.Conv2d)):
                 nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
-                if m.bias is not None:  # _shop_price_keys is bias-free
+                if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
             if isinstance(m, nn.MultiheadAttention):
                 # in_proj is a raw Parameter, not a Linear — the isinstance walk
@@ -254,12 +249,6 @@ class ActorCritic(nn.Module):
             x_keys = self._pointer_key_for(action_type)(x_tokens)
             x_action_type_emb = self._action_type_embedding(torch.full_like(x_rows, action_type))
 
-            # Shop purchase: additive price-key term at the shop tokens (zero elsewhere)
-            if action_type in AT_SHOP:
-                x_keys = x_keys + self._shop_price_terms(
-                    x_game_state.shop_prices[x_rows], x_idxs_rows, x_keys
-                )
-
             # Recorded picks are (kind, rank); the pointer scores positions
             x_recorded_pos = None
             if x_recorded_kind is not None:
@@ -331,18 +320,6 @@ class ActorCritic(nn.Module):
             x_entropy_l2,
             x_kl_uniform_l2,
         )
-
-    def _shop_price_terms(
-        self, x_prices: X_ShopPrices, x_idxs: torch.Tensor, x_keys: torch.Tensor
-    ) -> torch.Tensor:
-        """The price-key term per window token: `_shop_price_keys` of the item's
-        price row at its shop token, zeros elsewhere. Row k of a kind prices the
-        k-th token of that kind — both sides are (row, rank)-ordered prefixes."""
-        x_price_keys = self._shop_price_keys(x_prices.x)
-        x_terms = torch.zeros_like(x_keys)
-        for kind in (SliceKind.CARD_SHOP, SliceKind.RELIC_SHOP, SliceKind.POTION_SHOP):
-            x_terms[x_idxs == kind] = x_price_keys[x_prices.idxs == kind]
-        return x_terms
 
     @staticmethod
     def _position(

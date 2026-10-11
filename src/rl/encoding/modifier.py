@@ -9,7 +9,6 @@ from slai import ModifierKind
 
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import MAX_MODIFIER_ROWS_STATE
-from src.rl.constants import MAX_MONSTERS
 from src.rl.types import EntityKind
 from src.rl.types import X_Modifiers
 from src.rl.utils import get_sqrt_norm
@@ -19,8 +18,7 @@ _MODIFIER_KIND_TO_IDX = {
     modifier_kind: int(modifier_kind) for modifier_kind in ModifierKind.members()
 }
 _STACKS_MAX = 99
-# Per-kind caps over the default: Poison past the widest monster HP kills on its next tick
-_STACKS_MAX_OF_KIND = {ModifierKind.Poison: HEALTH_MAX_ENTITY}
+_STACKS_MAX_OF_KIND = {ModifierKind.Poison: HEALTH_MAX_ENTITY} # Poison past the widest Monster HP kills on its next tick
 _OFF_MODIFIER_BUFF = len(_MODIFIER_KIND_TO_IDX)
 _OFF_MODIFIER_STACKS = _OFF_MODIFIER_BUFF + 1
 _OFF_MODIFIER_STACKS_NEGATIVE = _OFF_MODIFIER_STACKS + 1
@@ -61,10 +59,13 @@ def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -
     idx_used = 0
     for b, game_state in enumerate(game_states):
         combat = game_state.combat
-        monsters = combat.monsters[:MAX_MONSTERS] if combat is not None else []
+        if combat is None:
+            continue
+
+        monsters = combat.monsters
         owners = [(EntityKind.CHARACTER, 0, game_state.character.modifiers)]
         owners += [
-            (EntityKind.MONSTER, i, monster.modifiers) for i, monster in enumerate(monsters)
+            (EntityKind.MONSTER, w, monster.modifiers) for w, monster in enumerate(monsters)
         ]
 
         idx = 0
