@@ -8,6 +8,7 @@ import yaml
 from slai import Action
 from slai import ActionType
 from slai import Card
+from slai import GameEnv
 from slai import GameState
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
@@ -30,7 +31,7 @@ def get_piecewise_dim(val_min: int, val_max: int, threshold: int) -> int:
     dim_linear = threshold - val_min + 1
 
     # Square root piece: floor(sqrt(threshold+1))..floor(sqrt(val_max))
-    dim_sqrt = int(math.sqrt(val_max)) - int(math.sqrt(threshold))
+    dim_sqrt = int(math.sqrt(val_max)) - int(math.sqrt(threshold + 1)) + 1
     return dim_linear + dim_sqrt
 
 
@@ -41,9 +42,9 @@ def get_piecewise_bucket(value: int, val_min: int, val_max: int, threshold: int)
     if value <= threshold:
         return value - val_min
 
-    sqrt_threshold = int(math.sqrt(threshold))
+    sqrt_start = int(math.sqrt(threshold + 1))
     sqrt_value = int(math.sqrt(value))
-    return (threshold - val_min + 1) + (sqrt_value - sqrt_threshold - 1)
+    return (threshold - val_min + 1) + (sqrt_value - sqrt_start)
 
 
 def get_sqrt_norm(value: float, cap: float) -> float:
@@ -96,17 +97,6 @@ def pending_virtual_int(state: GameState) -> int | None:
     virtual = PENDING_POOL_INT.get(pool)
     if virtual is None:
         raise ValueError(f"halt over an unmapped candidate pool: {pool}")
-    return virtual
-
-
-def virtual_action_int(action: Action, state: GameState) -> int:
-    """Engine action -> policy action-type int. Only the halt resolver moves;
-    every other type keeps its engine discriminant."""
-    if action.action_type != ActionType.EffectPendingResolve:
-        return int(action.action_type)
-    virtual = pending_virtual_int(state)
-    if virtual is None:
-        raise RuntimeError("EffectPendingResolve legal with no pending effect")
     return virtual
 
 
@@ -176,6 +166,23 @@ def action_from_actiontype(
         room_idxs_row,
         state,
     )
+
+
+# Dominant actions the policy never chooses: step_scripted takes them as soon as they're
+# legal. Taking a reward's gold never hurts
+_SCRIPTED_ACTION_TYPES = frozenset({ActionType.RewardTakeGold, ActionType.RewardTakeGoldStolen})
+
+
+def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
+    """`env.step(action)`, then the scripted actions until none is legal, all inside
+    this one policy step."""
+    state, terminated = env.step(action)
+    while not terminated:
+        scripted = [a for a in env.get_legal_actions() if a.action_type in _SCRIPTED_ACTION_TYPES]
+        if not scripted:
+            break
+        state, terminated = env.step(scripted[0])
+    return state, terminated
 
 
 def shuffle_rollout_buffer(buffer: RolloutBuffer, device: torch.device) -> RolloutBuffer:

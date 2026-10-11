@@ -15,7 +15,6 @@ from slai import CardName
 from slai import CardRarity
 from slai import Combat
 from slai import CostScope
-from slai import Effect
 from slai import EffectSetCostOverride
 from slai import GameState
 from slai import get_card_templates
@@ -34,7 +33,11 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
 from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.encoding.effect import catalog_rows
+from src.rl.types import BatchEffectRows
+from src.rl.types import BatchPriceRows
+from src.rl.types import EffectRow
 from src.rl.types import EffectSource
+from src.rl.types import PriceRow
 from src.rl.types import SliceKind
 from src.rl.types import make_channel_allocator
 from src.rl.utils import card_pile_draw_offset
@@ -217,15 +220,23 @@ def card_key(card: Card) -> tuple:
 
 
 def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -> None:
+    # Try cache hit
     cache_key = (card_key(card), energy_current)
     row = _CARD_ROW_CACHE.get(cache_key)
+
+    # Cache miss
     if row is None:
+        # Encode card
         row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
         _encode_card_into(card, energy_current, row)
-        row.flags.writeable = False  # guard the cached master copy
+
+        # Write into cache
+        row.flags.writeable = False 
         if len(_CARD_ROW_CACHE) >= _CARD_ROW_CACHE_MAX:
             _CARD_ROW_CACHE.clear()
         _CARD_ROW_CACHE[cache_key] = row
+
+    # Write into output array
     out[:] = row
 
 
@@ -329,44 +340,60 @@ def _get_card_entities(
 
 def iter_packed_cards(
     game_state: GameState, combat: Combat | None
-) -> Iterator[tuple[int, SliceKind, Card]]:
-    w = 0
+) -> Iterator[tuple[SliceKind, Card]]:
     for slice_kind in SLICE_KINDS_CARD:
         for card in _get_card_entities(slice_kind, game_state, combat):
-            yield w, slice_kind, card
-            w += 1
+            yield slice_kind, card
 
 
 def encode_batch_cards(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray, list[list[tuple[int, EffectSource, Effect]]]]:
-    """(B, W, ENCODING_DIM_CARD) rows + the (B, W) kind of each token + each state's
-    (offset, source, effect) rows, keyed by the same w as the token they belong to;
-    W is the batch's longest packed card sequence."""
+) -> tuple[torch.Tensor, np.ndarray, BatchEffectRows, BatchPriceRows]:
+    """(B, W, ENCODING_DIM_CARD) rows + the (B, W) `SliceKind` of each token + each state's
+    (offset, source, effect) rows and its shop tokens' (offset, price) rows, keyed by the
+    same w as the token they belong to; W is the batch's longest packed card sequence."""
     batch_tokens = []
     batch_energy_current = []
+    batch_card_prices = []
     for game_state in game_states:
         combat = game_state.combat  # Hoisted; each read clones across the FFI
         batch_tokens.append(list(iter_packed_cards(game_state, combat)))
         batch_energy_current.append(combat.energy.energy_current if combat is not None else 0)
+        shop = game_state.shop
+        batch_card_prices.append(shop.card_prices if shop is not None else [])
 
     seqlen = max((len(tokens) for tokens in batch_tokens), default=0)
     np_out = np.zeros((len(game_states), seqlen, ENCODING_DIM_CARD), dtype=np.float32)
     np_idxs = np.full((len(game_states), seqlen), -1, dtype=np.int16)
-    batch_effect_rows: list[list[tuple[int, EffectSource, Effect]]] = []
+    batch_effect_rows: BatchEffectRows = []
+    batch_price_rows: BatchPriceRows = []
 
     for b, (tokens, energy_current) in enumerate(zip(batch_tokens, batch_energy_current)):
-        effect_rows: list[tuple[int, EffectSource, Effect]] = []
-        for w, kind, card in tokens:
+        effect_rows: list[EffectRow] = []
+        price_rows: list[PriceRow] = []
+
+        # Shop tokens come in shop order, so they take the parallel price list in step
+        card_prices = iter(batch_card_prices[b])
+        for w, (slice_kind, card) in enumerate(tokens):
+            # Encode card
             encode_card_into_w_cache(card, energy_current, np_out[b, w])
-            np_idxs[b, w] = kind
-            effects = card.effects_play  # bound once: each read clones the Vec
-            if effects:
-                effect_rows += [(w, EffectSource.CARD_PLAY, effect) for effect in effects]
+
+            # Stamp `SliceKind`
+            np_idxs[b, w] = slice_kind
+
+            # Collect its price
+            if slice_kind == SliceKind.CARD_SHOP:
+                price_rows.append((w, next(card_prices)))
+
+            # Collect Effects
+            effects_play = card.effects_play  # Bound once; each read clones the Vec
+            if effects_play:
+                effect_rows += [(w, EffectSource.CARD_PLAY, effect) for effect in effects_play]
             effect_rows += [
                 (w, EffectSource.CARD_DISCARD, effect) for effect in card.effects_discard
             ]
             effect_rows += [(w, EffectSource.CARD_DRAW, effect) for effect in card.effects_draw]
         batch_effect_rows.append(effect_rows)
+        batch_price_rows.append(price_rows)
 
-    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows
+    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows, batch_price_rows

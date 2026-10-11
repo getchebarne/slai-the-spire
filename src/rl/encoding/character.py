@@ -28,17 +28,15 @@ from src.rl.utils import get_sqrt_norm
 _INCOMING_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)
 _HEALTH_MAX_CAP = CHARACTER_HEALTH_CAP
 _GOLD_MIN = 0
-_GOLD_MAX = 499
+_GOLD_MAX = 999
 _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 
-# Card-reward pity: starts at the base, falls by one per Common down to the min,
-# and resets on a Rare
+# Card-reward pity: starts at the base, falls by one per Common down to the min, resets on a Rare
 _REWARD_ROLL_OFFSET_MIN = GameEnv.CARD_REWARD_ROLL_OFFSET_MIN
 _REWARD_ROLL_OFFSET_BASE = GameEnv.CARD_REWARD_ROLL_OFFSET_BASE
 
-# This turn's discards only cut Eviscerate's cost (to 0 at its base cost, folded
-# from the catalog) and unlock Sneaky Strike's refund, so the count saturates there
+# This turn's discards only cut Eviscerate's cost and unlock Sneaky Strike's refund
 _THIS_TURN_DISCARDS_MAX = max(
     card_template.cost_base
     for card_template in get_card_templates()
@@ -50,26 +48,26 @@ _THIS_TURN_DISCARDS_MAX = max(
 _PANACHE_PLAYS = 5
 
 
-# Health/block is not here: it is the combatants' shared family (health_block.py)
+# Health / Block is not here: it is the combatants' shared family (health_block.py)
 class CharacterChannel(StrEnum):
     GOLD = auto()
     GOLD_SCALAR = auto()
+    HEALTH_FRACTION = auto()
+    MAX_HEALTH_MAGNITUDE = auto()
+    DECK_SIZE = auto()
+    DECK_UPGRADED_FRACTION = auto()
+    REWARD_ROLL_OFFSET = auto()
+    POTION_DROP_CHANCE = auto()  # Combat potion odds, ignoring White Beast Statue's 100%
+
+    # Combat only: 0 outside it
     INCOMING_DAMAGE = auto()
     BLOCK_COVERS_INCOMING = auto()
     INCOMING_IS_LETHAL = auto()
     INCOMING_HIDDEN = auto()  # Runic Dome: the four incoming-damage channels read 0
-    HEALTH_FRACTION = auto()
-    MAX_HEALTH_MAGNITUDE = auto()
     NET_UNBLOCKED_DAMAGE = auto()
-    DECK_SIZE = auto()
-    DECK_UPGRADED_FRACTION = auto()
-    REWARD_ROLL_OFFSET = auto()
-    POTION_DROP_CHANCE = auto()  # combat potion odds, ignoring White Beast Statue's 100%
-
-    # Combat only: 0 outside it
     THIS_TURN_DISCARDS = auto()
-    PANACHE_COUNTDOWN = auto()  # plays left until Panache's hit
-    ORANGE_PELLETS_PLAYED_ATTACK = auto()  # kinds played this turn since Orange Pellets fired
+    PANACHE_COUNTDOWN = auto()  # Plays left until Panache's hit
+    ORANGE_PELLETS_PLAYED_ATTACK = auto()  # Kinds played this turn since Orange Pellets fired
     ORANGE_PELLETS_PLAYED_SKILL = auto()
     ORANGE_PELLETS_PLAYED_POWER = auto()
 
@@ -77,17 +75,17 @@ class CharacterChannel(StrEnum):
 CHANNEL_LAYOUT_CHARACTER, _alloc = make_channel_allocator()
 OFF_CHARACTER_GOLD = _alloc(CharacterChannel.GOLD, _GOLD_DIM)
 OFF_CHARACTER_GOLD_SCALAR = _alloc(CharacterChannel.GOLD_SCALAR)
-OFF_CHARACTER_INCOMING_DAMAGE = _alloc(CharacterChannel.INCOMING_DAMAGE)
-OFF_CHARACTER_BLOCK_COVERS_INCOMING = _alloc(CharacterChannel.BLOCK_COVERS_INCOMING)
-OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc(CharacterChannel.INCOMING_IS_LETHAL)
-OFF_CHARACTER_INCOMING_HIDDEN = _alloc(CharacterChannel.INCOMING_HIDDEN)
 OFF_CHARACTER_HEALTH_FRACTION = _alloc(CharacterChannel.HEALTH_FRACTION)
 OFF_CHARACTER_MAX_HEALTH_MAGNITUDE = _alloc(CharacterChannel.MAX_HEALTH_MAGNITUDE)
-OFF_CHARACTER_NET_UNBLOCKED_DAMAGE = _alloc(CharacterChannel.NET_UNBLOCKED_DAMAGE)
 OFF_CHARACTER_DECK_SIZE = _alloc(CharacterChannel.DECK_SIZE)
 OFF_CHARACTER_DECK_UPGRADED_FRACTION = _alloc(CharacterChannel.DECK_UPGRADED_FRACTION)
 OFF_CHARACTER_REWARD_ROLL_OFFSET = _alloc(CharacterChannel.REWARD_ROLL_OFFSET)
 OFF_CHARACTER_POTION_DROP_CHANCE = _alloc(CharacterChannel.POTION_DROP_CHANCE)
+OFF_CHARACTER_INCOMING_DAMAGE = _alloc(CharacterChannel.INCOMING_DAMAGE)
+OFF_CHARACTER_BLOCK_COVERS_INCOMING = _alloc(CharacterChannel.BLOCK_COVERS_INCOMING)
+OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc(CharacterChannel.INCOMING_IS_LETHAL)
+OFF_CHARACTER_INCOMING_HIDDEN = _alloc(CharacterChannel.INCOMING_HIDDEN)
+OFF_CHARACTER_NET_UNBLOCKED_DAMAGE = _alloc(CharacterChannel.NET_UNBLOCKED_DAMAGE)
 OFF_CHARACTER_THIS_TURN_DISCARDS = _alloc(CharacterChannel.THIS_TURN_DISCARDS)
 OFF_CHARACTER_PANACHE_COUNTDOWN = _alloc(CharacterChannel.PANACHE_COUNTDOWN)
 OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK = _alloc(CharacterChannel.ORANGE_PELLETS_PLAYED_ATTACK)
@@ -111,17 +109,6 @@ def _encode_character_into(
     out[OFF_CHARACTER_GOLD + gold_bucket] = 1.0
 
     out[OFF_CHARACTER_GOLD_SCALAR] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
-    if incoming_damage is None:
-        out[OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
-    else:
-        out[OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(incoming_damage, _INCOMING_DAMAGE_MAX)
-        out[OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(character.block >= incoming_damage)
-        out[OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
-            incoming_damage >= character.health + character.block
-        )
-        out[OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
-            max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX
-        )
     out[OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
     out[OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(character.health_max, _HEALTH_MAX_CAP)
     out[OFF_CHARACTER_DECK_SIZE] = get_sqrt_norm(len(deck), MAX_SIZE_CARD_PILE_DECK)
@@ -135,6 +122,19 @@ def _encode_character_into(
         min(max(GameEnv.POTION_DROP_CHANCE_BASE + potion_drop_mod, 0), 100) / 100
     )
     if combat is not None:
+        if incoming_damage is None:
+            out[OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
+        else:
+            out[OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
+                incoming_damage, _INCOMING_DAMAGE_MAX
+            )
+            out[OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(character.block >= incoming_damage)
+            out[OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
+                incoming_damage >= character.health + character.block
+            )
+            out[OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
+                max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX
+            )
         out[OFF_CHARACTER_THIS_TURN_DISCARDS] = (
             min(combat.this_turn_discards, _THIS_TURN_DISCARDS_MAX) / _THIS_TURN_DISCARDS_MAX
         )
@@ -158,11 +158,11 @@ def encode_batch_character(
     for b, game_state in enumerate(game_states):
         combat = game_state.combat
         monsters = combat.monsters if combat is not None else []
-        # Runic Dome hides every intent, so the incoming damage is unknown
-        hidden = any(monster.intent is None for monster in monsters)
+
+        #
         _encode_character_into(
             game_state.character,
-            None if hidden else outgoing_damage(monsters),
+            outgoing_damage(monsters),
             game_state.card_pile_deck,
             combat,
             game_state.potion_drop_mod,

@@ -10,7 +10,6 @@ from src.rl.encoding.card import encode_batch_cards
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import encode_batch_character
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
-from src.rl.encoding.effect import encode_effect_rows
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
 from src.rl.encoding.energy import encode_batch_energy
 from src.rl.encoding.event import ENCODING_DIM_EVENT_META
@@ -30,7 +29,7 @@ from src.rl.encoding.relic import encode_batch_relics
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.reward import encode_batch_rewards
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
-from src.rl.encoding.shop import encode_batch_shop
+from src.rl.encoding.shop import encode_batch_shop_meta
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.types import X_GameState
 
@@ -43,7 +42,6 @@ __all__ = [
     "encode_batch_character",
     "ENCODING_DIM_CHARACTER",
     # Energy encoding
-    "encode_effect_rows",
     "ENCODING_DIM_EFFECT",
     "encode_batch_energy",
     "ENCODING_DIM_ENERGY",
@@ -67,7 +65,7 @@ __all__ = [
     "encode_batch_rewards",
     "ENCODING_DIM_REWARD_META",
     # Shop encoding
-    "encode_batch_shop",
+    "encode_batch_shop_meta",
     "ENCODING_DIM_PRICE",
     # Event encoding
     "encode_batch_events",

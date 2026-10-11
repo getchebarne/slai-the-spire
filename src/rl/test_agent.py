@@ -46,6 +46,7 @@ from src.rl.types import X_GameState
 from src.rl.types import X_Mask
 from src.rl.utils import action_from_actiontype
 from src.rl.utils import load_config
+from src.rl.utils import step_scripted
 
 
 try:
@@ -78,6 +79,10 @@ def _ansi_len(s: str) -> int:
 # tables are cross-checked here, where the imports are already paid for
 assert set(PENDING_POOL_SOURCE) == set(PENDING_POOL_SLICE), "halting-pool tables drifted"
 assert set(PENDING_VERB) == set(EFFECT_PENDING), "halting-kind tables drifted"
+assert all(
+    hasattr({"combat": slai.Combat, "state": slai.GameState, "event": slai.Event}[owner], attr)
+    for owner, attr, _ in PENDING_POOL_SOURCE.values()
+), "halting-pool attributes drifted"
 
 
 def _event_name(event: slai.Event) -> str:
@@ -173,7 +178,7 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
     i = action.idxs
     AT = slai.ActionType
     combat = view.combat
-    hand = combat.hand if combat is not None else []
+    hand = combat.card_pile_hand if combat is not None else []
 
     def card(pile: Sequence[Card], k: int) -> str:
         return variant_name(pile[k].name) if k < len(pile) else f"card #{k}"
@@ -264,7 +269,9 @@ def _describe_action(view: slai.GameState, action: slai.Action) -> str:
 def _enemy_row(i: int, m: slai.Monster) -> str:
     """Render a monster row WITHOUT padding — pre-pad outside this fn."""
     intent = m.intent
-    if intent.damage:
+    if intent is None:  # Runic Dome
+        intent_str = "HIDDEN"
+    elif intent.damage:
         intent_str = f"ATK {intent.damage}x{intent.instances or 1}"
     elif intent.kind in _INTENT_BLOCK_KINDS:
         intent_str = "BLOCK"
@@ -289,8 +296,8 @@ def _format_view(view: slai.GameState) -> str:
     header = f"Focus: {derive_focus(view).name}  (act {view.act})"
     if view.effect_pending is not None:
         header += f"  pending={type(view.effect_pending).__name__}"
-    if combat is not None and combat.discover:
-        header += f"  discover={[variant_name(c.name) for c in combat.discover]}"
+    if combat is not None and combat.card_pile_discover:
+        header += f"  discover={[variant_name(c.name) for c in combat.card_pile_discover]}"
     lines = [header]
 
     char_line = (
@@ -319,14 +326,20 @@ def _format_view(view: slai.GameState) -> str:
 
     if combat is not None:
         lines.append(f"Energy: {combat.energy.energy_current}/{combat.energy.energy_max}")
-        if combat.pile_stasis:
-            lines.append(f"Stasis: {[variant_name(c.name) for c in combat.pile_stasis]}")
-        if combat.bomb_countdown:
-            lines.append(f"The Bomb: {combat.bomb_countdown} turns")
-        if combat.hand:
+        # One slot per monster, None where it holds no card
+        stasis = combat.card_pile_stasis
+        if any(c is not None for c in stasis):
+            names = [variant_name(c.name) if c is not None else "-" for c in stasis]
+            lines.append(f"Stasis: {names}")
+        if combat.bombs:
+            lines.append(
+                "Bombs: "
+                + ", ".join(f"{damage} in {turns} turns" for turns, damage in combat.bombs)
+            )
+        if combat.card_pile_hand:
             lines.append("Hand:")
             energy_current = combat.energy.energy_current
-            for i, c in enumerate(combat.hand):
+            for i, c in enumerate(combat.card_pile_hand):
                 tgt = " (target)" if c.requires_target else ""
                 playable = "" if is_card_playable(c, energy_current) else " (unplayable)"
                 lines.append(f"  [{i}] {variant_name(c.name)} cost={c.cost}{tgt}{playable}")
@@ -403,8 +416,8 @@ def get_card_probabilities(
     x_logits = model._head_level_2(x_keys, x_core_out.global_, x_at_emb, x_mask)
     x_probs = torch.softmax(x_logits.masked_fill(~x_mask, float("-inf")), dim=-1)
 
-    # Hand card i is the i-th CARD_HAND token of the kind row (pack order = hand order)
-    return x_probs[0, x_core_out.entities.x_slice_kind[0] == SliceKind.CARD_HAND]
+    # Hand card i is the i-th CARD_PILE_HAND token of the kind row (pack order = hand order)
+    return x_probs[0, x_core_out.entities.x_slice_kind[0] == SliceKind.CARD_PILE_HAND]
 
 
 def format_card_probabilities(
@@ -415,7 +428,7 @@ def format_card_probabilities(
     seen: dict[str, dict] = {}
     order: list[str] = []
 
-    hand = view.combat.hand if view.combat is not None else []
+    hand = view.combat.card_pile_hand if view.combat is not None else []
     energy_current = view.combat.energy.energy_current if view.combat is not None else 0
     for idx, card in enumerate(hand):
         display = variant_name(card.name)
@@ -459,14 +472,14 @@ def get_action_from_model(
         card_probs_str = None
         combat = view.combat
         in_combat = derive_focus(view) is Focus.COMBAT and view.effect_pending is None
-        if show_card_probs and in_combat and combat.hand:
+        if show_card_probs and in_combat and combat.card_pile_hand:
             energy_current = combat.energy.energy_current
-            if any(is_card_playable(c, energy_current) for c in combat.hand):
+            if any(is_card_playable(c, energy_current) for c in combat.card_pile_hand):
                 x_probs = get_card_probabilities(model, x_game_state, x_mask_batch)
                 card_probs_str = format_card_probabilities(view, x_probs)
 
     return (
-        action_from_actiontype(x_action, 0, x_game_state.room_idxs[0].cpu().numpy()),
+        action_from_actiontype(x_action, 0, x_game_state.room_idxs[0].cpu().numpy(), view),
         card_probs_str,
     )
 
@@ -526,7 +539,7 @@ def run_game(
             print("-" * N_COL)
             time.sleep(delay)
 
-        obs, terminated = env.step(action)
+        obs, terminated = step_scripted(env, action)
         step_count += 1
 
     if check_legal and illegal:

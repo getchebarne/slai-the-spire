@@ -7,6 +7,7 @@ import torch
 from slai import ACTION_SPEC_REGISTRY
 from slai import ActionType
 from slai import CandidatePool
+from slai import Effect
 from tensordict import tensorclass
 
 
@@ -100,6 +101,20 @@ class EffectSource(IntEnum):
     CARD_DRAW = 14
 
 
+# An effect before encoding: the offset of the token that owns it (X_Effects.x_offset),
+# what applies it, and the effect
+type EffectRow = tuple[int, EffectSource, Effect]
+
+# One list of EffectRows per state in the batch
+type BatchEffectRows = list[list[EffectRow]]
+
+# A shop token's price before encoding: the offset of the token that sells it, and its price
+type PriceRow = tuple[int, int]
+
+# One list of PriceRows per state in the batch
+type BatchPriceRows = list[list[PriceRow]]
+
+
 @tensorclass
 class X_Entity:
     """One entity type's tokens, packed to a valid prefix; `idxs[b, w]` is token
@@ -116,17 +131,12 @@ class X_Entity:
 
 @tensorclass
 class X_Owned:
-    """Per-state pool of effect rows, flattened across entities.
+    """Rows owned by tokens, one family per subclass, which the projector adds into
+    their owners. Pads are x_entity_kind == -1, with zeros elsewhere."""
 
-    The per-entity axis is ragged (0-5 effects), so it is folded away: each row
-    names its owner as (idx_type, offset) — the owner's EntityKind and its packed
-    position within that type's block — and the model sum-pools rows back into
-    their owner. The pending halt owns no token: idx_type == OWNER_PENDING,
-    offset 0. Pads are idx_type == -1 (offset 0, x zeros)."""
-
-    x: torch.Tensor  # (B, E, ENCODING_DIM_EFFECT) / E = the batch's longest row count
-    x_entity_kind: torch.Tensor  # (B, E) long — owner `EntityKind` / `OWNER_PENDING` for the halt / -1 = pad
-    x_offset: torch.Tensor  # (B, E) long / owner's packed position within its type's `X_Entity`
+    x: torch.Tensor  # (B, R, D) — D = the family's row width, R = the batch's most rows
+    x_entity_kind: torch.Tensor  # (B, R) long — owner `EntityKind` / -1 = pad
+    x_offset: torch.Tensor  # (B, R) long — owner's packed position within its type's `X_Entity`
 
     @property
     def mask(self) -> torch.Tensor:
@@ -135,31 +145,22 @@ class X_Owned:
 
 @tensorclass
 class X_Modifiers(X_Owned):
-    pass
+    """Any number per Character / Monster."""
 
 
 @tensorclass
 class X_Effects(X_Owned):
-    pass
+    """Any number per token; the pending halt owns none (OWNER_PENDING, offset 0)."""
 
 
 @tensorclass
 class X_HealthBlock(X_Owned):
-    pass
+    """One per Character / Monster."""
 
 
 @tensorclass
-class X_ShopPrices:
-    """Price rows of the shop items that have a token, packed to a valid prefix in
-    kind order (CARD_SHOP, RELIC_SHOP, POTION_SHOP); `idxs` is each row's kind
-    (-1 = pad). Row k of a kind prices token k of that kind — rank within kind."""
-
-    x: torch.Tensor  # (B, S, ENCODING_DIM_PRICE) — S = the batch's most priced items
-    idxs: torch.Tensor  # (B, S) int16
-
-    @property
-    def mask(self) -> torch.Tensor:
-        return self.idxs >= 0
+class X_Prices(X_Owned):
+    """One per Shop token (Card / Relic / Potion)."""
 
 
 @tensorclass
@@ -173,6 +174,7 @@ class X_GameState:
     event_options: X_Entity
     character: X_Entity
     health_block: X_HealthBlock  # the combatants' shared health/block family, by kind
+    prices: X_Prices  # the shop tokens' shared price family, by owner
 
     effects: X_Effects
     modifiers: X_Modifiers
@@ -186,7 +188,6 @@ class X_GameState:
     reward_meta: torch.Tensor
     shop_meta: torch.Tensor
     event_meta: torch.Tensor
-    shop_prices: X_ShopPrices  # the shop tokens' prices, by kind and rank
 
 
 @dataclass
@@ -341,9 +342,6 @@ ACTION_TYPE_POOL: dict[int, tuple[SliceKind, ...]] = {
 # Action-type groups the mask builder and decoder special-case
 AT_REWARD_CARD = frozenset((int(ActionType.RewardTakeCard), int(ActionType.RewardSingingBowl)))
 AT_MONSTER_TARGETED = frozenset((int(ActionType.CardPlay), int(ActionType.PotionUse)))
-AT_SHOP = frozenset(
-    (int(ActionType.ShopBuyCard), int(ActionType.ShopBuyRelic), int(ActionType.ShopBuyPotion))
-)
 
 # Drift alarm: the engine's index-taking set must equal our engine-keyed entries
 # plus the one resolver we split into the virtuals

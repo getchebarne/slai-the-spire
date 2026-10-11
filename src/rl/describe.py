@@ -22,15 +22,15 @@ def variant_name(value: object) -> str:
 # the collection named by pending.target.candidate_pool, so rendering has to read
 # the pool rather than the action type
 PENDING_POOL_SOURCE: dict[CandidatePool, tuple[str, str, str]] = {
-    CandidatePool.Hand: ("combat", "hand", "hand"),
-    CandidatePool.PileDraw: ("combat", "pile_draw", "draw pile"),
-    CandidatePool.PileDiscard: ("combat", "pile_discard", "discard pile"),
-    CandidatePool.PileExhaust: ("combat", "pile_exhaust", "exhaust pile"),
-    CandidatePool.Discover: ("combat", "discover", "discovery"),
-    CandidatePool.Deck: ("state", "deck", "deck"),
-    CandidatePool.EventRollCard: ("event", "roll_cards", "offered cards"),
-    CandidatePool.EventRollRelic: ("event", "roll_relics", "staked relics"),
-    CandidatePool.EventRollPotion: ("event", "roll_potions", "offered potions"),
+    CandidatePool.CardPileHand: ("combat", "card_pile_hand", "hand"),
+    CandidatePool.CardPileDraw: ("combat", "card_pile_draw", "draw pile"),
+    CandidatePool.CardPileDiscard: ("combat", "card_pile_discard", "discard pile"),
+    CandidatePool.CardPileExhaust: ("combat", "card_pile_exhaust", "exhaust pile"),
+    CandidatePool.CardPileDiscover: ("combat", "card_pile_discover", "discovery"),
+    CandidatePool.CardPileDeck: ("state", "card_pile_deck", "deck"),
+    CandidatePool.CardPileEventRoll: ("event", "card_pile_event_roll", "offered cards"),
+    CandidatePool.RelicEventRoll: ("event", "relic_event_roll", "staked relics"),
+    CandidatePool.PotionEventRoll: ("event", "potion_event_roll", "offered potions"),
 }
 
 PENDING_VERB: dict[type, str] = {
@@ -48,6 +48,9 @@ PENDING_VERB: dict[type, str] = {
     slai.EffectCardDuplicate: "duplicated",
     slai.EffectCardTransform: "transformed",
     slai.EffectRelicLose: "gave up",
+    slai.EffectMatchFlipSeen: "flipped",
+    slai.EffectRestSmith: "upgraded",
+    slai.EffectRestToke: "removed",
 }
 
 

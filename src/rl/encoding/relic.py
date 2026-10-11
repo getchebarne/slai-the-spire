@@ -4,7 +4,6 @@ from enum import auto
 
 import numpy as np
 import torch
-from slai import Effect
 from slai import GameState
 from slai import Relic
 from slai import RelicName
@@ -15,7 +14,11 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.types import BatchEffectRows
+from src.rl.types import BatchPriceRows
+from src.rl.types import EffectRow
 from src.rl.types import EffectSource
+from src.rl.types import PriceRow
 from src.rl.types import SliceKind
 from src.rl.types import make_channel_allocator
 
@@ -31,8 +34,6 @@ SLICE_KINDS_RELIC = (
 
 _RELIC_NAME_TO_IDX = {relic_name: int(relic_name) for relic_name in RelicName.members()}
 _RELIC_TIER_TO_IDX = {tier: int(tier) for tier in RelicTier.members()}
-# Widest firing threshold in the catalog (Nunchaku/Ink Bottle 10); Girya (3) and
-# Matryoshka (2) count without firing and sit far below
 _COUNTER_MAX = max(template.counter_reset for template in get_relic_templates())
 
 
@@ -42,6 +43,7 @@ class RelicChannel(StrEnum):
     USED_UP = auto()
     COUNTER = auto()
     COUNTER_PROGRESS = auto()  # counter / counter_reset for firing counters, else 0
+    COUNTER_REMAINING = auto()  # Triggers left until it fires, bucket 0 the next one
 
 
 CHANNEL_LAYOUT_RELIC, _alloc = make_channel_allocator()
@@ -50,6 +52,7 @@ OFF_RELIC_TIER = _alloc(RelicChannel.TIER, len(_RELIC_TIER_TO_IDX))
 OFF_RELIC_USED_UP = _alloc(RelicChannel.USED_UP)
 OFF_RELIC_COUNTER = _alloc(RelicChannel.COUNTER)
 OFF_RELIC_COUNTER_PROGRESS = _alloc(RelicChannel.COUNTER_PROGRESS)
+OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MAX)
 
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
@@ -63,9 +66,14 @@ def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
     out[OFF_RELIC_TIER + _RELIC_TIER_TO_IDX[relic.tier]] = 1.0
     out[OFF_RELIC_USED_UP] = float(relic.used_up)
     out[OFF_RELIC_COUNTER] = min(relic.counter, _COUNTER_MAX) / _COUNTER_MAX
+
     counter_reset = relic.counter_reset
     if counter_reset > 0:
         out[OFF_RELIC_COUNTER_PROGRESS] = max(relic.counter, 0) / counter_reset
+
+        # None for a spent one-shot (-1) or past Stone Calendar's single firing
+        if 0 <= relic.counter < counter_reset:
+            out[OFF_RELIC_COUNTER_REMAINING + counter_reset - relic.counter - 1] = 1.0
 
 
 def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
@@ -75,7 +83,7 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
     if row is None:
         row = np.zeros(ENCODING_DIM_RELIC, dtype=np.float32)
         encode_relic_into(relic, row)
-        row.flags.writeable = False  # guard the cached master copy
+        row.flags.writeable = False
         if len(_RELIC_ROW_CACHE) >= _RELIC_ROW_CACHE_MAX:
             _RELIC_ROW_CACHE.clear()
         _RELIC_ROW_CACHE[cache_key] = row
@@ -102,33 +110,50 @@ def _get_relic_entities(kind: SliceKind, game_state: GameState) -> list:
             raise ValueError(f"not a relic kind: {kind}")
 
 
-def iter_packed_relics(game_state: GameState) -> Iterator[tuple[int, SliceKind, Relic]]:
-    """(w, kind, relic) for every relic token: the kinds back to back in
+def iter_packed_relics(game_state: GameState) -> Iterator[tuple[SliceKind, Relic]]:
+    """(kind, relic) for every relic token: the kinds back to back in
     SLICE_KINDS_RELIC order, each collection in engine order."""
-    w = 0
     for kind in SLICE_KINDS_RELIC:
         for relic in _get_relic_entities(kind, game_state):
-            yield w, kind, relic
-            w += 1
+            yield kind, relic
 
 
 def encode_batch_relics(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray, list[list[tuple[int, EffectSource, Effect]]]]:
+) -> tuple[torch.Tensor, np.ndarray, BatchEffectRows, BatchPriceRows]:
     """(B, W, ENCODING_DIM_RELIC) rows + the (B, W) kind of each token + each state's
-    (offset, source, effect) rows (every trigger's, per relic), keyed by the same w
-    as the token they belong to; W is the batch's longest packed relic sequence."""
+    (offset, source, effect) rows (every trigger's, per relic) and its shop tokens'
+    (offset, price) rows, keyed by the same w as the token they belong to; W is the
+    batch's longest packed relic sequence."""
     batch_tokens = [list(iter_packed_relics(game_state)) for game_state in game_states]
+    batch_relic_prices = []
+    for game_state in game_states:
+        shop = game_state.shop
+        batch_relic_prices.append(shop.relic_prices if shop is not None else [])
+
     width = max((len(tokens) for tokens in batch_tokens), default=0)
     np_out = np.zeros((len(game_states), width, ENCODING_DIM_RELIC), dtype=np.float32)
     np_idxs = np.full((len(game_states), width), -1, dtype=np.int16)
-    batch_effect_rows: list[list[tuple[int, EffectSource, Effect]]] = []
+    batch_effect_rows: BatchEffectRows = []
+    batch_price_rows: BatchPriceRows = []
 
     for b, tokens in enumerate(batch_tokens):
-        effect_rows: list[tuple[int, EffectSource, Effect]] = []
-        for w, kind, relic in tokens:
+        effect_rows: list[EffectRow] = []
+        price_rows: list[PriceRow] = []
+
+        # Shop tokens come in shop order, so they take the parallel price list in step
+        relic_prices = iter(batch_relic_prices[b])
+        for w, (kind, relic) in enumerate(tokens):
             encode_relic_into_w_cache(relic, np_out[b, w])
+
+            # `SliceKind`
             np_idxs[b, w] = kind
+
+            # Price
+            if kind == SliceKind.RELIC_SHOP:
+                price_rows.append((w, next(relic_prices)))
+
+            # Effects
             effect_rows += [
                 (w, source, effect)
                 for effects, source in (
@@ -142,6 +167,8 @@ def encode_batch_relics(
                 )
                 for effect in effects
             ]
-        batch_effect_rows.append(effect_rows)
 
-    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows
+        batch_effect_rows.append(effect_rows)
+        batch_price_rows.append(price_rows)
+
+    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows, batch_price_rows

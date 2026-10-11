@@ -19,8 +19,8 @@ _GOLD_MAX = GameEnv.REWARD_GOLD_MAX
 class RewardMetaChannel(StrEnum):
     GOLD = auto()
     GOLD_AFTER_TAKING = auto()
-    RELICS_EXCLUSIVE = auto()  # boss rewards: take one relic, lose the rest
-    GOLD_STOLEN = auto()  # the thieves' purse, offered apart from the room's gold
+    RELICS_EXCLUSIVE = auto()  # Boss rewards: take one Relic, lose the rest
+    GOLD_STOLEN = auto()  # The Thieves' purse, offered apart from the room's gold
     CARDS_FORCED = auto()  # The Library: one pick, no skip
 
 

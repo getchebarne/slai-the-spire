@@ -23,7 +23,6 @@ class EpisodeStats:
     stream_returns: np.ndarray  # (K,) per-stream DISCOUNTED returns (γ^t·r_t sums)
     gold_gained: int  # sum of positive gold deltas over the episode
     gold_spent: int  # gold spent at shops (reward.shop_gold_spent) over the episode
-    potion_wastes: int  # discards of a holdable Potion (belt not full)
     deck_size: int  # deck size at episode end
     cards_added: int  # deck-size increases over the episode
     purges: int  # ShopPurge actions over the episode
@@ -46,7 +45,6 @@ KEY_REWARD_STD = "reward_std"
 KEY_ACT2_RATE = "act2_rate"
 KEY_GOLD_AVG = "gold_avg"
 KEY_GOLD_SPENT_AVG = "gold_spent_avg"
-KEY_POTION_WASTES_AVG = "potion_wastes_avg"
 KEY_BOSS_RATE = "boss_rate"
 KEY_DECK_SIZE_AVG = "deck_size_avg"
 KEY_CARDS_ADDED_AVG = "cards_added_avg"
@@ -68,7 +66,6 @@ def aggregate_episodes(episodes: list[EpisodeStats]) -> dict[str, float]:
         KEY_ACT2_RATE: sum(e.floor >= ACT2_FLOOR_MIN for e in episodes) / n,
         KEY_GOLD_AVG: sum(e.gold_gained for e in episodes) / n,
         KEY_GOLD_SPENT_AVG: sum(e.gold_spent for e in episodes) / n,
-        KEY_POTION_WASTES_AVG: sum(e.potion_wastes for e in episodes) / n,
         KEY_BOSS_RATE: sum(e.floor >= BOSS_FLOOR_MIN for e in episodes) / n,
         KEY_DECK_SIZE_AVG: sum(e.deck_size for e in episodes) / n,
         KEY_CARDS_ADDED_AVG: sum(e.cards_added for e in episodes) / n,

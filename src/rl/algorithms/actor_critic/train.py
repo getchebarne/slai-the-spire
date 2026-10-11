@@ -67,7 +67,6 @@ from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
 from src.rl.reward import cumulative_floor
 from src.rl.reward import shop_gold_spent
-from src.rl.reward import wasted_potion_discard
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import RolloutBuffer
 from src.rl.types import X_Effects
@@ -77,12 +76,13 @@ from src.rl.types import X_GameState
 from src.rl.types import X_HealthBlock
 from src.rl.types import X_Mask
 from src.rl.types import X_Modifiers
-from src.rl.types import X_ShopPrices
+from src.rl.types import X_Prices
 from src.rl.utils import action_from_actiontype
 from src.rl.utils import engine_action
 from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
 from src.rl.utils import shuffle_rollout_buffer
+from src.rl.utils import step_scripted
 
 
 _AT_REST = ACTION_TYPE_BY_INT.index(slai.ActionType.Rest)
@@ -136,7 +136,6 @@ class EnvPool:
     ep_lengths: list[int]
     ep_gold: list[int]  # positive gold deltas accumulated across the episode
     ep_spent: list[int]  # shop gold spend accumulated across the episode
-    ep_wastes: list[int]  # holdable-Potion discards across the episode
     ep_cards_added: list[int]  # deck-size increases across the episode
     ep_purges: list[int]  # ShopPurge actions across the episode
     completed: list[EpisodeStats]
@@ -180,7 +179,6 @@ def make_env_pool(
         ep_lengths=[0] * num_envs,
         ep_gold=[0] * num_envs,
         ep_spent=[0] * num_envs,
-        ep_wastes=[0] * num_envs,
         ep_cards_added=[0] * num_envs,
         ep_purges=[0] * num_envs,
         completed=[],
@@ -198,14 +196,13 @@ def legal_actions(pool: EnvPool) -> list[list[slai.Action]]:
 
 def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarray, bool]:
     prev = pool.obs[env_idx]
-    nxt, terminated = pool.envs[env_idx].step(action)
+    nxt, terminated = step_scripted(pool.envs[env_idx], action)
     reward = compute_reward(prev, nxt, terminated, pool.gamma, action)  # (K,)
     pool.ep_rewards[env_idx] += reward
     pool.ep_returns[env_idx] += pool.gamma ** pool.ep_lengths[env_idx] * reward
     pool.ep_lengths[env_idx] += 1
     pool.ep_gold[env_idx] += max(0, nxt.character.gold - prev.character.gold)
     pool.ep_spent[env_idx] += shop_gold_spent(prev, nxt, action)
-    pool.ep_wastes[env_idx] += wasted_potion_discard(prev, action)
     pool.ep_cards_added[env_idx] += max(0, len(nxt.card_pile_deck) - len(prev.card_pile_deck))
     pool.ep_purges[env_idx] += action.action_type == slai.ActionType.ShopPurge
     if terminated:
@@ -219,7 +216,6 @@ def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarr
                 stream_returns=pool.ep_returns[env_idx],
                 gold_gained=pool.ep_gold[env_idx],
                 gold_spent=pool.ep_spent[env_idx],
-                potion_wastes=pool.ep_wastes[env_idx],
                 deck_size=len(nxt.card_pile_deck),
                 cards_added=pool.ep_cards_added[env_idx],
                 purges=pool.ep_purges[env_idx],
@@ -230,7 +226,6 @@ def step_env(pool: EnvPool, env_idx: int, action: slai.Action) -> tuple[np.ndarr
         pool.ep_lengths[env_idx] = 0
         pool.ep_gold[env_idx] = 0
         pool.ep_spent[env_idx] = 0
-        pool.ep_wastes[env_idx] = 0
         pool.ep_cards_added[env_idx] = 0
         pool.ep_purges[env_idx] = 0
         pool.envs[env_idx], nxt = _make_env(
@@ -436,6 +431,7 @@ def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
         event_options=entity("event_options"),
         character=entity("character"),
         health_block=rows("health_block", X_HealthBlock),
+        prices=rows("prices", X_Prices),
         effects=rows("effects", X_Effects),
         modifiers=rows("modifiers", X_Modifiers),
         energy=flat("energy"),
@@ -448,11 +444,6 @@ def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
         reward_meta=flat("reward_meta"),
         shop_meta=flat("shop_meta"),
         event_meta=flat("event_meta"),
-        shop_prices=X_ShopPrices(
-            _pad_cat([x.shop_prices.x for x in steps], 1, 0.0),
-            _pad_cat([x.shop_prices.idxs for x in steps], 1, -1),
-            batch_size=batch_size,
-        ),
         batch_size=batch_size,
     )
 
@@ -530,9 +521,9 @@ _SHM_WIDTH = {
     "character": 1,
     "rooms": MAP_WIDTH,
     "health_block": MAX_MONSTERS + 1,
+    "prices": MAX_SIZE_SHOP_CARDS + MAX_SHOP_RELICS + MAX_SHOP_POTIONS,
     "effects": MAX_EFFECTS_STATE,
     "modifiers": MAX_MODIFIER_ROWS_STATE,
-    "shop_prices": MAX_SIZE_SHOP_CARDS + MAX_SHOP_RELICS + MAX_SHOP_POTIONS,
 }
 
 
@@ -547,8 +538,9 @@ def _obs_tensor_items(x: X_GameState) -> list[tuple[str, torch.Tensor]]:
     items.append(("health_block.x", x.health_block.x))
     items.append(("health_block.x_entity_kind", x.health_block.x_entity_kind))
     items.append(("health_block.x_offset", x.health_block.x_offset))
-    items.append(("shop_prices.x", x.shop_prices.x))
-    items.append(("shop_prices.idxs", x.shop_prices.idxs))
+    items.append(("prices.x", x.prices.x))
+    items.append(("prices.x_entity_kind", x.prices.x_entity_kind))
+    items.append(("prices.x_offset", x.prices.x_offset))
     # Effects/modifiers carry their owner keys; int64 rides shm fine —
     # room_node_idx is the precedent.
     items.append(("effects.x", x.effects.x))
@@ -680,7 +672,6 @@ def _snapshot_to_device(
             batch_size=B,
         )
 
-    w_shop = width("shop_prices.idxs")
     x = X_GameState(
         cards=entity("cards"),
         relics=entity("relics"),
@@ -689,6 +680,7 @@ def _snapshot_to_device(
         event_options=entity("event_options"),
         character=entity("character"),
         health_block=rows("health_block", X_HealthBlock),
+        prices=rows("prices", X_Prices),
         effects=rows("effects", X_Effects),
         modifiers=rows("modifiers", X_Modifiers),
         energy=t("energy"),
@@ -701,9 +693,6 @@ def _snapshot_to_device(
         reward_meta=t("reward_meta"),
         shop_meta=t("shop_meta"),
         event_meta=t("event_meta"),
-        shop_prices=X_ShopPrices(
-            t("shop_prices.x", w_shop), t("shop_prices.idxs", w_shop), batch_size=B
-        ),
         batch_size=B,
     )
 
@@ -785,11 +774,7 @@ def _shard_worker(
         mb = build_masks(pool.obs, legal, x, cpu)
         for name, t in _obs_tensor_items(x) + _mask_tensor_items(mb):
             # Kind/owner rows pad with -1, everything else with 0/False
-            fill = (
-                -1
-                if name.endswith((".idxs", ".x_slice_kind", ".x_entity_kind", "room_idxs"))
-                else 0
-            )
+            fill = -1 if name.endswith((".x_slice_kind", ".x_entity_kind", "room_idxs")) else 0
             _write_padded(views[name][lo:hi], t.numpy(), fill)
         for stats in drain_completed(pool):
             ep_queue.put(stats)

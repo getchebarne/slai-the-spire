@@ -123,10 +123,10 @@ MAX_SIZE_SHOP_CARDS = _slai.GameEnv.SHOP_SLOTS_CARD_TOTAL + 1
 MAX_SHOP_RELICS = _slai.GameEnv.SHOP_SLOTS_RELIC + 1
 MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
-# Per-state effect-row pool. Ragged per entity (0-5 effects), so rows are packed
-# per STATE with an owner segment rather than padded per entity: (B, 284, 5, D)
-# would cost ~6x this. Measured under EFFECT-II@4100 (trained agent, deep act-2
-# runs) with moveset variants deduped: mean 52, p99 109, max 116
+# Per-state effect-row pool. Ragged per entity (up to 6 effects, a Monster up to 17 with
+# its whole moveset), so rows are packed per STATE with an owner segment rather than
+# padded per entity: (B, 381, 17, D) would cost ~29x this. Measured under EFFECT-II@4100
+# (trained agent, deep act-2 runs) with moveset variants deduped: mean 52, p99 109, max 116
 MAX_EFFECTS_STATE = 224
 MAX_MODIFIER_ROWS_STATE = 64
 MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_PICK_COUNT + 2
