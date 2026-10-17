@@ -1,77 +1,53 @@
-exp_name: ppo/EFFECT-IIIf  # warm from IIIe@~52.5k: amp off — bf16 KL-gauge phantom starved learning
+exp_name: ppo/EFFECT-IIIf
 seed: 0
 num_iterations: 1.0e+6
-log_every: 10
-save_every: 100
-# Two-act horizon: 1/(1-γ)=1000 ≈ 2.5x the ~400-step episode (the ratio XVIII ran
-# at 0.998/~200). At 0.998 the 31-floor reward invariants are infeasible — the
-# discounted climb outruns the win margin before it clears the time cost; see
-# reward.py + scripts/verify_reward.py. Reward totals are NOT comparable to
-# pre-two-act runs.
+# Horizon 1/(1-γ) = 1000 steps, ~2.5x a two-act episode
+# At 0.998 no floor weight satisfies the reward invariants
 gamma: 0.999
-lam: 0.95
-coef_value: 0.500
-coef_entropy_max: 0.010
-coef_entropy_min: 0.010  # decay neutralized (min = max): the uniform-KL barrier is the
-entropy_decay_steps: 2.0e+7  # anti-collapse floor; a decayed bonus could never reopen a head (XIV fix #4)
-# Uniform-KL log-barrier per head: floors legal-action probs at ~coef/(n·|A|). Entropy's
-# restoring force vanishes on a dying action (XIV's L1 collapse); the barrier's doesn't. No decay.
-coef_kl_uniform: 0.020
+
+cadence:
+  log_every: 10
+  save_every: 100
+  eval_every: 100
+  archive_every: 1000
+
 # Soft ascension curriculum: envs graduate to the frontier level in curriculum_step
-# fractions when the greedy eval battery sustains promote_win_rate at the frontier.
-ascension_start: 0
-ascension_max: 20
-promote_win_rate: 0.75    # advance c when frontier eval/win_rate >= this...
-                          # NOTE: a win now means clearing BOTH acts — expect a long
-                          # c=0 plateau; eval/act2_rate is the progress signal there.
-promote_streak: 2         # ...for this many consecutive frontier batteries
-curriculum_step: 0.25     # fraction of envs graduated per qualifying eval
-target_kl: 0.03           # PPO epoch early-stop at 1.5x this — transition-shift hygiene
-max_grad_norm: 0.500
-# 256x32 keeps N=8192 but amortizes rollout launch overhead: 7.53 -> 6.93 s/iter measured
-# on the RTX 3090 (2026-07 probe). T=32 still exceeds the GAE lambda-horizon (~20 steps).
-num_envs: 256
-rollout_length: 32
-clip_eps: 0.20
-clip_value_loss: false
-# bf16 autocast on the update forward; loss math stays fp32. 4090-measured:
-# update 3.07 -> 2.59 s/iter at mb 2048.
-# OFF for IIIf: at IIIe's saturation (entropy/L3 0.001) bf16 logit jitter reads
-# as k3 approx_kl 0.018-0.027 at IDENTICAL weights (identical-weights probe,
-# 2026-09-02) — 60-90% of target_kl. The adaptive-lr controller throttled to its
-# 1/64 floor chasing that phantom and updates truncated to <1 epoch. fp32 vs
-# fp32 measures exactly 0.0
-amp: false
-# 2048 -> 4096: fewer optimizer steps, better GPU regime. 4090-measured: update
-# 2.59 -> 2.07 s/iter. Side effect: realized approx_kl roughly halves (smoother
-# steps) — factor this into any future lr retuning.
-# Walked back to 2048: OOM at EFFECT-II iter ~4450 — activation memory scales with
-# token width (transformer packs to the batch's max), and a competent agent's deep
-# runs (act2 0.81, 46-card decks) roughly double it vs the early-run states 4096
-# was sized on. 24 GB fits mb4096 only until the agent gets good.
-# mb2048/fp32 (amp off doubles activations) OOM'd the 24 GB 4090 3x at
-# floor-29 widths (2026-09-03); on the 5090's 32 GB it peaked 23.8 GB.
-# mb4096 there peaked 30.9 GB and OOM'd in its first updates — 3072 is the
-# largest that fits fp32 on 32 GB at deep-run widths
-minibatch_size: 3072
-num_epochs: 4
-# Rollout(t+1) collected in a side process during update(t), staleness 1. Measured a
-# WASH on the 4-P-core M4 post-packing (hidden rollout reappears as update contention:
-# 10.5s either way), and a clear LOSS on the single-GPU 3090 (9.9 vs 7.5 s serial,
-# 2026-07 probe: GPU contention + full-buffer pipe transfer). Leave off on one GPU.
-overlap_rollout: false
-# Sharded rollout: env-step + reward + encode + masks run in this many worker
-# processes over shared memory (0 = single-thread serial path). 4090 staged bench
-# 2026-08-16 (40-iter A0, s/iter): serial 4.18 -> workers8 3.45 (rollout 2.10 ->
-# 1.25). double_buffer (two env gangs, SF-style) measured a LOSS on this box:
-# 3.71 vs 3.45 — the rollout forward is launch-latency-bound, so two half-batch
-# forwards cost more than one full one. Re-measure only if the forward becomes
-# compute-bound (bigger model). Full ladder incl. amp+mb4096: 5.32 -> 3.45.
-# 2026-08-29 Tier-0 ladder (48-thread pod, post row-block cache): workers 8->16
-# rollout 1.29 -> 1.08 s (24/32 flat); num_envs 512 OOMs the on-device rollout
-# buffer at 24 GB; torch.compile(dynamic) a wash. Update (2.7 s) is the wall.
-rollout_workers: 16
-double_buffer: false
+# fractions when the greedy eval battery, played at the envs' levels, sustains promote_win_rate.
+curriculum:
+  ascension_start: 0.0
+  ascension_max: 20
+  promote_win_rate: 0.75    # advance c when eval/win_rate >= this...
+                            # (a win clears both acts: expect a long c=0 plateau)
+  promote_streak: 2         # ...for this many consecutive batteries at the current c
+  curriculum_step: 0.25     # fraction of envs graduated per qualifying eval
+
+ppo:
+  lam: 0.95
+  num_epochs: 4
+  # Activation memory grows with the states' token widths, so a size that fits early in a run
+  # can OOM later; scripts/probe_memory.py measures the peak at deep-run widths
+  minibatch_size: 4096
+  clip_eps: 0.20
+  clip_value_loss: false
+  coef_value: 0.500
+  coef_entropy: 0.010  # no decay: a decayed bonus could never reopen a head
+  # Uniform-KL log-barrier per head: floors legal-action probs at ~coef/(n·|A|). No decay:
+  # entropy's restoring force vanishes on a dying action, the barrier's doesn't
+  coef_kl_uniform: 0.020
+  is_clip: 2.0  # cap on the off-policy weight π_prox / π_behavior
+  max_grad_norm: 0.500
+  target_kl: 0.03  # the update stops after an epoch past 1.5x this or a minibatch past 3x,
+                   # and train.py's adaptive lr steers the KL toward it
+
+rollout:
+  # N = 256 games x 32 steps per iteration: more games per step amortize the forward's launch
+  # overhead, and T = 32 still exceeds the GAE λ-horizon (~20 steps)
+  num_envs: 256
+  rollout_length: 32
+  # Worker processes that step the games and encode their states and masks; num_envs must
+  # divide evenly across them
+  # On a pod, launch.sh can replace this count with --rollout-workers
+  rollout_workers: 16
 
 model:
   # Core encoder
@@ -79,28 +55,23 @@ model:
   dim_global: 1024
   transformer_dim_ff: 512
   transformer_num_heads: 4
-  transformer_num_blocks: 3  # 2 -> 3 for EFFECT-III (AlphaStar depth; blocks are pre-LN now)
+  transformer_num_blocks: 3  # AlphaStar's depth
   gnn_num_layers: 15  # map GNN depth = MAP_HEIGHT → full downstream lookahead per room
-  map_encoder_dim: 256  # GNN internal width (lifted to dim_entity in entity_projector); depth unchanged
-  # The value head's privileged pass sees the draw order, so it is a second transformer
-  # pass over almost every combat row. true: those rows run apart from the actor's in
-  # the update and recompute in the backward, keeping the update near one pass's
-  # activation memory for one more forward of them. Measure with scripts/probe_memory.py
-  checkpoint_privileged: false
+  map_encoder_dim: 256  # GNN internal width (lifted to dim_entity in entity_projector)
 
   # Head dimensions
   dim_ff_primary: 1024
   dim_ff_value: 1024
-  dim_op: 256  # operation-embedding dim (L2 query conditioning)
-  dim_key: 256  # pointer key/query dim (64 = AlphaStar size; 32 underperformed = IX)
+  dim_op: 256  # ActionType-embedding dim (conditions the L2 query)
+  dim_key: 256  # pointer key/query dim (AlphaStar's is 64)
 
 optimizer:
   name: Adam
   kwargs:
-    # Walked back from EFFECT-I's 1.5e-4 (the 2.5x XVIII bump): approx_kl ran
-    # chronically above target from ~iter 7k and the L2 uniform-KL barrier
-    # diverged — see the EFFECT-I post-mortem (2026-08-30).
-    # update/approx_kl + update/epochs_run are the guardrail telemetry.
-    # Halved 1e-4 -> 5e-5 with the IIId barrier clamp: approx_kl ran 0.09 in a
-    # single epoch (epochs_run pinned ~1) under win-jackpot sharpening
-    lr: 5.0e-5
+    # The base lr: train.py's adaptive-KL controller scales it by 1/64 to 1. A higher one drives
+    # approx_kl past target; update/approx_kl and update/epochs_run are the guardrail telemetry
+    # Sized with ppo.minibatch_size: an update takes one optimizer step per minibatch
+    lr: 7.5e-5
+
+    # One kernel per optimizer step; a resumed run keeps the setting of the checkpoint it loads
+    fused: true

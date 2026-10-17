@@ -30,7 +30,8 @@ _MAP_NUM_ROOM_KINDS = len(_MAP_ROOM_KIND)
 _MAP_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.members()}
 
 # Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
-NUM_EDGE_CHANNELS = 3
+EDGE_DELTAS = (-1, 0, 1)
+NUM_EDGE_CHANNELS = len(EDGE_DELTAS)
 
 
 class MapGridChannel(StrEnum):
@@ -39,6 +40,7 @@ class MapGridChannel(StrEnum):
     POSITION = auto()
 
 
+# Every cell must be 0 or 1: `map_encoder.py`'s dedup packs the grid one bit per cell
 CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
 OFF_MAP_ROOM_KIND = _alloc(MapGridChannel.ROOM_KIND, _MAP_NUM_ROOM_KINDS)
 OFF_MAP_EDGES = _alloc(MapGridChannel.EDGES, NUM_EDGE_CHANNELS)
@@ -49,8 +51,10 @@ NUM_CHANNELS = sum(w for _, w in CHANNEL_LAYOUT_MAP_GRID)
 # GNN-facing view of the edge block (read by `map_encoder.py`)
 SLICE_MAP_EDGES = slice(OFF_MAP_EDGES, OFF_MAP_EDGES + NUM_EDGE_CHANNELS)
 
+SLICE_MAP_ROOM_KIND = slice(OFF_MAP_ROOM_KIND, OFF_MAP_ROOM_KIND + _MAP_NUM_ROOM_KINDS)
 
-# Flat map-global meta — position-anchored facts the pooled CNN summary can't carry
+
+# Flat map-global meta — position-anchored facts the pooled GNN readout can't carry
 class MapMetaChannel(StrEnum):
     FLOOR_DEPTH = auto()  # y_current / MAP_HEIGHT
     ON_MAP = auto()  # y_current is not None
@@ -106,8 +110,8 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
             grid[y, x, OFF_MAP_ROOM_KIND + _MAP_ROOM_KIND[room.room_kind]] = 1.0
             for x_next in room.edges:
                 delta = x_next - x  # -1, 0, or 1
-                if 0 <= x_next < MAP_WIDTH and -1 <= delta <= 1:
-                    grid[y, x, OFF_MAP_EDGES + delta + 1] = 1.0
+                if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
+                    grid[y, x, OFF_MAP_EDGES + EDGE_DELTAS.index(delta)] = 1.0
 
     # Store in the cache. Guard the master copy against future writes
     grid.flags.writeable = False
@@ -143,6 +147,20 @@ def _next_row_candidate_cols(
             raise ValueError(f"Edge ({y_current}, {x_current})->({y_next}, {x_next}) has no room")
 
     return list(room_curr.edges)
+
+
+def _get_room_entities(game_state: GameState) -> list[Room]:
+    """The Rooms a RoomSelect can name, in column order: the room tokens' rank order"""
+    map_ = game_state.map
+    rooms = map_.rooms  # reconstructs the whole grid across the FFI; fetched once
+    y_current = map_.y_current
+    winged = _wing_boots_charged(game_state)
+    cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
+    if not cols:
+        return []
+
+    y_next = 0 if y_current is None else y_current + 1
+    return [room for x, room in enumerate(rooms[y_next]) if x in cols and room is not None]
 
 
 def _encode_map_meta_into(
@@ -222,7 +240,8 @@ def encode_batch_map(
 
     for b, game_state in enumerate(game_states):
         map_ = game_state.map
-        # `map_.rooms` reconstructs the whole grid across the FFI (~23us); fetch it once per state
+
+        # `map_.rooms` reconstructs the whole grid across the FFI; fetch it once per state
         rooms = map_.rooms
         y_current = map_.y_current
         x_current = map_.x_current
@@ -242,11 +261,11 @@ def encode_batch_map(
         _encode_unknown_room_into(game_state, map_.room_kind_resolved, np_meta[b])
 
     # The room tokens' kind row: ROOMS at each reachable next-row column, -1 where none
-    np_room_idxs = np.where(np_node_idx >= 0, SliceKind.ROOMS, -1).astype(np.int16)
+    np_room_slice_kind = np.where(np_node_idx >= 0, SliceKind.ROOMS, -1).astype(np.int16)
 
     return (
         torch.from_numpy(np_grid).to(device),
         torch.from_numpy(np_node_idx).to(device),
-        np_room_idxs,
+        np_room_slice_kind,
         torch.from_numpy(np_meta).to(device),
     )

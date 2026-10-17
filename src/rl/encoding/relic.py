@@ -14,22 +14,16 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.encoding.pairs import entity_pairs
+from src.rl.types import SLICE_KINDS_RELIC
 from src.rl.types import BatchEffectRows
 from src.rl.types import BatchPriceRows
 from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import PriceRow
 from src.rl.types import SliceKind
+from src.rl.types import X_EntityPairs
 from src.rl.types import make_channel_allocator
-
-
-# Pack order within the relic block: decision pools first, the owned relics last
-SLICE_KINDS_RELIC = (
-    SliceKind.RELIC_REWARD,
-    SliceKind.RELIC_SHOP,
-    SliceKind.RELIC_EVENT_ROLL,
-    SliceKind.RELIC_OWNED,
-)
 
 
 _RELIC_NAME_TO_IDX = {relic_name: int(relic_name) for relic_name in RelicName.members()}
@@ -55,6 +49,9 @@ OFF_RELIC_COUNTER_PROGRESS = _alloc(RelicChannel.COUNTER_PROGRESS)
 OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MAX)
 
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
+
+# Most nonzero columns a relic row holds: one per channel, each a one-hot or a scalar
+ENCODING_PAIRS_RELIC = len(CHANNEL_LAYOUT_RELIC)
 
 # Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -120,11 +117,11 @@ def iter_packed_relics(game_state: GameState) -> Iterator[tuple[SliceKind, Relic
 
 def encode_batch_relics(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray, BatchEffectRows, BatchPriceRows]:
-    """(B, W, ENCODING_DIM_RELIC) rows + the (B, W) kind of each token + each state's
-    (offset, source, effect) rows (every trigger's, per relic) and its shop tokens'
-    (offset, price) rows, keyed by the same w as the token they belong to; W is the
-    batch's longest packed relic sequence."""
+) -> tuple[X_EntityPairs, BatchEffectRows, BatchPriceRows]:
+    """The relic block ((B, W, ENCODING_DIM_RELIC) rows as pairs + the (B, W) kind of each
+    token) + each state's (offset, source, effect) rows (every trigger's, per relic) and its
+    shop tokens' (offset, price) rows, keyed by the same w as the token they belong to; W is
+    the batch's longest packed relic sequence."""
     batch_tokens = [list(iter_packed_relics(game_state)) for game_state in game_states]
     batch_relic_prices = []
     for game_state in game_states:
@@ -133,7 +130,7 @@ def encode_batch_relics(
 
     width = max((len(tokens) for tokens in batch_tokens), default=0)
     np_out = np.zeros((len(game_states), width, ENCODING_DIM_RELIC), dtype=np.float32)
-    np_idxs = np.full((len(game_states), width), -1, dtype=np.int16)
+    np_slice_kind = np.full((len(game_states), width), -1, dtype=np.int16)
     batch_effect_rows: BatchEffectRows = []
     batch_price_rows: BatchPriceRows = []
 
@@ -147,7 +144,7 @@ def encode_batch_relics(
             encode_relic_into_w_cache(relic, np_out[b, w])
 
             # `SliceKind`
-            np_idxs[b, w] = kind
+            np_slice_kind[b, w] = kind
 
             # Price
             if kind == SliceKind.RELIC_SHOP:
@@ -171,4 +168,8 @@ def encode_batch_relics(
         batch_effect_rows.append(effect_rows)
         batch_price_rows.append(price_rows)
 
-    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows, batch_price_rows
+    return (
+        entity_pairs(np_out, np_slice_kind, ENCODING_PAIRS_RELIC, device),
+        batch_effect_rows,
+        batch_price_rows,
+    )

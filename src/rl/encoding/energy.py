@@ -10,7 +10,7 @@ from src.rl.types import make_channel_allocator
 
 
 _ENERGY_MIN = 0
-_ENERGY_MAX = 15  # Ice Cream accumulates energy accross turns
+_ENERGY_MAX = 15  # Ice Cream accumulates energy across turns
 
 
 class EnergyChannel(StrEnum):
