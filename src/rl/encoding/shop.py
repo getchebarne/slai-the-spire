@@ -7,6 +7,7 @@ import torch
 from slai import GameState
 
 from src.rl.constants import SHOP_PRICE_CAP
+from src.rl.encoding.pairs import owned_pairs
 from src.rl.types import BatchPriceRows
 from src.rl.types import EntityKind
 from src.rl.types import X_Prices
@@ -26,6 +27,9 @@ OFF_SHOP_GOLD_GAP = _alloc(PriceChannel.GOLD_GAP)
 
 ENCODING_DIM_PRICE = sum(w for _, w in CHANNEL_LAYOUT_PRICE)
 
+# Most nonzero columns a price row holds: one per channel, each a scalar
+ENCODING_PAIRS_PRICE = len(CHANNEL_LAYOUT_PRICE)
+
 # Shop meta: the purge-service price triple + the purged flag
 OFF_SHOP_PURGED = ENCODING_DIM_PRICE
 ENCODING_DIM_SHOP_META = ENCODING_DIM_PRICE + 1
@@ -42,8 +46,8 @@ def encode_batch_prices(
     sources: Sequence[tuple[EntityKind, BatchPriceRows]],
     device: torch.device,
 ) -> X_Prices:
-    """Every state's shop-token price rows as one (B, P, ENCODING_DIM_PRICE) block with
-    their owner keys; P is the batch's most priced tokens."""
+    """Every state's shop-token price rows as one (B, P, ENCODING_DIM_PRICE) block, held as
+    pairs, with their owner keys; P is the batch's most priced tokens."""
     batch_size = len(game_states)
     batch_rows = [
         [
@@ -68,12 +72,7 @@ def encode_batch_prices(
             np_entity_kind[b, idx] = entity_kind
             np_offset[b, idx] = offset
 
-    return X_Prices(
-        x=torch.from_numpy(np_price).to(device),
-        x_entity_kind=torch.from_numpy(np_entity_kind).to(device),
-        x_offset=torch.from_numpy(np_offset).to(device),
-        batch_size=[batch_size],
-    )
+    return owned_pairs(X_Prices, np_price, np_entity_kind, np_offset, ENCODING_PAIRS_PRICE, device)
 
 
 def encode_batch_shop_meta(game_states: list[GameState], device: torch.device) -> torch.Tensor:

@@ -4,13 +4,39 @@ from enum import IntEnum
 from enum import StrEnum
 
 import torch
-from slai import ACTION_SPEC_REGISTRY
 from slai import ActionType
-from slai import CandidatePool
 from slai import Effect
 from tensordict import tensorclass
 
+from src.rl.constants import MAP_WIDTH
+from src.rl.constants import MAX_CARD_REWARD_ROLL
+from src.rl.constants import MAX_COMBAT_CARD_REWARD
+from src.rl.constants import MAX_EVENT_OPTIONS
+from src.rl.constants import MAX_MONSTERS
+from src.rl.constants import MAX_POTION_REWARDS
+from src.rl.constants import MAX_POTION_SLOTS
+from src.rl.constants import MAX_RELIC_REWARDS
+from src.rl.constants import MAX_RELICS
+from src.rl.constants import MAX_REWARD_CARD_BUNDLES
+from src.rl.constants import MAX_SHOP_POTIONS
+from src.rl.constants import MAX_SHOP_RELICS
+from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
+from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
+from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
+from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
+from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_CARD_PILE_EXHAUST
+from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
+from src.rl.constants import MAX_SIZE_CARD_PILE_NIGHTMARE
+from src.rl.constants import MAX_SIZE_CARD_PILE_SELECTED
+from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
+from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
+from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
+
+# Values index Core._type_emb rows, so checkpoints pin them: append new kinds, never renumber
 class SliceKind(IntEnum):
     CARD_PILE_HAND = 0
     CARD_PILE_DRAW = 1
@@ -38,10 +64,87 @@ class SliceKind(IntEnum):
     CARD_PILE_EVENT_ROLL = 23
     POTION_EVENT_ROLL = 24
     RELIC_EVENT_ROLL = 25
-    CARD_PENDING_SELECTED = 26
+    CARD_PILE_SELECTED = 26
     CARD_PLAY_QUEUE = 27
     CARD_PILE_NIGHTMARE = 28
     CARD_MATCH_FLIPPED = 29
+
+
+SLICE_KINDS_CARD_REWARDS = (  # one kind per reward bundle (card.py owns their packing)
+    SliceKind.CARD_REWARD_0,
+    SliceKind.CARD_REWARD_1,
+    SliceKind.CARD_REWARD_2,
+    SliceKind.CARD_REWARD_3,
+    SliceKind.CARD_REWARD_4,
+)
+
+# Pack order within the card block: decision pools first, observational piles last
+SLICE_KINDS_CARD = (
+    SliceKind.CARD_PILE_HAND,
+    SliceKind.CARD_PILE_DISCOVER,
+    SliceKind.CARD_PILE_SELECTED,
+    *SLICE_KINDS_CARD_REWARDS,
+    SliceKind.CARD_SHOP,
+    SliceKind.CARD_PILE_EVENT_ROLL,
+    SliceKind.CARD_MATCH_FLIPPED,
+    SliceKind.CARD_PILE_STASIS,
+    SliceKind.CARD_PLAY_QUEUE,
+    SliceKind.CARD_PILE_NIGHTMARE,
+    SliceKind.CARD_PILE_DRAW,
+    SliceKind.CARD_PILE_DISCARD,
+    SliceKind.CARD_PILE_EXHAUST,
+    SliceKind.CARD_PILE_DECK,
+)
+
+# Pack order within the relic block: decision pools first, the owned relics last
+SLICE_KINDS_RELIC = (
+    SliceKind.RELIC_REWARD,
+    SliceKind.RELIC_SHOP,
+    SliceKind.RELIC_EVENT_ROLL,
+    SliceKind.RELIC_OWNED,
+)
+
+# Pack order within the potion block; every source is engine-bounded
+SLICE_KINDS_POTION = (
+    SliceKind.POTION_OWNED,
+    SliceKind.POTION_REWARD,
+    SliceKind.POTION_SHOP,
+    SliceKind.POTION_EVENT_ROLL,
+)
+
+# Each kind's token cap: the slice its encoder applies to that collection
+CAP_OF_KIND: dict[SliceKind, int] = {
+    SliceKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
+    SliceKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
+    SliceKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
+    SliceKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
+    SliceKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
+    SliceKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
+    SliceKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
+    SliceKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
+    SliceKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
+    SliceKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
+    SliceKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up card
+    SliceKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
+    SliceKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
+    SliceKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
+    SliceKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
+    SliceKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
+    SliceKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
+    SliceKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
+    SliceKind.RELIC_REWARD: MAX_RELIC_REWARDS,
+    SliceKind.RELIC_SHOP: MAX_SHOP_RELICS,
+    SliceKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
+    SliceKind.RELIC_OWNED: MAX_RELICS,
+    SliceKind.POTION_OWNED: MAX_POTION_SLOTS,
+    SliceKind.POTION_REWARD: MAX_POTION_REWARDS,
+    SliceKind.POTION_SHOP: MAX_SHOP_POTIONS,
+    SliceKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
+    SliceKind.MONSTERS: MAX_MONSTERS,
+    SliceKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
+    SliceKind.CHARACTER: 1,
+    SliceKind.ROOMS: MAP_WIDTH,
+}
 
 
 def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., int]]:
@@ -57,10 +160,9 @@ def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., i
     return layout, alloc
 
 
-# Entity types that have already warned about overflow — truncation is never silent
 class EntityKind(IntEnum):
     """The one entity-type order: X_GameState's entity fields, the model's block
-    cat, and the owner type of an effect/modifier row all follow it."""
+    cat, and the owner type of an X_Owned row all follow it."""
 
     CARD = 0
     RELIC = 1
@@ -117,12 +219,28 @@ type BatchPriceRows = list[list[PriceRow]]
 
 @tensorclass
 class X_Entity:
-    """One entity type's tokens, packed to a valid prefix; `idxs[b, w]` is token
-    w's SliceKind, -1 past the prefix (pad). W is the batch's longest packed
-    sequence of the type — no fixed width anywhere but the transport's capacity."""
+    """Dense tokens and their kinds: the map GNN's rooms, and the projector's window (every
+    type's block, then the rooms); `x_slice_kind[b, w]` is token w's SliceKind, -1 on a pad."""
 
     x: torch.Tensor  # (B, W, D_type)
     x_slice_kind: torch.Tensor  # (B, W) int16 (long once the model owns the window)
+
+    @property
+    def mask(self) -> torch.Tensor:
+        return self.x_slice_kind >= 0
+
+
+@tensorclass
+class X_EntityPairs:
+    """One entity type's encoded tokens, packed to a valid prefix; `x_slice_kind[b, w]` is
+    token w's SliceKind, -1 past the prefix (pad). W is the batch's longest packed
+    sequence of the type, and K its most nonzero columns in a row — no fixed width anywhere
+    but X_Rows' caps. Each row is its nonzero (column, value) pairs in column order, then
+    (0, 0.0) pairs up to K."""
+
+    x_column: torch.Tensor  # (B, W, K) int16
+    x_value: torch.Tensor  # (B, W, K) float32
+    x_slice_kind: torch.Tensor  # (B, W) int16
 
     @property
     def mask(self) -> torch.Tensor:
@@ -134,9 +252,10 @@ class X_Owned:
     """Rows owned by tokens, one family per subclass, which the projector adds into
     their owners. Pads are x_entity_kind == -1, with zeros elsewhere."""
 
-    x: torch.Tensor  # (B, R, D) — D = the family's row width, R = the batch's most rows
+    x_column: torch.Tensor  # (B, R, K) int16 — as in X_EntityPairs; R = the batch's most rows
+    x_value: torch.Tensor  # (B, R, K) float32
     x_entity_kind: torch.Tensor  # (B, R) long — owner `EntityKind` / -1 = pad
-    x_offset: torch.Tensor  # (B, R) long — owner's packed position within its type's `X_Entity`
+    x_offset: torch.Tensor  # (B, R) long — owner's packed position in its type's `X_EntityPairs`
 
     @property
     def mask(self) -> torch.Tensor:
@@ -165,54 +284,53 @@ class X_Prices(X_Owned):
 
 @tensorclass
 class X_GameState:
-    # One X_Entity per type, in EntityKind order. The window's kind row is the cat
-    # of their `idxs` then `room_idxs`, written wherever a consumer needs it
-    cards: X_Entity
-    relics: X_Entity
-    potions: X_Entity
-    monsters: X_Entity
-    event_options: X_Entity
-    character: X_Entity
+    # One X_EntityPairs per type, in EntityKind order. The window's kind row is the cat
+    # of their `x_slice_kind` then `room_slice_kind`, written wherever a consumer needs it
+    cards: X_EntityPairs
+    relics: X_EntityPairs
+    potions: X_EntityPairs
+    monsters: X_EntityPairs
+    event_options: X_EntityPairs
+    character: X_EntityPairs
     health_block: X_HealthBlock  # the combatants' shared health/block family, by kind
     prices: X_Prices  # the shop tokens' shared price family, by owner
 
     effects: X_Effects
     modifiers: X_Modifiers
-    energy: torch.Tensor
+    energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
     room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
-    room_idxs: torch.Tensor  # (B, MAP_WIDTH) int16 — ROOMS at each reachable next-row column
-    map_meta: torch.Tensor
-    focus: torch.Tensor
+    room_slice_kind: torch.Tensor  # (B, MAP_WIDTH) int16 — ROOMS at each reachable next-row column
+    map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
+    focus: torch.Tensor  # (B, ENCODING_DIM_FOCUS) float32
     ascension: torch.Tensor  # (B, ENCODING_DIM_ASCENSION) thermometer, bit i = level > i
-    reward_meta: torch.Tensor
-    shop_meta: torch.Tensor
-    event_meta: torch.Tensor
+    reward_meta: torch.Tensor  # (B, ENCODING_DIM_REWARD_META) float32
+    shop_meta: torch.Tensor  # (B, ENCODING_DIM_SHOP_META) float32
+    event_meta: torch.Tensor  # (B, ENCODING_DIM_EVENT_META) float32
 
 
 @dataclass
 class X_CoreOutput:
-    """`global_` and `entities` are the actor pass's, read by the policy heads.
-    `global_value` is the value head's: the privileged pass's where the draw pile
-    shows an order the actor can't see, the actor pass's elsewhere."""
+    """`global_` and `entities` are the policy heads': the transformer's, but the draw-order
+    layer's on the rows under Frozen Eye whose draw pile shows an order. `global_value` is the
+    value head's: the layer's on every row whose draw pile shows an order, the transformer's
+    elsewhere."""
 
     global_: torch.Tensor  # (B, dim_global)
     global_value: torch.Tensor  # (B, dim_global)
-    entities: X_Entity  # the refined window: x (B, window, dim_entity), idxs (B, window) long
+    entities: X_Entity  # refined window: x (B, window, dim_entity), x_slice_kind (B, window) long
 
 
 @tensorclass
 class X_EntityMask:
-    """The masks over one type's block, token for token with its `idxs` (the
+    """The masks over one type's block, token for token with its `x_slice_kind` (the
     heads cat the blocks in X_GameState field order, exactly as the tokens)."""
 
-    # L2 pick: legal AND in the action type's pool, deduped by card identity
+    # L2 selection: legal under the action type, deduped by card identity
     legal: torch.Tensor  # (B, NUM_ACTION_TYPES, W)
-    # picks whose legal actions carry a monster target (cards / potions)
+
+    # selections whose legal actions carry a monster target (cards / potions)
     needs_target: torch.Tensor  # (B, W)
-    # legal L3 targets: the alive monsters. The engine offers every alive monster
-    # to every targeted action, so the set does not depend on the L2 pick
-    is_target: torch.Tensor  # (B, W)
 
 
 @tensorclass
@@ -228,130 +346,89 @@ class X_Mask:
     character: X_EntityMask
     rooms: X_EntityMask
 
-
-class Level(IntEnum):
-    """Action-hierarchy levels — column indices into X_Action's (B, len(Level)) tensors."""
-
-    ACTION_TYPE = 0
-    L1 = 1
-    L2 = 2
+    # legal L3 targets: the alive monsters. The engine offers every alive monster
+    # to every targeted action, so the set does not depend on the L2 selection
+    monster_is_target: torch.Tensor  # (B, W) — W = the monster block's width
 
 
 @tensorclass
 class X_Action:
     """The sampled hierarchy per row, engine-facing: `kind` and `rank` name the L2
-    pick as the rank-th token of its kind (the engine index; for a room, the rank
-    among the reachable columns), `target` the L3 pick as the engine monster
-    index. -1 where a level didn't apply."""
+    selection as the rank-th token of its kind, `target` the L3 selection as the rank-th monster
+    token, and masks.engine_action names their entities by id. -1 where a level didn't
+    apply."""
 
     action_type: torch.Tensor  # (B,) long
-    kind: torch.Tensor  # (B,) long — SliceKind of the L2 pick
+    kind: torch.Tensor  # (B,) long — SliceKind of the L2 selection
     rank: torch.Tensor  # (B,) long
     target: torch.Tensor  # (B,) long
-    log_prob: torch.Tensor  # (B, len(Level)) float, 0 where N/A
-    entropy: torch.Tensor  # (B, len(Level)) float, 0 where N/A
-    kl_uniform: (
-        torch.Tensor
-    )  # (B, len(Level)) float, KL(uniform‖π) over legal actions, 0 where N/A
+    log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
+    entropy: torch.Tensor  # (B, 3) float, 0 where N/A
+    kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
-@tensorclass(shadow=True)  # `values` field shadows TensorDict.values()
-class RolloutBuffer:
+@tensorclass
+class X_Rows:
+    """One row per game, shared by the step loop and its workers: the action the step loop
+    sampled, then the reward, done flag, state and masks the worker wrote back"""
+
+    actions: torch.Tensor  # (E, 4) long: action type, kind, rank, target
+    rewards: torch.Tensor  # (E, K)
+    dones: torch.Tensor  # (E,)
+    game_state: X_GameState  # (E, ...), every block at its cap
+    mask_batch: X_Mask  # (E, ...), every block at its cap
+
+
+@tensorclass
+class Rollout:
+    """What the actor collected, before GAE: T steps of E games, row t * E + e of the
+    N = T * E rows. The `final_` field is each game's state after the last step, for
+    the bootstrap value"""
+
+    game_state: X_GameState  # (N, ...)
+    mask_batch: X_Mask  # (N, ...)
+    actions: torch.Tensor  # (N, 4): action type, kind, rank, target
+    log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    rewards: torch.Tensor  # (T, E, K)
+    dones: torch.Tensor  # (T, E)
+    final_game_state: X_GameState  # (E, ...)
+
+
+@tensorclass
+class TrainingBatch:
     """Columnar rollout (N = rollout_length * num_envs rows). The full-batch masks are
     stored once and row-sliced per minibatch; GAE returns/advantages are precomputed.
-    Values/returns are per reward stream (K = len(REWARD_STREAMS)); the policy
+    Values/returns are per reward stream (K = len(RewardStream)); the policy
     advantage is the per-stream advantages summed, then normalized."""
 
     game_state: X_GameState  # (N, ...)
     mask_batch: X_Mask  # (N, ...) — row-sliced per minibatch (mask_batch[rows])
-    action_type: torch.Tensor  # (N,) recorded L1 ActionType pick
-    kind: torch.Tensor  # (N,) recorded L2 pick: the kind (-1 if none) ...
-    rank: torch.Tensor  # (N,) ... and the rank within it — the engine index
-    target: torch.Tensor  # (N,) recorded L3 pick: the engine monster index (-1 if none)
-    log_probs_old: torch.Tensor  # (N,)
-    values: torch.Tensor  # (N, K)
+    actions: torch.Tensor  # (N, 4): action type, kind, rank, target
+    log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
+    values_prox: torch.Tensor  # (N, K) the values that go with π_prox
     returns: torch.Tensor  # (N, K)
     advantages: torch.Tensor  # (N, 1), summed over streams, normalized
 
 
-# members() is declaration order == int() order, which is what masks/utils/heads
-# index by
+# members() is declaration order == int() order, which is what masks and heads index by
 ACTION_TYPE_BY_INT = ActionType.members()
-_NUM_ENGINE_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
+
+# The policy's action types are exactly the engine's
+NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 
-# Halting candidate pool -> the kind its idx indexes
-#
-# The engine resolves every halt with one `EffectPendingResolve {idx}` over
-# `pending.target.candidate_pool`. Each halt must score exactly its pool's kind
-# and route to that class's key net, so the policy splits the one engine type
-# into a virtual type per pool and folds/unfolds at the boundary
-# (masks.build_masks in, utils.engine_action out). At most one is ever legal:
-# the engine holds a single effect_pending
-PENDING_POOL_SLICE: dict[CandidatePool, SliceKind] = {
-    CandidatePool.CardPileHand: SliceKind.CARD_PILE_HAND,
-    CandidatePool.CardPileDraw: SliceKind.CARD_PILE_DRAW,
-    CandidatePool.CardPileDiscard: SliceKind.CARD_PILE_DISCARD,
-    CandidatePool.CardPileExhaust: SliceKind.CARD_PILE_EXHAUST,
-    CandidatePool.CardPileDeck: SliceKind.CARD_PILE_DECK,
-    CandidatePool.CardPileDiscover: SliceKind.CARD_PILE_DISCOVER,
-    CandidatePool.CardPileEventRoll: SliceKind.CARD_PILE_EVENT_ROLL,
-    CandidatePool.RelicEventRoll: SliceKind.RELIC_EVENT_ROLL,
-    CandidatePool.PotionEventRoll: SliceKind.POTION_EVENT_ROLL,
-}
-# Policy ints: engine ints 0..N-1 keep their values (so
-# ACTION_TYPE_BY_INT.index(ActionType.X) still works), virtuals append
-PENDING_POOL_INT: dict[CandidatePool, int] = {
-    pool: _NUM_ENGINE_ACTION_TYPES + i for i, pool in enumerate(PENDING_POOL_SLICE)
-}
-PENDING_INTS: frozenset = frozenset(PENDING_POOL_INT.values())
-NUM_ACTION_TYPES = _NUM_ENGINE_ACTION_TYPES + len(PENDING_POOL_SLICE)
+def _check_tables() -> None:
+    """The tables that restate the engine or an enum still agree with it"""
+    if len(SLICE_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
+        raise RuntimeError(
+            f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
+            "add CARD_REWARD_<b> kinds"
+        )
+    if set(CAP_OF_KIND) != set(SliceKind):
+        raise RuntimeError(
+            f"A SliceKind has no entry in CAP_OF_KIND: {set(SliceKind) - set(CAP_OF_KIND)}"
+        )
 
-# Each index-taking action -> the kinds its selection may land on, keyed by
-# POLICY int (virtuals are not engine members). Terminal actions absent.
-# A pick is a window position; its kind gives the pool, its rank within that
-# kind gives the engine index. RewardTakeCard (idx_bundle, idx_card): the kind
-# is the bundle, the rank is the card. RewardSingingBowl names a bundle via
-# the bundle's first card. Only CardPlay/PotionUse have an L3 (monster target)
-_REWARD_BUNDLES = (  # one kind per reward bundle (card.py owns their packing)
-    SliceKind.CARD_REWARD_0,
-    SliceKind.CARD_REWARD_1,
-    SliceKind.CARD_REWARD_2,
-    SliceKind.CARD_REWARD_3,
-    SliceKind.CARD_REWARD_4,
-)
-_ENGINE_POOL: dict[ActionType, tuple[SliceKind, ...]] = {
-    ActionType.CardPlay: (SliceKind.CARD_PILE_HAND,),
-    ActionType.EventOptionSelect: (SliceKind.EVENT_OPTIONS,),
-    ActionType.PotionDiscard: (SliceKind.POTION_OWNED,),
-    ActionType.PotionUse: (SliceKind.POTION_OWNED,),
-    ActionType.RewardSingingBowl: _REWARD_BUNDLES,
-    ActionType.RewardTakeCard: _REWARD_BUNDLES,
-    ActionType.RewardTakePotion: (SliceKind.POTION_REWARD,),
-    ActionType.RewardTakeRelic: (SliceKind.RELIC_REWARD,),
-    ActionType.RoomSelect: (SliceKind.ROOMS,),
-    ActionType.ShopBuyCard: (SliceKind.CARD_SHOP,),
-    ActionType.ShopBuyPotion: (SliceKind.POTION_SHOP,),
-    ActionType.ShopBuyRelic: (SliceKind.RELIC_SHOP,),
-}
-ACTION_TYPE_POOL: dict[int, tuple[SliceKind, ...]] = {
-    **{int(at): pools for at, pools in _ENGINE_POOL.items()},
-    **{PENDING_POOL_INT[pool]: (kind,) for pool, kind in PENDING_POOL_SLICE.items()},
-}
 
-# Action-type groups the mask builder and decoder special-case
-AT_REWARD_CARD = frozenset((int(ActionType.RewardTakeCard), int(ActionType.RewardSingingBowl)))
-AT_MONSTER_TARGETED = frozenset((int(ActionType.CardPlay), int(ActionType.PotionUse)))
-
-# Drift alarm: the engine's index-taking set must equal our engine-keyed entries
-# plus the one resolver we split into the virtuals
-_ACTION_TYPE_ARITY: list = [ACTION_SPEC_REGISTRY[m].arity for m in ACTION_TYPE_BY_INT]
-_ENGINE_INDEX_TAKING = {
-    at for at in range(_NUM_ENGINE_ACTION_TYPES) if _ACTION_TYPE_ARITY[at] != (0, 0)
-}
-assert _ENGINE_INDEX_TAKING == {int(a) for a in _ENGINE_POOL} | {
-    int(ActionType.EffectPendingResolve)
-}, (
-    "engine index-taking actions changed: _ENGINE_POOL + EffectPendingResolve "
-    f"!= {sorted(_ENGINE_INDEX_TAKING)}"
-)
+_check_tables()

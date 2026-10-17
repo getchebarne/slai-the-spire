@@ -6,6 +6,7 @@ from typing import get_args
 
 import numpy as np
 import torch
+from slai import CandidatePool
 from slai import Card
 from slai import CardColor
 from slai import CardCostKind
@@ -21,53 +22,30 @@ from slai import get_card_templates
 
 from src.rl.constants import MAX_CARD_REWARD_ROLL
 from src.rl.constants import MAX_COMBAT_CARD_REWARD
-from src.rl.constants import MAX_PENDING_SELECTED
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
+from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
 from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_CARD_PILE_EXHAUST
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MAX_SIZE_CARD_PILE_NIGHTMARE
+from src.rl.constants import MAX_SIZE_CARD_PILE_SELECTED
 from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
 from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
-from src.rl.encoding.effect import catalog_rows
+from src.rl.encoding.effect import catalog_effects
+from src.rl.encoding.pairs import entity_pairs
+from src.rl.types import SLICE_KINDS_CARD
+from src.rl.types import SLICE_KINDS_CARD_REWARDS
 from src.rl.types import BatchEffectRows
 from src.rl.types import BatchPriceRows
 from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import PriceRow
 from src.rl.types import SliceKind
+from src.rl.types import X_EntityPairs
 from src.rl.types import make_channel_allocator
-from src.rl.utils import card_pile_draw_offset
-
-
-SLICE_KINDS_CARD_REWARDS: tuple[SliceKind, ...] = (
-    SliceKind.CARD_REWARD_0,
-    SliceKind.CARD_REWARD_1,
-    SliceKind.CARD_REWARD_2,
-    SliceKind.CARD_REWARD_3,
-    SliceKind.CARD_REWARD_4,
-)
-
-# Pack order within the card block: decision pools first, observational piles last
-SLICE_KINDS_CARD = (
-    SliceKind.CARD_PILE_HAND,
-    SliceKind.CARD_PILE_DISCOVER,
-    SliceKind.CARD_PENDING_SELECTED,
-    *SLICE_KINDS_CARD_REWARDS,
-    SliceKind.CARD_SHOP,
-    SliceKind.CARD_PILE_EVENT_ROLL,
-    SliceKind.CARD_MATCH_FLIPPED,
-    SliceKind.CARD_PILE_STASIS,
-    SliceKind.CARD_PLAY_QUEUE,
-    SliceKind.CARD_PILE_NIGHTMARE,
-    SliceKind.CARD_PILE_DRAW,
-    SliceKind.CARD_PILE_DISCARD,
-    SliceKind.CARD_PILE_EXHAUST,
-    SliceKind.CARD_PILE_DECK,
-)
 
 
 # Enum maps, keyed by int(): the declaration-order discriminant
@@ -83,9 +61,7 @@ _COST_MIN = 0
 _COST_MAX = max(
     max(card_template.cost_base for card_template in get_card_templates()),
     max(
-        effecet.amount
-        for _, effecet in catalog_rows()
-        if isinstance(effecet, EffectSetCostOverride)
+        effect.amount for effect in catalog_effects() if isinstance(effect, EffectSetCostOverride)
     ),
 )
 _COST_VECTOR_DIM = _COST_MAX - _COST_MIN + 1
@@ -109,7 +85,7 @@ class CardChannel(StrEnum):
     COLOR = auto()
     RARITY = auto()
     COST_KIND = auto()
-    COST_SCOPE = auto()  # all-zero = no override
+    COST_SCOPE = auto()  # All-zero = no override
     COST_VECTOR = auto()
     COST_SCALAR = auto()
     UPGRADED = auto()
@@ -119,7 +95,7 @@ class CardChannel(StrEnum):
     RETAIN = auto()
     REQUIRES_TARGET = auto()
     PLAYABLE = auto()
-    ENERGY_DELTA = auto()  # signed: energy_current - cost
+    ENERGY_DELTA = auto()  # Signed: energy_current - cost
     COST_BASE = auto()
     BOTTLED = auto()
     COST_OFFSET = auto()  # X-Cost offset
@@ -149,6 +125,9 @@ OFF_CARD_COST_OFFSET = _alloc(CardChannel.COST_OFFSET)
 OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(CardChannel.FREE_TO_PLAY_ONCE)
 
 ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
+
+# Most nonzero columns a card row holds: one per channel, each a one-hot or a scalar
+ENCODING_PAIRS_CARD = len(CHANNEL_LAYOUT_CARD)
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -190,8 +169,8 @@ def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
 
 def card_key(card: Card) -> tuple:
     """The fields _encode_card_into reads, minus energy — two cards with equal
-    identity encode the same ROW at any given energy. This is the row-cache key
-    and nothing else; effects are absent because they left the row.
+    identity encode the same ROW at any given energy. It keys the row cache and,
+    with effect_key, masks' identity dedup; effects are rows of their own, so absent.
 
     Explicit rather than hash(card): live entities carry a unique arena `id`
     that participates in the engine's __hash__, so hashing the object would make
@@ -231,7 +210,7 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
         _encode_card_into(card, energy_current, row)
 
         # Write into cache
-        row.flags.writeable = False 
+        row.flags.writeable = False
         if len(_CARD_ROW_CACHE) >= _CARD_ROW_CACHE_MAX:
             _CARD_ROW_CACHE.clear()
         _CARD_ROW_CACHE[cache_key] = row
@@ -272,9 +251,10 @@ def _get_card_entities(
         case SliceKind.CARD_PILE_DRAW:
             if combat is None:
                 return []
+
             # The top of the pile, still in engine order (bottom first)
             card_pile_draw = combat.card_pile_draw
-            return card_pile_draw[card_pile_draw_offset(card_pile_draw) :]
+            return card_pile_draw[max(0, len(card_pile_draw) - MAX_SIZE_CARD_PILE_DRAW) :]
         case SliceKind.CARD_PILE_DISCARD:
             return (
                 combat.card_pile_discard[:MAX_SIZE_CARD_PILE_DISCARD] if combat is not None else []
@@ -286,6 +266,7 @@ def _get_card_entities(
         case SliceKind.CARD_PILE_STASIS:
             if combat is None:
                 return []
+
             # Index-aligned with the monsters: a monster holding no card is None
             cards = [card for card in combat.card_pile_stasis if card is not None]
             return cards[:MAX_SIZE_CARD_PILE_STASIS]
@@ -317,9 +298,16 @@ def _get_card_entities(
             return shop.cards[:MAX_SIZE_SHOP_CARDS] if shop is not None else []
         case SliceKind.CARD_PILE_EVENT_ROLL:
             event = game_state.event
-            if event is not None and not event.consumed:
-                return event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
-            return []
+            if event is None:
+                return []
+
+            # A consumed event's offer is dead, unless a halt still selects from it (Neow's cards)
+            if event.consumed:
+                pending = game_state.effect_pending
+                pool = pending.target.candidate_pool if pending is not None else None
+                if pool != CandidatePool.CardPileEventRoll:
+                    return []
+            return event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
         case SliceKind.CARD_MATCH_FLIPPED:
             event = game_state.event
             card = event.card_match_flipped if event is not None else None
@@ -332,8 +320,8 @@ def _get_card_entities(
             if combat is None:
                 return []
             return _capped(kind, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE)
-        case SliceKind.CARD_PENDING_SELECTED:
-            return game_state.effect_pending_selected[:MAX_PENDING_SELECTED]
+        case SliceKind.CARD_PILE_SELECTED:
+            return game_state.card_pile_selected[:MAX_SIZE_CARD_PILE_SELECTED]
         case _:
             raise ValueError(f"Unsupported `SliceKind`: {kind}")
 
@@ -348,10 +336,11 @@ def iter_packed_cards(
 
 def encode_batch_cards(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray, BatchEffectRows, BatchPriceRows]:
-    """(B, W, ENCODING_DIM_CARD) rows + the (B, W) `SliceKind` of each token + each state's
-    (offset, source, effect) rows and its shop tokens' (offset, price) rows, keyed by the
-    same w as the token they belong to; W is the batch's longest packed card sequence."""
+) -> tuple[X_EntityPairs, BatchEffectRows, BatchPriceRows]:
+    """The card block ((B, W, ENCODING_DIM_CARD) rows as pairs + the (B, W) `SliceKind` of each
+    token) + each state's (offset, source, effect) rows and its shop tokens' (offset, price)
+    rows, keyed by the same w as the token they belong to; W is the batch's longest packed card
+    sequence."""
     batch_tokens = []
     batch_energy_current = []
     batch_card_prices = []
@@ -364,7 +353,7 @@ def encode_batch_cards(
 
     seqlen = max((len(tokens) for tokens in batch_tokens), default=0)
     np_out = np.zeros((len(game_states), seqlen, ENCODING_DIM_CARD), dtype=np.float32)
-    np_idxs = np.full((len(game_states), seqlen), -1, dtype=np.int16)
+    np_slice_kind = np.full((len(game_states), seqlen), -1, dtype=np.int16)
     batch_effect_rows: BatchEffectRows = []
     batch_price_rows: BatchPriceRows = []
 
@@ -379,7 +368,7 @@ def encode_batch_cards(
             encode_card_into_w_cache(card, energy_current, np_out[b, w])
 
             # Stamp `SliceKind`
-            np_idxs[b, w] = slice_kind
+            np_slice_kind[b, w] = slice_kind
 
             # Collect its price
             if slice_kind == SliceKind.CARD_SHOP:
@@ -396,4 +385,8 @@ def encode_batch_cards(
         batch_effect_rows.append(effect_rows)
         batch_price_rows.append(price_rows)
 
-    return torch.from_numpy(np_out).to(device), np_idxs, batch_effect_rows, batch_price_rows
+    return (
+        entity_pairs(np_out, np_slice_kind, ENCODING_PAIRS_CARD, device),
+        batch_effect_rows,
+        batch_price_rows,
+    )

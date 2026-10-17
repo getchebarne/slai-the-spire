@@ -1,32 +1,34 @@
+import signal
+from dataclasses import dataclass
 from multiprocessing.connection import Connection
+from multiprocessing.process import BaseProcess
+from typing import Any
 
-import numpy as np
-import slai
 import torch
+import torch.multiprocessing as mp
 
+from src.rl.algorithms.actor_critic.curriculum import env_level
 from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_WIN_RATE
 from src.rl.algorithms.actor_critic.episode import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
-from src.rl.algorithms.actor_critic.episode import aggregate_episodes
-from src.rl.constants import FAST_MODE
-from src.rl.constants import NEOW
+from src.rl.algorithms.actor_critic.episode import aggregate_episode_stats
+from src.rl.algorithms.actor_critic.episode import finish_episode
+from src.rl.algorithms.actor_critic.episode import make_episode_stats
+from src.rl.algorithms.actor_critic.episode import tally_step
 from src.rl.encoding.state import encode_batch_game_state
+from src.rl.masks import action_from_actiontype
 from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
-from src.rl.reward import REWARD_STREAMS
 from src.rl.reward import compute_reward
-from src.rl.reward import cumulative_floor
-from src.rl.reward import shop_gold_spent
-from src.rl.utils import action_from_actiontype
+from src.rl.utils import new_env
 from src.rl.utils import step_scripted
 
 
-# Greedy deterministic play can loop; cap so a hung eval can't wedge its worker.
-# Two-act episodes run ~350-450 steps; 2000 ≈ 4.5x nominal — a lower cap would
-# silently record a truncated run as a loss and corrupt the curriculum gate.
+# Greedy deterministic play can loop; cap so a hung eval can't wedge its worker. Keep it
+# well above an episode's length: a truncated run counts as a loss for the curriculum gate
 _EVAL_MAX_STEPS = 2000
 _EVAL_NUM_EPISODES = 64
 _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance trend
@@ -39,76 +41,122 @@ EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
 EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
 
 
-def run_eval_battery(
-    model: ActorCritic, device: torch.device, gamma: float, ascension: int
-) -> dict[str, float]:
-    episodes: list[EpisodeStats] = []
-    with torch.no_grad():
-        for seed in _EVAL_SEEDS:
-            env = slai.GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
-            obs = env.reset(seed=seed)
-            stream_rewards = np.zeros(len(REWARD_STREAMS))
-            stream_returns = np.zeros(len(REWARD_STREAMS))
-            length = 0
-            gold_gained = 0
-            gold_spent = 0
-            cards_added = 0
-            purges = 0
-            terminated = False
-            while not terminated and length < _EVAL_MAX_STEPS:
-                legal = env.get_legal_actions()
-                if not legal:
-                    raise RuntimeError(
-                        f"non-terminal state has no legal action (seed={seed}, step={length})"
-                    )
-
-                # Greedy step: Encode -> Mask -> Forward
-                x_game_state = encode_batch_game_state([obs], device)
-                x_mask = build_masks([obs], [legal], x_game_state, device)
-                x_action, _ = model(x_game_state, x_mask, greedy=True)
-
-                # Game step (a room pick decodes through the rooms row)
-                prev = obs
-                action = action_from_actiontype(
-                    x_action, 0, x_game_state.room_idxs[0].cpu().numpy(), obs
-                )
-                obs, terminated = step_scripted(env, action)
-                reward = compute_reward(prev, obs, terminated, gamma, action)
-                stream_rewards += reward
-                stream_returns += gamma**length * reward
-                gold_gained += max(0, obs.character.gold - prev.character.gold)
-                gold_spent += shop_gold_spent(prev, obs, action)
-                cards_added += max(0, len(obs.card_pile_deck) - len(prev.card_pile_deck))
-                purges += action.action_type == slai.ActionType.ShopPurge
-                length += 1
-
-            episodes.append(
-                EpisodeStats(
-                    stream_rewards=stream_rewards,
-                    length=length,
-                    won=bool(terminated and obs.character.health > 0),
-                    floor=cumulative_floor(obs),
-                    stream_returns=stream_returns,
-                    gold_gained=gold_gained,
-                    gold_spent=gold_spent,
-                    deck_size=len(obs.card_pile_deck),
-                    cards_added=cards_added,
-                    purges=purges,
-                )
+def _run_eval_episode(
+    model: ActorCritic, device: torch.device, gamma: float, ascension: int, seed: int
+) -> EpisodeStats:
+    env = new_env(ascension)
+    obs = env.reset(seed=seed)
+    stats = make_episode_stats()
+    terminated = False
+    while not terminated and stats.length < _EVAL_MAX_STEPS:
+        legal = env.get_legal_actions()
+        if not legal:
+            raise RuntimeError(
+                f"non-terminal state has no legal action (seed={seed}, step={stats.length})"
             )
 
-    return {PREFIX_EVAL + key: value for key, value in aggregate_episodes(episodes).items()}
+        # Greedy step: Encode -> Mask -> Forward
+        x_game_state = encode_batch_game_state([obs], device)
+        x_mask = build_masks([obs], [legal], x_game_state, device)
+        x_action = model.act(x_game_state, x_mask, greedy=True)
+
+        # Game step
+        prev = obs
+        action = action_from_actiontype(x_action, 0, obs)
+        obs, terminated = step_scripted(env, action)
+        reward = compute_reward(prev, obs, terminated, gamma, action)
+        tally_step(stats, prev, obs, action, reward, gamma)
+
+    finish_episode(stats, obs, terminated)
+    return stats
 
 
-def eval_battery_worker(conn: Connection, model_config: dict, gamma: float) -> None:
-    torch.set_num_threads(1)
+def run_eval_battery(
+    model: ActorCritic, device: torch.device, gamma: float, c: float, ascension_max: int
+) -> dict[str, float]:
+    """The battery at curriculum position c: game i plays the level training's env i would"""
+    with torch.no_grad():
+        episodes = [
+            _run_eval_episode(
+                model, device, gamma, env_level(c, i, len(_EVAL_SEEDS), ascension_max), seed
+            )
+            for i, seed in enumerate(_EVAL_SEEDS)
+        ]
+
+    return {PREFIX_EVAL + key: value for key, value in aggregate_episode_stats(episodes).items()}
+
+
+@dataclass
+class Evaluator:
+    """The eval process, the parent's end of its pipe, and whether a battery is running"""
+
+    process: BaseProcess
+    conn: Connection
+    busy: bool
+
+
+def start_eval(model_config: dict[str, Any], gamma: float, ascension_max: int) -> Evaluator:
+    """Start the eval process, idle until its first weights arrive"""
+    ctx = mp.get_context("spawn")
+    conn, child = ctx.Pipe()
+    process = ctx.Process(
+        target=_eval_loop, args=(child, model_config, gamma, ascension_max), daemon=True
+    )
+    process.start()
+    child.close()  # the eval process holds its own copy
+    return Evaluator(process, conn, busy=False)
+
+
+def submit_eval(evaluator: Evaluator, model: ActorCritic, iteration: int, c: float) -> None:
+    """Hand the eval process the model's CPU weights for a battery at curriculum position `c`,
+    unless one is running"""
+    _check_alive(evaluator)
+    if not evaluator.busy:
+        evaluator.conn.send((_cpu_state_dict(model), iteration, c))
+        evaluator.busy = True
+
+
+def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | None:
+    """A finished battery's (iteration, c, metrics), or None"""
+    _check_alive(evaluator)
+    if not evaluator.busy or not evaluator.conn.poll():
+        return None
+    evaluator.busy = False
+    return evaluator.conn.recv()
+
+
+def stop_eval(evaluator: Evaluator) -> None:
+    evaluator.process.kill()  # it ignores SIGTERM, and an eval in progress has nothing to save
+    evaluator.process.join()
+
+
+def _check_alive(evaluator: Evaluator) -> None:
+    """A dead eval process would never finish a battery: fail the run instead"""
+    if not evaluator.process.is_alive():
+        raise RuntimeError(
+            f"the eval process died (exitcode {evaluator.process.exitcode}); "
+            "see its traceback above"
+        )
+
+
+def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
+    """Model weights as CPU tensors, picklable to the eval process on any backend (MPS
+    tensors can't be shared across processes); the GPU->CPU copy is negligible."""
+    return {k: v.cpu() for k, v in model.state_dict().items()}
+
+
+def _eval_loop(
+    conn: Connection, model_config: dict[str, Any], gamma: float, ascension_max: int
+) -> None:
+    # A Ctrl-C or torchrun's SIGTERM reaches the whole process group: ignore them, so the
+    # training loop can finish its iteration and checkpoint before it stops this process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    torch.set_num_threads(1)  # Keeps the eval on the spare core, off the training critical path
     device = torch.device("cpu")
     model = ActorCritic(**model_config)
     model.eval()
     while True:
-        msg = conn.recv()
-        if msg is None:
-            return
-        state_dict, iteration, ascension = msg
+        state_dict, iteration, c = conn.recv()
         model.load_state_dict(state_dict)
-        conn.send((iteration, ascension, run_eval_battery(model, device, gamma, ascension)))
+        conn.send((iteration, c, run_eval_battery(model, device, gamma, c, ascension_max)))

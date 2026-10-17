@@ -17,11 +17,13 @@ from src.rl.constants import FACTOR_VULN
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.encoding.monster import outgoing_damage
+from src.rl.encoding.pairs import entity_pairs
+from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import get_piecewise_dim
+from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.types import SliceKind
+from src.rl.types import X_EntityPairs
 from src.rl.types import make_channel_allocator
-from src.rl.utils import get_piecewise_bucket
-from src.rl.utils import get_piecewise_dim
-from src.rl.utils import get_sqrt_norm
 
 
 # Widest catalog turn (damage x instances), Vulnerable-scaled; Strength ramps clamp
@@ -94,6 +96,9 @@ OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER = _alloc(CharacterChannel.ORANGE_PELLE
 
 ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 
+# Most nonzero columns a character row holds: one per channel, each a one-hot or a scalar
+ENCODING_PAIRS_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
+
 
 def _encode_character_into(
     character: Character,
@@ -146,10 +151,9 @@ def _encode_character_into(
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(combat.orange_pellets_played_power)
 
 
-def encode_batch_character(
-    game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray]:
-    """(B, 1, dim) row + the (B, 1) kind — the singleton is always present."""
+def encode_batch_character(game_states: list[GameState], device: torch.device) -> X_EntityPairs:
+    """The character block: (B, 1, dim) row as pairs + the (B, 1) kind — the singleton is
+    always present."""
     batch_size = len(game_states)
 
     # Pre-allocate NumPy array
@@ -159,7 +163,6 @@ def encode_batch_character(
         combat = game_state.combat
         monsters = combat.monsters if combat is not None else []
 
-        #
         _encode_character_into(
             game_state.character,
             outgoing_damage(monsters),
@@ -169,5 +172,5 @@ def encode_batch_character(
             np_out[b],
         )
 
-    np_idxs = np.full((batch_size, 1), SliceKind.CHARACTER, dtype=np.int16)
-    return torch.from_numpy(np_out).to(device).unsqueeze(1), np_idxs
+    np_slice_kind = np.full((batch_size, 1), SliceKind.CHARACTER, dtype=np.int16)
+    return entity_pairs(np_out[:, None], np_slice_kind, ENCODING_PAIRS_CHARACTER, device)

@@ -1,11 +1,13 @@
+from enum import StrEnum
+from enum import auto
+
 import numpy as np
 import slai
 
 from src.rl.constants import MAP_HEIGHT
 
 
-# docs/reward-decision-log.md has the reasoning and the history behind every weight
-_WEIGHT_HEALTH_CHAR = 0.1000  # Φ scale, per HP
+_WEIGHT_HEALTH = 0.1000  # Φ scale, per HP
 _WEIGHT_WIN = 3.0  # A death pays −1
 _WEIGHT_FLOOR = 0.12  # Per floor climbed; capped by the win margin at γ = 0.999
 _WEIGHT_GOLD_SPENT = _WEIGHT_FLOOR / 750  # Per gold spent at a shop
@@ -19,22 +21,27 @@ _SHOP_SPEND_ACTIONS = frozenset(
     }
 )
 
-_ACT_SPAN = MAP_HEIGHT + 1  # rows 0..14 + the boss-room sentinel (y_current = 15)
+ACT_SPAN = MAP_HEIGHT + 1  # rows 0..14 + the boss-room sentinel (y_current = 15)
+
 
 # One critic output per stream; the policy's advantage is the sum of theirs
-REWARD_STREAMS = ("outcome", "hp", "floor", "gold")
+class RewardStream(StrEnum):
+    OUTCOME = auto()
+    HP = auto()
+    FLOOR = auto()
+    GOLD = auto()
 
 
 def cumulative_floor(game_state: slai.GameState) -> int:
     """Run-cumulative floor, 0..31 over two acts: (act−1)·16 + (y_current or 0).
     y_current is None before an act's first room, so the act seam pays one floor."""
-    return (game_state.act - 1) * _ACT_SPAN + (game_state.map.y_current or 0)
+    return (game_state.act - 1) * ACT_SPAN + (game_state.map.y_current or 0)
 
 
 def _potential(health: float, health_max: float) -> float:
     """Health potential Φ(h) = W·(2h − h²/h_max): an HP costs ~2W near death and ~0
     near full HP; Φ(0) = 0 and Φ(h_max) = W·h_max."""
-    return _WEIGHT_HEALTH_CHAR * (2.0 * health - health * health / health_max)
+    return _WEIGHT_HEALTH * (2.0 * health - health * health / health_max)
 
 
 def shop_gold_spent(
@@ -53,8 +60,9 @@ def compute_reward(
     gamma: float,
     action: slai.Action | None = None,
 ) -> np.ndarray:
-    """Per-stream reward, index-aligned with REWARD_STREAMS; the total reward is
+    """Per-stream reward, index-aligned with RewardStream; the total reward is
     the sum over streams."""
+
     # Potential-based, γ·Φ(s') − Φ(s): the episode sum telescopes to its endpoints. γ must
     # be the trainer's discount. Φ stays on at a win on purpose: it prices the HP left
     hp = gamma * _potential(
@@ -67,7 +75,7 @@ def compute_reward(
     if game_over_flag:
         outcome += -1.0 if game_state_next.character.health <= 0 else _WEIGHT_WIN
 
-    # Event form: a potential form's per-step rent made dying early pay
+    # Event form: a potential form's per-step rent would make dying early pay
     floor = _WEIGHT_FLOOR * float(cumulative_floor(game_state_next) - cumulative_floor(game_state))
 
     # Shop spending only: gold gains pay nothing

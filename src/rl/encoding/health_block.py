@@ -7,11 +7,12 @@ from slai import GameState
 
 from src.rl.constants import BLOCK_MAX_ENTITY
 from src.rl.constants import HEALTH_MAX_ENTITY
+from src.rl.encoding.pairs import owned_pairs
+from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.types import EntityKind
 from src.rl.types import X_HealthBlock
 from src.rl.types import make_channel_allocator
-from src.rl.utils import get_piecewise_bucket
-from src.rl.utils import get_piecewise_dim
 
 
 _HEALTH_MIN = 1
@@ -44,6 +45,9 @@ OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc(HealthBlockChannel.TOTAL_SCALAR)
 # The one width every combatant builds: EntityProjector projects it with ONE shared block
 ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w in CHANNEL_LAYOUT_HEALTH_BLOCK)
 
+# Most nonzero columns a health/block row holds: one per channel, each a one-hot or a scalar
+ENCODING_PAIRS_HEALTH_BLOCK = len(CHANNEL_LAYOUT_HEALTH_BLOCK)
+
 
 def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
     total = health + block
@@ -66,8 +70,8 @@ def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
 
 
 def encode_batch_health_block(game_states: list[GameState], device: torch.device) -> X_HealthBlock:
-    """Every state's health/block rows as one (B, W, dim) block with their owner
-    keys: each Monster's row (offset = its slot), then the Character's (offset 0);
+    """Every state's health/block rows as one (B, W, dim) block, held as pairs, with their
+    owner keys: each Monster's row (offset = its slot), then the Character's (offset 0);
     W is the batch's most monsters + 1."""
     batch_size = len(game_states)
     batch_monsters = []
@@ -90,9 +94,6 @@ def encode_batch_health_block(game_states: list[GameState], device: torch.device
         _encode_health_block_into(character.health, character.block, np_out[b, k])
         np_entity_kind[b, k] = EntityKind.CHARACTER
 
-    return X_HealthBlock(
-        x=torch.from_numpy(np_out).to(device),
-        x_entity_kind=torch.from_numpy(np_entity_kind).to(device),
-        x_offset=torch.from_numpy(np_offset).to(device),
-        batch_size=[batch_size],
+    return owned_pairs(
+        X_HealthBlock, np_out, np_entity_kind, np_offset, ENCODING_PAIRS_HEALTH_BLOCK, device
     )

@@ -5,11 +5,8 @@ import torch.nn as nn
 
 
 class HeadActionType(nn.Module):
-    """
-    L1 action-kind head: x_global gated by the focus context before scoring
-    (AlphaStar-style GLU — the action space is modal per focus, so the gate lets
-    the head mute the global features irrelevant to the current mode).
-    """
+    """L1 ActionType head: x_global gated by the focus context before scoring (AlphaStar-style
+    GLU), so the head can mute the global features irrelevant to the current focus."""
 
     def __init__(self, dim_global: int, dim_ff: int, num_choices: int, dim_context: int) -> None:
         super().__init__()
@@ -35,7 +32,7 @@ class PointerKeys(nn.Module):
     """
     Entity-class key projection for pointer selection (AlphaStar PointerLogits
     keys net, 1 layer: LayerNorm -> ReLU -> Linear). One instance per entity
-    class (cards, potions, ...), shared by every pool of that class, so the same
+    class (cards, potions, ...), shared by every action type that selects that class, so the same
     entity maps to the same key in every selection context.
     """
 
@@ -54,26 +51,11 @@ class PointerKeys(nn.Module):
 
 
 class HeadPointerSelect(nn.Module):
-    """
-    Pointer-network selection head (AlphaStar PointerLogits): the decision context
-    projects to a query (1 layer: LayerNorm -> ReLU -> Linear), and each entity's
-    logit is the key·query dot product scaled by 1/√dim_key. The scaling deviates
-    from AlphaStar (raw dot products) deliberately: the dot product sums dim_key
-    unit-scale terms, so unscaled logits move ~√dim_key faster per weight step
-    than the concat-MLP heads the entropy/clip budget was tuned on — measured as
-    2× approx_kl and 2× faster entropy collapse on NEWERA-VIII. Selection is
-    retrieval in the shared key space: keys encode entity qualities once, the
-    query encodes what the current decision wants.
-    """
+    """Pointer-network selection head (AlphaStar PointerLogits): each entity's logit is
+    key·query scaled by 1/√dim_key. The scaling deviates from AlphaStar deliberately:
+    unscaled logits move ~√dim_key faster per weight step than the entropy/clip budget expects."""
 
     def __init__(self, dim_global: int, dim_cond: int, dim_key: int) -> None:
-        """
-        Args:
-            dim_global: Dimension of the global context vector
-            dim_cond: Dimension of the conditioning vector (operation embedding
-                for L2, active-entity embedding for L3)
-            dim_key: Dimension of the pointer keys/query
-        """
         super().__init__()
 
         self._scale = 1.0 / math.sqrt(dim_key)
@@ -107,12 +89,6 @@ class HeadValue(nn.Module):
     """
 
     def __init__(self, dim_global: int, dim_ff: int, num_streams: int) -> None:
-        """
-        Args:
-            dim_global: Dimension of the global context vector
-            dim_ff: Hidden dimension of the feedforward network
-            num_streams: Number of reward streams (len(REWARD_STREAMS))
-        """
         super().__init__()
 
         self._network = nn.Sequential(
@@ -124,13 +100,5 @@ class HeadValue(nn.Module):
         )
 
     def forward(self, x_global: torch.Tensor) -> torch.Tensor:
-        """
-        Estimate per-stream state values.
-
-        Args:
-            x_global: Global context vector (B, dim_global)
-
-        Returns:
-            Value estimates (B, num_streams)
-        """
+        """Estimate per-stream state values."""
         return self._network(x_global)
