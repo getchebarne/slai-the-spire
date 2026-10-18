@@ -12,7 +12,7 @@ from slai import GameState
 
 from src.rl.constants import FAST_MODE
 from src.rl.constants import NEOW
-from src.rl.types import TrainingBatch
+from src.rl.types import X_TrainingBatch
 
 
 def load_config(config_path: str) -> dict[str, Any]:
@@ -58,7 +58,7 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
     return state, terminated
 
 
-def shuffle_batch(batch: TrainingBatch, generator: torch.Generator) -> TrainingBatch:
+def shuffle_batch(batch: X_TrainingBatch, generator: torch.Generator) -> X_TrainingBatch:
     """Return the batch with every row permuted by one shared random permutation, so each
     epoch's minibatches are cheap contiguous slice views (indexing a tensorclass is costly)."""
     perm = torch.randperm(len(batch), device=generator.device, generator=generator)

@@ -193,8 +193,8 @@ def _encode_map_meta_into(
     # Next-row `RoomKind`s per column
     y_next = 0 if y_current is None else y_current + 1
     for x in _next_row_candidate_cols(rooms, y_current, x_current, winged):
-        idx_kind = _MAP_ROOM_KIND[rooms[y_next][x].room_kind]
-        out[OFF_MAP_NEXT_ROOM_KINDS + x * _MAP_NUM_ROOM_KINDS + idx_kind] = 1.0
+        idx_room_kind = _MAP_ROOM_KIND[rooms[y_next][x].room_kind]
+        out[OFF_MAP_NEXT_ROOM_KINDS + x * _MAP_NUM_ROOM_KINDS + idx_room_kind] = 1.0
 
     # Act OHE (1-based)
     out[OFF_MAP_ACT + (act - 1)] = 1.0
@@ -260,7 +260,7 @@ def encode_batch_map(
         )
         _encode_unknown_room_into(game_state, map_.room_kind_resolved, np_meta[b])
 
-    # The room tokens' kind row: ROOMS at each reachable next-row column, -1 where none
+    # The room tokens' slice kind row: ROOMS at each reachable next-row column, -1 where none
     np_room_slice_kind = np.where(np_node_idx >= 0, SliceKind.ROOMS, -1).astype(np.int16)
 
     return (

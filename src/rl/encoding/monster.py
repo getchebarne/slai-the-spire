@@ -20,15 +20,15 @@ from src.rl.constants import INTENT_DAMAGE_HIT_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import INTENT_INSTANCES_MAX
 from src.rl.constants import MONSTER_MOVESET_MAX
-from src.rl.encoding.pairs import entity_pairs
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.encoding.sparse import entity_sparse
 from src.rl.types import BatchEffectRows
 from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import SliceKind
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import make_channel_allocator
 
 
@@ -102,7 +102,7 @@ OFF_MONSTER_HOLDS_STASIS = _alloc(MonsterChannel.HOLDS_STASIS)
 ENCODING_DIM_MONSTER = sum(w for _, w in CHANNEL_LAYOUT_MONSTER)
 
 # Most nonzero columns a monster row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_MONSTER = len(CHANNEL_LAYOUT_MONSTER)
+ENCODING_SPARSE_MONSTER = len(CHANNEL_LAYOUT_MONSTER)
 
 
 def _intent_total_damage(monster: Monster) -> int:
@@ -124,11 +124,11 @@ def _encode_monster_into(
     out[OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
 
     # Poison-is-lethal
-    stacks_of_kind = {modifier.kind: modifier.stacks for modifier in monster.modifiers}
-    poison_health_loss = stacks_of_kind.get(ModifierKind.Poison, 0)
-    if ModifierKind.Buffer in stacks_of_kind:
+    stacks_of_modifier_kind = {modifier.kind: modifier.stacks for modifier in monster.modifiers}
+    poison_health_loss = stacks_of_modifier_kind.get(ModifierKind.Poison, 0)
+    if ModifierKind.Buffer in stacks_of_modifier_kind:
         poison_health_loss = 0
-    elif ModifierKind.Intangible in stacks_of_kind:
+    elif ModifierKind.Intangible in stacks_of_modifier_kind:
         poison_health_loss = min(poison_health_loss, 1)
     out[OFF_MONSTER_POISON_IS_LETHAL] = float(
         poison_health_loss > 0 and poison_health_loss >= monster.health
@@ -217,9 +217,9 @@ def _get_monster_entities(combat: Combat | None) -> list[Monster]:
 
 def encode_batch_monsters(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntityPairs, BatchEffectRows, BatchEffectRows]:
-    """The monster block ((B, W, dim) rows as pairs + the (B, W) kind of each token) + each
-    state's live-move effect rows and whole-moveset rows (what it could do, not the live
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchEffectRows]:
+    """The monster block ((B, W, dim) rows held sparse + the (B, W) slice kind of each token) +
+    each state's live-move effect rows and whole-moveset rows (what it could do, not the live
     intent), both keyed by monster slot; W is the batch's most monsters."""
     batch_size = len(game_states)
     batch_monsters = []
@@ -254,16 +254,19 @@ def encode_batch_monsters(
 
             # Effects
             effects = monster.move_effects  # Bound once: each read clones the Vec
-            effect_rows_move += [(i, EffectSource.MONSTER_MOVE, effect) for effect in effects]
+            effect_rows_move += [
+                (SliceKind.MONSTERS, i, EffectSource.MONSTER_MOVE, effect) for effect in effects
+            ]
             effect_rows_moveset += [
-                (i, EffectSource.MONSTER_MOVESET, effect) for effect in by_name[monster.name]
+                (SliceKind.MONSTERS, i, EffectSource.MONSTER_MOVESET, effect)
+                for effect in by_name[monster.name]
             ]
 
         batch_effect_rows_move.append(effect_rows_move)
         batch_effect_rows_moveset.append(effect_rows_moveset)
 
     return (
-        entity_pairs(np_out, np_slice_kind, ENCODING_PAIRS_MONSTER, device),
+        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_MONSTER, device),
         batch_effect_rows_move,
         batch_effect_rows_moveset,
     )

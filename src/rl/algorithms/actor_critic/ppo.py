@@ -8,8 +8,8 @@ from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
-from src.rl.types import Rollout
-from src.rl.types import TrainingBatch
+from src.rl.types import X_Rollout
+from src.rl.types import X_TrainingBatch
 from src.rl.utils import shuffle_batch
 
 
@@ -53,7 +53,7 @@ def _compute_gae(
 
 
 def _recompute(
-    model: ActorCritic, rollout: Rollout, minibatch_size: int
+    model: ActorCritic, rollout: X_Rollout, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """The rollout's log-probs (N,) and values (T, E, K) under the learner's current
     weights, a minibatch of rows at a time, and each game's final value (E, K)"""
@@ -63,7 +63,7 @@ def _recompute(
         for start in range(0, T * E, minibatch_size):
             rows = slice(start, start + minibatch_size)
             x_log_probs, _, _, x_values = model.evaluate_actions(
-                rollout.game_state[rows], rollout.mask_batch[rows], rollout.actions[rows]
+                rollout.game_state[rows], rollout.mask[rows], rollout.actions[rows]
             )
             log_probs.append(x_log_probs)
             values.append(x_values)
@@ -75,8 +75,8 @@ def _recompute(
 
 
 def prepare_batch(
-    model: ActorCritic, rollout: Rollout, gamma: float, ppo: PPOConfig
-) -> TrainingBatch:
+    model: ActorCritic, rollout: X_Rollout, gamma: float, ppo: PPOConfig
+) -> X_TrainingBatch:
     """The update's batch: GAE, and the anchor π_prox the clip and the KL measure from"""
     T, E, K = rollout.rewards.shape
     log_probs_prox, values, final_values = _recompute(model, rollout, ppo.minibatch_size)
@@ -91,9 +91,9 @@ def prepare_batch(
 
     # Normalize advantages over the batch
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-    return TrainingBatch(
+    return X_TrainingBatch(
         game_state=rollout.game_state,
-        mask_batch=rollout.mask_batch,
+        mask=rollout.mask,
         actions=rollout.actions,
         log_probs_behavior=rollout.log_probs_behavior,
         log_probs_prox=log_probs_prox,
@@ -145,7 +145,7 @@ def _minibatch_metrics(
 
 def update_ppo(
     model: ActorCritic,
-    batch: TrainingBatch,
+    batch: X_TrainingBatch,
     optimizer: torch.optim.Optimizer,
     ppo: PPOConfig,
     device: torch.device,
@@ -177,7 +177,7 @@ def update_ppo(
         for start in range(0, len(batch), ppo.minibatch_size):
             rows = slice(start, start + ppo.minibatch_size)
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                ep.game_state[rows], ep.mask_batch[rows], ep.actions[rows]
+                ep.game_state[rows], ep.mask[rows], ep.actions[rows]
             )
             log_probs_prox = ep.log_probs_prox[rows]
             adv = ep.advantages[rows].squeeze(-1)

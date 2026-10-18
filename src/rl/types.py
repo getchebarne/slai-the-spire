@@ -36,7 +36,7 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
 
-# Values index Core._type_emb rows, so checkpoints pin them: append new kinds, never renumber
+# Values index Core._type_emb rows, so checkpoints pin them: append new slice kinds, never renumber
 class SliceKind(IntEnum):
     CARD_PILE_HAND = 0
     CARD_PILE_DRAW = 1
@@ -70,7 +70,7 @@ class SliceKind(IntEnum):
     CARD_MATCH_FLIPPED = 29
 
 
-SLICE_KINDS_CARD_REWARDS = (  # one kind per reward bundle (card.py owns their packing)
+SLICE_KINDS_CARD_REWARDS = (  # one slice kind per reward bundle (card.py owns their packing)
     SliceKind.CARD_REWARD_0,
     SliceKind.CARD_REWARD_1,
     SliceKind.CARD_REWARD_2,
@@ -112,8 +112,8 @@ SLICE_KINDS_POTION = (
     SliceKind.POTION_EVENT_ROLL,
 )
 
-# Each kind's token cap: the slice its encoder applies to that collection
-CAP_OF_KIND: dict[SliceKind, int] = {
+# Each slice kind's token cap: the slice its encoder applies to that collection
+CAP_OF_SLICE_KIND: dict[SliceKind, int] = {
     SliceKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
     SliceKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
     SliceKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
@@ -160,22 +160,6 @@ def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., i
     return layout, alloc
 
 
-class EntityKind(IntEnum):
-    """The one entity-type order: X_GameState's entity fields, the model's block
-    cat, and the owner type of an X_Owned row all follow it."""
-
-    CARD = 0
-    RELIC = 1
-    POTION = 2
-    MONSTER = 3
-    EVENT_OPTION = 4
-    CHARACTER = 5
-
-
-# Effect owner past the six types: the pending halt owns no token
-OWNER_PENDING = len(EntityKind)
-
-
 class EffectSource(IntEnum):
     """What applies the effect, and for relics on which trigger; stamped into the
     row by the effects encoder, outside the row cache."""
@@ -203,15 +187,18 @@ class EffectSource(IntEnum):
     CARD_DRAW = 14
 
 
-# An effect before encoding: the offset of the token that owns it (X_Effects.x_offset),
-# what applies it, and the effect
-type EffectRow = tuple[int, EffectSource, Effect]
+# An effect before encoding: the slice kind and rank of the token that owns it (X_OwnedSparse's
+# x_owner_slice_kind and x_owner_rank), what applies it, and the effect. The rank is the
+# token's index among its slice kind's tokens in pack order: the same rank `X_Action` and
+# `masks.TokenIndex` use
+type EffectRow = tuple[SliceKind, int, EffectSource, Effect]
 
 # One list of EffectRows per state in the batch
 type BatchEffectRows = list[list[EffectRow]]
 
-# A shop token's price before encoding: the offset of the token that sells it, and its price
-type PriceRow = tuple[int, int]
+# A shop token's price before encoding: the slice kind and rank of the shop token that sells it,
+# and its price
+type PriceRow = tuple[SliceKind, int, int]
 
 # One list of PriceRows per state in the batch
 type BatchPriceRows = list[list[PriceRow]]
@@ -219,7 +206,7 @@ type BatchPriceRows = list[list[PriceRow]]
 
 @tensorclass
 class X_Entity:
-    """Dense tokens and their kinds: the map GNN's rooms, and the projector's window (every
+    """Dense tokens and their slice kinds: the map GNN's rooms, and the projector's window (every
     type's block, then the rooms); `x_slice_kind[b, w]` is token w's SliceKind, -1 on a pad."""
 
     x: torch.Tensor  # (B, W, D_type)
@@ -231,12 +218,12 @@ class X_Entity:
 
 
 @tensorclass
-class X_EntityPairs:
+class X_EntitySparse:
     """One entity type's encoded tokens, packed to a valid prefix; `x_slice_kind[b, w]` is
     token w's SliceKind, -1 past the prefix (pad). W is the batch's longest packed
     sequence of the type, and K its most nonzero columns in a row — no fixed width anywhere
-    but X_Rows' caps. Each row is its nonzero (column, value) pairs in column order, then
-    (0, 0.0) pairs up to K."""
+    but X_Step's caps. Each row is its nonzero (column, value) entries in column order, then
+    (0, 0.0) entries up to K."""
 
     x_column: torch.Tensor  # (B, W, K) int16
     x_value: torch.Tensor  # (B, W, K) float32
@@ -248,55 +235,54 @@ class X_EntityPairs:
 
 
 @tensorclass
-class X_Owned:
-    """Rows owned by tokens, one family per subclass, which the projector adds into
-    their owners. Pads are x_entity_kind == -1, with zeros elsewhere."""
+class X_OwnedSparse:
+    """Rows owned by tokens, one family per X_GameState field, which the projector adds into
+    their owners. Pads are x_owner_slice_kind == -1, with zeros elsewhere."""
 
-    x_column: torch.Tensor  # (B, R, K) int16 — as in X_EntityPairs; R = the batch's most rows
+    x_column: torch.Tensor  # (B, R, K) int16 — as in X_EntitySparse; R = the batch's most rows
     x_value: torch.Tensor  # (B, R, K) float32
-    x_entity_kind: torch.Tensor  # (B, R) long — owner `EntityKind` / -1 = pad
-    x_offset: torch.Tensor  # (B, R) long — owner's packed position in its type's `X_EntityPairs`
+    x_owner_slice_kind: torch.Tensor  # (B, R) long — the owner token's `SliceKind` / -1 = pad
+    x_owner_rank: torch.Tensor  # (B, R) long — the owner's rank within its slice kind
 
     @property
     def mask(self) -> torch.Tensor:
-        return self.x_entity_kind >= 0
+        return self.x_owner_slice_kind >= 0
 
 
 @tensorclass
-class X_Modifiers(X_Owned):
-    """Any number per Character / Monster."""
+class X_EffectPending:
+    """The pending halt's effect row, held sparse: global context, since no token owns it.
+    All (0, 0.0) entries where no halt is pending."""
 
+    x_column: torch.Tensor  # (B, K) int16
+    x_value: torch.Tensor  # (B, K) float32
 
-@tensorclass
-class X_Effects(X_Owned):
-    """Any number per token; the pending halt owns none (OWNER_PENDING, offset 0)."""
-
-
-@tensorclass
-class X_HealthBlock(X_Owned):
-    """One per Character / Monster."""
-
-
-@tensorclass
-class X_Prices(X_Owned):
-    """One per Shop token (Card / Relic / Potion)."""
+    @property
+    def mask(self) -> torch.Tensor:
+        # A pending row always sets its source column, and a row's nonzero entries come first
+        return self.x_value[:, 0] != 0
 
 
 @tensorclass
 class X_GameState:
-    # One X_EntityPairs per type, in EntityKind order. The window's kind row is the cat
+    # One X_EntitySparse per type, in window order. The window's slice kind row is the cat
     # of their `x_slice_kind` then `room_slice_kind`, written wherever a consumer needs it
-    cards: X_EntityPairs
-    relics: X_EntityPairs
-    potions: X_EntityPairs
-    monsters: X_EntityPairs
-    event_options: X_EntityPairs
-    character: X_EntityPairs
-    health_block: X_HealthBlock  # the combatants' shared health/block family, by kind
-    prices: X_Prices  # the shop tokens' shared price family, by owner
+    cards: X_EntitySparse
+    relics: X_EntitySparse
+    potions: X_EntitySparse
+    monsters: X_EntitySparse
+    event_options: X_EntitySparse
+    character: X_EntitySparse
 
-    effects: X_Effects
-    modifiers: X_Modifiers
+    # One per Character / Monster
+    health_block: X_OwnedSparse  # the combatants' shared health/block family, by slice kind
+
+    # One per Shop token (Card / Relic / Potion)
+    prices: X_OwnedSparse  # the shop tokens' shared price family, by owner
+
+    effects: X_OwnedSparse  # any number per token
+    effect_pending: X_EffectPending
+    modifiers: X_OwnedSparse  # any number per Character / Monster
     energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
     room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
@@ -353,13 +339,13 @@ class X_Mask:
 
 @tensorclass
 class X_Action:
-    """The sampled hierarchy per row, engine-facing: `kind` and `rank` name the L2
-    selection as the rank-th token of its kind, `target` the L3 selection as the rank-th monster
-    token, and masks.engine_action names their entities by id. -1 where a level didn't
-    apply."""
+    """The sampled hierarchy per row, engine-facing: `slice_kind` and `rank` name the L2
+    selection as the rank-th token of its slice kind, `target` the L3 selection as the
+    rank-th monster token, and masks.engine_action names their entities by id. -1 where a
+    level didn't apply."""
 
     action_type: torch.Tensor  # (B,) long
-    kind: torch.Tensor  # (B,) long — SliceKind of the L2 selection
+    slice_kind: torch.Tensor  # (B,) long — SliceKind of the L2 selection
     rank: torch.Tensor  # (B,) long
     target: torch.Tensor  # (B,) long
     log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
@@ -368,26 +354,26 @@ class X_Action:
 
 
 @tensorclass
-class X_Rows:
-    """One row per game, shared by the step loop and its workers: the action the step loop
-    sampled, then the reward, done flag, state and masks the worker wrote back"""
+class X_Step:
+    """One step of every game, shared by the step loop and its workers: the action the step
+    loop sampled, then the reward, done flag, state and masks the worker wrote back"""
 
-    actions: torch.Tensor  # (E, 4) long: action type, kind, rank, target
+    actions: torch.Tensor  # (E, 4) long: action type, slice kind, rank, target
     rewards: torch.Tensor  # (E, K)
     dones: torch.Tensor  # (E,)
     game_state: X_GameState  # (E, ...), every block at its cap
-    mask_batch: X_Mask  # (E, ...), every block at its cap
+    mask: X_Mask  # (E, ...), every block at its cap
 
 
 @tensorclass
-class Rollout:
+class X_Rollout:
     """What the actor collected, before GAE: T steps of E games, row t * E + e of the
     N = T * E rows. The `final_` field is each game's state after the last step, for
     the bootstrap value"""
 
     game_state: X_GameState  # (N, ...)
-    mask_batch: X_Mask  # (N, ...)
-    actions: torch.Tensor  # (N, 4): action type, kind, rank, target
+    mask: X_Mask  # (N, ...)
+    actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     rewards: torch.Tensor  # (T, E, K)
     dones: torch.Tensor  # (T, E)
@@ -395,15 +381,15 @@ class Rollout:
 
 
 @tensorclass
-class TrainingBatch:
+class X_TrainingBatch:
     """Columnar rollout (N = rollout_length * num_envs rows). The full-batch masks are
     stored once and row-sliced per minibatch; GAE returns/advantages are precomputed.
     Values/returns are per reward stream (K = len(RewardStream)); the policy
     advantage is the per-stream advantages summed, then normalized."""
 
     game_state: X_GameState  # (N, ...)
-    mask_batch: X_Mask  # (N, ...) — row-sliced per minibatch (mask_batch[rows])
-    actions: torch.Tensor  # (N, 4): action type, kind, rank, target
+    mask: X_Mask  # (N, ...) — row-sliced per minibatch (mask[rows])
+    actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
     values_prox: torch.Tensor  # (N, K) the values that go with π_prox
@@ -423,11 +409,12 @@ def _check_tables() -> None:
     if len(SLICE_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
         raise RuntimeError(
             f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
-            "add CARD_REWARD_<b> kinds"
+            "add CARD_REWARD_<b> slice kinds"
         )
-    if set(CAP_OF_KIND) != set(SliceKind):
+    if set(CAP_OF_SLICE_KIND) != set(SliceKind):
         raise RuntimeError(
-            f"A SliceKind has no entry in CAP_OF_KIND: {set(SliceKind) - set(CAP_OF_KIND)}"
+            "A SliceKind has no entry in CAP_OF_SLICE_KIND: "
+            f"{set(SliceKind) - set(CAP_OF_SLICE_KIND)}"
         )
 
 

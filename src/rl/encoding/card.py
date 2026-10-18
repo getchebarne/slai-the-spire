@@ -35,7 +35,7 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
 from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.encoding.effect import catalog_effects
-from src.rl.encoding.pairs import entity_pairs
+from src.rl.encoding.sparse import entity_sparse
 from src.rl.types import SLICE_KINDS_CARD
 from src.rl.types import SLICE_KINDS_CARD_REWARDS
 from src.rl.types import BatchEffectRows
@@ -44,7 +44,7 @@ from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import PriceRow
 from src.rl.types import SliceKind
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import make_channel_allocator
 
 
@@ -127,7 +127,7 @@ OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(CardChannel.FREE_TO_PLAY_ONCE)
 ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
 # Most nonzero columns a card row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_CARD = len(CHANNEL_LAYOUT_CARD)
+ENCODING_SPARSE_CARD = len(CHANNEL_LAYOUT_CARD)
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -219,33 +219,36 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
     out[:] = row
 
 
-_REWARD_BUNDLE_OF_KIND = {kind: bundle for bundle, kind in enumerate(SLICE_KINDS_CARD_REWARDS)}
+_REWARD_BUNDLE_OF_SLICE_KIND = {
+    slice_kind: bundle for bundle, slice_kind in enumerate(SLICE_KINDS_CARD_REWARDS)
+}
 
-# The play queue and nightmare pile kinds that have already warned about overflow
+# The play queue and nightmare pile slice kinds that have already warned about overflow
 _WARNED_OVERFLOW: set[SliceKind] = set()
 
 
-def _capped(kind: SliceKind, cards: list[Card], cap: int) -> list[Card]:
-    """`cards` cut to `cap`, warning once per kind when that drops any."""
-    if len(cards) > cap and kind not in _WARNED_OVERFLOW:
-        _WARNED_OVERFLOW.add(kind)
+def _capped(slice_kind: SliceKind, cards: list[Card], cap: int) -> list[Card]:
+    """`cards` cut to `cap`, warning once per slice kind when that drops any."""
+    if len(cards) > cap and slice_kind not in _WARNED_OVERFLOW:
+        _WARNED_OVERFLOW.add(slice_kind)
         warnings.warn(
-            f"{kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are dropped"
+            f"{slice_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
+            "dropped"
         )
     return cards[:cap]
 
 
 def _get_card_entities(
-    kind: SliceKind, game_state: GameState, combat: Combat | None
+    slice_kind: SliceKind, game_state: GameState, combat: Combat | None
 ) -> list[Card]:
-    """The GameState card pile a card kind names, truncated to the pile's cap
+    """The GameState card pile a card slice kind names, truncated to the pile's cap
     (used by iter_packed_cards + masks dedup). A card past the cap has no token,
     so masks and prices cannot name it.
 
     `combat` is the caller's hoisted `game_state.combat`: every context access
     deep-clones the whole snapshot across the FFI, so it is fetched once per
-    state, never per kind."""
-    match kind:
+    state, never per slice kind."""
+    match slice_kind:
         case SliceKind.CARD_PILE_HAND:
             return combat.card_pile_hand[:MAX_SIZE_CARD_PILE_HAND] if combat is not None else []
         case SliceKind.CARD_PILE_DRAW:
@@ -286,7 +289,7 @@ def _get_card_entities(
             | SliceKind.CARD_REWARD_4
         ):
             reward = game_state.reward
-            bundle = _REWARD_BUNDLE_OF_KIND[kind]
+            bundle = _REWARD_BUNDLE_OF_SLICE_KIND[slice_kind]
             if reward is None or bundle >= len(reward.cards):
                 return []
 
@@ -303,8 +306,8 @@ def _get_card_entities(
 
             # A consumed event's offer is dead, unless a halt still selects from it (Neow's cards)
             if event.consumed:
-                pending = game_state.effect_pending
-                pool = pending.target.candidate_pool if pending is not None else None
+                effect_pending = game_state.effect_pending
+                pool = effect_pending.target.candidate_pool if effect_pending is not None else None
                 if pool != CandidatePool.CardPileEventRoll:
                     return []
             return event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
@@ -315,32 +318,32 @@ def _get_card_entities(
         case SliceKind.CARD_PLAY_QUEUE:
             if combat is None:
                 return []
-            return _capped(kind, combat.card_play_queue, MAX_SIZE_CARD_PLAY_QUEUE)
+            return _capped(slice_kind, combat.card_play_queue, MAX_SIZE_CARD_PLAY_QUEUE)
         case SliceKind.CARD_PILE_NIGHTMARE:
             if combat is None:
                 return []
-            return _capped(kind, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE)
+            return _capped(slice_kind, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE)
         case SliceKind.CARD_PILE_SELECTED:
             return game_state.card_pile_selected[:MAX_SIZE_CARD_PILE_SELECTED]
         case _:
-            raise ValueError(f"Unsupported `SliceKind`: {kind}")
+            raise ValueError(f"Unsupported `SliceKind`: {slice_kind}")
 
 
 def iter_packed_cards(
     game_state: GameState, combat: Combat | None
-) -> Iterator[tuple[SliceKind, Card]]:
+) -> Iterator[tuple[SliceKind, int, Card]]:
     for slice_kind in SLICE_KINDS_CARD:
-        for card in _get_card_entities(slice_kind, game_state, combat):
-            yield slice_kind, card
+        for rank, card in enumerate(_get_card_entities(slice_kind, game_state, combat)):
+            yield slice_kind, rank, card
 
 
 def encode_batch_cards(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntityPairs, BatchEffectRows, BatchPriceRows]:
-    """The card block ((B, W, ENCODING_DIM_CARD) rows as pairs + the (B, W) `SliceKind` of each
-    token) + each state's (offset, source, effect) rows and its shop tokens' (offset, price)
-    rows, keyed by the same w as the token they belong to; W is the batch's longest packed card
-    sequence."""
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
+    """The card block ((B, W, ENCODING_DIM_CARD) rows held sparse + the (B, W) `SliceKind` of each
+    token) + each state's (slice kind, rank, source, effect) rows and its shop tokens'
+    (slice kind, rank, price) rows, keyed by the token they belong to; W is the batch's longest
+    packed card sequence."""
     batch_tokens = []
     batch_energy_current = []
     batch_card_prices = []
@@ -363,7 +366,7 @@ def encode_batch_cards(
 
         # Shop tokens come in shop order, so they take the parallel price list in step
         card_prices = iter(batch_card_prices[b])
-        for w, (slice_kind, card) in enumerate(tokens):
+        for w, (slice_kind, rank, card) in enumerate(tokens):
             # Encode card
             encode_card_into_w_cache(card, energy_current, np_out[b, w])
 
@@ -372,21 +375,26 @@ def encode_batch_cards(
 
             # Collect its price
             if slice_kind == SliceKind.CARD_SHOP:
-                price_rows.append((w, next(card_prices)))
+                price_rows.append((slice_kind, rank, next(card_prices)))
 
             # Collect Effects
             effects_play = card.effects_play  # Bound once; each read clones the Vec
             if effects_play:
-                effect_rows += [(w, EffectSource.CARD_PLAY, effect) for effect in effects_play]
+                effect_rows += [
+                    (slice_kind, rank, EffectSource.CARD_PLAY, effect) for effect in effects_play
+                ]
             effect_rows += [
-                (w, EffectSource.CARD_DISCARD, effect) for effect in card.effects_discard
+                (slice_kind, rank, EffectSource.CARD_DISCARD, effect)
+                for effect in card.effects_discard
             ]
-            effect_rows += [(w, EffectSource.CARD_DRAW, effect) for effect in card.effects_draw]
+            effect_rows += [
+                (slice_kind, rank, EffectSource.CARD_DRAW, effect) for effect in card.effects_draw
+            ]
         batch_effect_rows.append(effect_rows)
         batch_price_rows.append(price_rows)
 
     return (
-        entity_pairs(np_out, np_slice_kind, ENCODING_PAIRS_CARD, device),
+        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_CARD, device),
         batch_effect_rows,
         batch_price_rows,
     )

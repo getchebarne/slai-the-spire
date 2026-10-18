@@ -68,7 +68,7 @@ class EntityTransformer(nn.Module):
         self._norm_final = nn.LayerNorm(dim_entity)
 
         # Learned global token, refined with the entities (replaces pooling). It
-        # has no kind, so it joins the sequence here and leaves it here
+        # has no slice kind, so it joins the sequence here and leaves it here
         self._entity_global = nn.Parameter(torch.empty(1, 1, dim_entity))
         nn.init.normal_(self._entity_global, std=0.02)
 

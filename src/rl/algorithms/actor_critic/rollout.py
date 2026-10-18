@@ -9,12 +9,13 @@ from src.rl.algorithms.actor_critic.workers import snapshot_to_device
 from src.rl.algorithms.actor_critic.workers import step_workers
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
-from src.rl.types import Rollout
+from src.rl.types import X_EffectPending
 from src.rl.types import X_EntityMask
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import X_GameState
 from src.rl.types import X_Mask
-from src.rl.types import X_Owned
+from src.rl.types import X_OwnedSparse
+from src.rl.types import X_Rollout
 
 
 _AT_REST = int(slai.ActionType.Rest)
@@ -40,7 +41,7 @@ def _pad_cat(tensors: list[torch.Tensor], fill: float) -> torch.Tensor:
 
 def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
     """The rollout's states as one batch: every block padded to the rollout's
-    widest (pairs (0, 0.0), kinds -1), the per-state tensors just concatenated."""
+    widest (entries (0, 0.0), slice kinds -1), the per-state tensors just concatenated."""
     batch_size = [sum(len(x) for x in steps)]
     return X_GameState(
         cards=_pad_cat_entity([x.cards for x in steps], batch_size),
@@ -52,6 +53,7 @@ def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
         health_block=_pad_cat_owned([x.health_block for x in steps], batch_size),
         prices=_pad_cat_owned([x.prices for x in steps], batch_size),
         effects=_pad_cat_owned([x.effects for x in steps], batch_size),
+        effect_pending=_pad_cat_effect_pending([x.effect_pending for x in steps], batch_size),
         modifiers=_pad_cat_owned([x.modifiers for x in steps], batch_size),
         energy=torch.cat([x.energy for x in steps]),
         map_grid=torch.cat([x.map_grid for x in steps]),
@@ -67,8 +69,8 @@ def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
     )
 
 
-def _pad_cat_entity(blocks: list[X_EntityPairs], batch_size: list[int]) -> X_EntityPairs:
-    return X_EntityPairs(
+def _pad_cat_entity(blocks: list[X_EntitySparse], batch_size: list[int]) -> X_EntitySparse:
+    return X_EntitySparse(
         x_column=_pad_cat([block.x_column for block in blocks], 0),
         x_value=_pad_cat([block.x_value for block in blocks], 0.0),
         x_slice_kind=_pad_cat([block.x_slice_kind for block in blocks], -1),
@@ -76,12 +78,22 @@ def _pad_cat_entity(blocks: list[X_EntityPairs], batch_size: list[int]) -> X_Ent
     )
 
 
-def _pad_cat_owned(blocks: list[X_Owned], batch_size: list[int]) -> X_Owned:
-    return type(blocks[0])(
+def _pad_cat_owned(blocks: list[X_OwnedSparse], batch_size: list[int]) -> X_OwnedSparse:
+    return X_OwnedSparse(
         x_column=_pad_cat([block.x_column for block in blocks], 0),
         x_value=_pad_cat([block.x_value for block in blocks], 0.0),
-        x_entity_kind=_pad_cat([block.x_entity_kind for block in blocks], -1),
-        x_offset=_pad_cat([block.x_offset for block in blocks], 0),
+        x_owner_slice_kind=_pad_cat([block.x_owner_slice_kind for block in blocks], -1),
+        x_owner_rank=_pad_cat([block.x_owner_rank for block in blocks], 0),
+        batch_size=batch_size,
+    )
+
+
+def _pad_cat_effect_pending(
+    blocks: list[X_EffectPending], batch_size: list[int]
+) -> X_EffectPending:
+    return X_EffectPending(
+        x_column=_pad_cat([block.x_column for block in blocks], 0),
+        x_value=_pad_cat([block.x_value for block in blocks], 0.0),
         batch_size=batch_size,
     )
 
@@ -120,11 +132,11 @@ def collect_rollout(
     device: torch.device,
     curriculum_c: float,
     generator: torch.Generator,
-) -> tuple[Rollout, list[EpisodeStats], dict[str, float]]:
+) -> tuple[X_Rollout, list[EpisodeStats], dict[str, float]]:
     """Play `rollout_length` lockstep steps of every game with `model`, sampling from
     `generator`: each step one forward over all games, then the workers step them. GAE is the
     learner's"""
-    E = len(exchange.rows)
+    E = len(exchange.step)
     T = rollout_length
     N = T * E
     K = len(RewardStream)
@@ -143,14 +155,14 @@ def collect_rollout(
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
-        x, mb = snapshot_to_device(exchange.rows, device)
+        x, mb = snapshot_to_device(exchange.step, device)
         for t in range(T):
             out = model.act(x, mb, generator=generator)
             chunks_x.append(x)
             chunks_mb.append(mb)
             step_rows = slice(t * E, (t + 1) * E)
             actions[step_rows] = torch.stack(
-                [out.action_type, out.kind, out.rank, out.target], dim=1
+                [out.action_type, out.slice_kind, out.rank, out.target], dim=1
             )
             log_probs[step_rows] = out.log_prob.sum(-1)
 
@@ -160,11 +172,11 @@ def collect_rollout(
             rest_selections.add_((both & (chosen == _AT_REST)).sum())
             upgrade_selections.add_((both & (chosen == _AT_SMITH)).sum())
 
-            exchange.rows.actions.copy_(actions[step_rows])
+            exchange.step.actions.copy_(actions[step_rows])
             step_workers(workers)
-            rewards[t] = exchange.rows.rewards
-            dones[t] = exchange.rows.dones
-            x, mb = snapshot_to_device(exchange.rows, device)
+            rewards[t] = exchange.step.rewards
+            dones[t] = exchange.step.dones
+            x, mb = snapshot_to_device(exchange.step, device)
 
     # Set model to training mode
     model.train()
@@ -182,9 +194,9 @@ def collect_rollout(
     }
 
     return (
-        Rollout(
+        X_Rollout(
             game_state=_pad_cat_states(chunks_x),
-            mask_batch=_pad_cat_masks(chunks_mb),
+            mask=_pad_cat_masks(chunks_mb),
             actions=actions,
             log_probs_behavior=log_probs,
             rewards=rewards,

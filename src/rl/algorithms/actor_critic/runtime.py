@@ -21,14 +21,14 @@ from src.rl.algorithms.actor_critic.workers import parent_alive
 from src.rl.algorithms.actor_critic.workers import start_workers
 from src.rl.algorithms.actor_critic.workers import stop_workers
 from src.rl.models import ActorCritic
-from src.rl.types import Rollout
+from src.rl.types import X_Rollout
 
 
 @dataclass
 class Delivery:
     """One collected rollout and how it was made"""
 
-    rollout: Rollout
+    rollout: X_Rollout
     completed: list[EpisodeStats]
     info: dict[str, float]
     seconds_collect: float

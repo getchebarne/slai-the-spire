@@ -1,22 +1,18 @@
-from typing import TypeVar
-
 import numpy as np
 import torch
 
-from src.rl.types import X_EntityPairs
-from src.rl.types import X_Owned
+from src.rl.types import X_EffectPending
+from src.rl.types import X_EntitySparse
+from src.rl.types import X_OwnedSparse
 
 
-T = TypeVar("T", bound=X_Owned)
-
-
-def entity_pairs(
-    np_rows: np.ndarray, np_slice_kind: np.ndarray, num_pairs: int, device: torch.device
-) -> X_EntityPairs:
-    """An entity block from its (B, W, D) rows, each with at most `num_pairs` nonzero
-    columns, and their (B, W) kinds"""
-    np_column, np_value = _dense_to_pairs(np_rows, num_pairs)
-    return X_EntityPairs(
+def entity_sparse(
+    np_rows: np.ndarray, np_slice_kind: np.ndarray, num_sparse: int, device: torch.device
+) -> X_EntitySparse:
+    """An entity block from its (B, W, D) rows, each with at most `num_sparse` nonzero
+    columns, and their (B, W) slice kinds"""
+    np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
+    return X_EntitySparse(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
         x_slice_kind=torch.from_numpy(np_slice_kind).to(device),
@@ -24,30 +20,42 @@ def entity_pairs(
     )
 
 
-def owned_pairs(
-    cls: type[T],
+def owned_sparse(
     np_rows: np.ndarray,
-    np_entity_kind: np.ndarray,
-    np_offset: np.ndarray,
-    num_pairs: int,
+    np_owner_slice_kind: np.ndarray,
+    np_owner_rank: np.ndarray,
+    num_sparse: int,
     device: torch.device,
-) -> T:
-    """A family of owned rows from its (B, R, D) rows, each with at most `num_pairs` nonzero
+) -> X_OwnedSparse:
+    """A family of owned rows from its (B, R, D) rows, each with at most `num_sparse` nonzero
     columns, and their (B, R) owner keys"""
-    np_column, np_value = _dense_to_pairs(np_rows, num_pairs)
-    return cls(
+    np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
+    return X_OwnedSparse(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
-        x_entity_kind=torch.from_numpy(np_entity_kind).to(device),
-        x_offset=torch.from_numpy(np_offset).to(device),
+        x_owner_slice_kind=torch.from_numpy(np_owner_slice_kind).to(device),
+        x_owner_rank=torch.from_numpy(np_owner_rank).to(device),
         batch_size=[np_rows.shape[0]],
     )
 
 
-def _dense_to_pairs(np_rows: np.ndarray, num_pairs: int) -> tuple[np.ndarray, np.ndarray]:
-    """Each row of the (..., D) float32 `np_rows` as its nonzero (column, value) pairs in
-    column order, then (0, 0.0) pairs: (..., K) int16 columns and float32 values, K the rows'
-    most nonzero columns (at least one). A row with more than `num_pairs` raises an IndexError"""
+def effect_pending_sparse(
+    np_rows: np.ndarray, num_sparse: int, device: torch.device
+) -> X_EffectPending:
+    """The pending effects from their (B, D) rows, each with at most `num_sparse` nonzero
+    columns"""
+    np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
+    return X_EffectPending(
+        x_column=torch.from_numpy(np_column).to(device),
+        x_value=torch.from_numpy(np_value).to(device),
+        batch_size=[np_rows.shape[0]],
+    )
+
+
+def _dense_to_sparse(np_rows: np.ndarray, num_sparse: int) -> tuple[np.ndarray, np.ndarray]:
+    """Each row of the (..., D) float32 `np_rows` as its nonzero (column, value) entries in
+    column order, then (0, 0.0) entries: (..., K) int16 columns and float32 values, K the rows'
+    most nonzero columns (at least one). A row with more than `num_sparse` raises an IndexError"""
     encoding_dim = np_rows.shape[-1]
 
     # Number of rows in `np_rows.reshape(-1, encoding_dim)`
@@ -65,8 +73,8 @@ def _dense_to_pairs(np_rows: np.ndarray, num_pairs: int) -> tuple[np.ndarray, np
     np_nz_cnt = np.bincount(np_row, minlength=num_rows)  # (num_rows,)
 
     # Output width: the fullest row's non-zero count, at least one; `initial=0` covers a block
-    # with zero rows. The `num_pairs` cap only makes an overflowing row raise below
-    num_slots = max(min(int(np_nz_cnt.max(initial=0)), num_pairs), 1)
+    # with zero rows. The `num_sparse` cap only makes an overflowing row raise below
+    num_slots = max(min(int(np_nz_cnt.max(initial=0)), num_sparse), 1)
 
     # `np_idx_flat_nz` is sorted, so each row's non-zero elements form one run in it.
     # `np_end`: one past each run's last entry

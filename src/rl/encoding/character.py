@@ -17,12 +17,12 @@ from src.rl.constants import FACTOR_VULN
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.encoding.monster import outgoing_damage
-from src.rl.encoding.pairs import entity_pairs
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.encoding.sparse import entity_sparse
 from src.rl.types import SliceKind
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import make_channel_allocator
 
 
@@ -97,7 +97,7 @@ OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER = _alloc(CharacterChannel.ORANGE_PELLE
 ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 
 # Most nonzero columns a character row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
+ENCODING_SPARSE_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
 
 
 def _encode_character_into(
@@ -151,9 +151,9 @@ def _encode_character_into(
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(combat.orange_pellets_played_power)
 
 
-def encode_batch_character(game_states: list[GameState], device: torch.device) -> X_EntityPairs:
-    """The character block: (B, 1, dim) row as pairs + the (B, 1) kind — the singleton is
-    always present."""
+def encode_batch_character(game_states: list[GameState], device: torch.device) -> X_EntitySparse:
+    """The character block: (B, 1, dim) row held sparse + the (B, 1) slice kind — the
+    singleton is always present."""
     batch_size = len(game_states)
 
     # Pre-allocate NumPy array
@@ -173,4 +173,4 @@ def encode_batch_character(game_states: list[GameState], device: torch.device) -
         )
 
     np_slice_kind = np.full((batch_size, 1), SliceKind.CHARACTER, dtype=np.int16)
-    return entity_pairs(np_out[:, None], np_slice_kind, ENCODING_PAIRS_CHARACTER, device)
+    return entity_sparse(np_out[:, None], np_slice_kind, ENCODING_SPARSE_CHARACTER, device)

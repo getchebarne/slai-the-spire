@@ -11,10 +11,10 @@ from slai import ModifierKind
 
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import MAX_MODIFIER_ROWS_STATE
-from src.rl.encoding.pairs import owned_pairs
 from src.rl.encoding.scalars import get_sqrt_norm
-from src.rl.types import EntityKind
-from src.rl.types import X_Modifiers
+from src.rl.encoding.sparse import owned_sparse
+from src.rl.types import SliceKind
+from src.rl.types import X_OwnedSparse
 from src.rl.types import make_channel_allocator
 
 
@@ -24,8 +24,8 @@ _MODIFIER_KIND_TO_IDX = {
 _STACKS_MAX = 99
 
 # Poison past the widest Monster HP kills on its next tick
-_STACKS_MAX_OF_KIND = {ModifierKind.Poison: HEALTH_MAX_ENTITY}
-_STACKS_BUCKET_DIM = int(math.sqrt(max(_STACKS_MAX, *_STACKS_MAX_OF_KIND.values()))) + 1
+_STACKS_MAX_OF_MODIFIER_KIND = {ModifierKind.Poison: HEALTH_MAX_ENTITY}
+_STACKS_BUCKET_DIM = int(math.sqrt(max(_STACKS_MAX, *_STACKS_MAX_OF_MODIFIER_KIND.values()))) + 1
 
 
 class ModifierChannel(StrEnum):
@@ -46,7 +46,7 @@ _OFF_MODIFIER_STACKS_OHE = _alloc(ModifierChannel.STACKS_OHE, _STACKS_BUCKET_DIM
 ENCODING_DIM_MODIFIER = sum(w for _, w in CHANNEL_LAYOUT_MODIFIER)
 
 # Most nonzero columns a modifier row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_MODIFIER = len(CHANNEL_LAYOUT_MODIFIER)
+ENCODING_SPARSE_MODIFIER = len(CHANNEL_LAYOUT_MODIFIER)
 
 
 def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
@@ -57,7 +57,7 @@ def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
     out[_OFF_MODIFIER_BUFF] = float(modifier.kind.is_buff)
 
     # Stacks: signed float + sign bit + magnitude-only sqrt buckets
-    stacks_max = _STACKS_MAX_OF_KIND.get(modifier.kind, _STACKS_MAX)
+    stacks_max = _STACKS_MAX_OF_MODIFIER_KIND.get(modifier.kind, _STACKS_MAX)
     out[_OFF_MODIFIER_STACKS] = get_sqrt_norm(modifier.stacks, stacks_max)
     out[_OFF_MODIFIER_STACKS_NEGATIVE] = float(modifier.stacks < 0)
     out[_OFF_MODIFIER_STACKS_OHE + int(math.sqrt(min(abs(modifier.stacks), stacks_max)))] = 1.0
@@ -67,15 +67,15 @@ def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
 _WARNED_OVERFLOW: set[str] = set()
 
 
-def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -> X_Modifiers:
-    """Every state's Modifier rows in one (B, N, D) block, held as pairs, with their owner
-    keys: the Character's rows (offset 0), then each Monster's (offset = its slot)."""
+def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -> X_OwnedSparse:
+    """Every state's Modifier rows in one (B, N, D) block, held sparse, with their owner
+    keys: the Character's rows (CHARACTER, 0), then each Monster's (MONSTERS, its slot)."""
     batch_size = len(game_states)
     np_out = np.zeros(
         (batch_size, MAX_MODIFIER_ROWS_STATE, ENCODING_DIM_MODIFIER), dtype=np.float32
     )
-    np_entity_kind = np.full((batch_size, MAX_MODIFIER_ROWS_STATE), -1, dtype=np.int64)
-    np_offset = np.zeros((batch_size, MAX_MODIFIER_ROWS_STATE), dtype=np.int64)
+    np_owner_slice_kind = np.full((batch_size, MAX_MODIFIER_ROWS_STATE), -1, dtype=np.int64)
+    np_owner_rank = np.zeros((batch_size, MAX_MODIFIER_ROWS_STATE), dtype=np.int64)
 
     idx_used = 0
     for b, game_state in enumerate(game_states):
@@ -84,13 +84,13 @@ def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -
             continue
 
         monsters = combat.monsters
-        owners = [(EntityKind.CHARACTER, 0, game_state.character.modifiers)]
+        owners = [(SliceKind.CHARACTER, 0, game_state.character.modifiers)]
         owners += [
-            (EntityKind.MONSTER, w, monster.modifiers) for w, monster in enumerate(monsters)
+            (SliceKind.MONSTERS, w, monster.modifiers) for w, monster in enumerate(monsters)
         ]
 
         idx = 0
-        for entity_kind, w, modifiers in owners:
+        for slice_kind, w, modifiers in owners:
             for modifier in modifiers:
                 if idx >= MAX_MODIFIER_ROWS_STATE:
                     if "modifiers" not in _WARNED_OVERFLOW:
@@ -102,17 +102,16 @@ def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -
                     break
 
                 encode_modifier_row_into(modifier, np_out[b, idx])
-                np_entity_kind[b, idx] = entity_kind
-                np_offset[b, idx] = w
+                np_owner_slice_kind[b, idx] = slice_kind
+                np_owner_rank[b, idx] = w
                 idx += 1
         idx_used = max(idx_used, idx)
 
     # The batch's used rows only: the transport pads back to MAX_MODIFIER_ROWS_STATE
-    return owned_pairs(
-        X_Modifiers,
+    return owned_sparse(
         np.ascontiguousarray(np_out[:, :idx_used]),
-        np.ascontiguousarray(np_entity_kind[:, :idx_used]),
-        np.ascontiguousarray(np_offset[:, :idx_used]),
-        ENCODING_PAIRS_MODIFIER,
+        np.ascontiguousarray(np_owner_slice_kind[:, :idx_used]),
+        np.ascontiguousarray(np_owner_rank[:, :idx_used]),
+        ENCODING_SPARSE_MODIFIER,
         device,
     )

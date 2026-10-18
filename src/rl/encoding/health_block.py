@@ -7,11 +7,11 @@ from slai import GameState
 
 from src.rl.constants import BLOCK_MAX_ENTITY
 from src.rl.constants import HEALTH_MAX_ENTITY
-from src.rl.encoding.pairs import owned_pairs
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
-from src.rl.types import EntityKind
-from src.rl.types import X_HealthBlock
+from src.rl.encoding.sparse import owned_sparse
+from src.rl.types import SliceKind
+from src.rl.types import X_OwnedSparse
 from src.rl.types import make_channel_allocator
 
 
@@ -46,7 +46,7 @@ OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc(HealthBlockChannel.TOTAL_SCALAR)
 ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w in CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 # Most nonzero columns a health/block row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_HEALTH_BLOCK = len(CHANNEL_LAYOUT_HEALTH_BLOCK)
+ENCODING_SPARSE_HEALTH_BLOCK = len(CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 
 def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
@@ -69,9 +69,9 @@ def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
     out[OFF_HEALTH_BLOCK_TOTAL_SCALAR] = min(total / _TOTAL_MAX, 1.0)
 
 
-def encode_batch_health_block(game_states: list[GameState], device: torch.device) -> X_HealthBlock:
-    """Every state's health/block rows as one (B, W, dim) block, held as pairs, with their
-    owner keys: each Monster's row (offset = its slot), then the Character's (offset 0);
+def encode_batch_health_block(game_states: list[GameState], device: torch.device) -> X_OwnedSparse:
+    """Every state's health/block rows as one (B, W, dim) block, held sparse, with their
+    owner keys: each Monster's row (MONSTERS, its slot), then the Character's (CHARACTER, 0);
     W is the batch's most monsters + 1."""
     batch_size = len(game_states)
     batch_monsters = []
@@ -81,19 +81,19 @@ def encode_batch_health_block(game_states: list[GameState], device: torch.device
 
     seqlen = max((len(monsters) for monsters in batch_monsters), default=0) + 1
     np_out = np.zeros((batch_size, seqlen, ENCODING_DIM_HEALTH_BLOCK), dtype=np.float32)
-    np_entity_kind = np.full((batch_size, seqlen), -1, dtype=np.int64)
-    np_offset = np.zeros((batch_size, seqlen), dtype=np.int64)
+    np_owner_slice_kind = np.full((batch_size, seqlen), -1, dtype=np.int64)
+    np_owner_rank = np.zeros((batch_size, seqlen), dtype=np.int64)
 
     for b, (game_state, monsters) in enumerate(zip(game_states, batch_monsters)):
         for k, monster in enumerate(monsters):
             _encode_health_block_into(monster.health, monster.block, np_out[b, k])
-            np_entity_kind[b, k] = EntityKind.MONSTER
-            np_offset[b, k] = k
+            np_owner_slice_kind[b, k] = SliceKind.MONSTERS
+            np_owner_rank[b, k] = k
         k = len(monsters)
         character = game_state.character
         _encode_health_block_into(character.health, character.block, np_out[b, k])
-        np_entity_kind[b, k] = EntityKind.CHARACTER
+        np_owner_slice_kind[b, k] = SliceKind.CHARACTER
 
-    return owned_pairs(
-        X_HealthBlock, np_out, np_entity_kind, np_offset, ENCODING_PAIRS_HEALTH_BLOCK, device
+    return owned_sparse(
+        np_out, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_HEALTH_BLOCK, device
     )
