@@ -46,23 +46,23 @@ from src.rl.types import X_Mask
 # An entity a legal action can name
 type Entity = Card | Relic | Potion | Monster | EventOption | Room
 
-# A state's id -> token index: each entity id's token, as its kind and rank
+# A state's id -> token index: each entity id's token, as its slice kind and rank
 type TokenIndex = dict[int, tuple[SliceKind, int]]
 
 
 def token_entities(
-    kind: SliceKind, state: slai.GameState, combat: slai.Combat | None
+    slice_kind: SliceKind, state: slai.GameState, combat: slai.Combat | None
 ) -> Sequence[Entity]:
-    """The entities of a kind's tokens in rank order, from the encoders' own lists, so an
+    """The entities of a slice kind's tokens in rank order, from the encoders' own lists, so an
     entity's id and its token share one placement. `combat` is the caller's hoisted
     `state.combat`."""
-    if kind in SLICE_KINDS_CARD:
-        return _get_card_entities(kind, state, combat)
-    if kind in SLICE_KINDS_RELIC:
-        return _get_relic_entities(kind, state)
-    if kind in SLICE_KINDS_POTION:
-        return _get_potion_entities(kind, state)
-    match kind:
+    if slice_kind in SLICE_KINDS_CARD:
+        return _get_card_entities(slice_kind, state, combat)
+    if slice_kind in SLICE_KINDS_RELIC:
+        return _get_relic_entities(slice_kind, state)
+    if slice_kind in SLICE_KINDS_POTION:
+        return _get_potion_entities(slice_kind, state)
+    match slice_kind:
         case SliceKind.MONSTERS:
             return _get_monster_entities(combat)
         case SliceKind.EVENT_OPTIONS:
@@ -70,16 +70,16 @@ def token_entities(
         case SliceKind.ROOMS:
             return _get_room_entities(state)
         case _:
-            raise ValueError(f"No action names a {kind.name} token")
+            raise ValueError(f"No action names a {slice_kind.name} token")
 
 
 def token_index(state: slai.GameState, combat: slai.Combat | None) -> TokenIndex:
-    """Each entity id's token over the window, as its kind and rank. An id on several tokens
+    """Each entity id's token over the window, as its slice kind and rank. An id on several tokens
     names its first in window order, where each block packs its decision pools first (the
     relic event roll before the owned relics it can repeat). `combat` is the caller's
     hoisted `state.combat`."""
     index: TokenIndex = {}
-    for kind in (
+    for slice_kind in (
         *SLICE_KINDS_CARD,
         *SLICE_KINDS_RELIC,
         *SLICE_KINDS_POTION,
@@ -88,10 +88,10 @@ def token_index(state: slai.GameState, combat: slai.Combat | None) -> TokenIndex
         SliceKind.ROOMS,
     ):
         # The selected pile and the play queue repeat the ids of cards still in their piles
-        if kind in (SliceKind.CARD_PILE_SELECTED, SliceKind.CARD_PLAY_QUEUE):
+        if slice_kind in (SliceKind.CARD_PILE_SELECTED, SliceKind.CARD_PLAY_QUEUE):
             continue
-        for rank, entity in enumerate(token_entities(kind, state, combat)):
-            index.setdefault(entity.id, (kind, rank))
+        for rank, entity in enumerate(token_entities(slice_kind, state, combat)):
+            index.setdefault(entity.id, (slice_kind, rank))
     return index
 
 
@@ -118,17 +118,19 @@ def card_identity_ids(cards: list[Card]) -> list[int]:
     ]
 
 
-def _pile_ids(state: slai.GameState, combat: slai.Combat | None, kind: SliceKind) -> list[int]:
-    """Identity group-ids for a card kind's dedup, over its packed tokens; [] if the
-    kind doesn't dedup. `combat` is the caller's hoisted `state.combat`."""
-    if kind not in SLICE_KINDS_CARD:
+def _pile_ids(
+    state: slai.GameState, combat: slai.Combat | None, slice_kind: SliceKind
+) -> list[int]:
+    """Identity group-ids for a card slice kind's dedup, over its packed tokens; [] if the
+    slice kind doesn't dedup. `combat` is the caller's hoisted `state.combat`."""
+    if slice_kind not in SLICE_KINDS_CARD:
         return []
 
     # Frozen Eye shows the draw order: same-identity copies at different depths
     # are different selections
-    if kind is SliceKind.CARD_PILE_DRAW and draw_order_visible(state):
+    if slice_kind is SliceKind.CARD_PILE_DRAW and draw_order_visible(state):
         return []
-    return card_identity_ids(_get_card_entities(kind, state, combat))
+    return card_identity_ids(_get_card_entities(slice_kind, state, combat))
 
 
 def wasted_potion_discard(state: slai.GameState, action: slai.Action) -> bool:
@@ -158,13 +160,13 @@ def build_masks(
     """Build a X_Mask from each state's legal actions, one X_EntityMask per block.
     Wasted Potion discards are engine-legal but masked.
 
-    A legal id's position in its block is its token's, the rank-th of its kind in that
-    block's kind row, as the state's token_index ranks it; so the masks read the
+    A legal id's position in its block is its token's, the rank-th of its slice kind in that
+    block's slice kind row, as the state's token_index ranks it; so the masks read the
     encoder's placement rather than re-deriving it, and an entity the encoder dropped
     is unselectable by construction. A target is its monster's token."""
     batch_size = len(states)
 
-    # Read the window's kind row: X_GameState's entity blocks, then the rooms row
+    # Read the window's slice kind row: X_GameState's entity blocks, then the rooms row
     x_rows = (
         x_game_state.cards.x_slice_kind,
         x_game_state.relics.x_slice_kind,
@@ -175,12 +177,12 @@ def build_masks(
         x_game_state.room_slice_kind,
     )
     widths = [x_row.shape[1] for x_row in x_rows]
-    np_kinds = torch.cat(x_rows, dim=1).cpu().numpy()
+    np_slice_kind = torch.cat(x_rows, dim=1).cpu().numpy()
 
     # Pre-allocate NumPy arrays
     np_action_type = np.zeros((batch_size, NUM_ACTION_TYPES), dtype=bool)
-    np_legal = np.zeros((batch_size, NUM_ACTION_TYPES, np_kinds.shape[1]), dtype=bool)
-    np_needs_target = np.zeros(np_kinds.shape, dtype=bool)
+    np_legal = np.zeros((batch_size, NUM_ACTION_TYPES, np_slice_kind.shape[1]), dtype=bool)
+    np_needs_target = np.zeros(np_slice_kind.shape, dtype=bool)
     np_monster_is_target = np.zeros(
         (batch_size, x_game_state.monsters.x_slice_kind.shape[1]), dtype=bool
     )
@@ -189,11 +191,11 @@ def build_masks(
         combat = state.combat  # hoisted once: FFI context accesses deep-clone
         index = token_index(state, combat)
 
-        # Window positions of each kind's tokens, in rank order
+        # Window positions of each slice kind's tokens, in rank order
         positions: dict[SliceKind, np.ndarray] = {}
 
-        # The (type, kind) pairs whose legal ids set a bit, for the dedup below
-        legal_kinds: set[tuple[int, SliceKind]] = set()
+        # The (type, slice kind) pairs whose legal ids set a bit, for the dedup below
+        legal_slice_kinds: set[tuple[int, SliceKind]] = set()
 
         for action in batch_legal_actions[b]:
             if wasted_potion_discard(state, action):
@@ -211,13 +213,13 @@ def build_masks(
                         warnings.warn(f"Dropped legal action: type={at} id {ids[0]} has no token")
                     continue
 
-                # Filled on a kind's first use: every kind up front costs most of the build
-                kind, rank = token
-                if kind not in positions:
-                    positions[kind] = np.flatnonzero(np_kinds[b] == kind)
-                w = positions[kind][rank]
+                # Filled on a slice kind's first use: every one up front costs most of the build
+                slice_kind, rank = token
+                if slice_kind not in positions:
+                    positions[slice_kind] = np.flatnonzero(np_slice_kind[b] == slice_kind)
+                w = positions[slice_kind][rank]
                 np_legal[b, at, w] = True  # per ACTION TYPE — legality differs per type
-                legal_kinds.add((at, kind))
+                legal_slice_kinds.add((at, slice_kind))
 
                 # L3: only CardPlay/PotionUse carry a monster target as ids[1]. The
                 # engine offers every alive monster to every targeted action, so the
@@ -236,15 +238,15 @@ def build_masks(
                 f"{[(int(a.action_type), list(a.ids)) for a in batch_legal_actions[b]]}"
             )
 
-        # Dedup each type's legal tokens by card identity, kind by kind (copies collapse)
-        for at, kind in legal_kinds:
-            group_ids = _pile_ids(state, combat, kind)
+        # Dedup each type's legal tokens by card identity per slice kind (copies collapse)
+        for at, slice_kind in legal_slice_kinds:
+            group_ids = _pile_ids(state, combat, slice_kind)
             if not group_ids:
                 continue
 
             np_row = np_legal[b, at]
             seen: set[int] = set()
-            for rank, w in enumerate(positions[kind]):
+            for rank, w in enumerate(positions[slice_kind]):
                 if not np_row[w]:
                     continue
                 if group_ids[rank] in seen:
@@ -307,20 +309,20 @@ def _empty_entity_mask(batch_size: int, cap: int) -> X_EntityMask:
 
 
 def engine_action(
-    at_int: int, kind: int, rank: int, target: int, state: slai.GameState
+    at_int: int, slice_kind: int, rank: int, target: int, state: slai.GameState
 ) -> slai.Action:
-    """Build a `slai.Action` from the sampled hierarchy [ActionType, kind, rank, target]
-    (kind/rank = -1 when the type takes no id, target = -1 when it takes no monster
+    """Build a `slai.Action` from the sampled hierarchy [ActionType, slice kind, rank, target]
+    (slice kind/rank = -1 when the type takes no id, target = -1 when it takes no monster
     target).
 
-    The kind and rank name a token and the target the target-th monster token; the
+    The slice kind and rank name a token and the target the target-th monster token; the
     action carries their entities' ids (token_entities)."""
     action_type = ACTION_TYPE_BY_INT[at_int]
     if ACTION_SPEC_REGISTRY[action_type].arity == (0, 0):
         return slai.Action(action_type, [])
 
     combat = state.combat
-    ids = [token_entities(SliceKind(kind), state, combat)[rank].id]
+    ids = [token_entities(SliceKind(slice_kind), state, combat)[rank].id]
     if target >= 0:  # CardPlay / PotionUse with a monster target
         ids.append(token_entities(SliceKind.MONSTERS, state, combat)[target].id)
     return slai.Action(action_type, ids)
@@ -330,7 +332,7 @@ def action_from_actiontype(x_action: X_Action, i: int, state: slai.GameState) ->
     """Decode row `i` of a batched `X_Action` into a `slai.Action`"""
     return engine_action(
         int(x_action.action_type[i]),
-        int(x_action.kind[i]),
+        int(x_action.slice_kind[i]),
         int(x_action.rank[i]),
         int(x_action.target[i]),
         state,

@@ -14,7 +14,7 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
-from src.rl.encoding.pairs import entity_pairs
+from src.rl.encoding.sparse import entity_sparse
 from src.rl.types import SLICE_KINDS_RELIC
 from src.rl.types import BatchEffectRows
 from src.rl.types import BatchPriceRows
@@ -22,7 +22,7 @@ from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import PriceRow
 from src.rl.types import SliceKind
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import make_channel_allocator
 
 
@@ -51,7 +51,7 @@ OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MA
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
 # Most nonzero columns a relic row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_RELIC = len(CHANNEL_LAYOUT_RELIC)
+ENCODING_SPARSE_RELIC = len(CHANNEL_LAYOUT_RELIC)
 
 # Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -87,9 +87,9 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
     out[:] = row
 
 
-def _get_relic_entities(kind: SliceKind, game_state: GameState) -> list:
+def _get_relic_entities(slice_kind: SliceKind, game_state: GameState) -> list:
     # Each collection truncated to its own cap: a relic past it has no token
-    match kind:
+    match slice_kind:
         case SliceKind.RELIC_OWNED:
             return game_state.relics[:MAX_RELICS]
         case SliceKind.RELIC_REWARD:
@@ -104,24 +104,24 @@ def _get_relic_entities(kind: SliceKind, game_state: GameState) -> list:
                 return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
             return []
         case _:
-            raise ValueError(f"not a relic kind: {kind}")
+            raise ValueError(f"not a relic slice kind: {slice_kind}")
 
 
-def iter_packed_relics(game_state: GameState) -> Iterator[tuple[SliceKind, Relic]]:
-    """(kind, relic) for every relic token: the kinds back to back in
+def iter_packed_relics(game_state: GameState) -> Iterator[tuple[SliceKind, int, Relic]]:
+    """(slice kind, rank, relic) for every relic token: the slice kinds back to back in
     SLICE_KINDS_RELIC order, each collection in engine order."""
-    for kind in SLICE_KINDS_RELIC:
-        for relic in _get_relic_entities(kind, game_state):
-            yield kind, relic
+    for slice_kind in SLICE_KINDS_RELIC:
+        for rank, relic in enumerate(_get_relic_entities(slice_kind, game_state)):
+            yield slice_kind, rank, relic
 
 
 def encode_batch_relics(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntityPairs, BatchEffectRows, BatchPriceRows]:
-    """The relic block ((B, W, ENCODING_DIM_RELIC) rows as pairs + the (B, W) kind of each
-    token) + each state's (offset, source, effect) rows (every trigger's, per relic) and its
-    shop tokens' (offset, price) rows, keyed by the same w as the token they belong to; W is
-    the batch's longest packed relic sequence."""
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
+    """The relic block ((B, W, ENCODING_DIM_RELIC) rows held sparse + the (B, W) slice kind of
+    each token) + each state's (slice kind, rank, source, effect) rows (every trigger's, per
+    relic) and its shop tokens' (slice kind, rank, price) rows, keyed by the token they belong
+    to; W is the batch's longest packed relic sequence."""
     batch_tokens = [list(iter_packed_relics(game_state)) for game_state in game_states]
     batch_relic_prices = []
     for game_state in game_states:
@@ -140,19 +140,19 @@ def encode_batch_relics(
 
         # Shop tokens come in shop order, so they take the parallel price list in step
         relic_prices = iter(batch_relic_prices[b])
-        for w, (kind, relic) in enumerate(tokens):
+        for w, (slice_kind, rank, relic) in enumerate(tokens):
             encode_relic_into_w_cache(relic, np_out[b, w])
 
             # `SliceKind`
-            np_slice_kind[b, w] = kind
+            np_slice_kind[b, w] = slice_kind
 
             # Price
-            if kind == SliceKind.RELIC_SHOP:
-                price_rows.append((w, next(relic_prices)))
+            if slice_kind == SliceKind.RELIC_SHOP:
+                price_rows.append((slice_kind, rank, next(relic_prices)))
 
             # Effects
             effect_rows += [
-                (w, source, effect)
+                (slice_kind, rank, source, effect)
                 for effects, source in (
                     (relic.effects_combat_start, EffectSource.RELIC_COMBAT_START),
                     (relic.effects_turn_start, EffectSource.RELIC_TURN_START),
@@ -169,7 +169,7 @@ def encode_batch_relics(
         batch_price_rows.append(price_rows)
 
     return (
-        entity_pairs(np_out, np_slice_kind, ENCODING_PAIRS_RELIC, device),
+        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_RELIC, device),
         batch_effect_rows,
         batch_price_rows,
     )

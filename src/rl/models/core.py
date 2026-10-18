@@ -16,7 +16,7 @@ from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import DrawOrderLayer
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
-from src.rl.types import CAP_OF_KIND
+from src.rl.types import CAP_OF_SLICE_KIND
 from src.rl.types import SLICE_KINDS_CARD_REWARDS
 from src.rl.types import SliceKind
 from src.rl.types import X_CoreOutput
@@ -24,9 +24,9 @@ from src.rl.types import X_Entity
 from src.rl.types import X_GameState
 
 
-# Count features: one per kind except the character singleton (a constant 1.0), each
-# normalized by its kind's cap (a count never exceeds it), in window order
-_COUNT_KINDS: tuple[SliceKind, ...] = (  # Explicit: checkpoints pin this column order
+# Count features: one per slice kind except the character singleton (a constant 1.0), each
+# normalized by its slice kind's cap (a count never exceeds it), in window order
+_COUNT_SLICE_KINDS: tuple[SliceKind, ...] = (  # Explicit: checkpoints pin this column order
     SliceKind.CARD_PILE_HAND,
     SliceKind.CARD_PILE_DISCOVER,
     SliceKind.CARD_PILE_SELECTED,
@@ -141,16 +141,16 @@ class Core(nn.Module):
             dim_entity, transformer_dim_ff, transformer_num_heads
         )
 
-        # Token identity: one row per SliceKind, looked up by the window's kind row
+        # Token identity: one row per SliceKind, looked up by the window's slice kind row
         self._type_emb = nn.Embedding(len(SliceKind), dim_entity)
         self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim)
 
-        # Global context: global token + character + map readout + per-kind counts + raw flats
+        # Global context: global token + character + map readout + slice-kind counts + raw flats
         global_input_dim = (
             dim_entity  # global token (attention-aggregated entities)
             + dim_entity  # character (refined singleton)
             + map_encoder_dim  # map GNN readout (whole-graph summary)
-            + len(_COUNT_KINDS)  # per-kind token counts, sqrt-normalized by each kind's cap
+            + len(_COUNT_SLICE_KINDS)  # per-slice-kind token counts, sqrt-normalized by their caps
             + ENCODING_DIM_ENERGY  # energy (raw)
             + ENCODING_DIM_FOCUS  # focus row
             + ENCODING_DIM_ASCENSION  # ascension thermometer (curriculum level)
@@ -158,7 +158,7 @@ class Core(nn.Module):
             + ENCODING_DIM_REWARD_META
             + ENCODING_DIM_SHOP_META  # shop purge price triple + purged flag
             + ENCODING_DIM_EVENT_META
-            + dim_entity  # pooled pending-halt effect (EntityProjector)
+            + dim_entity  # embedded pending-halt effect (EntityProjector)
         )
 
         # Output LN: HeadActionType/HeadValue read this vector without their
@@ -170,17 +170,20 @@ class Core(nn.Module):
             nn.LayerNorm(dim_global),
         )
 
-        # Count features: kinds to count and each kind's cap; derived, so excluded from checkpoints
+        # Count features: slice kinds to count and each slice kind's cap; derived, so excluded
+        # from checkpoints
         self.register_buffer(
-            "_count_kinds", torch.tensor(_COUNT_KINDS).view(1, 1, -1), persistent=False
+            "_count_slice_kinds", torch.tensor(_COUNT_SLICE_KINDS).view(1, 1, -1), persistent=False
         )
         self.register_buffer(
             "_count_norm",
-            torch.tensor([float(CAP_OF_KIND[kind]) for kind in _COUNT_KINDS]).view(1, -1),
+            torch.tensor(
+                [float(CAP_OF_SLICE_KIND[slice_kind]) for slice_kind in _COUNT_SLICE_KINDS]
+            ).view(1, -1),
             persistent=False,
         )
 
-        # The per-bundle kinds carry their own type rows; this shared embedding
+        # The per-bundle slice kinds carry their own type rows; this shared embedding
         # is the global CARD_REWARD identity summed on top of all of them
         self._reward_emb = nn.Embedding(2, dim_entity, padding_idx=0)
 
@@ -193,7 +196,7 @@ class Core(nn.Module):
             x_game_state.map_grid, x_game_state.room_node_idx, x_game_state.room_slice_kind
         )
 
-        # The window as one X_Entity (the six blocks then the rooms) + the pooled pending halt
+        # The window as one X_Entity (the six blocks then the rooms) + the embedded pending halt
         x_entities, x_pending = self._entity_projector(x_game_state, x_rooms)
 
         # Per-state inputs to the global context: the same for the transformer and the layer, so
@@ -267,7 +270,7 @@ class Core(nn.Module):
     ) -> torch.Tensor:
         """The global vector of each state of a refined window, from its global token, its
         character token and its per-state inputs"""
-        # The one character token per state, found by its kind: exactly one -> (B, D)
+        # The one character token per state, found by its slice kind: exactly one -> (B, D)
         x_is_character = x_refined.x_slice_kind == SliceKind.CHARACTER
         x_at = x_is_character.long().argmax(1)  # a boolean index would make the CPU wait
         x_character = x_refined.x[torch.arange(x_at.shape[0], device=x_at.device), x_at]
@@ -276,8 +279,8 @@ class Core(nn.Module):
         )
 
     def _embed_identity(self, x_entities: X_Entity) -> X_Entity:
-        # Every token's identity comes from its kind: the kind's type row, plus the
-        # shared CARD_REWARD identity on the reward kinds
+        # Every token's identity comes from its slice kind: the slice kind's type row, plus the
+        # shared CARD_REWARD identity on the reward slice kinds
         x_slice_kind = x_entities.x_slice_kind
         x_is_reward = (x_slice_kind >= _REWARD_LO) & (x_slice_kind <= _REWARD_HI)
 
@@ -288,22 +291,24 @@ class Core(nn.Module):
         )
 
     def _get_token_counts(self, x_slice_kind: torch.Tensor) -> torch.Tensor:
-        """Per-kind token counts, sqrt-normalized by the kind's cap (a count never
+        """Per-slice-kind token counts, sqrt-normalized by the slice kind's cap (a count never
         exceeds it, so the ratio is in [0, 1])."""
-        x_count = (x_slice_kind.unsqueeze(-1) == self._count_kinds).sum(dim=1).float()
+        x_count = (x_slice_kind.unsqueeze(-1) == self._count_slice_kinds).sum(dim=1).float()
         return (x_count / self._count_norm).sqrt()
 
 
 def _check_tables() -> None:
-    """The count kinds cover every kind but the character, and the reward kinds are a range"""
-    if set(_COUNT_KINDS) != set(SliceKind) - {SliceKind.CHARACTER}:
+    """The count slice kinds cover every slice kind but the character, and the reward slice
+    kinds are a range"""
+    if set(_COUNT_SLICE_KINDS) != set(SliceKind) - {SliceKind.CHARACTER}:
         raise RuntimeError(
-            "every kind counts once: _COUNT_KINDS and every SliceKind but CHARACTER differ on "
-            f"{set(_COUNT_KINDS) ^ (set(SliceKind) - {SliceKind.CHARACTER})}"
+            "every slice kind counts once: _COUNT_SLICE_KINDS and every SliceKind but CHARACTER "
+            f"differ on {set(_COUNT_SLICE_KINDS) ^ (set(SliceKind) - {SliceKind.CHARACTER})}"
         )
     if SLICE_KINDS_CARD_REWARDS != tuple(range(_REWARD_LO, _REWARD_HI + 1)):
         raise RuntimeError(
-            "The reward kinds must be contiguous and ascending: _embed_identity range-tests them"
+            "The reward slice kinds must be contiguous and ascending: _embed_identity "
+            "range-tests them"
         )
 
 

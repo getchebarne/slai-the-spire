@@ -14,13 +14,13 @@ from slai import MonsterEncounter
 from src.rl.constants import CHARACTER_HEALTH_CAP
 from src.rl.constants import EVENT_STAGE_CAP
 from src.rl.constants import MAX_EVENT_OPTIONS
-from src.rl.encoding.pairs import entity_pairs
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.encoding.sparse import entity_sparse
 from src.rl.types import BatchEffectRows
 from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import SliceKind
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import make_channel_allocator
 
 
@@ -71,7 +71,7 @@ OFF_EVENT_CARD_MATCH_UNSEEN_COUNT = _alloc(EventMetaChannel.CARD_MATCH_UNSEEN_CO
 
 ENCODING_DIM_EVENT_META = sum(w for _, w in CHANNEL_LAYOUT_EVENT_META)
 ENCODING_DIM_EVENT_OPTION = MAX_EVENT_OPTIONS  # Slot-index OHE; Effects are separate rows
-ENCODING_PAIRS_EVENT_OPTION = 1  # The slot one-hot's one nonzero column
+ENCODING_SPARSE_EVENT_OPTION = 1  # The slot one-hot's one nonzero column
 
 _SLOT_OHE = np.eye(MAX_EVENT_OPTIONS, dtype=np.float32)
 
@@ -117,8 +117,8 @@ def _get_event_option_entities(event: Event | None) -> list[EventOption]:
 
 def encode_batch_events(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, X_EntityPairs, BatchEffectRows]:
-    """Event meta + the option block ((B, W, dim) rows as pairs + their per-option kinds) +
+) -> tuple[torch.Tensor, X_EntitySparse, BatchEffectRows]:
+    """Event meta + the option block ((B, W, dim) rows held sparse + their slice kinds) +
     each state's option effect rows, keyed by option slot; W is the batch's most options
     (capped at MAX_EVENT_OPTIONS). The option row itself is just a slot OHE — everything it
     does lives in its effect rows."""
@@ -161,11 +161,12 @@ def encode_batch_events(
             effects = option.effects  # Bound once: each read clones the Vec
             if effects:
                 effect_rows += [
-                    (w, EffectSource.EVENT_OPTION_SELECT, effect) for effect in effects
+                    (SliceKind.EVENT_OPTIONS, w, EffectSource.EVENT_OPTION_SELECT, effect)
+                    for effect in effects
                 ]
 
     return (
         torch.from_numpy(np_meta).to(device),
-        entity_pairs(np_options, np_slice_kind, ENCODING_PAIRS_EVENT_OPTION, device),
+        entity_sparse(np_options, np_slice_kind, ENCODING_SPARSE_EVENT_OPTION, device),
         batch_effect_rows,
     )

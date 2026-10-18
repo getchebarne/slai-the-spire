@@ -18,18 +18,19 @@ from src.rl.masks import build_masks
 from src.rl.masks import empty_masks
 from src.rl.masks import engine_action
 from src.rl.reward import RewardStream
+from src.rl.types import X_EffectPending
 from src.rl.types import X_EntityMask
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import X_GameState
 from src.rl.types import X_Mask
-from src.rl.types import X_Owned
-from src.rl.types import X_Rows
+from src.rl.types import X_OwnedSparse
+from src.rl.types import X_Step
 from src.rl.utils import set_rng_seeds
 
 
 # The rollout's CPU work (engine step, reward, encode, masks) runs in worker processes, each
 # over its shard of the games, while the step loop runs the forward and the sampling. Both
-# sides share one X_Rows of torch shared tensors, so actions, rewards, states and masks move
+# sides share one X_Step of torch shared tensors, so actions, rewards, states and masks move
 # without pickling; every block sits at its cap
 
 
@@ -37,7 +38,7 @@ from src.rl.utils import set_rng_seeds
 class Exchange:
     """What the step loop and its workers share"""
 
-    rows: X_Rows
+    step: X_Step
     curriculum_c: torch.Tensor  # live curriculum position
     stop: torch.Tensor  # a lock-free flag: a worker killed holding an Event's lock would hang it
     episodes: Queue[EpisodeStats]
@@ -69,12 +70,12 @@ def start_workers(
     ), "num_envs must divide evenly across workers"
     ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
     exchange = Exchange(
-        rows=X_Rows(
+        step=X_Step(
             actions=torch.zeros(rollout_config.num_envs, 4, dtype=torch.long),
             rewards=torch.zeros(rollout_config.num_envs, len(RewardStream)),
             dones=torch.zeros(rollout_config.num_envs),
             game_state=empty_game_state(rollout_config.num_envs),
-            mask_batch=empty_masks(rollout_config.num_envs),
+            mask=empty_masks(rollout_config.num_envs),
             batch_size=[rollout_config.num_envs],
         ).share_memory_(),
         curriculum_c=torch.tensor(curriculum.ascension_start, dtype=torch.float64).share_memory_(),
@@ -130,16 +131,16 @@ def _wait_for_replies(workers: list[Worker]) -> None:
                 raise RuntimeError(f"the learner died while rollout worker {w} stepped")
 
 
-def snapshot_to_device(rows: X_Rows, device: torch.device) -> tuple[X_GameState, X_Mask]:
-    """Copy every game's row out of the shared rows onto the device as an X_GameState/X_Mask
-    pair, each block trimmed from its cap to the rows' widest valid prefix, and its pairs to the
-    most a row uses. The copy is the snapshot: the rollout keeps it while the workers overwrite
-    the rows on the next request."""
+def snapshot_to_device(step: X_Step, device: torch.device) -> tuple[X_GameState, X_Mask]:
+    """Copy every game's row out of the shared step onto the device as an X_GameState and an
+    X_Mask, each block trimmed from its cap to the rows' widest valid prefix, and its entries to
+    the most a row uses. The copy is the snapshot: the rollout keeps it while the workers
+    overwrite the step on the next request."""
 
-    # Shallow copies: a cut block replaces its entry here, not in the shared rows
-    x, mb = rows.game_state.copy(), rows.mask_batch.copy()
+    # Shallow copies: a cut block replaces its entry here, not in the shared step
+    x, mb = step.game_state.copy(), step.mask.copy()
 
-    # The six entity blocks, each cut with its masks, then the owned families
+    # The six entity blocks, each cut with its masks, then the owned families and pending effect
     x.cards, mb.cards = _cut_entity(x.cards, mb.cards)
     x.relics, mb.relics = _cut_entity(x.relics, mb.relics)
     x.potions, mb.potions = _cut_entity(x.potions, mb.potions)
@@ -151,6 +152,7 @@ def snapshot_to_device(rows: X_Rows, device: torch.device) -> tuple[X_GameState,
     x.prices = _cut(x.prices)
     x.effects = _cut(x.effects)
     x.modifiers = _cut(x.modifiers)
+    x.effect_pending = _cut_effect_pending(x.effect_pending)
 
     # Every field packed into one pinned buffer and sent in one copy: a copy per field from
     # the shared (pageable) memory makes the CPU wait for the GPU once per field
@@ -169,17 +171,24 @@ def snapshot_to_device(rows: X_Rows, device: torch.device) -> tuple[X_GameState,
     return x.apply(lambda t: next(pieces)), mb.apply(lambda t: next(pieces))
 
 
-def _cut[B: (X_EntityPairs, X_Owned)](block: B) -> B:
-    """`block` cut to the rows' widest valid prefix, and its pairs to the most a row uses"""
-    # The widest valid prefix of a kind/owner row across the rows.
+def _cut[B: (X_EntitySparse, X_OwnedSparse)](block: B) -> B:
+    """`block` cut to the rows' widest valid prefix, and its entries to the most a row uses"""
+    # The widest valid prefix of a slice kind/owner row across the rows.
     w = int(block.mask.sum(1).max())
 
-    # The pairs any row uses, at least one: a row's nonzero values come first
+    # The entries any row uses, at least one: a row's nonzero values come first
     k = max(int(block.x_value[:, :w].numpy().any(axis=(0, 1)).sum()), 1)
     return block.apply(lambda t: t[:, :w, :k] if t.dim() == 3 else t[:, :w])
 
 
-def _cut_entity(block: X_EntityPairs, masks: X_EntityMask) -> tuple[X_EntityPairs, X_EntityMask]:
+def _cut_effect_pending(block: X_EffectPending) -> X_EffectPending:
+    """`block` cut to the most entries a row uses"""
+    # The entries any row uses, at least one: a row's nonzero values come first
+    k = max(int(block.x_value.numpy().any(axis=0).sum()), 1)
+    return block.apply(lambda t: t[:, :k])
+
+
+def _cut_entity(block: X_EntitySparse, masks: X_EntityMask) -> tuple[X_EntitySparse, X_EntityMask]:
     """An entity block cut as _cut cuts it, and its masks cut to the same tokens"""
     block_cut = _cut(block)
     w = block_cut.x_slice_kind.shape[1]
@@ -224,22 +233,22 @@ def _worker_loop(
     flag is set"""
     set_rng_seeds(settings.seed)
     torch.set_num_threads(1)  # workers are the parallelism; don't oversubscribe
-    rows = exchange.rows[settings.first_env : settings.first_env + settings.num_envs]
+    step = exchange.step[settings.first_env : settings.first_env + settings.num_envs]
     pad_x, pad_mb = empty_game_state(settings.num_envs), empty_masks(settings.num_envs)
     shard = make_shard(settings)
-    _write_states(rows, shard, pad_x, pad_mb)
+    _write_states(step, shard, pad_x, pad_mb)
     reply.release()
     while _wait_for_request(request, exchange.stop):
         shard.ascension_c = float(exchange.curriculum_c)  # promotions apply on reset
 
-        for j, (at, kind, rank, target) in enumerate(rows.actions.tolist()):
-            action = engine_action(at, kind, rank, target, shard.obs[j])
+        for j, (at, slice_kind, rank, target) in enumerate(step.actions.tolist()):
+            action = engine_action(at, slice_kind, rank, target, shard.obs[j])
             reward, finished = step_env(shard, j, action, settings)
-            rows.rewards[j] = torch.from_numpy(reward)
-            rows.dones[j] = float(finished is not None)
+            step.rewards[j] = torch.from_numpy(reward)
+            step.dones[j] = float(finished is not None)
             if finished is not None:
                 exchange.episodes.put(finished)
-        _write_states(rows, shard, pad_x, pad_mb)
+        _write_states(step, shard, pad_x, pad_mb)
         reply.release()
 
 
@@ -251,18 +260,18 @@ def _wait_for_request(request: Semaphore, stop: torch.Tensor) -> bool:
     return not stop
 
 
-def _write_states(rows: X_Rows, shard: Shard, pad_x: X_GameState, pad_mb: X_Mask) -> None:
-    """Encode the shard's games and their masks into its rows"""
+def _write_states(step: X_Step, shard: Shard, pad_x: X_GameState, pad_mb: X_Mask) -> None:
+    """Encode the shard's games and their masks into its rows of the step"""
     cpu = torch.device("cpu")
     legal = [env.get_legal_actions() for env in shard.envs]
     x = encode_batch_game_state(shard.obs, cpu)
     mb = build_masks(shard.obs, legal, x, cpu)
 
     # Every row back to padding, then every field of the encode into its leading corner
-    rows.game_state.copy_(pad_x)
-    rows.game_state.apply(_copy_prefix, x)
-    rows.mask_batch.copy_(pad_mb)
-    rows.mask_batch.apply(_copy_prefix, mb)
+    step.game_state.copy_(pad_x)
+    step.game_state.apply(_copy_prefix, x)
+    step.mask.copy_(pad_mb)
+    step.mask.apply(_copy_prefix, mb)
 
 
 def _copy_prefix(dst: torch.Tensor, src: torch.Tensor) -> None:

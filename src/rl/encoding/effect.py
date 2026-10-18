@@ -1,6 +1,6 @@
 """Per-effect feature rows.
 
-Each `Effect` becomes one factored row — kind OHE + target features + typed
+Each `Effect` becomes one factored row — effect kind OHE + target features + typed
 param channels + magnitudes on shared physical scales — embedded model-side by
 one shared MLP and sum-pooled into its owning entity's token.
 
@@ -59,12 +59,12 @@ from src.rl.constants import MAX_EFFECTS_STATE
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
-from src.rl.encoding.pairs import owned_pairs
-from src.rl.types import OWNER_PENDING
+from src.rl.encoding.sparse import effect_pending_sparse
+from src.rl.encoding.sparse import owned_sparse
 from src.rl.types import BatchEffectRows
 from src.rl.types import EffectSource
-from src.rl.types import EntityKind
-from src.rl.types import X_Effects
+from src.rl.types import X_EffectPending
+from src.rl.types import X_OwnedSparse
 from src.rl.types import make_channel_allocator
 
 
@@ -443,12 +443,12 @@ _MULTI_HOT_CHANNELS = (EffectChannel.CANDIDATE_FILTER, EffectChannel.RELIC_NAME)
 
 # Most nonzero columns an effect row holds: one per one-hot or scalar channel, and every column
 # of the multi-hot ones
-ENCODING_PAIRS_EFFECT = sum(
+ENCODING_SPARSE_EFFECT = sum(
     width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in CHANNEL_LAYOUT_EFFECT
 )
 
 
-# Per-kind encoders
+# Per-effect-kind encoders
 def _write_amount(row: np.ndarray, value: Amount, off_abs: int, off_rel: int) -> None:
     """Amount union -> absolute/relative channels, plus the shared range flag."""
     absolute, relative, is_range = _amount_parts(value)
@@ -921,35 +921,25 @@ _WARNED_OVERFLOW: set[str] = set()
 
 def encode_batch_effects(
     game_states: list[GameState],
-    sources: Sequence[tuple[EntityKind, BatchEffectRows]],
+    sources: Sequence[BatchEffectRows],
     device: torch.device,
-) -> X_Effects:
-    """Every state's effect rows as one (B, E, D) block, held as pairs, with their owner keys.
+) -> X_OwnedSparse:
+    """Every state's effect rows as one (B, E, D) block, held sparse, with their owner keys.
 
-    `sources` is (owner kind, per-state (offset, source, effect) rows) in fill
-    priority: the pending halt goes first, then the sources in order, so a state
+    `sources` is per-state (slice kind, rank, source, effect) rows in fill priority, so a state
     past MAX_EFFECTS_STATE drops its last sources' rows."""
     batch_size = len(game_states)
 
     # Initialize NumPy arrays
     np_effect = np.zeros((batch_size, MAX_EFFECTS_STATE, ENCODING_DIM_EFFECT), dtype=np.float32)
-    np_entity_kind = np.full((batch_size, MAX_EFFECTS_STATE), -1, dtype=np.int64)
-    np_offset = np.zeros((batch_size, MAX_EFFECTS_STATE), dtype=np.int64)
+    np_owner_slice_kind = np.full((batch_size, MAX_EFFECTS_STATE), -1, dtype=np.int64)
+    np_owner_rank = np.zeros((batch_size, MAX_EFFECTS_STATE), dtype=np.int64)
 
     idx_used = 0
-    for b, game_state in enumerate(game_states):
+    for b in range(batch_size):
         idx = 0
-
-        # Pending Effect: owns no token
-        pending = game_state.effect_pending
-        if pending is not None:
-            encode_effect_row_into_w_cache(pending, np_effect[b, idx])
-            np_effect[b, idx, OFF_EFFECT_SOURCE + EffectSource.PENDING] = 1.0
-            np_entity_kind[b, idx] = OWNER_PENDING
-            idx += 1
-
-        for entity_kind, batch_effect_rows in sources:
-            for offset, source, effect in batch_effect_rows[b]:
+        for batch_effect_rows in sources:
+            for slice_kind, rank, source, effect in batch_effect_rows[b]:
                 if idx == MAX_EFFECTS_STATE:
                     if "effects" not in _WARNED_OVERFLOW:
                         _WARNED_OVERFLOW.add("effects")
@@ -961,8 +951,8 @@ def encode_batch_effects(
 
                 encode_effect_row_into_w_cache(effect, np_effect[b, idx])
                 np_effect[b, idx, OFF_EFFECT_SOURCE + source] = 1.0
-                np_entity_kind[b, idx] = entity_kind
-                np_offset[b, idx] = offset
+                np_owner_slice_kind[b, idx] = slice_kind
+                np_owner_rank[b, idx] = rank
                 idx += 1
 
         idx_used = max(idx_used, idx)
@@ -970,11 +960,26 @@ def encode_batch_effects(
     # The batch's used rows only: the transport pads back to MAX_EFFECTS_STATE
     np_effect = np.ascontiguousarray(np_effect[:, :idx_used])
     normalize_effect_rows(np_effect)
-    return owned_pairs(
-        X_Effects,
+    return owned_sparse(
         np_effect,
-        np.ascontiguousarray(np_entity_kind[:, :idx_used]),
-        np.ascontiguousarray(np_offset[:, :idx_used]),
-        ENCODING_PAIRS_EFFECT,
+        np.ascontiguousarray(np_owner_slice_kind[:, :idx_used]),
+        np.ascontiguousarray(np_owner_rank[:, :idx_used]),
+        ENCODING_SPARSE_EFFECT,
         device,
     )
+
+
+def encode_batch_effect_pending(
+    game_states: list[GameState], device: torch.device
+) -> X_EffectPending:
+    """Every state's pending effect row as one (B, D) block, held sparse: all (0, 0.0) entries
+    where no halt is pending."""
+    np_effect = np.zeros((len(game_states), ENCODING_DIM_EFFECT), dtype=np.float32)
+    for b, game_state in enumerate(game_states):
+        effect_pending = game_state.effect_pending
+        if effect_pending is not None:
+            encode_effect_row_into_w_cache(effect_pending, np_effect[b])
+            np_effect[b, OFF_EFFECT_SOURCE + EffectSource.PENDING] = 1.0
+
+    normalize_effect_rows(np_effect)
+    return effect_pending_sparse(np_effect, ENCODING_SPARSE_EFFECT, device)

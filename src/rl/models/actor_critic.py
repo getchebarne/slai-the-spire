@@ -60,21 +60,23 @@ def _categorical_step(
 
 
 def _position(
-    x_slice_kind: torch.Tensor, x_kind: torch.Tensor, x_rank: torch.Tensor
+    x_window_slice_kind: torch.Tensor, x_slice_kind: torch.Tensor, x_rank: torch.Tensor
 ) -> torch.Tensor:
-    """The window position of the rank-th token of `kind`, per row."""
-    x_match = x_slice_kind == x_kind.unsqueeze(1)
+    """The window position of the rank-th token of `slice_kind`, per row."""
+    x_match = x_window_slice_kind == x_slice_kind.unsqueeze(1)
     x_hit = x_match & (x_match.cumsum(1) == x_rank.unsqueeze(1) + 1)
     return x_hit.long().argmax(1)
 
 
-def _kind_rank(
-    x_slice_kind: torch.Tensor, x_pos: torch.Tensor
+def _slice_kind_rank(
+    x_window_slice_kind: torch.Tensor, x_pos: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """A window position's kind and its rank within that kind, per row."""
-    x_kind = x_slice_kind.gather(1, x_pos.unsqueeze(1)).squeeze(1)
-    x_before = torch.arange(x_slice_kind.shape[1], device=x_slice_kind.device) < x_pos.unsqueeze(1)
-    return x_kind, ((x_slice_kind == x_kind.unsqueeze(1)) & x_before).sum(1)
+    """A window position's slice kind and its rank within that slice kind, per row."""
+    x_slice_kind = x_window_slice_kind.gather(1, x_pos.unsqueeze(1)).squeeze(1)
+    x_before = torch.arange(
+        x_window_slice_kind.shape[1], device=x_window_slice_kind.device
+    ) < x_pos.unsqueeze(1)
+    return x_slice_kind, ((x_window_slice_kind == x_slice_kind.unsqueeze(1)) & x_before).sum(1)
 
 
 class ActorCritic(nn.Module):
@@ -187,12 +189,12 @@ class ActorCritic(nn.Module):
             x_mask.character,
             x_mask.rooms,
         )
-        x_action_type, x_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
+        x_action_type, x_slice_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
             self,
             x_focus=x_focus,
             x_global=x_core_out.global_,
             x_tokens=x_core_out.entities.x,
-            x_slice_kind=x_core_out.entities.x_slice_kind,
+            x_window_slice_kind=x_core_out.entities.x_slice_kind,
             x_mask_action_type=x_mask.mask_action_type,
             x_legal_blocks=tuple(block.legal for block in blocks),
             x_needs_target_blocks=tuple(block.needs_target for block in blocks),
@@ -203,7 +205,7 @@ class ActorCritic(nn.Module):
         )
         return X_Action(
             action_type=x_action_type,
-            kind=x_kind,
+            slice_kind=x_slice_kind,
             rank=x_rank,
             target=x_target,
             log_prob=x_log_prob,
@@ -258,7 +260,7 @@ def policy_heads(
     x_focus: torch.Tensor,
     x_global: torch.Tensor,
     x_tokens: torch.Tensor,
-    x_slice_kind: torch.Tensor,
+    x_window_slice_kind: torch.Tensor,
     x_mask_action_type: torch.Tensor,
     x_legal_blocks: tuple[torch.Tensor, ...],
     x_needs_target_blocks: tuple[torch.Tensor, ...],
@@ -268,11 +270,11 @@ def policy_heads(
     x_recorded_actions: torch.Tensor | None,
 ) -> tuple[torch.Tensor, ...]:
     """`model`'s L1-L3 selections, or the recorded ones scored, over the core's global vector and
-    refined window (tokens and kinds), given the L1 mask, each window block's `legal` and
+    refined window (tokens and slice kinds), given the L1 mask, each window block's `legal` and
     `needs_target` masks in window order, and the monster block's `monster_is_target`. Returns
     X_Action's fields in order"""
     # The recorded actions' columns, or None when selecting
-    x_recorded_action_type, x_recorded_kind, x_recorded_rank, x_recorded_target = (
+    x_recorded_action_type, x_recorded_slice_kind, x_recorded_rank, x_recorded_target = (
         x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 4
     )
 
@@ -329,12 +331,12 @@ def policy_heads(
     # placeholder, so its categorical stays finite
     x_mask_l2[:, 0] |= ~x_selects_token
 
-    # Recorded selections are (kind, rank); the pointer scores positions
-    # A row without a selection records kind and rank -1: rank -1 hits no token, so _position
+    # Recorded selections are (slice kind, rank); the pointer scores positions
+    # A row without a selection records slice kind and rank -1: rank -1 hits no token, so _position
     # gives 0, the placeholder
     x_recorded_pos = None
-    if x_recorded_kind is not None:
-        x_recorded_pos = _position(x_slice_kind, x_recorded_kind, x_recorded_rank)
+    if x_recorded_slice_kind is not None:
+        x_recorded_pos = _position(x_window_slice_kind, x_recorded_slice_kind, x_recorded_rank)
 
     # Calculate the window's logits & sample from them
     x_logits = model._head_level_2(
@@ -343,7 +345,7 @@ def policy_heads(
     x_pos, x_log_prob_l2, x_entropy_l2, x_kl_uniform_l2 = _categorical_step(
         x_logits, x_mask_l2, x_recorded_pos, greedy, generator
     )
-    x_kind, x_rank = _kind_rank(x_slice_kind, x_pos)
+    x_slice_kind, x_rank = _slice_kind_rank(x_window_slice_kind, x_pos)
 
     # L3: monster target, only for actions that take one (CardPlay / PotionUse)
     # Keep only rows whose committed L2 selection takes a target: at recompute
@@ -384,7 +386,7 @@ def policy_heads(
     )
 
     # A level a row doesn't reach: no selection (-1) and zero terms, whatever its placeholder drew
-    x_kind = torch.where(x_selects_token, x_kind, -1)
+    x_slice_kind = torch.where(x_selects_token, x_slice_kind, -1)
     x_rank = torch.where(x_selects_token, x_rank, -1)
     x_log_prob_l2 = torch.where(x_selects_token, x_log_prob_l2, 0.0)
     x_entropy_l2 = torch.where(x_selects_token, x_entropy_l2, 0.0)
@@ -397,7 +399,7 @@ def policy_heads(
     # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
     return (
         x_action_type,
-        x_kind,
+        x_slice_kind,
         x_rank,
         x_target,
         torch.stack([x_log_prob_l1, x_log_prob_l2, x_log_prob_l3], dim=1),

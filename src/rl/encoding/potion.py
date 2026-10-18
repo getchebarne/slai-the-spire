@@ -13,7 +13,7 @@ from src.rl.constants import MAX_POTION_REWARDS
 from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SHOP_POTIONS
 from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
-from src.rl.encoding.pairs import entity_pairs
+from src.rl.encoding.sparse import entity_sparse
 from src.rl.types import SLICE_KINDS_POTION
 from src.rl.types import BatchEffectRows
 from src.rl.types import BatchPriceRows
@@ -21,7 +21,7 @@ from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import PriceRow
 from src.rl.types import SliceKind
-from src.rl.types import X_EntityPairs
+from src.rl.types import X_EntitySparse
 from src.rl.types import make_channel_allocator
 
 
@@ -47,7 +47,7 @@ OFF_POTION_DOUBLED = _alloc(PotionChannel.DOUBLED)
 ENCODING_DIM_POTION = sum(w for _, w in CHANNEL_LAYOUT_POTION)
 
 # Most nonzero columns a potion row holds: one per channel, each a one-hot or a scalar
-ENCODING_PAIRS_POTION = len(CHANNEL_LAYOUT_POTION)
+ENCODING_SPARSE_POTION = len(CHANNEL_LAYOUT_POTION)
 
 # Per-potion encoding cache keyed by (name, doubled): every other field is fixed by name
 _POTION_ROW_CACHE: dict[tuple[PotionName, bool], np.ndarray] = {}
@@ -76,9 +76,9 @@ def encode_potion_into_w_cache(potion: Potion, out: np.ndarray) -> None:
     out[:] = row
 
 
-def _get_potion_entities(kind: SliceKind, game_state: GameState) -> list:
+def _get_potion_entities(slice_kind: SliceKind, game_state: GameState) -> list:
     # Each collection truncated to its own cap (all engine-bounded, so never lossy)
-    match kind:
+    match slice_kind:
         case SliceKind.POTION_OWNED:
             return game_state.potions[:MAX_POTION_SLOTS]
         case SliceKind.POTION_REWARD:
@@ -93,24 +93,24 @@ def _get_potion_entities(kind: SliceKind, game_state: GameState) -> list:
                 return event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
             return []
         case _:
-            raise ValueError(f"not a potion kind: {kind}")
+            raise ValueError(f"not a potion slice kind: {slice_kind}")
 
 
-def iter_packed_potions(game_state: GameState) -> Iterator[tuple[SliceKind, Potion]]:
-    """(kind, potion) for every potion token: the kinds back to back in
+def iter_packed_potions(game_state: GameState) -> Iterator[tuple[SliceKind, int, Potion]]:
+    """(slice kind, rank, potion) for every potion token: the slice kinds back to back in
     SLICE_KINDS_POTION order, each collection in engine order."""
-    for kind in SLICE_KINDS_POTION:
-        for potion in _get_potion_entities(kind, game_state):
-            yield kind, potion
+    for slice_kind in SLICE_KINDS_POTION:
+        for rank, potion in enumerate(_get_potion_entities(slice_kind, game_state)):
+            yield slice_kind, rank, potion
 
 
 def encode_batch_potions(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntityPairs, BatchEffectRows, BatchPriceRows]:
-    """The potion block ((B, W, ENCODING_DIM_POTION) rows as pairs + the (B, W) kind of each
-    token) + each state's (offset, source, effect) rows and its shop tokens' (offset, price)
-    rows, keyed by the same w as the token they belong to; W is the batch's longest packed
-    potion sequence."""
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
+    """The potion block ((B, W, ENCODING_DIM_POTION) rows held sparse + the (B, W) slice kind of
+    each token) + each state's (slice kind, rank, source, effect) rows and its shop tokens'
+    (slice kind, rank, price) rows, keyed by the token they belong to; W is the batch's longest
+    packed potion sequence."""
     batch_tokens = [list(iter_packed_potions(game_state)) for game_state in game_states]
     batch_potion_prices = []
     for game_state in game_states:
@@ -129,26 +129,28 @@ def encode_batch_potions(
 
         # Shop tokens come in shop order, so they take the parallel price list in step
         potion_prices = iter(batch_potion_prices[b])
-        for w, (kind, potion) in enumerate(tokens):
+        for w, (slice_kind, rank, potion) in enumerate(tokens):
             encode_potion_into_w_cache(potion, np_out[b, w])
 
             # `SliceKind`
-            np_slice_kind[b, w] = kind
+            np_slice_kind[b, w] = slice_kind
 
             # Price
-            if kind == SliceKind.POTION_SHOP:
-                price_rows.append((w, next(potion_prices)))
+            if slice_kind == SliceKind.POTION_SHOP:
+                price_rows.append((slice_kind, rank, next(potion_prices)))
 
             # Effects
             effects = potion.effects  # Bound once: each read clones the Vec
             if effects:
-                effect_rows += [(w, EffectSource.POTION_USE, effect) for effect in effects]
+                effect_rows += [
+                    (slice_kind, rank, EffectSource.POTION_USE, effect) for effect in effects
+                ]
 
         batch_effect_rows.append(effect_rows)
         batch_price_rows.append(price_rows)
 
     return (
-        entity_pairs(np_out, np_slice_kind, ENCODING_PAIRS_POTION, device),
+        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_POTION, device),
         batch_effect_rows,
         batch_price_rows,
     )

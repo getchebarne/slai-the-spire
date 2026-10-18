@@ -7,10 +7,9 @@ import torch
 from slai import GameState
 
 from src.rl.constants import SHOP_PRICE_CAP
-from src.rl.encoding.pairs import owned_pairs
+from src.rl.encoding.sparse import owned_sparse
 from src.rl.types import BatchPriceRows
-from src.rl.types import EntityKind
-from src.rl.types import X_Prices
+from src.rl.types import X_OwnedSparse
 from src.rl.types import make_channel_allocator
 
 
@@ -28,7 +27,7 @@ OFF_SHOP_GOLD_GAP = _alloc(PriceChannel.GOLD_GAP)
 ENCODING_DIM_PRICE = sum(w for _, w in CHANNEL_LAYOUT_PRICE)
 
 # Most nonzero columns a price row holds: one per channel, each a scalar
-ENCODING_PAIRS_PRICE = len(CHANNEL_LAYOUT_PRICE)
+ENCODING_SPARSE_PRICE = len(CHANNEL_LAYOUT_PRICE)
 
 # Shop meta: the purge-service price triple + the purged flag
 OFF_SHOP_PURGED = ENCODING_DIM_PRICE
@@ -43,36 +42,34 @@ def _encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
 
 def encode_batch_prices(
     game_states: list[GameState],
-    sources: Sequence[tuple[EntityKind, BatchPriceRows]],
+    sources: Sequence[BatchPriceRows],
     device: torch.device,
-) -> X_Prices:
-    """Every state's shop-token price rows as one (B, P, ENCODING_DIM_PRICE) block, held as
-    pairs, with their owner keys; P is the batch's most priced tokens."""
+) -> X_OwnedSparse:
+    """Every state's shop-token price rows as one (B, P, ENCODING_DIM_PRICE) block, held
+    sparse, with their owner keys; P is the batch's most priced tokens."""
     batch_size = len(game_states)
     batch_rows = [
-        [
-            (entity_kind, offset, price)
-            for entity_kind, batch_price_rows in sources
-            for offset, price in batch_price_rows[b]
-        ]
+        [row for batch_price_rows in sources for row in batch_price_rows[b]]
         for b in range(batch_size)
     ]
     width = max((len(rows) for rows in batch_rows), default=0)
     np_price = np.zeros((batch_size, width, ENCODING_DIM_PRICE), dtype=np.float32)
-    np_entity_kind = np.full((batch_size, width), -1, dtype=np.int64)
-    np_offset = np.zeros((batch_size, width), dtype=np.int64)
+    np_owner_slice_kind = np.full((batch_size, width), -1, dtype=np.int64)
+    np_owner_rank = np.zeros((batch_size, width), dtype=np.int64)
 
     for b, (game_state, rows) in enumerate(zip(game_states, batch_rows)):
         if not rows:
             continue
 
         gold = game_state.character.gold
-        for idx, (entity_kind, offset, price) in enumerate(rows):
+        for idx, (slice_kind, rank, price) in enumerate(rows):
             _encode_price_into(price, gold, np_price[b, idx])
-            np_entity_kind[b, idx] = entity_kind
-            np_offset[b, idx] = offset
+            np_owner_slice_kind[b, idx] = slice_kind
+            np_owner_rank[b, idx] = rank
 
-    return owned_pairs(X_Prices, np_price, np_entity_kind, np_offset, ENCODING_PAIRS_PRICE, device)
+    return owned_sparse(
+        np_price, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_PRICE, device
+    )
 
 
 def encode_batch_shop_meta(game_states: list[GameState], device: torch.device) -> torch.Tensor:
