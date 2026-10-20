@@ -46,7 +46,7 @@ class PointerKeys(nn.Module):
         )
 
     def forward(self, x_entities: torch.Tensor) -> torch.Tensor:
-        """Project entity embeddings (B, N, dim_in) to pointer keys (B, N, dim_key)."""
+        """Project entity embeddings (..., dim_in) to pointer keys (..., dim_key)."""
         return self._net(x_entities)
 
 
