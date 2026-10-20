@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.algorithms.actor_critic.distributed import average_gradients
+from src.rl.algorithms.actor_critic.distributed import GradientBuckets
+from src.rl.algorithms.actor_critic.distributed import average_gradient_buckets
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
@@ -147,6 +148,7 @@ def update_ppo(
     model: ActorCritic,
     batch: X_TrainingBatch,
     optimizer: torch.optim.Optimizer,
+    buckets: GradientBuckets,
     ppo: PPOConfig,
     device: torch.device,
     generator: torch.Generator,
@@ -220,7 +222,7 @@ def update_ppo(
 
             optimizer.zero_grad()
             loss.backward()
-            average_gradients(model)
+            average_gradient_buckets(buckets, model)
             grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo.max_grad_norm)
             optimizer.step()
 

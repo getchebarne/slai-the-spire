@@ -117,6 +117,9 @@ def train(
         # own, and the CPU parity runs stay bit-identical
         if rank_info.device.type == "cuda":
             compile_hot_paths(model)
+
+        # The ranks start averaging each bucket of gradients while the backward still runs
+        buckets = distributed.hook_gradient_buckets(model)
         generator = torch.Generator(device=rank_info.device).manual_seed(
             random.randint(0, 2**31 - 1)
         )
@@ -129,7 +132,9 @@ def train(
             t_update = time.perf_counter()
             total_steps += steps_per_iteration
             batch = prepare_batch(model, delivery.rollout, gamma, ppo)
-            metrics = update_ppo(model, batch, optimizer, ppo, rank_info.device, generator)
+            metrics = update_ppo(
+                model, batch, optimizer, buckets, ppo, rank_info.device, generator
+            )
             seconds_update = time.perf_counter() - t_update
 
             # Adaptive-KL lr: the early stops bound epochs, not the first epoch's step size
