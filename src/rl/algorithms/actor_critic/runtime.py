@@ -25,7 +25,7 @@ from src.rl.types import X_Rollout
 
 
 @dataclass
-class Delivery:
+class _Delivery:
     """One collected rollout and how it was made"""
 
     rollout: X_Rollout
@@ -36,7 +36,7 @@ class Delivery:
 
 
 @dataclass
-class Published:
+class _Published:
     """One published weight set and the curriculum position to play it at"""
 
     version: torch.Tensor  # () int64, in shared memory
@@ -51,7 +51,7 @@ class Handoff:
     """What the learner and its actor process share"""
 
     # Two suffice: the learner overwrites the older set only after taking the rollouts played on it
-    published: list[Published]  # Last two weights published by the Learner
+    published: list[_Published]  # Last two weights published by the Learner
     new_version: Semaphore  # released once by each publish; the actor acquires once per version
     stop: torch.Tensor  # () bool in shared memory, lock-free like the workers' stop flag
 
@@ -81,6 +81,7 @@ class ActorSettings:
     matmul_precision: str
     num_threads: int
     deterministic: bool
+    use_duck_shape: bool
 
 
 def start_actor(model: ActorCritic, settings: ActorSettings) -> tuple[Handoff, Actor]:
@@ -89,7 +90,7 @@ def start_actor(model: ActorCritic, settings: ActorSettings) -> tuple[Handoff, A
     ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
     handoff = Handoff(
         published=[
-            Published(
+            _Published(
                 version=torch.tensor(-1).share_memory_(),
                 weights={
                     n: torch.empty_like(x, device="cpu").share_memory_()
@@ -123,7 +124,7 @@ def publish(handoff: Handoff, model: ActorCritic, version: int, curriculum_c: fl
     handoff.new_version.release()
 
 
-def take(actor: Actor) -> tuple[Delivery, float]:
+def take(actor: Actor) -> tuple[_Delivery, float]:
     """The next rollout and how long the learner waited for it. A dead actor surfaces here"""
     t_start = time.perf_counter()
     while not actor.conn.poll(timeout=1.0):
@@ -175,6 +176,7 @@ def _actor_loop(handoff: Handoff, conn: Connection, settings: ActorSettings) -> 
     torch.set_float32_matmul_precision(settings.matmul_precision)
     torch.set_num_threads(settings.num_threads)
     torch.use_deterministic_algorithms(settings.deterministic)
+    torch.fx.experimental._config.use_duck_shape = settings.use_duck_shape
     model = ActorCritic(**settings.model_config).to(device)  # its weights come from the handoff
 
     # Its sampling continues the learner's global stream, which the run seeds per rank and resume
@@ -209,7 +211,7 @@ def _actor_loop(handoff: Handoff, conn: Connection, settings: ActorSettings) -> 
             if device.type == "cuda":
                 torch.cuda.synchronize(device)  # the learner reads the rollout in another process
                 info["memory/actor_gb"] = torch.cuda.max_memory_reserved(device) / 2**30
-            delivery = Delivery(
+            delivery = _Delivery(
                 x_rollout,
                 completed,
                 info,

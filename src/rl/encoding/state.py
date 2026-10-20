@@ -46,6 +46,7 @@ from src.rl.encoding.shop import ENCODING_SPARSE_PRICE
 from src.rl.encoding.shop import encode_batch_prices
 from src.rl.encoding.shop import encode_batch_shop_meta
 from src.rl.types import CAP_OF_SLICE_KIND
+from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SLICE_KINDS_CARD
 from src.rl.types import SLICE_KINDS_POTION
 from src.rl.types import SLICE_KINDS_RELIC
@@ -53,6 +54,7 @@ from src.rl.types import X_EffectPending
 from src.rl.types import X_EntitySparse
 from src.rl.types import X_GameState
 from src.rl.types import X_OwnedSparse
+from src.rl.types import X_Rooms
 
 
 ENCODING_DIM_ASCENSION = ASCENSION_LEVEL
@@ -112,6 +114,17 @@ def encode_batch_game_state(game_states: list[GameState], device: torch.device) 
         monsters=x_monsters,
         event_options=x_event_options,
         character=x_character,
+        rooms=X_Rooms(
+            x_node_idx=x_room_node_idx,
+            x_slice_kind=torch.from_numpy(np_room_slice_kind).to(device),
+            x_legal=torch.zeros(
+                len(game_states), MAP_WIDTH, NUM_ACTION_TYPES, dtype=torch.bool, device=device
+            ),
+            x_needs_target=torch.zeros(
+                len(game_states), MAP_WIDTH, dtype=torch.bool, device=device
+            ),
+            batch_size=batch_size,
+        ),
         health_block=encode_batch_health_block(game_states, device),
         prices=x_prices,
         effects=x_effects,
@@ -119,14 +132,15 @@ def encode_batch_game_state(game_states: list[GameState], device: torch.device) 
         modifiers=encode_batch_modifiers(game_states, device),
         energy=encode_batch_energy(game_states, device),
         map_grid=x_map_grid,
-        room_node_idx=x_room_node_idx,
-        room_slice_kind=torch.from_numpy(np_room_slice_kind).to(device),
         map_meta=x_map_meta,
         focus=encode_batch_focus(game_states, device),
         ascension=_encode_batch_ascension(game_states, device),
         reward_meta=encode_batch_rewards(game_states, device),
         shop_meta=encode_batch_shop_meta(game_states, device),
         event_meta=x_event_meta,
+        x_legal_action_type=torch.zeros(
+            len(game_states), NUM_ACTION_TYPES, dtype=torch.bool, device=device
+        ),
         batch_size=batch_size,
     )
 
@@ -149,6 +163,13 @@ def empty_game_state(batch_size: int) -> X_GameState:
         monsters=_empty_entity(batch_size, MAX_MONSTERS, ENCODING_SPARSE_MONSTER),
         event_options=_empty_entity(batch_size, MAX_EVENT_OPTIONS, ENCODING_SPARSE_EVENT_OPTION),
         character=_empty_entity(batch_size, 1, ENCODING_SPARSE_CHARACTER),
+        rooms=X_Rooms(
+            x_node_idx=torch.full((batch_size, MAP_WIDTH), -1, dtype=torch.long),
+            x_slice_kind=torch.full((batch_size, MAP_WIDTH), -1, dtype=torch.int16),
+            x_legal=torch.zeros(batch_size, MAP_WIDTH, NUM_ACTION_TYPES, dtype=torch.bool),
+            x_needs_target=torch.zeros(batch_size, MAP_WIDTH, dtype=torch.bool),
+            batch_size=[batch_size],
+        ),
         health_block=_empty_owned(batch_size, MAX_MONSTERS + 1, ENCODING_SPARSE_HEALTH_BLOCK),
         prices=_empty_owned(batch_size, CAP_PRICES, ENCODING_SPARSE_PRICE),
         effects=_empty_owned(batch_size, MAX_EFFECTS_STATE, ENCODING_SPARSE_EFFECT),
@@ -160,14 +181,13 @@ def empty_game_state(batch_size: int) -> X_GameState:
         modifiers=_empty_owned(batch_size, MAX_MODIFIER_ROWS_STATE, ENCODING_SPARSE_MODIFIER),
         energy=torch.zeros(batch_size, ENCODING_DIM_ENERGY),
         map_grid=torch.zeros(batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
-        room_node_idx=torch.full((batch_size, MAP_WIDTH), -1, dtype=torch.long),
-        room_slice_kind=torch.full((batch_size, MAP_WIDTH), -1, dtype=torch.int16),
         map_meta=torch.zeros(batch_size, ENCODING_DIM_MAP_META),
         focus=torch.zeros(batch_size, ENCODING_DIM_FOCUS),
         ascension=torch.zeros(batch_size, ENCODING_DIM_ASCENSION),
         reward_meta=torch.zeros(batch_size, ENCODING_DIM_REWARD_META),
         shop_meta=torch.zeros(batch_size, ENCODING_DIM_SHOP_META),
         event_meta=torch.zeros(batch_size, ENCODING_DIM_EVENT_META),
+        x_legal_action_type=torch.zeros(batch_size, NUM_ACTION_TYPES, dtype=torch.bool),
         batch_size=[batch_size],
     )
 
@@ -177,6 +197,8 @@ def _empty_entity(batch_size: int, cap: int, num_sparse: int) -> X_EntitySparse:
         torch.zeros(batch_size, cap, num_sparse, dtype=torch.int16),
         torch.zeros(batch_size, cap, num_sparse),
         torch.full((batch_size, cap), -1, dtype=torch.int16),
+        torch.zeros(batch_size, cap, NUM_ACTION_TYPES, dtype=torch.bool),
+        torch.zeros(batch_size, cap, dtype=torch.bool),
         batch_size=[batch_size],
     )
 

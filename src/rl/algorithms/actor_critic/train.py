@@ -110,6 +110,7 @@ def train(
                 matmul_precision=torch.get_float32_matmul_precision(),
                 num_threads=torch.get_num_threads(),
                 deterministic=torch.are_deterministic_algorithms_enabled(),
+                use_duck_shape=torch.fx.experimental._config.use_duck_shape,
             ),
         )
 
@@ -237,8 +238,9 @@ if __name__ == "__main__":
     # TF32 on Ampere+ GPUs: near-free matmul throughput (no-op on CPU/MPS)
     torch.set_float32_matmul_precision("high")
 
-    # Every size its own symbol, process-wide: duck sizing ties the window blocks' widths that
-    # match at the heads' first trace, and the heads recompile each time those widths part
+    # Every size its own symbol, process-wide: duck sizing ties sizes that match at the heads'
+    # first trace, such as a monster block 4 wide and the recorded actions' 4 columns, and the
+    # heads recompile each time those sizes part
     torch.fx.experimental._config.use_duck_shape = False
 
     # Set seeds

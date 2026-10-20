@@ -3,7 +3,6 @@ from collections.abc import Sequence
 
 import numpy as np
 import slai
-import torch
 from slai import ACTION_SPEC_REGISTRY
 from slai import ActionType
 from slai import Card
@@ -15,9 +14,6 @@ from slai import Relic
 from slai import RelicName
 from slai import Room
 
-from src.rl.constants import MAP_WIDTH
-from src.rl.constants import MAX_EVENT_OPTIONS
-from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.card import _get_card_entities
 from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
@@ -28,19 +24,13 @@ from src.rl.encoding.map_ import _get_room_entities
 from src.rl.encoding.monster import _get_monster_entities
 from src.rl.encoding.potion import _get_potion_entities
 from src.rl.encoding.relic import _get_relic_entities
-from src.rl.encoding.state import CAP_CARDS
-from src.rl.encoding.state import CAP_POTIONS
-from src.rl.encoding.state import CAP_RELICS
 from src.rl.types import ACTION_TYPE_BY_INT
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SLICE_KINDS_CARD
 from src.rl.types import SLICE_KINDS_POTION
 from src.rl.types import SLICE_KINDS_RELIC
 from src.rl.types import SliceKind
 from src.rl.types import X_Action
-from src.rl.types import X_EntityMask
 from src.rl.types import X_GameState
-from src.rl.types import X_Mask
 
 
 # An entity a legal action can name
@@ -155,44 +145,38 @@ def build_masks(
     states: list[slai.GameState],
     batch_legal_actions: list[list[slai.Action]],
     x_game_state: X_GameState,
-    device: torch.device,
-) -> X_Mask:
-    """Build a X_Mask from each state's legal actions, one X_EntityMask per block.
-    Wasted Potion discards are engine-legal but masked.
+) -> None:
+    """Fill the masks of the CPU `x_game_state` from each state's legal actions: its
+    `x_legal_action_type`, and each block's `x_legal` and `x_needs_target`. Wasted Potion discards
+    are engine-legal but masked.
 
-    A legal id's position in its block is its token's, the rank-th of its slice kind in that
-    block's slice kind row, as the state's token_index ranks it; so the masks read the
-    encoder's placement rather than re-deriving it, and an entity the encoder dropped
-    is unselectable by construction. A target is its monster's token."""
-    batch_size = len(states)
+    A legal id's bit goes on its token, the rank-th of its slice kind in the block whose slice
+    kind row holds it, as the state's token_index ranks it; so the masks read the encoder's
+    placement rather than re-deriving it, and an entity the encoder dropped is unselectable by
+    construction."""
 
-    # Read the window's slice kind row: X_GameState's entity blocks, then the rooms row
-    x_rows = (
-        x_game_state.cards.x_slice_kind,
-        x_game_state.relics.x_slice_kind,
-        x_game_state.potions.x_slice_kind,
-        x_game_state.monsters.x_slice_kind,
-        x_game_state.event_options.x_slice_kind,
-        x_game_state.character.x_slice_kind,
-        x_game_state.room_slice_kind,
-    )
-    widths = [x_row.shape[1] for x_row in x_rows]
-    np_slice_kind = torch.cat(x_rows, dim=1).cpu().numpy()
-
-    # Pre-allocate NumPy arrays
-    np_action_type = np.zeros((batch_size, NUM_ACTION_TYPES), dtype=bool)
-    np_legal = np.zeros((batch_size, NUM_ACTION_TYPES, np_slice_kind.shape[1]), dtype=bool)
-    np_needs_target = np.zeros(np_slice_kind.shape, dtype=bool)
-    np_monster_is_target = np.zeros(
-        (batch_size, x_game_state.monsters.x_slice_kind.shape[1]), dtype=bool
-    )
+    # Each block's slice kind row and masks as NumPy views, so the bits go straight into the
+    # blocks; in any order, since each slice kind lives in one block
+    blocks = [
+        (x_block.x_slice_kind.numpy(), x_block.x_legal.numpy(), x_block.x_needs_target.numpy())
+        for x_block in (
+            x_game_state.cards,
+            x_game_state.relics,
+            x_game_state.potions,
+            x_game_state.monsters,
+            x_game_state.event_options,
+            x_game_state.character,
+            x_game_state.rooms,
+        )
+    ]
+    np_legal_action_type = x_game_state.x_legal_action_type.numpy()
 
     for b, state in enumerate(states):
         combat = state.combat  # hoisted once: FFI context accesses deep-clone
         index = token_index(state, combat)
 
-        # Window positions of each slice kind's tokens, in rank order
-        positions: dict[SliceKind, np.ndarray] = {}
+        # Each slice kind's tokens: their block's masks, and their positions there in rank order
+        tokens_of_slice_kind: dict[SliceKind, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
         # The (type, slice kind) pairs whose legal ids set a bit, for the dedup below
         legal_slice_kinds: set[tuple[int, SliceKind]] = set()
@@ -215,10 +199,11 @@ def build_masks(
 
                 # Filled on a slice kind's first use: every one up front costs most of the build
                 slice_kind, rank = token
-                if slice_kind not in positions:
-                    positions[slice_kind] = np.flatnonzero(np_slice_kind[b] == slice_kind)
-                w = positions[slice_kind][rank]
-                np_legal[b, at, w] = True  # per ACTION TYPE — legality differs per type
+                if slice_kind not in tokens_of_slice_kind:
+                    tokens_of_slice_kind[slice_kind] = _find_tokens(blocks, b, slice_kind)
+                np_legal, np_needs_target, np_positions = tokens_of_slice_kind[slice_kind]
+                w = np_positions[rank]
+                np_legal[b, w, at] = True  # per ACTION TYPE — legality differs per type
                 legal_slice_kinds.add((at, slice_kind))
 
                 # L3: only CardPlay/PotionUse carry a monster target as ids[1]. The
@@ -226,12 +211,9 @@ def build_masks(
                 # targets live on the monster tokens and the selection only records that
                 # it takes one
                 if len(ids) == 2:
-                    # The monster block is dense: a monster's rank is its column
-                    _, rank_target = index[ids[1]]
-                    np_monster_is_target[b, rank_target] = True
                     np_needs_target[b, w] = True
-            np_action_type[b, at] = True  # L1: every legal ActionType the masks can express
-        if not np_action_type[b].any():
+            np_legal_action_type[b, at] = True  # L1: every legal ActionType the masks can express
+        if not np_legal_action_type[b].any():
             # Every legal action was dropped — unrepresentable; fail loudly not NaN
             raise RuntimeError(
                 f"All legal actions dropped on focus {derive_focus(state).name}: "
@@ -244,9 +226,10 @@ def build_masks(
             if not group_ids:
                 continue
 
-            np_row = np_legal[b, at]
+            np_legal, _, np_positions = tokens_of_slice_kind[slice_kind]
+            np_row = np_legal[b, :, at]
             seen: set[int] = set()
-            for rank, w in enumerate(positions[slice_kind]):
+            for rank, w in enumerate(np_positions):
                 if not np_row[w]:
                     continue
                 if group_ids[rank] in seen:
@@ -254,58 +237,17 @@ def build_masks(
                 else:
                     seen.add(group_ids[rank])
 
-    # Cut the window back into its blocks: X_GameState's entity blocks, then the rooms
-    (
-        x_cards_mask,
-        x_relics_mask,
-        x_potions_mask,
-        x_monsters_mask,
-        x_event_options_mask,
-        x_character_mask,
-        x_rooms_mask,
-    ) = (
-        X_EntityMask(legal=x_legal, needs_target=x_needs_target, batch_size=[batch_size])
-        for x_legal, x_needs_target in zip(
-            torch.from_numpy(np_legal).split(widths, dim=2),
-            torch.from_numpy(np_needs_target).split(widths, dim=1),
-        )
-    )
-    return X_Mask(
-        mask_action_type=torch.from_numpy(np_action_type),
-        cards=x_cards_mask,
-        relics=x_relics_mask,
-        potions=x_potions_mask,
-        monsters=x_monsters_mask,
-        event_options=x_event_options_mask,
-        character=x_character_mask,
-        rooms=x_rooms_mask,
-        monster_is_target=torch.from_numpy(np_monster_is_target),
-        batch_size=[batch_size],
-    ).to(device)
 
-
-def empty_masks(batch_size: int) -> X_Mask:
-    """Masks with every block at its cap and nothing legal"""
-    return X_Mask(
-        mask_action_type=torch.zeros(batch_size, NUM_ACTION_TYPES, dtype=torch.bool),
-        cards=_empty_entity_mask(batch_size, CAP_CARDS),
-        relics=_empty_entity_mask(batch_size, CAP_RELICS),
-        potions=_empty_entity_mask(batch_size, CAP_POTIONS),
-        monsters=_empty_entity_mask(batch_size, MAX_MONSTERS),
-        event_options=_empty_entity_mask(batch_size, MAX_EVENT_OPTIONS),
-        character=_empty_entity_mask(batch_size, 1),
-        rooms=_empty_entity_mask(batch_size, MAP_WIDTH),
-        monster_is_target=torch.zeros(batch_size, MAX_MONSTERS, dtype=torch.bool),
-        batch_size=[batch_size],
-    )
-
-
-def _empty_entity_mask(batch_size: int, cap: int) -> X_EntityMask:
-    return X_EntityMask(
-        legal=torch.zeros(batch_size, NUM_ACTION_TYPES, cap, dtype=torch.bool),
-        needs_target=torch.zeros(batch_size, cap, dtype=torch.bool),
-        batch_size=[batch_size],
-    )
+def _find_tokens(
+    blocks: list[tuple[np.ndarray, np.ndarray, np.ndarray]], b: int, slice_kind: SliceKind
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Row b's tokens of `slice_kind`: the `x_legal` and `x_needs_target` views of the one block
+    whose slice kind row holds them, and their positions there in rank order"""
+    for np_slice_kind, np_legal, np_needs_target in blocks:
+        np_positions = np.flatnonzero(np_slice_kind[b] == slice_kind)
+        if np_positions.size:
+            return np_legal, np_needs_target, np_positions
+    raise ValueError(f"No block holds a {slice_kind.name} token in row {b}")
 
 
 def engine_action(

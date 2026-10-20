@@ -46,7 +46,7 @@ class PointerKeys(nn.Module):
         )
 
     def forward(self, x_entities: torch.Tensor) -> torch.Tensor:
-        """Project entity embeddings (B, N, dim_in) to pointer keys (B, N, dim_key)."""
+        """Project entity embeddings (..., dim_in) to pointer keys (..., dim_key)."""
         return self._net(x_entities)
 
 
@@ -70,13 +70,15 @@ class HeadPointerSelect(nn.Module):
         x_keys: torch.Tensor,
         x_global: torch.Tensor,
         x_cond: torch.Tensor,
+        x_key_state: torch.Tensor,
         x_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Score entities by scaled key·query; returns masked logits. `x_keys` is
-        (B, N, dim_key) from PointerKeys; identity dedup is baked into `x_mask`
+        """Score entities by scaled key·query, each key against its state's query; returns
+        masked logits. `x_keys` is (..., dim_key) from PointerKeys and `x_key_state` each key's
+        state, broadcast to the keys' leading dims; identity dedup is baked into `x_mask`
         (masks.py); sampling is the caller's job."""
         x_query = self._query_net(torch.cat([x_global, x_cond], dim=-1))  # (B, dim_key)
-        x_logits = torch.bmm(x_keys, x_query.unsqueeze(-1)).squeeze(-1) * self._scale  # (B, N)
+        x_logits = (x_keys * x_query[x_key_state]).sum(-1) * self._scale
         return x_logits.masked_fill(~x_mask, float("-inf"))
 
 
