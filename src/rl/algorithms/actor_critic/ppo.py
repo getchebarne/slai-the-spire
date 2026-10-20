@@ -5,8 +5,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.algorithms.actor_critic.distributed import GradientBuckets
 from src.rl.algorithms.actor_critic.distributed import RankMean
-from src.rl.algorithms.actor_critic.distributed import average_gradients
+from src.rl.algorithms.actor_critic.distributed import average_gradient_buckets
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.distributed import read_rank_mean
 from src.rl.algorithms.actor_critic.metrics import MetricKey
@@ -51,6 +52,7 @@ def update_ppo(
     model: ActorCritic,
     rollout: Rollout,
     optimizer: torch.optim.Optimizer,
+    gradient_buckets: GradientBuckets,
     ppo_config: PPOConfig,
     gamma: float,
     device: torch.device,
@@ -66,6 +68,8 @@ def update_ppo(
         The collected states, actions and rewards.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
+    gradient_buckets : GradientBuckets
+        The model's gradient buckets, which average each step's gradients over the ranks.
     ppo_config : PPOConfig
         The PPO settings.
     gamma : float
@@ -151,6 +155,7 @@ def update_ppo(
         x_metrics, rank_mean_approx_kl = _update_minibatch(
             model,
             optimizer,
+            gradient_buckets,
             states_mini,
             x_action_mini,
             targets_mini,
@@ -404,6 +409,7 @@ def _plan_minibatches(
 def _update_minibatch(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
+    gradient_buckets: GradientBuckets,
     states: States[Live],
     x_action: torch.Tensor,
     targets: _Targets,
@@ -418,6 +424,8 @@ def _update_minibatch(
         The Learner's model, updated in place.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
+    gradient_buckets : GradientBuckets
+        The model's gradient buckets, which average each step's gradients over the ranks.
     states : States[Live]
         The minibatch's selected states, including their CPU totals.
     x_action : torch.Tensor
@@ -470,7 +478,7 @@ def _update_minibatch(
     # Optimizer step, on the gradient averaged over the ranks
     optimizer.zero_grad()
     x_loss.backward()
-    average_gradients(model)
+    average_gradient_buckets(gradient_buckets, model)
     x_grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo_config.max_grad_norm)
     optimizer.step()
 
