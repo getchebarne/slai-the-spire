@@ -339,11 +339,11 @@ def iter_packed_cards(
 
 def encode_batch_cards(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
-    """The card block ((B, W, ENCODING_DIM_CARD) rows held sparse + the (B, W) `SliceKind` of each
-    token) + each state's (slice kind, rank, source, effect) rows and its shop tokens'
-    (slice kind, rank, price) rows, keyed by the token they belong to; W is the batch's longest
-    packed card sequence."""
+) -> tuple[X_EntitySparse, torch.Tensor, BatchEffectRows, BatchPriceRows]:
+    """The card block ((N, ENCODING_DIM_CARD) rows held sparse, every state's tokens after the
+    previous state's, + the (N,) `SliceKind` of each token) + each state's (B,) token count + each
+    state's (slice kind, rank, source, effect) rows and its shop tokens' (slice kind, rank, price)
+    rows, keyed by the token they belong to."""
     batch_tokens = []
     batch_energy_current = []
     batch_card_prices = []
@@ -354,24 +354,25 @@ def encode_batch_cards(
         shop = game_state.shop
         batch_card_prices.append(shop.card_prices if shop is not None else [])
 
-    seqlen = max((len(tokens) for tokens in batch_tokens), default=0)
-    np_out = np.zeros((len(game_states), seqlen, ENCODING_DIM_CARD), dtype=np.float32)
-    np_slice_kind = np.full((len(game_states), seqlen), -1, dtype=np.int16)
+    np_count = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
+    np_out = np.zeros((np_count.sum(), ENCODING_DIM_CARD), dtype=np.float32)  # (N, D)
+    np_slice_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
     batch_effect_rows: BatchEffectRows = []
     batch_price_rows: BatchPriceRows = []
 
+    row = 0
     for b, (tokens, energy_current) in enumerate(zip(batch_tokens, batch_energy_current)):
         effect_rows: list[EffectRow] = []
         price_rows: list[PriceRow] = []
 
         # Shop tokens come in shop order, so they take the parallel price list in step
         card_prices = iter(batch_card_prices[b])
-        for w, (slice_kind, rank, card) in enumerate(tokens):
+        for slice_kind, rank, card in tokens:
             # Encode card
-            encode_card_into_w_cache(card, energy_current, np_out[b, w])
+            encode_card_into_w_cache(card, energy_current, np_out[row])
 
             # Stamp `SliceKind`
-            np_slice_kind[b, w] = slice_kind
+            np_slice_kind[row] = slice_kind
 
             # Collect its price
             if slice_kind == SliceKind.CARD_SHOP:
@@ -390,11 +391,13 @@ def encode_batch_cards(
             effect_rows += [
                 (slice_kind, rank, EffectSource.CARD_DRAW, effect) for effect in card.effects_draw
             ]
+            row += 1
         batch_effect_rows.append(effect_rows)
         batch_price_rows.append(price_rows)
 
     return (
         entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_CARD, device),
+        torch.from_numpy(np_count).to(device),
         batch_effect_rows,
         batch_price_rows,
     )

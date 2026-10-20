@@ -150,23 +150,29 @@ def build_masks(
     `x_legal_action_type`, and each block's `x_legal` and `x_needs_target`. Wasted Potion discards
     are engine-legal but masked.
 
-    A legal id's bit goes on its token, the rank-th of its slice kind in the block whose slice
-    kind row holds it, as the state's token_index ranks it; so the masks read the encoder's
+    A legal id's bit goes on its token, the rank-th of its slice kind in the block whose rows of
+    the state hold it, as the state's token_index ranks it; so the masks read the encoder's
     placement rather than re-deriving it, and an entity the encoder dropped is unselectable by
     construction."""
 
-    # Each block's slice kind row and masks as NumPy views, so the bits go straight into the
-    # blocks; in any order, since each slice kind lives in one block
+    # Each block's slice kinds and masks as NumPy views, so the bits go straight into the blocks,
+    # with each state's first row and the end of the last; in any order, since each slice kind
+    # lives in one block
     blocks = [
-        (x_block.x_slice_kind.numpy(), x_block.x_legal.numpy(), x_block.x_needs_target.numpy())
-        for x_block in (
-            x_game_state.cards,
-            x_game_state.relics,
-            x_game_state.potions,
-            x_game_state.monsters,
-            x_game_state.event_options,
-            x_game_state.character,
-            x_game_state.rooms,
+        (
+            np.concatenate([[0], np.cumsum(x_count_block.numpy())]),
+            x_block.x_slice_kind.numpy(),
+            x_block.x_legal.numpy(),
+            x_block.x_needs_target.numpy(),
+        )
+        for x_block, x_count_block in (
+            (x_game_state.cards, x_game_state.count.cards),
+            (x_game_state.relics, x_game_state.count.relics),
+            (x_game_state.potions, x_game_state.count.potions),
+            (x_game_state.monsters, x_game_state.count.monsters),
+            (x_game_state.event_options, x_game_state.count.event_options),
+            (x_game_state.character, x_game_state.count.character),
+            (x_game_state.rooms, x_game_state.count.rooms),
         )
     ]
     np_legal_action_type = x_game_state.x_legal_action_type.numpy()
@@ -175,7 +181,7 @@ def build_masks(
         combat = state.combat  # hoisted once: FFI context accesses deep-clone
         index = token_index(state, combat)
 
-        # Each slice kind's tokens: their block's masks, and their positions there in rank order
+        # Each slice kind's tokens: their block's masks, and their rows there in rank order
         tokens_of_slice_kind: dict[SliceKind, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
         # The (type, slice kind) pairs whose legal ids set a bit, for the dedup below
@@ -201,9 +207,9 @@ def build_masks(
                 slice_kind, rank = token
                 if slice_kind not in tokens_of_slice_kind:
                     tokens_of_slice_kind[slice_kind] = _find_tokens(blocks, b, slice_kind)
-                np_legal, np_needs_target, np_positions = tokens_of_slice_kind[slice_kind]
-                w = np_positions[rank]
-                np_legal[b, w, at] = True  # per ACTION TYPE — legality differs per type
+                np_legal, np_needs_target, np_rows = tokens_of_slice_kind[slice_kind]
+                row = np_rows[rank]
+                np_legal[row, at] = True  # per ACTION TYPE — legality differs per type
                 legal_slice_kinds.add((at, slice_kind))
 
                 # L3: only CardPlay/PotionUse carry a monster target as ids[1]. The
@@ -211,7 +217,7 @@ def build_masks(
                 # targets live on the monster tokens and the selection only records that
                 # it takes one
                 if len(ids) == 2:
-                    np_needs_target[b, w] = True
+                    np_needs_target[row] = True
             np_legal_action_type[b, at] = True  # L1: every legal ActionType the masks can express
         if not np_legal_action_type[b].any():
             # Every legal action was dropped — unrepresentable; fail loudly not NaN
@@ -226,28 +232,30 @@ def build_masks(
             if not group_ids:
                 continue
 
-            np_legal, _, np_positions = tokens_of_slice_kind[slice_kind]
-            np_row = np_legal[b, :, at]
+            np_legal, _, np_rows = tokens_of_slice_kind[slice_kind]
             seen: set[int] = set()
-            for rank, w in enumerate(np_positions):
-                if not np_row[w]:
+            for rank, row in enumerate(np_rows):
+                if not np_legal[row, at]:
                     continue
                 if group_ids[rank] in seen:
-                    np_row[w] = False
+                    np_legal[row, at] = False
                 else:
                     seen.add(group_ids[rank])
 
 
 def _find_tokens(
-    blocks: list[tuple[np.ndarray, np.ndarray, np.ndarray]], b: int, slice_kind: SliceKind
+    blocks: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    b: int,
+    slice_kind: SliceKind,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Row b's tokens of `slice_kind`: the `x_legal` and `x_needs_target` views of the one block
-    whose slice kind row holds them, and their positions there in rank order"""
-    for np_slice_kind, np_legal, np_needs_target in blocks:
-        np_positions = np.flatnonzero(np_slice_kind[b] == slice_kind)
-        if np_positions.size:
-            return np_legal, np_needs_target, np_positions
-    raise ValueError(f"No block holds a {slice_kind.name} token in row {b}")
+    """State b's tokens of `slice_kind`: the `x_legal` and `x_needs_target` views of the one block
+    whose rows of the state hold them, and their rows there in rank order"""
+    for np_start, np_slice_kind, np_legal, np_needs_target in blocks:
+        start, end = np_start[b], np_start[b + 1]
+        np_rows = start + np.flatnonzero(np_slice_kind[start:end] == slice_kind)
+        if np_rows.size:
+            return np_legal, np_needs_target, np_rows
+    raise ValueError(f"No block holds a {slice_kind.name} token in state {b}")
 
 
 def engine_action(

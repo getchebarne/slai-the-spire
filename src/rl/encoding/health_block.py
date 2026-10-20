@@ -69,31 +69,37 @@ def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
     out[OFF_HEALTH_BLOCK_TOTAL_SCALAR] = min(total / _TOTAL_MAX, 1.0)
 
 
-def encode_batch_health_block(game_states: list[GameState], device: torch.device) -> X_OwnedSparse:
-    """Every state's health/block rows as one (B, W, dim) block, held sparse, with their
-    owner keys: each Monster's row (MONSTERS, its slot), then the Character's (CHARACTER, 0);
-    W is the batch's most monsters + 1."""
-    batch_size = len(game_states)
+def encode_batch_health_block(
+    game_states: list[GameState], device: torch.device
+) -> tuple[X_OwnedSparse, torch.Tensor]:
+    """Every state's health/block rows as one (N, dim) block, held sparse, every state's after the
+    previous state's, with their owner keys: each Monster's row (MONSTERS, its slot), then the
+    Character's (CHARACTER, 0); and each state's (B,) row count, its monsters + 1."""
     batch_monsters = []
     for game_state in game_states:
         combat = game_state.combat  # hoisted: each read clones across the FFI
         batch_monsters.append(combat.monsters if combat is not None else [])
 
-    seqlen = max((len(monsters) for monsters in batch_monsters), default=0) + 1
-    np_out = np.zeros((batch_size, seqlen, ENCODING_DIM_HEALTH_BLOCK), dtype=np.float32)
-    np_owner_slice_kind = np.full((batch_size, seqlen), -1, dtype=np.int64)
-    np_owner_rank = np.zeros((batch_size, seqlen), dtype=np.int64)
+    np_count = np.array([len(monsters) + 1 for monsters in batch_monsters], dtype=np.int64)
+    np_out = np.zeros((np_count.sum(), ENCODING_DIM_HEALTH_BLOCK), dtype=np.float32)
+    np_owner_slice_kind = np.empty(np_count.sum(), dtype=np.int64)
+    np_owner_rank = np.zeros(np_count.sum(), dtype=np.int64)
 
-    for b, (game_state, monsters) in enumerate(zip(game_states, batch_monsters)):
+    row = 0
+    for game_state, monsters in zip(game_states, batch_monsters):
         for k, monster in enumerate(monsters):
-            _encode_health_block_into(monster.health, monster.block, np_out[b, k])
-            np_owner_slice_kind[b, k] = SliceKind.MONSTERS
-            np_owner_rank[b, k] = k
-        k = len(monsters)
+            _encode_health_block_into(monster.health, monster.block, np_out[row])
+            np_owner_slice_kind[row] = SliceKind.MONSTERS
+            np_owner_rank[row] = k
+            row += 1
         character = game_state.character
-        _encode_health_block_into(character.health, character.block, np_out[b, k])
-        np_owner_slice_kind[b, k] = SliceKind.CHARACTER
+        _encode_health_block_into(character.health, character.block, np_out[row])
+        np_owner_slice_kind[row] = SliceKind.CHARACTER
+        row += 1
 
-    return owned_sparse(
-        np_out, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_HEALTH_BLOCK, device
+    return (
+        owned_sparse(
+            np_out, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_HEALTH_BLOCK, device
+        ),
+        torch.from_numpy(np_count).to(device),
     )

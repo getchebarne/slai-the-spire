@@ -67,20 +67,17 @@ def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
 _WARNED_OVERFLOW: set[str] = set()
 
 
-def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -> X_OwnedSparse:
-    """Every state's Modifier rows in one (B, N, D) block, held sparse, with their owner
-    keys: the Character's rows (CHARACTER, 0), then each Monster's (MONSTERS, its slot)."""
-    batch_size = len(game_states)
-    np_out = np.zeros(
-        (batch_size, MAX_MODIFIER_ROWS_STATE, ENCODING_DIM_MODIFIER), dtype=np.float32
-    )
-    np_owner_slice_kind = np.full((batch_size, MAX_MODIFIER_ROWS_STATE), -1, dtype=np.int64)
-    np_owner_rank = np.zeros((batch_size, MAX_MODIFIER_ROWS_STATE), dtype=np.int64)
-
-    idx_used = 0
-    for b, game_state in enumerate(game_states):
+def encode_batch_modifiers(
+    game_states: list[GameState], device: torch.device
+) -> tuple[X_OwnedSparse, torch.Tensor]:
+    """Every state's Modifier rows in one (N, D) block, held sparse, every state's after the
+    previous state's, with their owner keys: the Character's rows (CHARACTER, 0), then each
+    Monster's (MONSTERS, its slot); and each state's (B,) row count."""
+    batch_rows: list[list[tuple[SliceKind, int, Modifier]]] = []
+    for game_state in game_states:
         combat = game_state.combat
         if combat is None:
+            batch_rows.append([])
             continue
 
         monsters = combat.monsters
@@ -88,30 +85,39 @@ def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -
         owners += [
             (SliceKind.MONSTERS, w, monster.modifiers) for w, monster in enumerate(monsters)
         ]
+        batch_rows.append(
+            [
+                (slice_kind, w, modifier)
+                for slice_kind, w, modifiers in owners
+                for modifier in modifiers
+            ]
+        )
 
-        idx = 0
-        for slice_kind, w, modifiers in owners:
-            for modifier in modifiers:
-                if idx >= MAX_MODIFIER_ROWS_STATE:
-                    if "modifiers" not in _WARNED_OVERFLOW:
-                        _WARNED_OVERFLOW.add("modifiers")
-                        warnings.warn(
-                            f"modifier rows exceeded {MAX_MODIFIER_ROWS_STATE} in one state; "
-                            "dropped (constants.MAX_MODIFIER_ROWS_STATE)"
-                        )
-                    break
+    # Each state's rows cut to MAX_MODIFIER_ROWS_STATE
+    if "modifiers" not in _WARNED_OVERFLOW and any(
+        len(rows) > MAX_MODIFIER_ROWS_STATE for rows in batch_rows
+    ):
+        _WARNED_OVERFLOW.add("modifiers")
+        warnings.warn(
+            f"modifier rows exceeded {MAX_MODIFIER_ROWS_STATE} in one state; "
+            "dropped (constants.MAX_MODIFIER_ROWS_STATE)"
+        )
+    np_count = np.array(
+        [min(len(rows), MAX_MODIFIER_ROWS_STATE) for rows in batch_rows], dtype=np.int64
+    )
+    np_out = np.zeros((np_count.sum(), ENCODING_DIM_MODIFIER), dtype=np.float32)
+    np_owner_slice_kind = np.empty(np_count.sum(), dtype=np.int64)
+    np_owner_rank = np.empty(np_count.sum(), dtype=np.int64)
 
-                encode_modifier_row_into(modifier, np_out[b, idx])
-                np_owner_slice_kind[b, idx] = slice_kind
-                np_owner_rank[b, idx] = w
-                idx += 1
-        idx_used = max(idx_used, idx)
+    row = 0
+    for rows, count in zip(batch_rows, np_count):
+        for slice_kind, w, modifier in rows[:count]:
+            encode_modifier_row_into(modifier, np_out[row])
+            np_owner_slice_kind[row] = slice_kind
+            np_owner_rank[row] = w
+            row += 1
 
-    # The batch's used rows only: the transport pads back to MAX_MODIFIER_ROWS_STATE
-    return owned_sparse(
-        np.ascontiguousarray(np_out[:, :idx_used]),
-        np.ascontiguousarray(np_owner_slice_kind[:, :idx_used]),
-        np.ascontiguousarray(np_owner_rank[:, :idx_used]),
-        ENCODING_SPARSE_MODIFIER,
-        device,
+    return (
+        owned_sparse(np_out, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_MODIFIER, device),
+        torch.from_numpy(np_count).to(device),
     )

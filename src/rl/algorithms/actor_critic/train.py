@@ -118,9 +118,7 @@ def train(
         # own, and the CPU parity runs stay bit-identical
         if rank_info.device.type == "cuda":
             compile_hot_paths(model)
-        generator = torch.Generator(device=rank_info.device).manual_seed(
-            random.randint(0, 2**31 - 1)
-        )
+        generator = torch.Generator().manual_seed(random.randint(0, 2**31 - 1))
         steps_per_iteration = (
             rank_info.world_size * rollout_config.rollout_length * rollout_config.num_envs
         )
@@ -239,8 +237,8 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
 
     # Every size its own symbol, process-wide: duck sizing ties sizes that match at the heads'
-    # first trace, such as a monster block 4 wide and the recorded actions' 4 columns, and the
-    # heads recompile each time those sizes part
+    # first trace, such as a block's 4 rows and the recorded actions' 4 columns, and the heads
+    # recompile each time those sizes part
     torch.fx.experimental._config.use_duck_shape = False
 
     # Set seeds

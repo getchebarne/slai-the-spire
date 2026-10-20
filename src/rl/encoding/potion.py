@@ -106,34 +106,35 @@ def iter_packed_potions(game_state: GameState) -> Iterator[tuple[SliceKind, int,
 
 def encode_batch_potions(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
-    """The potion block ((B, W, ENCODING_DIM_POTION) rows held sparse + the (B, W) slice kind of
-    each token) + each state's (slice kind, rank, source, effect) rows and its shop tokens'
-    (slice kind, rank, price) rows, keyed by the token they belong to; W is the batch's longest
-    packed potion sequence."""
+) -> tuple[X_EntitySparse, torch.Tensor, BatchEffectRows, BatchPriceRows]:
+    """The potion block ((N, ENCODING_DIM_POTION) rows held sparse, every state's tokens after the
+    previous state's, + the (N,) slice kind of each token) + each state's (B,) token count + each
+    state's (slice kind, rank, source, effect) rows and its shop tokens' (slice kind, rank, price)
+    rows, keyed by the token they belong to."""
     batch_tokens = [list(iter_packed_potions(game_state)) for game_state in game_states]
     batch_potion_prices = []
     for game_state in game_states:
         shop = game_state.shop
         batch_potion_prices.append(shop.potion_prices if shop is not None else [])
 
-    width = max((len(tokens) for tokens in batch_tokens), default=0)
-    np_out = np.zeros((len(game_states), width, ENCODING_DIM_POTION), dtype=np.float32)
-    np_slice_kind = np.full((len(game_states), width), -1, dtype=np.int16)
+    np_count = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
+    np_out = np.zeros((np_count.sum(), ENCODING_DIM_POTION), dtype=np.float32)  # (N, D)
+    np_slice_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
     batch_effect_rows: BatchEffectRows = []
     batch_price_rows: BatchPriceRows = []
 
+    row = 0
     for b, tokens in enumerate(batch_tokens):
         effect_rows: list[EffectRow] = []
         price_rows: list[PriceRow] = []
 
         # Shop tokens come in shop order, so they take the parallel price list in step
         potion_prices = iter(batch_potion_prices[b])
-        for w, (slice_kind, rank, potion) in enumerate(tokens):
-            encode_potion_into_w_cache(potion, np_out[b, w])
+        for slice_kind, rank, potion in tokens:
+            encode_potion_into_w_cache(potion, np_out[row])
 
             # `SliceKind`
-            np_slice_kind[b, w] = slice_kind
+            np_slice_kind[row] = slice_kind
 
             # Price
             if slice_kind == SliceKind.POTION_SHOP:
@@ -145,12 +146,14 @@ def encode_batch_potions(
                 effect_rows += [
                     (slice_kind, rank, EffectSource.POTION_USE, effect) for effect in effects
                 ]
+            row += 1
 
         batch_effect_rows.append(effect_rows)
         batch_price_rows.append(price_rows)
 
     return (
         entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_POTION, device),
+        torch.from_numpy(np_count).to(device),
         batch_effect_rows,
         batch_price_rows,
     )

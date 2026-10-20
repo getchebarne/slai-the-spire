@@ -44,31 +44,35 @@ def encode_batch_prices(
     game_states: list[GameState],
     sources: Sequence[BatchPriceRows],
     device: torch.device,
-) -> X_OwnedSparse:
-    """Every state's shop-token price rows as one (B, P, ENCODING_DIM_PRICE) block, held
-    sparse, with their owner keys; P is the batch's most priced tokens."""
+) -> tuple[X_OwnedSparse, torch.Tensor]:
+    """Every state's shop-token price rows as one (N, ENCODING_DIM_PRICE) block, held sparse,
+    every state's after the previous state's, with their owner keys; and each state's (B,) row
+    count."""
     batch_size = len(game_states)
     batch_rows = [
         [row for batch_price_rows in sources for row in batch_price_rows[b]]
         for b in range(batch_size)
     ]
-    width = max((len(rows) for rows in batch_rows), default=0)
-    np_price = np.zeros((batch_size, width, ENCODING_DIM_PRICE), dtype=np.float32)
-    np_owner_slice_kind = np.full((batch_size, width), -1, dtype=np.int64)
-    np_owner_rank = np.zeros((batch_size, width), dtype=np.int64)
+    np_count = np.array([len(rows) for rows in batch_rows], dtype=np.int64)  # (B,)
+    np_price = np.zeros((np_count.sum(), ENCODING_DIM_PRICE), dtype=np.float32)
+    np_owner_slice_kind = np.empty(np_count.sum(), dtype=np.int64)
+    np_owner_rank = np.empty(np_count.sum(), dtype=np.int64)
 
-    for b, (game_state, rows) in enumerate(zip(game_states, batch_rows)):
+    row = 0
+    for game_state, rows in zip(game_states, batch_rows):
         if not rows:
             continue
 
         gold = game_state.character.gold
-        for idx, (slice_kind, rank, price) in enumerate(rows):
-            _encode_price_into(price, gold, np_price[b, idx])
-            np_owner_slice_kind[b, idx] = slice_kind
-            np_owner_rank[b, idx] = rank
+        for slice_kind, rank, price in rows:
+            _encode_price_into(price, gold, np_price[row])
+            np_owner_slice_kind[row] = slice_kind
+            np_owner_rank[row] = rank
+            row += 1
 
-    return owned_sparse(
-        np_price, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_PRICE, device
+    return (
+        owned_sparse(np_price, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_PRICE, device),
+        torch.from_numpy(np_count).to(device),
     )
 
 

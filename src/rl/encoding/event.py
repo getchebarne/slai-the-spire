@@ -117,25 +117,24 @@ def _get_event_option_entities(event: Event | None) -> list[EventOption]:
 
 def encode_batch_events(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, X_EntitySparse, BatchEffectRows]:
-    """Event meta + the option block ((B, W, dim) rows held sparse + their slice kinds) +
-    each state's option effect rows, keyed by option slot; W is the batch's most options
-    (capped at MAX_EVENT_OPTIONS). The option row itself is just a slot OHE — everything it
-    does lives in its effect rows."""
+) -> tuple[torch.Tensor, X_EntitySparse, torch.Tensor, BatchEffectRows]:
+    """Event meta + the option block ((N, dim) rows held sparse, every state's options after the
+    previous state's, + their slice kinds) + each state's (B,) option count, capped at
+    MAX_EVENT_OPTIONS + each state's option effect rows, keyed by option slot. The option row
+    itself is just a slot OHE — everything it does lives in its effect rows."""
     batch_size = len(game_states)
     batch_event = [game_state.event for game_state in game_states]  # hoisted: reads clone
-    width = max(
-        (min(len(event.options), MAX_EVENT_OPTIONS) for event in batch_event if event is not None),
-        default=0,
-    )
+    batch_options = [_get_event_option_entities(event) for event in batch_event]
+    np_count = np.array([len(options) for options in batch_options], dtype=np.int64)  # (B,)
 
     # Pre-allocate NumPy arrays
     np_meta = np.zeros((batch_size, ENCODING_DIM_EVENT_META), dtype=np.float32)
-    np_options = np.zeros((batch_size, width, ENCODING_DIM_EVENT_OPTION), dtype=np.float32)
-    np_slice_kind = np.full((batch_size, width), -1, dtype=np.int16)
+    np_options = np.zeros((np_count.sum(), ENCODING_DIM_EVENT_OPTION), dtype=np.float32)
+    np_slice_kind = np.empty(np_count.sum(), dtype=np.int16)
     batch_effect_rows: BatchEffectRows = []
 
-    for b, event in enumerate(batch_event):
+    row = 0
+    for b, (event, options) in enumerate(zip(batch_event, batch_options)):
         effect_rows: list[EffectRow] = []
         batch_effect_rows.append(effect_rows)
         if event is None:
@@ -152,11 +151,11 @@ def encode_batch_events(
         _encode_event_meta_into(event, np_meta[b])
 
         # Event Options
-        options = _get_event_option_entities(event)
-        np_options[b, : len(options)] = _SLOT_OHE[: len(options)]
+        np_options[row : row + len(options)] = _SLOT_OHE[: len(options)]
 
         # `SliceKind`
-        np_slice_kind[b, : len(options)] = SliceKind.EVENT_OPTIONS
+        np_slice_kind[row : row + len(options)] = SliceKind.EVENT_OPTIONS
+        row += len(options)
         for w, option in enumerate(options):
             effects = option.effects  # Bound once: each read clones the Vec
             if effects:
@@ -168,5 +167,6 @@ def encode_batch_events(
     return (
         torch.from_numpy(np_meta).to(device),
         entity_sparse(np_options, np_slice_kind, ENCODING_SPARSE_EVENT_OPTION, device),
+        torch.from_numpy(np_count).to(device),
         batch_effect_rows,
     )

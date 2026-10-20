@@ -217,11 +217,11 @@ def _get_monster_entities(combat: Combat | None) -> list[Monster]:
 
 def encode_batch_monsters(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, BatchEffectRows, BatchEffectRows]:
-    """The monster block ((B, W, dim) rows held sparse + the (B, W) slice kind of each token) +
-    each state's live-move effect rows and whole-moveset rows (what it could do, not the live
-    intent), both keyed by monster slot; W is the batch's most monsters."""
-    batch_size = len(game_states)
+) -> tuple[X_EntitySparse, torch.Tensor, BatchEffectRows, BatchEffectRows]:
+    """The monster block ((N, dim) rows held sparse, every state's monsters after the previous
+    state's, + the (N,) slice kind of each token) + each state's (B,) monster count + each state's
+    live-move effect rows and whole-moveset rows (what it could do, not the live intent), both
+    keyed by monster slot."""
     batch_monsters = []
     batch_card_pile_stasis = []
     for game_state in game_states:
@@ -229,14 +229,15 @@ def encode_batch_monsters(
         batch_monsters.append(_get_monster_entities(combat))
         batch_card_pile_stasis.append(combat.card_pile_stasis if combat is not None else [])
 
-    width = max((len(monsters) for monsters in batch_monsters), default=0)
-    np_out = np.zeros((batch_size, width, ENCODING_DIM_MONSTER), dtype=np.float32)
-    np_slice_kind = np.full((batch_size, width), -1, dtype=np.int16)
+    np_count = np.array([len(monsters) for monsters in batch_monsters], dtype=np.int64)  # (B,)
+    np_out = np.zeros((np_count.sum(), ENCODING_DIM_MONSTER), dtype=np.float32)  # (N, D)
+    np_slice_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
     batch_effect_rows_move: BatchEffectRows = []
     batch_effect_rows_moveset: BatchEffectRows = []
 
-    for b, (game_state, monsters, card_pile_stasis) in enumerate(
-        zip(game_states, batch_monsters, batch_card_pile_stasis)
+    row = 0
+    for game_state, monsters, card_pile_stasis in zip(
+        game_states, batch_monsters, batch_card_pile_stasis
     ):
         character = game_state.character
         damage = outgoing_damage(monsters)
@@ -244,13 +245,13 @@ def encode_batch_monsters(
         effect_rows_move: list[EffectRow] = []
         effect_rows_moveset: list[EffectRow] = []
         for i, monster in enumerate(monsters):
-            _encode_monster_into(monster, character.health, character.block, damage, np_out[b, i])
+            _encode_monster_into(monster, character.health, character.block, damage, np_out[row])
 
             # The stasis pile is slot-aligned with the monsters: None where one holds no card
-            np_out[b, i, OFF_MONSTER_HOLDS_STASIS] = float(card_pile_stasis[i] is not None)
+            np_out[row, OFF_MONSTER_HOLDS_STASIS] = float(card_pile_stasis[i] is not None)
 
             # `SliceKind`
-            np_slice_kind[b, i] = SliceKind.MONSTERS
+            np_slice_kind[row] = SliceKind.MONSTERS
 
             # Effects
             effects = monster.move_effects  # Bound once: each read clones the Vec
@@ -261,12 +262,14 @@ def encode_batch_monsters(
                 (SliceKind.MONSTERS, i, EffectSource.MONSTER_MOVESET, effect)
                 for effect in by_name[monster.name]
             ]
+            row += 1
 
         batch_effect_rows_move.append(effect_rows_move)
         batch_effect_rows_moveset.append(effect_rows_moveset)
 
     return (
         entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_MONSTER, device),
+        torch.from_numpy(np_count).to(device),
         batch_effect_rows_move,
         batch_effect_rows_moveset,
     )
