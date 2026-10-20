@@ -10,18 +10,16 @@ from src.rl.types import X_OwnedSparse
 def entity_sparse(
     np_rows: np.ndarray, np_slice_kind: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_EntitySparse:
-    """An entity block from its (B, W, D) rows, each with at most `num_sparse` nonzero
-    columns, and their (B, W) slice kinds; its masks all False, for build_masks to fill"""
+    """An entity block from its (N, D) rows, each with at most `num_sparse` nonzero columns, and
+    their (N,) slice kinds; its masks all False, for build_masks to fill"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_EntitySparse(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
         x_slice_kind=torch.from_numpy(np_slice_kind).to(device),
-        x_legal=torch.zeros(
-            *np_slice_kind.shape, NUM_ACTION_TYPES, dtype=torch.bool, device=device
-        ),
-        x_needs_target=torch.zeros(np_slice_kind.shape, dtype=torch.bool, device=device),
-        batch_size=[np_rows.shape[0]],
+        x_legal=torch.zeros(len(np_rows), NUM_ACTION_TYPES, dtype=torch.bool, device=device),
+        x_needs_target=torch.zeros(len(np_rows), dtype=torch.bool, device=device),
+        batch_size=[len(np_rows)],
     )
 
 
@@ -32,8 +30,8 @@ def owned_sparse(
     num_sparse: int,
     device: torch.device,
 ) -> X_OwnedSparse:
-    """A family of owned rows from its (B, R, D) rows, each with at most `num_sparse` nonzero
-    columns, and their (B, R) owner keys"""
+    """A family of owned rows from its (N, D) rows, each with at most `num_sparse` nonzero
+    columns, and their (N,) owner keys"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_OwnedSparse(
         x_column=torch.from_numpy(np_column).to(device),
@@ -47,7 +45,7 @@ def owned_sparse(
 def effect_pending_sparse(
     np_rows: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_EffectPending:
-    """The pending effects from their (B, D) rows, each with at most `num_sparse` nonzero
+    """The pending effects from their (P, D) rows, each with at most `num_sparse` nonzero
     columns"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_EffectPending(

@@ -13,7 +13,6 @@ from slai import RoomKind
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.types import SliceKind
 from src.rl.types import make_channel_allocator
 
 
@@ -224,20 +223,28 @@ def _encode_room_node_idx_into(
     x_current: int | None,
     winged: bool,
     out: np.ndarray,
-) -> None:
+) -> int:
+    """Each reachable next-row room's node index, in column order, into `out`'s leading rows;
+    returns how many"""
     y_next = 0 if y_current is None else y_current + 1
-    for x in _next_row_candidate_cols(rooms, y_current, x_current, winged):
-        out[x] = y_next * MAP_WIDTH + x
+    cols = _next_row_candidate_cols(rooms, y_current, x_current, winged)
+    node_idx = [y_next * MAP_WIDTH + x for x in range(MAP_WIDTH) if x in cols]
+    out[: len(node_idx)] = node_idx
+    return len(node_idx)
 
 
 def encode_batch_map(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor, np.ndarray, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The map grid, the reachable next-row rooms' node indices as rows (every state's after the
+    previous state's) and each state's (B,) room count, and the map meta"""
     batch_size = len(game_states)
     np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
-    np_node_idx = np.full((batch_size, MAP_WIDTH), -1, dtype=np.int64)
+    np_node_idx = np.empty(batch_size * MAP_WIDTH, dtype=np.int64)  # every state's rooms at most
+    np_count = np.empty(batch_size, dtype=np.int64)
     np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
 
+    row = 0
     for b, game_state in enumerate(game_states):
         map_ = game_state.map
 
@@ -254,18 +261,18 @@ def encode_batch_map(
             np_grid[b, y_current, x_current, OFF_MAP_POSITION] = 1.0
 
         winged = _wing_boots_charged(game_state)
-        _encode_room_node_idx_into(rooms, y_current, x_current, winged, np_node_idx[b])
+        np_count[b] = _encode_room_node_idx_into(
+            rooms, y_current, x_current, winged, np_node_idx[row:]
+        )
+        row += np_count[b]
         _encode_map_meta_into(
             rooms, y_current, x_current, map_.boss, game_state.act, winged, np_meta[b]
         )
         _encode_unknown_room_into(game_state, map_.room_kind_resolved, np_meta[b])
 
-    # The room tokens' slice kind row: ROOMS at each reachable next-row column, -1 where none
-    np_room_slice_kind = np.where(np_node_idx >= 0, SliceKind.ROOMS, -1).astype(np.int16)
-
     return (
         torch.from_numpy(np_grid).to(device),
-        torch.from_numpy(np_node_idx).to(device),
-        np_room_slice_kind,
+        torch.from_numpy(np_node_idx[:row]).to(device),
+        torch.from_numpy(np_count).to(device),
         torch.from_numpy(np_meta).to(device),
     )

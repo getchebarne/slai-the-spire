@@ -181,19 +181,14 @@ class Core(nn.Module):
 
         # Map GNN: next-row room features + whole-graph readout
         x_rooms, x_map_readout = self._map_gnn(
-            x_game_state.map_grid, x_game_state.rooms.x_node_idx, x_game_state.rooms.x_slice_kind
+            x_game_state.map_grid, x_game_state.rooms.x_node_idx, x_game_state.count.rooms
         )
 
-        # The window packed (its tokens and their X_Window), its slots per state, its valid tokens
-        # per entity type, the draw-order layer's states, and the embedded pending halt
-        (
-            x_tokens,
-            x_window,
-            num_slots,
-            num_tokens,
-            x_draw_order,
-            x_pending,
-        ) = self._entity_projector(x_game_state, x_rooms)
+        # The window packed (its tokens and their X_Window), its valid tokens per entity type, the
+        # draw-order layer's states, and the embedded pending halt
+        x_tokens, x_window, num_tokens, x_draw_order, x_pending = self._entity_projector(
+            x_game_state, x_rooms
+        )
 
         # One transformer pass over every state, without the draw depths
         x_refined, x_global_token = self._entity_transformer(
@@ -235,7 +230,6 @@ class Core(nn.Module):
                 global_value=x_global,
                 x_tokens=x_refined,
                 window=x_window,
-                num_slots=num_slots,
                 num_tokens=num_tokens,
             )
 
@@ -273,7 +267,6 @@ class Core(nn.Module):
             global_value=x_global_value,
             x_tokens=x_refined,
             window=x_window,
-            num_slots=num_slots,
             num_tokens=num_tokens,
         )
 

@@ -151,9 +151,11 @@ def _encode_character_into(
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(combat.orange_pellets_played_power)
 
 
-def encode_batch_character(game_states: list[GameState], device: torch.device) -> X_EntitySparse:
-    """The character block: (B, 1, dim) row held sparse + the (B, 1) slice kind — the
-    singleton is always present."""
+def encode_batch_character(
+    game_states: list[GameState], device: torch.device
+) -> tuple[X_EntitySparse, torch.Tensor]:
+    """The character block: one row per state, (B, dim) held sparse + the (B,) slice kind — the
+    singleton is always present — and each state's (B,) count, 1."""
     batch_size = len(game_states)
 
     # Pre-allocate NumPy array
@@ -172,5 +174,8 @@ def encode_batch_character(game_states: list[GameState], device: torch.device) -
             np_out[b],
         )
 
-    np_slice_kind = np.full((batch_size, 1), SliceKind.CHARACTER, dtype=np.int16)
-    return entity_sparse(np_out[:, None], np_slice_kind, ENCODING_SPARSE_CHARACTER, device)
+    np_slice_kind = np.full(batch_size, SliceKind.CHARACTER, dtype=np.int16)
+    return (
+        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_CHARACTER, device),
+        torch.ones(batch_size, dtype=torch.long, device=device),
+    )
