@@ -193,11 +193,14 @@ class Core(nn.Module):
 
         # Map GNN: next-row room features + whole-graph readout
         x_rooms, x_map_readout = self._map_gnn(
-            x_game_state.map_grid, x_game_state.room_node_idx, x_game_state.room_slice_kind
+            x_game_state.map_grid, x_game_state.rooms.x_node_idx, x_game_state.rooms.x_slice_kind
         )
 
-        # The window as one X_Entity (the six blocks then the rooms) + the embedded pending halt
-        x_entities, x_pending = self._entity_projector(x_game_state, x_rooms)
+        # The window as one X_Entity (the six blocks then the rooms), its masks, its valid tokens
+        # per entity type, and the embedded pending halt
+        x_entities, x_legal, x_needs_target, num_tokens, x_pending = self._entity_projector(
+            x_game_state, x_rooms
+        )
 
         # Per-state inputs to the global context: the same for the transformer and the layer, so
         # cat'd once
@@ -237,7 +240,14 @@ class Core(nn.Module):
             ]
         ).squeeze(1)
         if x_rows.shape[0] == 0:
-            return X_CoreOutput(global_=x_global, global_value=x_global, entities=x_refined)
+            return X_CoreOutput(
+                global_=x_global,
+                global_value=x_global,
+                entities=x_refined,
+                x_legal=x_legal,
+                x_needs_target=x_needs_target,
+                num_tokens=num_tokens,
+            )
 
         # The value head reads the layer on every one of its rows
         x_refined_layer, x_global_token_layer = self._draw_order_layer(
@@ -263,7 +273,14 @@ class Core(nn.Module):
                 .view_as(x_refined.x),
                 x_refined.x_slice_kind,
             )
-        return X_CoreOutput(global_=x_global, global_value=x_global_value, entities=x_refined)
+        return X_CoreOutput(
+            global_=x_global,
+            global_value=x_global_value,
+            entities=x_refined,
+            x_legal=x_legal,
+            x_needs_target=x_needs_target,
+            num_tokens=num_tokens,
+        )
 
     def _global_context(
         self, x_refined: X_Entity, x_global_token: torch.Tensor, x_state_inputs: torch.Tensor

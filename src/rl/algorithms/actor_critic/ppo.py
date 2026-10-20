@@ -63,7 +63,7 @@ def _recompute(
         for start in range(0, T * E, minibatch_size):
             rows = slice(start, start + minibatch_size)
             x_log_probs, _, _, x_values = model.evaluate_actions(
-                rollout.game_state[rows], rollout.mask[rows], rollout.actions[rows]
+                rollout.game_state[rows], rollout.actions[rows]
             )
             log_probs.append(x_log_probs)
             values.append(x_values)
@@ -93,7 +93,6 @@ def prepare_batch(
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     return X_TrainingBatch(
         game_state=rollout.game_state,
-        mask=rollout.mask,
         actions=rollout.actions,
         log_probs_behavior=rollout.log_probs_behavior,
         log_probs_prox=log_probs_prox,
@@ -177,7 +176,7 @@ def update_ppo(
         for start in range(0, len(batch), ppo.minibatch_size):
             rows = slice(start, start + ppo.minibatch_size)
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                ep.game_state[rows], ep.mask[rows], ep.actions[rows]
+                ep.game_state[rows], ep.actions[rows]
             )
             log_probs_prox = ep.log_probs_prox[rows]
             adv = ep.advantages[rows].squeeze(-1)
