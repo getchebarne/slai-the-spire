@@ -410,11 +410,13 @@ def policy_heads(
 
 def compile_hot_paths(model: ActorCritic) -> None:
     """Fuse the update's hot paths: each transformer block, the draw-order layer's block, the map
-    GNN's message passing, and the policy heads on recorded actions. Autotuned, so the first
-    update compiles for a minute or two"""
+    GNN's message passing, and the policy heads on recorded actions. All but the heads are
+    autotuned, so the first update compiles for a minute or two"""
     mode = "max-autotune-no-cudagraphs"
     for block in model.core._entity_transformer._entity_transformer_blocks:
         block.compile(dynamic=True, mode=mode)
     model.core._draw_order_layer._draw_order_block.compile(dynamic=True, mode=mode)
     model.core._map_gnn.message_passing = torch.compile(message_passing, dynamic=True, mode=mode)
-    model.policy_heads_recorded = torch.compile(policy_heads, dynamic=True, mode=mode)
+
+    # Not autotuned: an empty block's key-net matmul fails to lower under autotuning
+    model.policy_heads_recorded = torch.compile(policy_heads, dynamic=True)
