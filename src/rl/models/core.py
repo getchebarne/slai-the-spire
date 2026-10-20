@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
 from src.rl.encoding.event import ENCODING_DIM_EVENT_META
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.shop import ENCODING_DIM_SHOP_META
@@ -20,7 +19,6 @@ from src.rl.types import CAP_OF_SLICE_KIND
 from src.rl.types import SLICE_KINDS_CARD_REWARDS
 from src.rl.types import SliceKind
 from src.rl.types import X_CoreOutput
-from src.rl.types import X_Entity
 from src.rl.types import X_GameState
 
 
@@ -64,20 +62,6 @@ _REWARD_HI = SLICE_KINDS_CARD_REWARDS[-1]
 _SPREAD_COPIES = 256
 
 
-def draw_depth(x_slice_kind: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per window token, its depth in the draw pile: the cards above it, 0 off the
-    draw tokens. Per row, whether the pile shows an order: at least 2 draw tokens.
-
-    The draw tokens are the pile's top cards in engine order, bottom first, so the
-    last rank is the next card drawn: depth = count - 1 - rank."""
-    x_is_draw = x_slice_kind == SliceKind.CARD_PILE_DRAW
-    x_count = x_is_draw.sum(dim=1, keepdim=True)
-
-    # A draw token's running count is its rank + 1
-    x_depth = (x_count - x_is_draw.cumsum(dim=1)) * x_is_draw
-    return x_depth, x_count.squeeze(1) >= 2
-
-
 class _SpreadEmbedding(torch.autograd.Function):
     """F.embedding, whose backward sums each table row's gradient over _SPREAD_COPIES copies of
     the table: the token at flat position i adds into copy i % _SPREAD_COPIES, then the copies
@@ -113,11 +97,15 @@ class _SpreadEmbedding(torch.autograd.Function):
 
 
 def _embedding(table: nn.Embedding, x_idxs: torch.Tensor) -> torch.Tensor:
-    """`table`'s rows at the (B, S) `x_idxs`, the gradient's sums spread by _SpreadEmbedding"""
+    """`table`'s rows at `x_idxs`, the gradient's sums spread by _SpreadEmbedding"""
     return _SpreadEmbedding.apply(table.weight, x_idxs, table.padding_idx)
 
 
 class Core(nn.Module):
+    # The buffers __init__ registers, typed for mypy
+    _count_slice_kinds: torch.Tensor
+    _count_norm: torch.Tensor
+
     def __init__(
         self,
         dim_entity: int,
@@ -173,7 +161,7 @@ class Core(nn.Module):
         # Count features: slice kinds to count and each slice kind's cap; derived, so excluded
         # from checkpoints
         self.register_buffer(
-            "_count_slice_kinds", torch.tensor(_COUNT_SLICE_KINDS).view(1, 1, -1), persistent=False
+            "_count_slice_kinds", torch.tensor(_COUNT_SLICE_KINDS), persistent=False
         )
         self.register_buffer(
             "_count_norm",
@@ -188,23 +176,36 @@ class Core(nn.Module):
         self._reward_emb = nn.Embedding(2, dim_entity, padding_idx=0)
 
     def forward(self, x_game_state: X_GameState, with_value: bool = True) -> X_CoreOutput:
-        """The core's output; `with_value=False` runs the draw-order layer only on the rows the
+        """The core's output; `with_value=False` runs the draw-order layer only on the states the
         policy reads, for callers that need no value, and leaves `global_value` the policy's"""
 
         # Map GNN: next-row room features + whole-graph readout
         x_rooms, x_map_readout = self._map_gnn(
-            x_game_state.map_grid, x_game_state.room_node_idx, x_game_state.room_slice_kind
+            x_game_state.map_grid, x_game_state.rooms.x_node_idx, x_game_state.rooms.x_slice_kind
         )
 
-        # The window as one X_Entity (the six blocks then the rooms) + the embedded pending halt
-        x_entities, x_pending = self._entity_projector(x_game_state, x_rooms)
+        # The window packed (its tokens and their X_Window), its slots per state, its valid tokens
+        # per entity type, the draw-order layer's states, and the embedded pending halt
+        (
+            x_tokens,
+            x_window,
+            num_slots,
+            num_tokens,
+            x_draw_order,
+            x_pending,
+        ) = self._entity_projector(x_game_state, x_rooms)
+
+        # One transformer pass over every state, without the draw depths
+        x_refined, x_global_token = self._entity_transformer(
+            self._embed_identity(x_tokens, x_window.x_slice_kind), x_window
+        )
 
         # Per-state inputs to the global context: the same for the transformer and the layer, so
         # cat'd once
         x_state_inputs = torch.cat(
             [
                 x_map_readout,
-                self._get_token_counts(x_entities.x_slice_kind),
+                self._get_token_counts(x_window.x_slice_kind_count),
                 x_game_state.energy,
                 x_game_state.focus,
                 x_game_state.ascension,
@@ -217,83 +218,85 @@ class Core(nn.Module):
             dim=1,
         )
 
-        # The layer's rows, whose pile shows an order: the Frozen Eye ones, then the rest unless
-        # `with_value` is False. Their counts are read back with the transformer's packing widths
-        x_depth, x_has_order = draw_depth(x_entities.x_slice_kind)
-        x_draw_order_visible = x_game_state.focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
-        x_ordered_visible = x_has_order & x_draw_order_visible
-        x_ordered_hidden = x_has_order & ~x_draw_order_visible
+        # The one character token per state, its CHARACTER row
+        x_character_row = x_window.x_slice_kind_row[:, SliceKind.CHARACTER]  # (B,)
+        x_global = self._global_context(x_refined[x_character_row], x_global_token, x_state_inputs)
 
-        # One transformer pass over every state, without the draw depths
-        x_refined, x_global_token, (num_visible, num_hidden) = self._entity_transformer(
-            self._embed_identity(x_entities),
-            torch.stack([x_ordered_visible.sum(), x_ordered_hidden.sum()]),
+        # The layer's states, whose pile shows an order: the Frozen Eye ones, then the rest unless
+        # `with_value` is False, with their rows and pile rows
+        x_states = x_draw_order.x_states
+        num_rows, num_pile = x_draw_order.num_rows, x_draw_order.num_pile
+        if not with_value:
+            x_states = x_states[: x_draw_order.num_states_visible]
+            num_rows, num_pile = x_draw_order.num_rows_visible, x_draw_order.num_pile_visible
+        if x_states.shape[0] == 0:
+            return X_CoreOutput(
+                global_=x_global,
+                global_value=x_global,
+                x_tokens=x_refined,
+                window=x_window,
+                num_slots=num_slots,
+                num_tokens=num_tokens,
+            )
+
+        # The value head reads the layer on every one of its states
+        x_rows, x_refined_layer, x_global_token_layer = self._draw_order_layer(
+            x_refined, x_global_token, x_window, x_states, num_rows, num_pile
         )
-        x_global = self._global_context(x_refined, x_global_token, x_state_inputs)
-        x_rows = torch.cat(
-            [
-                torch.nonzero_static(x_ordered_visible, size=num_visible),
-                torch.nonzero_static(x_ordered_hidden, size=num_hidden if with_value else 0),
-            ]
-        ).squeeze(1)
-        if x_rows.shape[0] == 0:
-            return X_CoreOutput(global_=x_global, global_value=x_global, entities=x_refined)
 
-        # The value head reads the layer on every one of its rows
-        x_refined_layer, x_global_token_layer = self._draw_order_layer(
-            x_refined, x_global_token, x_depth, x_rows
+        # Each layer state's character among the layer's rows: its state's first, plus its rank
+        x_count_layer = x_window.x_count[x_states]
+        x_character_layer = (
+            x_count_layer.cumsum(0)
+            - x_count_layer
+            + x_character_row[x_states]
+            - x_window.x_first_row[x_states]
         )
         x_global_layer = self._global_context(
-            x_refined_layer, x_global_token_layer, x_state_inputs[x_rows]
+            x_refined_layer[x_character_layer], x_global_token_layer, x_state_inputs[x_states]
         )
-        x_global_value = x_global.index_copy(0, x_rows, x_global_layer)
+        x_global_value = x_global.index_copy(0, x_states, x_global_layer)
 
-        # The policy reads it on the Frozen Eye rows. Their window is a view of its flat tokens, as
-        # the transformer's is: the compiled heads guard on the window's base
-        if num_visible > 0:
-            x_rows_visible = x_rows[:num_visible]
-            num_slots = x_refined.x.shape[1]
-            x_slots = x_rows_visible.unsqueeze(1) * num_slots + torch.arange(
-                num_slots, device=x_rows.device
+        # The policy reads it on the Frozen Eye states: their order-aware rows written back into
+        # the window
+        num_states_visible = x_draw_order.num_states_visible
+        if num_states_visible > 0:
+            num_rows_visible = x_draw_order.num_rows_visible
+            x_global = x_global.index_copy(
+                0, x_states[:num_states_visible], x_global_layer[:num_states_visible]
             )
-            x_global = x_global.index_copy(0, x_rows_visible, x_global_layer[:num_visible])
-            x_refined = X_Entity(
-                x_refined.x.flatten(0, 1)
-                .index_copy(0, x_slots.flatten(), x_refined_layer.x[:num_visible].flatten(0, 1))
-                .view_as(x_refined.x),
-                x_refined.x_slice_kind,
+            x_refined = x_refined.index_copy(
+                0, x_rows[:num_rows_visible], x_refined_layer[:num_rows_visible]
             )
-        return X_CoreOutput(global_=x_global, global_value=x_global_value, entities=x_refined)
+        return X_CoreOutput(
+            global_=x_global,
+            global_value=x_global_value,
+            x_tokens=x_refined,
+            window=x_window,
+            num_slots=num_slots,
+            num_tokens=num_tokens,
+        )
 
     def _global_context(
-        self, x_refined: X_Entity, x_global_token: torch.Tensor, x_state_inputs: torch.Tensor
+        self, x_character: torch.Tensor, x_global_token: torch.Tensor, x_state_inputs: torch.Tensor
     ) -> torch.Tensor:
-        """The global vector of each state of a refined window, from its global token, its
-        character token and its per-state inputs"""
-        # The one character token per state, found by its slice kind: exactly one -> (B, D)
-        x_is_character = x_refined.x_slice_kind == SliceKind.CHARACTER
-        x_at = x_is_character.long().argmax(1)  # a boolean index would make the CPU wait
-        x_character = x_refined.x[torch.arange(x_at.shape[0], device=x_at.device), x_at]
+        """The global vector of each state, from its global token, its refined character token
+        and its per-state inputs"""
         return self._global_projection(
             torch.cat([x_global_token, x_character, x_state_inputs], dim=1)
         )
 
-    def _embed_identity(self, x_entities: X_Entity) -> X_Entity:
+    def _embed_identity(self, x_tokens: torch.Tensor, x_slice_kind: torch.Tensor) -> torch.Tensor:
         # Every token's identity comes from its slice kind: the slice kind's type row, plus the
         # shared CARD_REWARD identity on the reward slice kinds
-        x_slice_kind = x_entities.x_slice_kind
         x_is_reward = (x_slice_kind >= _REWARD_LO) & (x_slice_kind <= _REWARD_HI)
+        x_type = _embedding(self._type_emb, x_slice_kind)
+        return x_tokens + x_type + _embedding(self._reward_emb, x_is_reward.long())
 
-        # Pads borrow type row 0; they are masked downstream
-        x_type = _embedding(self._type_emb, x_slice_kind.clamp(min=0))
-        return X_Entity(
-            x_entities.x + x_type + _embedding(self._reward_emb, x_is_reward.long()), x_slice_kind
-        )
-
-    def _get_token_counts(self, x_slice_kind: torch.Tensor) -> torch.Tensor:
+    def _get_token_counts(self, x_slice_kind_count: torch.Tensor) -> torch.Tensor:
         """Per-slice-kind token counts, sqrt-normalized by the slice kind's cap (a count never
         exceeds it, so the ratio is in [0, 1])."""
-        x_count = (x_slice_kind.unsqueeze(-1) == self._count_slice_kinds).sum(dim=1).float()
+        x_count = x_slice_kind_count[:, self._count_slice_kinds].float()
         return (x_count / self._count_norm).sqrt()
 
 

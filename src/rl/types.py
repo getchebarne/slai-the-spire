@@ -112,6 +112,12 @@ SLICE_KINDS_POTION = (
     SliceKind.POTION_EVENT_ROLL,
 )
 
+# The single-slice-kind blocks
+SLICE_KINDS_MONSTER = (SliceKind.MONSTERS,)
+SLICE_KINDS_EVENT_OPTION = (SliceKind.EVENT_OPTIONS,)
+SLICE_KINDS_CHARACTER = (SliceKind.CHARACTER,)
+SLICE_KINDS_ROOM = (SliceKind.ROOMS,)
+
 # Each slice kind's token cap: the slice its encoder applies to that collection
 CAP_OF_SLICE_KIND: dict[SliceKind, int] = {
     SliceKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
@@ -206,11 +212,11 @@ type BatchPriceRows = list[list[PriceRow]]
 
 @tensorclass
 class X_Entity:
-    """Dense tokens and their slice kinds: the map GNN's rooms, and the projector's window (every
-    type's block, then the rooms); `x_slice_kind[b, w]` is token w's SliceKind, -1 on a pad."""
+    """Dense tokens and their slice kinds: the map GNN's rooms; `x_slice_kind[b, w]` is token w's
+    SliceKind, -1 on a pad."""
 
     x: torch.Tensor  # (B, W, D_type)
-    x_slice_kind: torch.Tensor  # (B, W) int16 (long once the model owns the window)
+    x_slice_kind: torch.Tensor  # (B, W) int16
 
     @property
     def mask(self) -> torch.Tensor:
@@ -228,6 +234,27 @@ class X_EntitySparse:
     x_column: torch.Tensor  # (B, W, K) int16
     x_value: torch.Tensor  # (B, W, K) float32
     x_slice_kind: torch.Tensor  # (B, W) int16
+
+    # L2 selection: legal under the action type, deduped by card identity
+    x_legal: torch.Tensor  # (B, W, NUM_ACTION_TYPES) bool
+
+    # selections whose legal actions carry a monster target (cards / potions)
+    x_needs_target: torch.Tensor  # (B, W) bool
+
+    @property
+    def mask(self) -> torch.Tensor:
+        return self.x_slice_kind >= 0
+
+
+@tensorclass
+class X_Rooms:
+    """The next map row's rooms, one token per column, with their masks as X_EntitySparse's;
+    `x_slice_kind[b, x]` is ROOMS at a reachable column, -1 elsewhere (pads sit between rooms)"""
+
+    x_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
+    x_slice_kind: torch.Tensor  # (B, MAP_WIDTH) int16 — ROOMS at each reachable next-row column
+    x_legal: torch.Tensor  # (B, MAP_WIDTH, NUM_ACTION_TYPES) bool
+    x_needs_target: torch.Tensor  # (B, MAP_WIDTH) bool
 
     @property
     def mask(self) -> torch.Tensor:
@@ -265,14 +292,15 @@ class X_EffectPending:
 
 @tensorclass
 class X_GameState:
-    # One X_EntitySparse per type, in window order. The window's slice kind row is the cat
-    # of their `x_slice_kind` then `room_slice_kind`, written wherever a consumer needs it
+    # One block per type, in window order (the rooms last). The projector cats their
+    # `x_slice_kind`, `x_legal` and `x_needs_target` into the window's slice kind row and masks
     cards: X_EntitySparse
     relics: X_EntitySparse
     potions: X_EntitySparse
     monsters: X_EntitySparse
     event_options: X_EntitySparse
     character: X_EntitySparse
+    rooms: X_Rooms
 
     # One per Character / Monster
     health_block: X_OwnedSparse  # the combatants' shared health/block family, by slice kind
@@ -285,56 +313,75 @@ class X_GameState:
     modifiers: X_OwnedSparse  # any number per Character / Monster
     energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
     map_grid: torch.Tensor  # named map_grid (not map) to avoid shadowing TensorDict.map()
-    room_node_idx: torch.Tensor  # (B, MAP_WIDTH) long
-    room_slice_kind: torch.Tensor  # (B, MAP_WIDTH) int16 — ROOMS at each reachable next-row column
     map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
     focus: torch.Tensor  # (B, ENCODING_DIM_FOCUS) float32
     ascension: torch.Tensor  # (B, ENCODING_DIM_ASCENSION) thermometer, bit i = level > i
     reward_meta: torch.Tensor  # (B, ENCODING_DIM_REWARD_META) float32
     shop_meta: torch.Tensor  # (B, ENCODING_DIM_SHOP_META) float32
     event_meta: torch.Tensor  # (B, ENCODING_DIM_EVENT_META) float32
+    x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
+
+
+@dataclass
+class X_Window:
+    """The window packed for the model: only its tokens, each state's in window order (its six
+    blocks', then its rooms'), state after state. Per row: its slice kind, its masks, its state and
+    its position in its state's padded window. Per state: its first row and its tokens, and per
+    slice kind its first row and its tokens; a slice kind's tokens sit in consecutive rows"""
+
+    x_slice_kind: torch.Tensor  # (N,) long
+    x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+    x_needs_target: torch.Tensor  # (N,) bool
+    x_state: torch.Tensor  # (N,) long
+    x_position: torch.Tensor  # (N,) long
+    x_first_row: torch.Tensor  # (B,) long
+    x_count: torch.Tensor  # (B,) long
+    x_slice_kind_row: torch.Tensor  # (B, len(SliceKind)) long, N where the slice kind is absent
+    x_slice_kind_count: torch.Tensor  # (B, len(SliceKind)) long
+
+
+@dataclass
+class TokenCounts:
+    """The window's valid tokens per entity type across the batch, from the projector's one read:
+    they size the heads' one gather, which would otherwise read them back from the GPU"""
+
+    cards: int
+    relics: int
+    potions: int
+    monsters: int
+    event_options: int
+    character: int
+    rooms: int
+
+
+@dataclass
+class X_DrawOrderStates:
+    """The states the draw-order layer reads, those whose draw pile shows an order (2 or more draw
+    tokens): the ones under Frozen Eye (visible) first. With, from the projector's one read, how
+    many are visible, and their rows and pile rows (their draw tokens), visible and in all"""
+
+    x_states: torch.Tensor  # (S,) long
+    num_states_visible: int
+    num_rows_visible: int
+    num_rows: int
+    num_pile_visible: int
+    num_pile: int
 
 
 @dataclass
 class X_CoreOutput:
-    """`global_` and `entities` are the policy heads': the transformer's, but the draw-order
-    layer's on the rows under Frozen Eye whose draw pile shows an order. `global_value` is the
-    value head's: the layer's on every row whose draw pile shows an order, the transformer's
-    elsewhere."""
+    """`global_` and `x_tokens` are the policy heads': the transformer's, but the draw-order
+    layer's on the states under Frozen Eye whose draw pile shows an order. `global_value` is the
+    value head's: the layer's on every state whose draw pile shows an order, the transformer's
+    elsewhere. `window` is the packed window's X_Window, `num_slots` its slots per state and
+    `num_tokens` its valid tokens per entity type."""
 
     global_: torch.Tensor  # (B, dim_global)
     global_value: torch.Tensor  # (B, dim_global)
-    entities: X_Entity  # refined window: x (B, window, dim_entity), x_slice_kind (B, window) long
-
-
-@tensorclass
-class X_EntityMask:
-    """The masks over one type's block, token for token with its `x_slice_kind` (the
-    heads cat the blocks in X_GameState field order, exactly as the tokens)."""
-
-    # L2 selection: legal under the action type, deduped by card identity
-    legal: torch.Tensor  # (B, NUM_ACTION_TYPES, W)
-
-    # selections whose legal actions carry a monster target (cards / potions)
-    needs_target: torch.Tensor  # (B, W)
-
-
-@tensorclass
-class X_Mask:
-    mask_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) — L1
-
-    # One X_EntityMask per block, in X_GameState field order (rooms last)
-    cards: X_EntityMask
-    relics: X_EntityMask
-    potions: X_EntityMask
-    monsters: X_EntityMask
-    event_options: X_EntityMask
-    character: X_EntityMask
-    rooms: X_EntityMask
-
-    # legal L3 targets: the alive monsters. The engine offers every alive monster
-    # to every targeted action, so the set does not depend on the L2 selection
-    monster_is_target: torch.Tensor  # (B, W) — W = the monster block's width
+    x_tokens: torch.Tensor  # (N, dim_entity) the refined rows
+    window: X_Window
+    num_slots: int
+    num_tokens: TokenCounts
 
 
 @tensorclass
@@ -356,13 +403,12 @@ class X_Action:
 @tensorclass
 class X_Step:
     """One step of every game, shared by the step loop and its workers: the action the step
-    loop sampled, then the reward, done flag, state and masks the worker wrote back"""
+    loop sampled, then the reward, done flag and state, masks included, the worker wrote back"""
 
     actions: torch.Tensor  # (E, 4) long: action type, slice kind, rank, target
     rewards: torch.Tensor  # (E, K)
     dones: torch.Tensor  # (E,)
     game_state: X_GameState  # (E, ...), every block at its cap
-    mask: X_Mask  # (E, ...), every block at its cap
 
 
 @tensorclass
@@ -372,7 +418,6 @@ class X_Rollout:
     the bootstrap value"""
 
     game_state: X_GameState  # (N, ...)
-    mask: X_Mask  # (N, ...)
     actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     rewards: torch.Tensor  # (T, E, K)
@@ -382,13 +427,12 @@ class X_Rollout:
 
 @tensorclass
 class X_TrainingBatch:
-    """Columnar rollout (N = rollout_length * num_envs rows). The full-batch masks are
-    stored once and row-sliced per minibatch; GAE returns/advantages are precomputed.
-    Values/returns are per reward stream (K = len(RewardStream)); the policy
+    """Columnar rollout (N = rollout_length * num_envs rows). The full-batch states, masks
+    included, are stored once and row-sliced per minibatch; GAE returns/advantages are
+    precomputed. Values/returns are per reward stream (K = len(RewardStream)); the policy
     advantage is the per-stream advantages summed, then normalized."""
 
-    game_state: X_GameState  # (N, ...)
-    mask: X_Mask  # (N, ...) — row-sliced per minibatch (mask[rows])
+    game_state: X_GameState  # (N, ...) — row-sliced per minibatch (game_state[rows])
     actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
@@ -415,6 +459,23 @@ def _check_tables() -> None:
         raise RuntimeError(
             "A SliceKind has no entry in CAP_OF_SLICE_KIND: "
             f"{set(SliceKind) - set(CAP_OF_SLICE_KIND)}"
+        )
+
+    # The block tables split SliceKind exactly: every slice kind in one table, none in two
+    slice_kinds = [
+        *SLICE_KINDS_CARD,
+        *SLICE_KINDS_RELIC,
+        *SLICE_KINDS_POTION,
+        *SLICE_KINDS_MONSTER,
+        *SLICE_KINDS_EVENT_OPTION,
+        *SLICE_KINDS_CHARACTER,
+        *SLICE_KINDS_ROOM,
+    ]
+    if sorted(slice_kinds) != sorted(SliceKind):
+        repeated = {slice_kind for slice_kind in slice_kinds if slice_kinds.count(slice_kind) > 1}
+        raise RuntimeError(
+            "Every SliceKind sits in exactly one SLICE_KINDS_* block table: missing "
+            f"{set(SliceKind) - set(slice_kinds)}, in two {repeated}"
         )
 
 

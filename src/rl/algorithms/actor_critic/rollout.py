@@ -10,12 +10,11 @@ from src.rl.algorithms.actor_critic.workers import step_workers
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
 from src.rl.types import X_EffectPending
-from src.rl.types import X_EntityMask
 from src.rl.types import X_EntitySparse
 from src.rl.types import X_GameState
-from src.rl.types import X_Mask
 from src.rl.types import X_OwnedSparse
 from src.rl.types import X_Rollout
+from src.rl.types import X_Rooms
 
 
 _AT_REST = int(slai.ActionType.Rest)
@@ -41,7 +40,8 @@ def _pad_cat(tensors: list[torch.Tensor], fill: float) -> torch.Tensor:
 
 def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
     """The rollout's states as one batch: every block padded to the rollout's
-    widest (entries (0, 0.0), slice kinds -1), the per-state tensors just concatenated."""
+    widest (entries (0, 0.0), slice kinds -1, masks False), the per-state tensors just
+    concatenated."""
     batch_size = [sum(len(x) for x in steps)]
     return X_GameState(
         cards=_pad_cat_entity([x.cards for x in steps], batch_size),
@@ -50,6 +50,7 @@ def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
         monsters=_pad_cat_entity([x.monsters for x in steps], batch_size),
         event_options=_pad_cat_entity([x.event_options for x in steps], batch_size),
         character=_pad_cat_entity([x.character for x in steps], batch_size),
+        rooms=_pad_cat_rooms([x.rooms for x in steps], batch_size),
         health_block=_pad_cat_owned([x.health_block for x in steps], batch_size),
         prices=_pad_cat_owned([x.prices for x in steps], batch_size),
         effects=_pad_cat_owned([x.effects for x in steps], batch_size),
@@ -57,14 +58,13 @@ def _pad_cat_states(steps: list[X_GameState]) -> X_GameState:
         modifiers=_pad_cat_owned([x.modifiers for x in steps], batch_size),
         energy=torch.cat([x.energy for x in steps]),
         map_grid=torch.cat([x.map_grid for x in steps]),
-        room_node_idx=torch.cat([x.room_node_idx for x in steps]),
-        room_slice_kind=torch.cat([x.room_slice_kind for x in steps]),
         map_meta=torch.cat([x.map_meta for x in steps]),
         focus=torch.cat([x.focus for x in steps]),
         ascension=torch.cat([x.ascension for x in steps]),
         reward_meta=torch.cat([x.reward_meta for x in steps]),
         shop_meta=torch.cat([x.shop_meta for x in steps]),
         event_meta=torch.cat([x.event_meta for x in steps]),
+        x_legal_action_type=torch.cat([x.x_legal_action_type for x in steps]),
         batch_size=batch_size,
     )
 
@@ -74,6 +74,18 @@ def _pad_cat_entity(blocks: list[X_EntitySparse], batch_size: list[int]) -> X_En
         x_column=_pad_cat([block.x_column for block in blocks], 0),
         x_value=_pad_cat([block.x_value for block in blocks], 0.0),
         x_slice_kind=_pad_cat([block.x_slice_kind for block in blocks], -1),
+        x_legal=_pad_cat([block.x_legal for block in blocks], False),
+        x_needs_target=_pad_cat([block.x_needs_target for block in blocks], False),
+        batch_size=batch_size,
+    )
+
+
+def _pad_cat_rooms(blocks: list[X_Rooms], batch_size: list[int]) -> X_Rooms:
+    return X_Rooms(
+        x_node_idx=_pad_cat([block.x_node_idx for block in blocks], -1),
+        x_slice_kind=_pad_cat([block.x_slice_kind for block in blocks], -1),
+        x_legal=_pad_cat([block.x_legal for block in blocks], False),
+        x_needs_target=_pad_cat([block.x_needs_target for block in blocks], False),
         batch_size=batch_size,
     )
 
@@ -98,32 +110,6 @@ def _pad_cat_effect_pending(
     )
 
 
-def _pad_cat_masks(steps: list[X_Mask]) -> X_Mask:
-    """The rollout's masks as one batch, each block padded (False) to the same
-    width as its entity block in _pad_cat_states."""
-    batch_size = [sum(len(mb) for mb in steps)]
-    return X_Mask(
-        mask_action_type=torch.cat([mb.mask_action_type for mb in steps]),
-        cards=_pad_cat_entity_mask([mb.cards for mb in steps], batch_size),
-        relics=_pad_cat_entity_mask([mb.relics for mb in steps], batch_size),
-        potions=_pad_cat_entity_mask([mb.potions for mb in steps], batch_size),
-        monsters=_pad_cat_entity_mask([mb.monsters for mb in steps], batch_size),
-        event_options=_pad_cat_entity_mask([mb.event_options for mb in steps], batch_size),
-        character=_pad_cat_entity_mask([mb.character for mb in steps], batch_size),
-        rooms=_pad_cat_entity_mask([mb.rooms for mb in steps], batch_size),
-        monster_is_target=_pad_cat([mb.monster_is_target for mb in steps], False),
-        batch_size=batch_size,
-    )
-
-
-def _pad_cat_entity_mask(blocks: list[X_EntityMask], batch_size: list[int]) -> X_EntityMask:
-    return X_EntityMask(
-        legal=_pad_cat([block.legal for block in blocks], False),
-        needs_target=_pad_cat([block.needs_target for block in blocks], False),
-        batch_size=batch_size,
-    )
-
-
 def collect_rollout(
     model: ActorCritic,
     exchange: Exchange,
@@ -142,7 +128,6 @@ def collect_rollout(
     K = len(RewardStream)
     exchange.curriculum_c.fill_(curriculum_c)
     chunks_x: list[X_GameState] = []  # per step, in row order
-    chunks_mb: list[X_Mask] = []
     actions = torch.empty(N, 4, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
     rewards = torch.empty(T, E, K, device=device)
@@ -155,11 +140,10 @@ def collect_rollout(
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
-        x, mb = snapshot_to_device(exchange.step, device)
+        x = snapshot_to_device(exchange.step, device)
         for t in range(T):
-            out = model.act(x, mb, generator=generator)
+            out = model.act(x, generator=generator)
             chunks_x.append(x)
-            chunks_mb.append(mb)
             step_rows = slice(t * E, (t + 1) * E)
             actions[step_rows] = torch.stack(
                 [out.action_type, out.slice_kind, out.rank, out.target], dim=1
@@ -167,7 +151,7 @@ def collect_rollout(
             log_probs[step_rows] = out.log_prob.sum(-1)
 
             # Campfire decision: both Rest and RestSmith legal — which was chosen?
-            both = mb.mask_action_type[:, _AT_REST] & mb.mask_action_type[:, _AT_SMITH]
+            both = x.x_legal_action_type[:, _AT_REST] & x.x_legal_action_type[:, _AT_SMITH]
             chosen = out.action_type
             rest_selections.add_((both & (chosen == _AT_REST)).sum())
             upgrade_selections.add_((both & (chosen == _AT_SMITH)).sum())
@@ -176,7 +160,7 @@ def collect_rollout(
             step_workers(workers)
             rewards[t] = exchange.step.rewards
             dones[t] = exchange.step.dones
-            x, mb = snapshot_to_device(exchange.step, device)
+            x = snapshot_to_device(exchange.step, device)
 
     # Set model to training mode
     model.train()
@@ -196,7 +180,6 @@ def collect_rollout(
     return (
         X_Rollout(
             game_state=_pad_cat_states(chunks_x),
-            mask=_pad_cat_masks(chunks_mb),
             actions=actions,
             log_probs_behavior=log_probs,
             rewards=rewards,
