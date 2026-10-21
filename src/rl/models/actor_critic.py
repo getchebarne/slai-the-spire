@@ -126,9 +126,13 @@ def _categorical_rows(
 
 def _row(x_window: X_Window, x_slice_kind: torch.Tensor, x_rank: torch.Tensor) -> torch.Tensor:
     """The row of the rank-th token of `slice_kind`, per state; where the slice kind is -1, the
-    placeholder's: its state's first row."""
+    placeholder's: its state's character row."""
     x_first_row = x_window.x_slice_kind_row.gather(1, x_slice_kind.clamp(min=0).unsqueeze(1))
-    return torch.where(x_slice_kind >= 0, x_first_row.squeeze(1) + x_rank, x_window.x_first_row)
+    return torch.where(
+        x_slice_kind >= 0,
+        x_first_row.squeeze(1) + x_rank,
+        x_window.x_slice_kind_row[:, SliceKind.CHARACTER],
+    )
 
 
 def _slice_kind_rank(x_window: X_Window, x_row: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -207,7 +211,7 @@ class ActorCritic(nn.Module):
 
         # The policy heads' computation as a plain function, which compile_hot_paths swaps for
         # its compiled version on the learner's model
-        self.policy_heads_recorded = policy_heads
+        self.policy_heads_recorded = _policy_heads
 
         self._init_weights()
 
@@ -281,7 +285,7 @@ class ActorCritic(nn.Module):
         x_core_out = self.core(x_gs, with_value=False)
 
         # Sampling actions runs eager
-        return self._select_actions(policy_heads, x_gs, x_core_out, greedy, generator)
+        return self._select_actions(_policy_heads, x_gs, x_core_out, greedy, generator)
 
     def evaluate_actions(
         self, x_gs: X_GameState, x_recorded_actions: torch.Tensor
@@ -302,7 +306,7 @@ class ActorCritic(nn.Module):
         return x_action.log_prob.sum(-1), x_action.entropy, x_action.kl_uniform, x_values
 
 
-def policy_heads(
+def _policy_heads(
     model: ActorCritic,
     x_focus: torch.Tensor,
     x_global: torch.Tensor,
@@ -337,12 +341,10 @@ def policy_heads(
     # Compute the `Action`'s selections from the chosen `ActionType`
     batch_size = x_action_type.shape[0]
     x_states = torch.arange(batch_size, device=x_action_type.device)
-    x_state, x_first_row = x_window.x_state, x_window.x_first_row
+    x_state = x_window.x_state
 
-    # One gather from the blocks' rows; the split hands each class its rows
-    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_tokens[
-        x_window.x_block_row
-    ].split(
+    # The split hands each class its rows
+    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_tokens.split(
         [
             num_cards,
             num_relics,
@@ -356,8 +358,7 @@ def policy_heads(
 
     # L2 keys, once per token: its own class's net, the one every action type scores
     # it with. Monsters and the character are never L2 selections: zero keys
-    x_keys = x_tokens.new_empty(x_tokens.shape[0], model._dim_key)
-    x_keys[x_window.x_block_row] = torch.cat(
+    x_keys = torch.cat(
         [
             model._pointer_key_card(x_cards),
             model._pointer_key_relic(x_relics),
@@ -374,9 +375,9 @@ def policy_heads(
     x_selects_token = model._selects_token[x_action_type]
     x_mask_rows = x_window.x_legal.gather(1, x_action_type[x_state].unsqueeze(1)).squeeze(1)
 
-    # Every state at once: a type that selects no token (TurnEnd...) gets its state's first row
-    # as a placeholder, so its categorical stays finite
-    x_mask_rows[x_first_row] |= ~x_selects_token
+    # Every state at once: a type that selects no token (TurnEnd...) gets its state's character
+    # row as a placeholder, so its categorical stays finite
+    x_mask_rows[x_window.x_slice_kind_row[:, SliceKind.CHARACTER]] |= ~x_selects_token
 
     # Recorded selections are (slice kind, rank); the pointer scores rows
     # A state without a selection records slice kind and rank -1: _row gives the placeholder
@@ -405,8 +406,7 @@ def policy_heads(
     # The choices: each monster row, scored against its state's selected card/potion token and
     # legal where its state takes a target; then each state's "no target" choice, a zero key,
     # legal where it takes none
-    x_count_monster = x_window.x_slice_kind_count[:, SliceKind.MONSTERS]
-    x_monster_state = torch.repeat_interleave(x_count_monster, output_size=num_monsters)
+    x_monster_state = x_state.narrow(0, num_cards + num_relics + num_potions, num_monsters)
     x_choice_state = torch.cat([x_monster_state, x_states])
     x_mask_l3 = torch.cat([x_has_target[x_monster_state], ~x_has_target])
 
@@ -419,6 +419,7 @@ def policy_heads(
     )
 
     # A target is a monster's rank: its choice is its state's first monster choice plus the rank
+    x_count_monster = x_window.x_slice_kind_count[:, SliceKind.MONSTERS]
     x_first_monster = x_count_monster.cumsum(0) - x_count_monster
     x_recorded_choice = None
     if x_recorded_target is not None:
@@ -469,4 +470,4 @@ def compile_hot_paths(model: ActorCritic) -> None:
     model.core._map_gnn.message_passing = torch.compile(message_passing, dynamic=True, mode=mode)
 
     # Not autotuned: an empty block's key-net matmul fails to lower under autotuning
-    model.policy_heads_recorded = torch.compile(policy_heads, dynamic=True)
+    model.policy_heads_recorded = torch.compile(_policy_heads, dynamic=True)

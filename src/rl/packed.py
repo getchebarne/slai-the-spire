@@ -191,7 +191,7 @@ def join_regions(x_gs: X_GameState, num_regions: int) -> X_GameState:
     )
 
 
-def rows_of_states(
+def _rows_of_states(
     x_first_row: torch.Tensor, x_count: torch.Tensor, num_rows: int
 ) -> torch.Tensor:
     """The rows of states laid out one after another, `x_count` (S,) rows each, each state's from
@@ -208,7 +208,7 @@ def _join_rows(block: _Block, num_regions: int) -> _Block:
     num_rows_region = len(x_row_fields[0]) // num_regions  # every row field holds all the rows
     x_count_region = block.x_count.view(num_regions, -1).sum(1)  # (R,)
     x_first_row = torch.arange(num_regions) * num_rows_region  # (R,)
-    np_row = rows_of_states(x_first_row, x_count_region, int(x_count_region.sum())).numpy()
+    np_row = _rows_of_states(x_first_row, x_count_region, int(x_count_region.sum())).numpy()
     return _block_from_row_fields(
         block,
         [torch.from_numpy(x_field.numpy()[np_row]) for x_field in x_row_fields],
@@ -234,7 +234,7 @@ def _take_rows(block: _Block, x_states: torch.Tensor, num_rows: int) -> _Block:
     x_count = block.x_count
     x_count_taken = x_count[x_states]
     x_first_row = x_count.cumsum(0) - x_count
-    x_rows = rows_of_states(x_first_row[x_states], x_count_taken, num_rows)
+    x_rows = _rows_of_states(x_first_row[x_states], x_count_taken, num_rows)
     return _block_from_row_fields(
         block, [x_field[x_rows] for x_field in _row_fields(block)], x_count_taken
     )

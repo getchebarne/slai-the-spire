@@ -276,8 +276,8 @@ class X_GameState:
     state's rows in it. The per-state fields are (B, ...). src/rl/packed.py chooses its states and
     joins them"""
 
-    # One block per type, in window order (the rooms last). The projector writes their tokens,
-    # slice kinds and masks at their rows of the window
+    # One block per type, in window order (the rooms last): the projector's window is their rows,
+    # block after block
     cards: X_EntitySparse
     relics: X_EntitySparse
     potions: X_EntitySparse
@@ -308,18 +308,15 @@ class X_GameState:
 
 @dataclass
 class X_Window:
-    """The window packed for the model: only its tokens, each state's in window order (its six
-    blocks', then its rooms'), state after state. Per row: its slice kind, its masks and its state;
-    and each block token's row, as X_GameState holds the blocks. Per state: its first row
-    and its tokens, and per slice kind its first row and its tokens; a slice kind's tokens sit in
-    consecutive rows"""
+    """The window packed for the model: only its tokens, in block order (the six blocks' rows, then
+    the rooms', each block's state after state, as X_GameState holds them). Per row: its slice
+    kind, its masks and its state. Per state: its tokens, and per slice kind its first row and its
+    tokens; a slice kind's tokens sit in consecutive rows"""
 
     x_slice_kind: torch.Tensor  # (N,) long
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
     x_needs_target: torch.Tensor  # (N,) bool
     x_state: torch.Tensor  # (N,) long
-    x_block_row: torch.Tensor  # (N,) long, the cards' rows, then the relics', ..., the rooms'
-    x_first_row: torch.Tensor  # (B,) long
     x_count: torch.Tensor  # (B,) long
     x_slice_kind_row: torch.Tensor  # (B, len(SliceKind)) long, N where the slice kind is absent
     x_slice_kind_count: torch.Tensor  # (B, len(SliceKind)) long
