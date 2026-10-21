@@ -172,8 +172,8 @@ def _worker_loop(
     while _wait_for_request(request, exchange.stop):
         shard.ascension_c = float(exchange.curriculum_c)  # promotions apply on reset
 
-        for j, (at, slice_kind, rank, target) in enumerate(step.actions.tolist()):
-            action = engine_action(at, slice_kind, rank, target, shard.obs[j])
+        for j, (at, token_kind, rank, target) in enumerate(step.actions.tolist()):
+            action = engine_action(at, token_kind, rank, target, shard.obs[j])
             reward, finished = step_env(shard, j, action, settings)
             step.rewards[j] = torch.from_numpy(reward)
             step.dones[j] = float(finished is not None)

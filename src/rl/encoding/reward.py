@@ -28,7 +28,7 @@ def _encode_reward_meta_into(reward: Reward, out: np.ndarray) -> None:
 
 def encode_batch_rewards(game_states: list[GameState], device: torch.device) -> torch.Tensor:
     """Reward meta only — the offered card/relic/potion entities are encoded by
-    their entity-class encoders (reward slices per the encoders)."""
+    their entity-class encoders (the reward's token kinds per the encoders)."""
     batch_size = len(game_states)
     np_meta = np.zeros((batch_size, ENCODING_DIM_REWARD_META), dtype=np.float32)
 

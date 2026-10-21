@@ -43,11 +43,12 @@ def _encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
 def encode_batch_prices(
     game_states: list[GameState],
     sources: Sequence[BatchPriceRows],
+    np_first_offset: np.ndarray,
     device: torch.device,
 ) -> X_OwnedSparse:
     """Every state's shop-token price rows as one (N, ENCODING_DIM_PRICE) block, held sparse,
-    every state's after the previous state's, with their owner keys; and each state's (B,) row
-    count."""
+    every state's after the previous state's, with their owners as offsets through
+    `np_first_offset`; and each state's (B,) row count."""
     batch_size = len(game_states)
     batch_rows = [
         [row for batch_price_rows in sources for row in batch_price_rows[b]]
@@ -55,7 +56,7 @@ def encode_batch_prices(
     ]
     np_count = np.array([len(rows) for rows in batch_rows], dtype=np.int64)  # (B,)
     np_price = np.zeros((np_count.sum(), ENCODING_DIM_PRICE), dtype=np.float32)
-    np_owner_slice_kind = np.empty(np_count.sum(), dtype=np.int64)
+    np_owner_token_kind = np.empty(np_count.sum(), dtype=np.int64)
     np_owner_rank = np.empty(np_count.sum(), dtype=np.int64)
 
     row = 0
@@ -64,14 +65,20 @@ def encode_batch_prices(
             continue
 
         gold = game_state.character.gold
-        for slice_kind, rank, price in rows:
+        for token_kind, rank, price in rows:
             _encode_price_into(price, gold, np_price[row])
-            np_owner_slice_kind[row] = slice_kind
+            np_owner_token_kind[row] = token_kind
             np_owner_rank[row] = rank
             row += 1
 
     return owned_sparse(
-        np_price, np_owner_slice_kind, np_owner_rank, np_count, ENCODING_SPARSE_PRICE, device
+        np_price,
+        np_owner_token_kind,
+        np_owner_rank,
+        np_count,
+        np_first_offset,
+        ENCODING_SPARSE_PRICE,
+        device,
     )
 
 

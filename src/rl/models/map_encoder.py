@@ -51,8 +51,8 @@ class MapGNN(nn.Module):
     Rooms above the position row take part, or every Room when there is no position bit
     (before the act's first Room, and in the boss and boss treasure rooms).
 
-    Returns the next-row Rooms' features, one row per packed room (N, hidden); then the readout
-    (B, hidden): the mean over the Rooms that take part, zero when none does."""
+    Returns each unique map's node features (U, H * W, hidden) and each state's map (B,); then the
+    readout (B, hidden): the mean over the Rooms that take part, zero when none does."""
 
     def __init__(self, num_layers: int, hidden: int) -> None:
         super().__init__()
@@ -69,19 +69,16 @@ class MapGNN(nn.Module):
         # its compiled version on the learner's model
         self.message_passing = message_passing
 
-    def forward(
-        self, x_grid: torch.Tensor, x_room_node_idx: torch.Tensor, x_room_count: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """`x_grid`'s (B, H, W, C) maps and their next-row rooms: each room's node
-        `x_room_node_idx` (N,), state after state, each state's `x_room_count` (B,) of them"""
+    def forward(self, x_grid: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """`x_grid`'s (B, H, W, C) maps"""
         batch_size = x_grid.shape[0]
-        x_room_state = torch.repeat_interleave(x_room_count, output_size=x_room_node_idx.shape[0])
 
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
         x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
 
         if batch_size < _DEDUP_MIN_BATCH:
-            return self.message_passing(self, x_nodes, x_room_state, x_room_node_idx)
+            x_hidden, x_readout = self.message_passing(self, x_nodes)
+            return x_hidden, torch.arange(batch_size, device=x_grid.device), x_readout
 
         # The game sits on one map node for many steps, so its grid repeats across a minibatch:
         # run the GNN on unique grids once and gather back (exact)
@@ -94,12 +91,9 @@ class MapGNN(nn.Module):
         x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_grid.device)
         x_rep[x_inverse] = torch.arange(batch_size, device=x_grid.device)
 
-        # Encode the unique maps, each room's features from its state's map, and gather the readout
-        # back
-        x_rooms, x_readout_uniq = self.message_passing(
-            self, x_nodes[x_rep], x_inverse[x_room_state], x_room_node_idx
-        )
-        return x_rooms, x_readout_uniq[x_inverse]
+        # Encode the unique maps, and gather the readout back
+        x_hidden, x_readout_uniq = self.message_passing(self, x_nodes[x_rep])
+        return x_hidden, x_inverse, x_readout_uniq[x_inverse]
 
     def _forward_valid(self, x_nodes: torch.Tensor) -> torch.Tensor:
         """Computes the valid rooms matrix (higher than current floor and not None)"""
@@ -140,11 +134,9 @@ class MapGNN(nn.Module):
         return x_adj / x_adj.sum(-1, keepdim=True).clamp(min=1.0)
 
 
-def message_passing(
-    gnn: MapGNN, x_nodes: torch.Tensor, x_room_map: torch.Tensor, x_room_node_idx: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """`gnn` over the (U, H * W, C) maps: each room's features (N, hidden), the room at node
-    `x_room_node_idx` of map `x_room_map`, and the readout"""
+def message_passing(gnn: MapGNN, x_nodes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """`gnn` over the (U, H * W, C) maps: each node's features (U, H * W, hidden), and the
+    readout"""
     x_valid = gnn._forward_valid(x_nodes)  # (U, H * W) / Forward rooms only
     x_adj = gnn._adjacency(x_nodes)  # (U, H * W, H * W) / Row-normalized children
 
@@ -155,11 +147,8 @@ def message_passing(
         x_hidden = norm(x_hidden + F.relu(lin(torch.bmm(x_adj, x_hidden))))
         x_hidden = x_hidden * x_valid.unsqueeze(-1)
 
-    # Gather each room's node features from its map
-    x_room_h = x_hidden[x_room_map, x_room_node_idx]
-
     # Map readout: masked mean over valid nodes
     x_denom = x_valid.sum(1, keepdim=True).clamp(min=1).float()
     x_readout = x_hidden.sum(1) / x_denom  # Already zero off x_valid: masked above
 
-    return x_room_h, x_readout
+    return x_hidden, x_readout

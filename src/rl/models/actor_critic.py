@@ -6,6 +6,11 @@ import torch.nn as nn
 from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
+from src.rl.encoding.state import COLUMN_START_CHARACTER
+from src.rl.encoding.state import COLUMN_START_EVENT_OPTION
+from src.rl.encoding.state import COLUMN_START_MONSTER
+from src.rl.encoding.state import COLUMN_START_POTION
+from src.rl.encoding.state import COLUMN_START_RELIC
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -15,7 +20,7 @@ from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import NUM_ACTION_TYPES
-from src.rl.types import SliceKind
+from src.rl.types import TokenKind
 from src.rl.types import X_Action
 from src.rl.types import X_CoreOutput
 from src.rl.types import X_GameState
@@ -124,22 +129,22 @@ def _categorical_rows(
     return x_row, x_log_prob[x_row], x_entropy, x_kl_uniform
 
 
-def _row(x_window: X_Window, x_slice_kind: torch.Tensor, x_rank: torch.Tensor) -> torch.Tensor:
-    """The row of the rank-th token of `slice_kind`, per state; where the slice kind is -1, the
+def _row(x_window: X_Window, x_token_kind: torch.Tensor, x_rank: torch.Tensor) -> torch.Tensor:
+    """The row of the rank-th token of `token_kind`, per state; where the token kind is -1, the
     placeholder's: its state's character row."""
-    x_first_row = x_window.x_slice_kind_row.gather(1, x_slice_kind.clamp(min=0).unsqueeze(1))
+    x_first_row = x_window.x_token_kind_row.gather(1, x_token_kind.clamp(min=0).unsqueeze(1))
     return torch.where(
-        x_slice_kind >= 0,
+        x_token_kind >= 0,
         x_first_row.squeeze(1) + x_rank,
-        x_window.x_slice_kind_row[:, SliceKind.CHARACTER],
+        x_window.x_token_kind_row[:, TokenKind.CHARACTER],
     )
 
 
-def _slice_kind_rank(x_window: X_Window, x_row: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """A row's slice kind and its rank within that slice kind, per state."""
-    x_slice_kind = x_window.x_slice_kind[x_row]
-    x_first_row = x_window.x_slice_kind_row.gather(1, x_slice_kind.unsqueeze(1)).squeeze(1)
-    return x_slice_kind, x_row - x_first_row
+def _token_kind_rank(x_window: X_Window, x_row: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """A row's token kind and its rank within that token kind, per state."""
+    x_token_kind = x_window.x_token_kind[x_row]
+    x_first_row = x_window.x_token_kind_row.gather(1, x_token_kind.unsqueeze(1)).squeeze(1)
+    return x_token_kind, x_row - x_first_row
 
 
 class ActorCritic(nn.Module):
@@ -187,7 +192,7 @@ class ActorCritic(nn.Module):
         # L2/L3 pointer selection: one key net per entity class + a shared query net per level
         self._action_type_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
 
-        # One key net per entity class; every SliceKind of that class shares it, so an entity maps
+        # One key net per entity class; every TokenKind of that class shares it, so an entity maps
         # to the same key in every selection context
         self._pointer_key_card = PointerKeys(dim_entity, dim_key)
         self._pointer_key_relic = PointerKeys(dim_entity, dim_key)
@@ -222,6 +227,22 @@ class ActorCritic(nn.Module):
                 nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
+
+        # The shared first layer per family's columns, split at each family's start, as a family's
+        # own layer: orthogonal over all of them would shrink each column's scale
+        with torch.no_grad():
+            for x_weight_family in torch.tensor_split(
+                self.core._entity_projector._pre_token.weight,
+                (
+                    COLUMN_START_RELIC,
+                    COLUMN_START_POTION,
+                    COLUMN_START_MONSTER,
+                    COLUMN_START_EVENT_OPTION,
+                    COLUMN_START_CHARACTER,
+                ),
+                dim=1,
+            ):
+                nn.init.orthogonal_(x_weight_family, gain=math.sqrt(2))
         nn.init.orthogonal_(self._head_action_type._scorer[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_2._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)
@@ -236,27 +257,20 @@ class ActorCritic(nn.Module):
         generator: torch.Generator | None = None,
         x_recorded_actions: torch.Tensor | None = None,
     ) -> X_Action:
-        x_action_type, x_slice_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
+        x_action_type, x_token_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
             self,
             x_focus=x_gs.focus,
             x_global=x_core_out.global_,
             x_tokens=x_core_out.x_tokens,
             x_window=x_core_out.window,
             x_legal_action_type=x_gs.x_legal_action_type,
-            num_cards=x_gs.cards.x_slice_kind.shape[0],
-            num_relics=x_gs.relics.x_slice_kind.shape[0],
-            num_potions=x_gs.potions.x_slice_kind.shape[0],
-            num_monsters=x_gs.monsters.x_slice_kind.shape[0],
-            num_event_options=x_gs.event_options.x_slice_kind.shape[0],
-            num_character=x_gs.character.x_slice_kind.shape[0],
-            num_rooms=x_gs.rooms.x_slice_kind.shape[0],
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
         )
         return X_Action(
             action_type=x_action_type,
-            slice_kind=x_slice_kind,
+            token_kind=x_token_kind,
             rank=x_rank,
             target=x_target,
             log_prob=x_log_prob,
@@ -308,22 +322,15 @@ def _policy_heads(
     x_tokens: torch.Tensor,
     x_window: X_Window,
     x_legal_action_type: torch.Tensor,
-    num_cards: int,
-    num_relics: int,
-    num_potions: int,
-    num_monsters: int,
-    num_event_options: int,
-    num_character: int,
-    num_rooms: int,
     greedy: bool,
     generator: torch.Generator | None,
     x_recorded_actions: torch.Tensor | None,
 ) -> tuple[torch.Tensor, ...]:
     """`model`'s L1-L3 selections, or the recorded ones scored, over the core's global vector and
-    refined rows of the packed window, given the L1 mask and the window's rows per block.
-    L2 and L3 select per state over its rows. Returns X_Action's fields in order"""
+    refined rows of the packed window, given the L1 mask. L2 and L3 select per state over its rows,
+    grouped by family. Returns X_Action's fields in order"""
     # The recorded actions' columns, or None when selecting
-    x_recorded_action_type, x_recorded_slice_kind, x_recorded_rank, x_recorded_target = (
+    x_recorded_action_type, x_recorded_token_kind, x_recorded_rank, x_recorded_target = (
         x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 4
     )
 
@@ -336,20 +343,25 @@ def _policy_heads(
     # Compute the `Action`'s selections from the chosen `ActionType`
     batch_size = x_action_type.shape[0]
     x_states = torch.arange(batch_size, device=x_action_type.device)
-    x_state = x_window.x_state
+
+    # The rows grouped by family, family after family and each family's state after state: what
+    # the key nets split and the scoring runs on. Selections map back to the window through it
+    x_order = torch.argsort(x_window.x_family, stable=True)  # (N,)
+    x_state = x_window.x_state[x_order]
+    (
+        num_cards,
+        num_relics,
+        num_potions,
+        num_monsters,
+        num_event_options,
+        num_character,
+        _,
+    ) = x_window.num_tokens_family
 
     # The split hands each class its rows
-    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_tokens.split(
-        [
-            num_cards,
-            num_relics,
-            num_potions,
-            num_monsters,
-            num_event_options,
-            num_character,
-            num_rooms,
-        ]
-    )
+    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_tokens[
+        x_order
+    ].split(x_window.num_tokens_family)
 
     # L2 keys, once per token: its own class's net, the one every action type scores
     # it with. Monsters and the character are never L2 selections: zero keys
@@ -368,17 +380,25 @@ def _policy_heads(
     # L2: score every row against its state's query, conditioned on the `ActionType` embedding;
     # the mask keeps exactly the type's legal tokens
     x_selects_token = model._selects_token[x_action_type]
-    x_mask_rows = x_window.x_legal.gather(1, x_action_type[x_state].unsqueeze(1)).squeeze(1)
+    x_legal = x_window.x_legal.gather(1, x_action_type[x_window.x_state].unsqueeze(1))
+    x_mask_rows = x_legal.squeeze(1)[x_order]
 
     # Every state at once: a type that selects no token (TurnEnd...) gets its state's character
-    # row as a placeholder, so its categorical stays finite
-    x_mask_rows[x_window.x_slice_kind_row[:, SliceKind.CHARACTER]] |= ~x_selects_token
+    # row as a placeholder, so its categorical stays finite. One per state, past the earlier
+    # families' rows
+    num_rows_before_character = (
+        num_cards + num_relics + num_potions + num_monsters + num_event_options
+    )
+    x_mask_rows[num_rows_before_character + x_states] |= ~x_selects_token
 
-    # Recorded selections are (slice kind, rank); the pointer scores rows
-    # A state without a selection records slice kind and rank -1: _row gives the placeholder
+    # Recorded selections are (token kind, rank); the pointer scores rows
+    # A state without a selection records token kind and rank -1: _row gives the placeholder
     x_recorded_row = None
-    if x_recorded_slice_kind is not None:
-        x_recorded_row = _row(x_window, x_recorded_slice_kind, x_recorded_rank)
+    if x_recorded_token_kind is not None:
+        # Each window row's place among the grouped rows
+        x_place = torch.empty_like(x_order)
+        x_place[x_order] = torch.arange(x_order.shape[0], device=x_order.device)
+        x_recorded_row = x_place[_row(x_window, x_recorded_token_kind, x_recorded_rank)]
 
     # Calculate the rows' logits & select from each state's
     x_logits = model._head_level_2(
@@ -387,7 +407,10 @@ def _policy_heads(
     x_row_selected, x_log_prob_l2, x_entropy_l2, x_kl_uniform_l2 = _categorical_rows(
         x_logits, x_mask_rows, x_state, batch_size, x_recorded_row, greedy, generator
     )
-    x_slice_kind, x_rank = _slice_kind_rank(x_window, x_row_selected)
+
+    # The selected rows back in the window
+    x_token_selected = x_order[x_row_selected]
+    x_token_kind, x_rank = _token_kind_rank(x_window, x_token_selected)
 
     # L3: monster target, only for actions that take one (CardPlay / PotionUse)
     # Keep only rows whose committed L2 selection takes a target: at recompute
@@ -395,7 +418,7 @@ def _policy_heads(
     x_has_target = (
         x_recorded_target >= 0
         if x_recorded_target is not None
-        else model._is_targeted[x_action_type] & x_window.x_needs_target[x_row_selected]
+        else model._is_targeted[x_action_type] & x_window.x_needs_target[x_token_selected]
     )
 
     # The choices: each monster row, scored against its state's selected card/potion token and
@@ -414,7 +437,7 @@ def _policy_heads(
     )
 
     # A target is a monster's rank: its choice is its state's first monster choice plus the rank
-    x_count_monster = x_window.x_slice_kind_count[:, SliceKind.MONSTERS]
+    x_count_monster = x_window.x_token_kind_count[:, TokenKind.MONSTERS]
     x_first_monster = x_count_monster.cumsum(0) - x_count_monster
     x_recorded_choice = None
     if x_recorded_target is not None:
@@ -424,7 +447,7 @@ def _policy_heads(
 
     # Calculate the choices' logits & select from each state's
     x_logits = model._head_level_3(
-        x_keys, x_global, x_tokens[x_row_selected], x_choice_state, x_mask_l3
+        x_keys, x_global, x_tokens[x_token_selected], x_choice_state, x_mask_l3
     )
     x_choice, x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _categorical_rows(
         x_logits, x_mask_l3, x_choice_state, batch_size, x_recorded_choice, greedy, generator
@@ -432,7 +455,7 @@ def _policy_heads(
     x_target = x_choice - x_first_monster
 
     # A level a row doesn't reach: no selection (-1) and zero terms, whatever its placeholder drew
-    x_slice_kind = torch.where(x_selects_token, x_slice_kind, -1)
+    x_token_kind = torch.where(x_selects_token, x_token_kind, -1)
     x_rank = torch.where(x_selects_token, x_rank, -1)
     x_log_prob_l2 = torch.where(x_selects_token, x_log_prob_l2, 0.0)
     x_entropy_l2 = torch.where(x_selects_token, x_entropy_l2, 0.0)
@@ -445,7 +468,7 @@ def _policy_heads(
     # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
     return (
         x_action_type,
-        x_slice_kind,
+        x_token_kind,
         x_rank,
         x_target,
         torch.stack([x_log_prob_l1, x_log_prob_l2, x_log_prob_l3], dim=1),
