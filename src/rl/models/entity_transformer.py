@@ -1,34 +1,136 @@
+from typing import cast
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.attention.flex_attention import BlockMask
+from torch.nn.attention.flex_attention import flex_attention
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
-from src.rl.types import SliceKind
-from src.rl.types import X_Entity
+from src.rl.types import TokenKind
+from src.rl.types import X_Window
 
 
-# A batch packs in max(1, rows // this) groups of rows, each group to its own widest row
-_ROWS_PER_GROUP = 1024
+# FlexAttention's block: on the GPU, each side of an attention is padded to a multiple of it
+_FLEX_BLOCK = 128
+
+# Fixed kernel options: max-autotune leaves the forward's untuned, and tunes only the backward's
+# block sizes
+_FLEX_KERNEL_OPTIONS = {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}
+
+# On the GPU even the eager actor calls FlexAttention compiled: eager, it scores every query row
+# against every key row. One graph, or a loud failure rather than a fall back to eager
+_flex_attention_compiled = torch.compile(flex_attention, dynamic=True, fullgraph=True)
 
 
-def _width_groups(
-    x_count: torch.Tensor, x_column_key: torch.Tensor, num_groups: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Rows in `num_groups` width groups, from their token counts `x_count` (R,): the rows in
-    group order (R,), each group's width (G,), and each row's columns in that order, sorted by
-    `x_column_key` (R, C)"""
+def _padded(num_rows: int, device: torch.device) -> int:
+    """`num_rows` rounded up to a multiple of FlexAttention's block on the GPU; on the CPU, where
+    SDPA needs no tail, `num_rows`"""
+    if device.type != "cuda":
+        return num_rows
+    return -(-num_rows // _FLEX_BLOCK) * _FLEX_BLOCK
 
-    # The rows sorted by token count, then cut into near-equal groups: a group's width is its
-    # last row's count
-    x_count, x_order = torch.sort(x_count, stable=True)
-    x_widths = torch.stack([x[-1] for x in x_count.tensor_split(num_groups)])
-    return x_order, x_widths, torch.argsort(x_column_key[x_order], dim=1, stable=True)
+
+def _states_and_ranks(x_offsets: torch.Tensor, num_rows: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Each of `num_rows` rows' state and its rank in it, the states laid out one after another
+    from `x_offsets` (S + 1,), their first rows then the end: the rows past the end form state S"""
+    x_row = torch.arange(num_rows, device=x_offsets.device)
+    x_state = torch.searchsorted(x_offsets, x_row, right=True) - 1
+    return x_state, x_row - x_offsets[x_state]
+
+
+def _block_mask(
+    x_offsets_query: torch.Tensor, x_offsets_key: torch.Tensor, num_query: int, num_key: int
+) -> BlockMask:
+    """FlexAttention's same-state mask, built on the device: each query row attends the key rows
+    of its own state. `x_offsets_*` (S + 1,) are each side's state starts, then its end; its
+    `num_*` rows, a multiple of _FLEX_BLOCK, end in a tail that forms state S"""
+    x_state_query, _ = _states_and_ranks(x_offsets_query, num_query)
+    x_state_key, _ = _states_and_ranks(x_offsets_key, num_key)
+
+    # A query block attends the key blocks from its first row's state's first key row to its last
+    # row's state's last key row
+    num_blocks_key = num_key // _FLEX_BLOCK
+    x_starts_key = F.pad(x_offsets_key, (0, 1), value=num_key)  # (S + 2,)
+    x_first = x_starts_key[x_state_query[::_FLEX_BLOCK]] // _FLEX_BLOCK
+    x_last = (x_starts_key[x_state_query[_FLEX_BLOCK - 1 :: _FLEX_BLOCK] + 1] - 1) // _FLEX_BLOCK
+
+    # from_kv_blocks wants each query block's key blocks as wide as the key blocks: its first
+    # (x_last - x_first + 1) count
+    x_blocks_key = x_first.unsqueeze(1) + torch.arange(num_blocks_key, device=x_first.device)
+
+    def same_state(
+        b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
+    ) -> torch.Tensor:
+        return x_state_query[q_idx] == x_state_key[kv_idx]
+
+    return BlockMask.from_kv_blocks(
+        (x_last - x_first + 1).int().view(1, 1, -1),
+        x_blocks_key.clamp(max=num_blocks_key - 1).int().view(1, 1, -1, num_blocks_key),
+        BLOCK_SIZE=_FLEX_BLOCK,
+        mask_mod=same_state,
+        seq_lengths=(num_query, num_key),
+    )
+
+
+def _same_state_mask(
+    x_offsets_query: torch.Tensor, x_offsets_key: torch.Tensor, num_query: int, num_key: int
+) -> BlockMask | torch.Tensor | None:
+    """Each query row attends the key rows of its own state, `x_offsets_*` (S + 1,) each side's
+    state starts, then its end: on the GPU FlexAttention's BlockMask; on the CPU SDPA's dense
+    (N_q, N_k) mask, or none for a single state"""
+    if x_offsets_query.is_cuda:
+        return _block_mask(x_offsets_query, x_offsets_key, num_query, num_key)
+    if x_offsets_query.shape[0] == 2:
+        return None
+    x_state_query, _ = _states_and_ranks(x_offsets_query, num_query)
+    x_state_key, _ = _states_and_ranks(x_offsets_key, num_key)
+    return x_state_query.unsqueeze(1) == x_state_key.unsqueeze(0)
+
+
+class _Attention(nn.Module):
+    """Multi-head attention over packed rows: the query and key/value projections, the attention
+    kernel, the output projection. FlexAttention, compiled, on the GPU; SDPA on the CPU"""
+
+    def __init__(self, dim_entity: int, num_heads: int) -> None:
+        super().__init__()
+
+        self._projection_query = nn.Linear(dim_entity, dim_entity)
+        self._projection_key_value = nn.Linear(dim_entity, 2 * dim_entity)
+        self._projection_out = nn.Linear(dim_entity, dim_entity)
+        self._num_heads = num_heads
+
+    def forward(
+        self, x_query: torch.Tensor, x_key: torch.Tensor, mask: BlockMask | torch.Tensor | None
+    ) -> torch.Tensor:
+        """Each query row (N_q, D) reads the key rows (N_k, D) that `mask` lets it"""
+        x_q = self._projection_query(x_query)
+        x_k, x_v = self._projection_key_value(x_key).chunk(2, dim=1)
+
+        # Both kernels' layout: (1, heads, rows, head dim)
+        x_q, x_k, x_v = (
+            x.unflatten(1, (self._num_heads, -1)).transpose(0, 1).unsqueeze(0)
+            for x in (x_q, x_k, x_v)
+        )
+
+        # One tensor, (1, H, N_q, D / H): no log-sum-exp is asked for
+        if isinstance(mask, BlockMask):
+            x_read = cast(
+                torch.Tensor,
+                _flex_attention_compiled(
+                    x_q, x_k, x_v, block_mask=mask, kernel_options=_FLEX_KERNEL_OPTIONS
+                ),
+            )
+        else:
+            x_read = F.scaled_dot_product_attention(x_q, x_k, x_v, attn_mask=mask)
+        return self._projection_out(x_read.squeeze(0).transpose(0, 1).flatten(1))
 
 
 class _EntityTransformerBlock(nn.Module):
     def __init__(self, dim_entity: int, dim_feed_forward: int, num_heads: int) -> None:
         super().__init__()
 
-        self._multi_head_attention = nn.MultiheadAttention(dim_entity, num_heads, batch_first=True)
+        self._self_attention = _Attention(dim_entity, num_heads)
         self._layer_norm_1 = nn.LayerNorm(dim_entity)
         self._layer_norm_2 = nn.LayerNorm(dim_entity)
         self._mlp = nn.Sequential(
@@ -37,13 +139,13 @@ class _EntityTransformerBlock(nn.Module):
             nn.Linear(dim_feed_forward, dim_entity),
         )
 
-    def forward(self, x_packed: torch.Tensor, x_mask_pad: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x_packed: torch.Tensor, mask: BlockMask | torch.Tensor | None
+    ) -> torch.Tensor:
         # Pre-LN (norm inside the residual branch): stable at depth, unlike post-LN
         x_normed = self._layer_norm_1(x_packed)
-        x_mha = self._multi_head_attention(
-            x_normed, x_normed, x_normed, key_padding_mask=x_mask_pad, need_weights=False
-        )[0]
-        x_out = x_packed + x_mha
+        x_read = self._self_attention(x_normed, x_normed, mask)
+        x_out = x_packed + x_read
 
         # Feedforward with residual connection
         x_out = x_out + self._mlp(self._layer_norm_2(x_out))
@@ -68,101 +170,45 @@ class EntityTransformer(nn.Module):
         self._norm_final = nn.LayerNorm(dim_entity)
 
         # Learned global token, refined with the entities (replaces pooling). It
-        # has no slice kind, so it joins the sequence here and leaves it here
-        self._entity_global = nn.Parameter(torch.empty(1, 1, dim_entity))
+        # has no token kind, so it joins the sequence here and leaves it here
+        self._entity_global = nn.Parameter(torch.empty(dim_entity))
         nn.init.normal_(self._entity_global, std=0.02)
 
     def forward(
-        self, x_entities: X_Entity, x_counts_to_read: torch.Tensor
-    ) -> tuple[X_Entity, torch.Tensor, list[int]]:
-        """Refine the window together with the global token.
+        self, x_tokens: torch.Tensor, x_window: X_Window
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Refine the packed window's rows (N, D), every state's after the previous state's,
+        together with each state's global token, which joins the sequence at the end of its state's
+        rows.
 
-        Returns the refined entities (x (B, S, D), x_slice_kind carried through), the refined
-        global token (B, D), and `x_counts_to_read` (k,) as ints, read back to the CPU together
-        with the packing widths."""
-        batch_size, num_slots, dim = x_entities.x.shape
-        num_window_tokens = batch_size * num_slots
+        Returns the refined rows (N, D), in the window's order, and global tokens (B, D)."""
+        num_rows, dim = x_tokens.shape
+        batch_size = x_window.x_count.shape[0]
 
-        # The sequence as one column of tokens: every row's window slots, then every row's global
-        # token. The refined tokens come back in the same layout, so the window and the global
-        # tokens leave it as two contiguous blocks
-        x_sequence = torch.cat(
-            [x_entities.x.flatten(0, 1), self._entity_global.view(1, dim).expand(batch_size, -1)]
+        # The sequence: each state's rows, then its global token, state after state. Each state's
+        # first place in it, then the end; each row's place, past one global token per state before
+        # its own, and each global token's
+        x_offsets = F.pad((x_window.x_count + 1).cumsum(0), (1, 0))  # (B + 1,)
+        x_place_row = torch.arange(num_rows, device=x_tokens.device) + x_window.x_state  # (N,)
+        x_place_global = x_offsets[1:] - 1  # (B,)
+
+        # On the GPU, a tail of zero rows pads it to FlexAttention's block. Zeros, not empty: a
+        # key's NaN would reach every query through its zero attention weight (0 * NaN = NaN)
+        num_places = _padded(num_rows + batch_size, x_tokens.device)
+        x_sequence = x_tokens.new_zeros(num_places, dim)
+        x_sequence[x_place_row] = x_tokens
+        x_sequence[x_place_global] = self._entity_global
+        x_refined = self._refine(
+            x_sequence, _same_state_mask(x_offsets, x_offsets, num_places, num_places)
         )
-        x_valid = torch.cat(
-            [
-                x_entities.mask,
-                torch.ones(batch_size, 1, dtype=torch.bool, device=x_sequence.device),
-            ],
-            dim=1,
-        )
-        x_valid_sequence = torch.cat([x_valid[:, :-1].flatten(), x_valid[:, -1]])
+        return x_refined[x_place_row], x_refined[x_place_global]
 
-        # Pack each group of rows to its true max token count: attention is O(width^2), and a few
-        # wide rows would widen a whole batch. The widths' one host sync costs less than attending
-        # over a fixed or unpacked width
-        num_groups = max(1, batch_size // _ROWS_PER_GROUP)
-        if num_groups == 1:
-            x_order = torch.arange(batch_size, device=x_sequence.device)
-            x_widths = x_valid.sum(dim=1).max().unsqueeze(0)
-            x_column = torch.argsort(~x_valid, dim=1, stable=True, descending=False)
-        else:
-            x_order, x_widths, x_column = _width_groups(x_valid.sum(dim=1), ~x_valid, num_groups)
-
-        # The widths and the counts to read, in one read back to the CPU
-        widths_and_counts = torch.cat([x_widths, x_counts_to_read]).tolist()
-        pack_widths = widths_and_counts[:num_groups]
-        counts = widths_and_counts[num_groups:]
-
-        # Each row's columns in x_order, valid first (its window slots, then its global token, the
-        # last column), then its pads, as indices into the sequence; a group keeps its rows' first
-        # pack_width
-        x_row = x_order.unsqueeze(1)
-        x_slot = torch.where(
-            x_column < num_slots, x_row * num_slots + x_column, num_window_tokens + x_row
-        )
-        x_keep_groups = [
-            x_slot_group[:, :pack_width]
-            for x_slot_group, pack_width in zip(x_slot.tensor_split(num_groups), pack_widths)
-        ]
-
-        # One gather packs every group and one scatter puts them back. The blocks get copies, not
-        # views: a view's base would compile them again
-        x_keep = torch.cat([x_keep_group.flatten() for x_keep_group in x_keep_groups])
-        if num_groups == 1:
-            x_refined = self._refine(
-                x_sequence[x_keep_groups[0]],
-                ~x_valid_sequence[x_keep_groups[0]],  # MHA wants True = padded
-            ).flatten(0, 1)
-        else:
-            x_packed_groups = x_sequence.index_select(0, x_keep).split(
-                [x_keep_group.numel() for x_keep_group in x_keep_groups]
-            )
-            x_refined = torch.cat(
-                [
-                    self._refine(
-                        x_packed.unflatten(0, x_keep_group.shape).clone(),
-                        ~x_valid_sequence[x_keep_group],
-                    ).flatten(0, 1)
-                    for x_keep_group, x_packed in zip(x_keep_groups, x_packed_groups)
-                ]
-            )
-
-        # Scatter the refined tokens back to their original slots. Zeros, not empty_like:
-        # downstream masks multiply (x*0) and NaN*0 = NaN, so uninitialized bytes would propagate
-        x_out = torch.zeros_like(x_sequence)
-        x_out.index_copy_(0, x_keep, x_refined)
-        x_out_window, x_out_global = x_out.split([num_window_tokens, batch_size])
-        return (
-            X_Entity(x_out_window.view(batch_size, num_slots, dim), x_entities.x_slice_kind),
-            x_out_global,
-            counts,
-        )
-
-    def _refine(self, x_packed: torch.Tensor, x_mask_pad: torch.Tensor) -> torch.Tensor:
+    def _refine(
+        self, x_packed: torch.Tensor, mask: BlockMask | torch.Tensor | None
+    ) -> torch.Tensor:
         """The blocks, then the final norm, over packed rows"""
         for entity_transformer_block in self._entity_transformer_blocks:
-            x_packed = entity_transformer_block(x_packed, x_mask_pad)
+            x_packed = entity_transformer_block(x_packed, mask)
         return self._norm_final(x_packed)
 
 
@@ -173,8 +219,8 @@ class _DrawOrderBlock(nn.Module):
         # One row per depth in the draw pile: the cards above the token
         self._draw_depth_emb = nn.Embedding(MAX_SIZE_CARD_PILE_DRAW, dim_entity)
 
-        self._cross_attention = nn.MultiheadAttention(dim_entity, num_heads, batch_first=True)
-        self._readout_attention = nn.MultiheadAttention(dim_entity, num_heads, batch_first=True)
+        self._cross_attention = _Attention(dim_entity, num_heads)
+        self._readout_attention = _Attention(dim_entity, num_heads)
         self._layer_norm_1 = nn.LayerNorm(dim_entity)
         self._layer_norm_2 = nn.LayerNorm(dim_entity)
         self._layer_norm_3 = nn.LayerNorm(dim_entity)
@@ -191,41 +237,31 @@ class _DrawOrderBlock(nn.Module):
     def forward(
         self,
         x_packed: torch.Tensor,
-        x_mask_pad: torch.Tensor,
-        x_global_token: torch.Tensor,
+        x_pile: torch.Tensor,
         x_depth: torch.Tensor,
-        x_mask_pile_pad: torch.Tensor,
+        x_global_token: torch.Tensor,
+        mask_pile: BlockMask | torch.Tensor | None,
+        mask_readout: BlockMask | torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Over packed rows whose first columns hold the draw pile (`x_depth`'s width): every
-        token reads the pile tagged with its depths, then each row's global token (R, D) reads
-        the order-aware tokens. Pre-LN and residual, then one final norm over both outputs, as
-        in the transformer"""
+        """Over packed rows (N, D): every row reads its state's pile (P, D), tagged with its
+        depths (P,), then each state's global token (S, D) reads its state's order-aware rows.
+        Pre-LN and residual, then one final norm over both outputs, as in the transformer"""
         # The pile's tokens, tagged with their depths
-        x_pile = self._layer_norm_1(
-            x_packed[:, : x_depth.shape[1]] + self._draw_depth_emb(x_depth)
-        )
+        x_pile = self._layer_norm_1(x_pile + self._draw_depth_emb(x_depth))
 
         # Every token reads the pile, then the feedforward
-        x_read = self._cross_attention(
-            self._layer_norm_1(x_packed),
-            x_pile,
-            x_pile,
-            key_padding_mask=x_mask_pile_pad,
-            need_weights=False,
-        )[0]
+        x_read = self._cross_attention(self._layer_norm_1(x_packed), x_pile, mask_pile)
         x_out = x_packed + x_read
         x_out = x_out + self._mlp(self._layer_norm_2(x_out))
 
         # The global token reads the order-aware tokens
         x_normed = self._layer_norm_3(x_out)
         x_read_global = self._readout_attention(
-            self._layer_norm_3(x_global_token).unsqueeze(1),
+            self._layer_norm_3(x_global_token),
             x_normed,
-            x_normed,
-            key_padding_mask=x_mask_pad,
-            need_weights=False,
-        )[0]
-        return self._norm_final(x_out), self._norm_final(x_global_token + x_read_global.squeeze(1))
+            mask_readout,
+        )
+        return self._norm_final(x_out), self._norm_final(x_global_token + x_read_global)
 
 
 class DrawOrderLayer(nn.Module):
@@ -236,77 +272,49 @@ class DrawOrderLayer(nn.Module):
 
     def forward(
         self,
-        x_entities: X_Entity,
+        x_tokens: torch.Tensor,
         x_global_token: torch.Tensor,
-        x_depth: torch.Tensor,
-        x_rows: torch.Tensor,
-    ) -> tuple[X_Entity, torch.Tensor]:
-        """The layer over the states `x_rows`, each with an ordered draw pile, of the
-        transformer's refined window (B, S, D) and global tokens (B, D), given the window's draw
-        depths (B, S).
+        x_window: X_Window,
+        x_states: torch.Tensor,
+        num_rows: int,
+        num_pile: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """The layer over the states `x_states` (S,), each with an ordered draw pile, of the
+        transformer's refined rows (N, D), in the window's order, and global tokens (B, D);
+        `num_rows` and `num_pile` are those states' rows and draw tokens.
 
-        Returns those states' order-aware window (x (R, S, D), x_slice_kind carried through) and
-        global tokens (R, D)."""
-        num_rows = x_rows.shape[0]
-        num_slots, dim = x_entities.x.shape[1:]
-        x_slice_kind = x_entities.x_slice_kind[x_rows]
-        x_valid = x_slice_kind >= 0
-        x_is_draw = x_slice_kind == SliceKind.CARD_PILE_DRAW
+        Returns those states' rows (num_rows,), state after state, each state's in window order,
+        their order-aware rows (num_rows, D), and the states' global tokens (S, D)."""
+        num_states = x_states.shape[0]
 
-        # Width groups, as the transformer's: the rows sorted by token count and cut into
-        # near-equal groups, each packed to its last row's count and its pile to its largest
-        num_groups = max(1, num_rows // _ROWS_PER_GROUP)
-        x_order, x_widths, x_column = _width_groups(
-            x_valid.sum(dim=1), (~x_is_draw).long() + (~x_valid).long(), num_groups
+        # The states' rows, state after state: each state's first among them, then the end. Each
+        # is its state's first row in the window plus its rank
+        x_offsets = F.pad(x_window.x_count[x_states].cumsum(0), (1, 0))  # (S + 1,)
+        x_state_layer, x_rank = _states_and_ranks(x_offsets, num_rows)  # (num_rows,)
+        x_first_row = x_window.x_count.cumsum(0) - x_window.x_count  # (B,)
+        x_rows = x_first_row[x_states][x_state_layer] + x_rank
+
+        # Their piles' rows the same way, each pile's first row plus its rank, bottom first; a draw
+        # token's depth is the cards above it, its pile's count - 1 - its rank
+        x_count_pile = x_window.x_token_kind_count[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
+        x_offsets_pile = F.pad(x_count_pile.cumsum(0), (1, 0))  # (S + 1,)
+        x_state_layer_pile, x_rank_pile = _states_and_ranks(x_offsets_pile, num_pile)
+        x_first_row_pile = x_window.x_token_kind_row[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
+        x_rows_pile = x_first_row_pile[x_state_layer_pile] + x_rank_pile
+        x_depth = x_count_pile[x_state_layer_pile] - 1 - x_rank_pile
+
+        # On the GPU, each side padded to FlexAttention's block; a global token is its state's one
+        # query
+        num_places = _padded(num_rows, x_tokens.device)
+        num_places_pile = _padded(num_pile, x_tokens.device)
+        num_places_global = _padded(num_states, x_tokens.device)
+        x_offsets_global = torch.arange(num_states + 1, device=x_states.device)
+        x_out, x_out_global = self._draw_order_block(
+            F.pad(x_tokens[x_rows], (0, 0, 0, num_places - num_rows)),
+            F.pad(x_tokens[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
+            F.pad(x_depth, (0, num_places_pile - num_pile)),
+            F.pad(x_global_token[x_states], (0, 0, 0, num_places_global - num_states)),
+            _same_state_mask(x_offsets, x_offsets_pile, num_places, num_places_pile),
+            _same_state_mask(x_offsets_global, x_offsets, num_places_global, num_places),
         )
-        x_count_pile = x_is_draw.sum(dim=1)[x_order]
-        pack_widths, pile_widths = torch.stack(
-            [x_widths, torch.stack([x.max() for x in x_count_pile.tensor_split(num_groups)])]
-        ).tolist()
-
-        # Each row's columns in x_order: its draw tokens first, so the pile is a prefix, then its
-        # other valid tokens, then its pads, as indices into these rows' window
-        x_slot = x_order.unsqueeze(1) * num_slots + x_column
-        x_keep_groups = [
-            x_slot_group[:, :pack_width]
-            for x_slot_group, pack_width in zip(x_slot.tensor_split(num_groups), pack_widths)
-        ]
-        x_keep = torch.cat([x_keep_group.flatten() for x_keep_group in x_keep_groups])
-
-        # One gather packs every group from the batch's window, where a kept slot's row is its
-        # state's. The block gets the packed tokens as copies, not views, as the transformer's do
-        x_keep_batch = x_rows[x_keep // num_slots] * num_slots + x_keep % num_slots
-        x_packed_groups = (
-            x_entities.x.flatten(0, 1)
-            .index_select(0, x_keep_batch)
-            .split([x_keep_group.numel() for x_keep_group in x_keep_groups])
-        )
-        x_valid_flat, x_is_draw_flat = x_valid.flatten(), x_is_draw.flatten()
-        x_depth_flat = x_depth[x_rows].flatten()
-        x_refined, x_refined_global = zip(
-            *[
-                self._draw_order_block(
-                    x_packed.unflatten(0, x_keep_group.shape).clone(),
-                    ~x_valid_flat[x_keep_group],  # MHA wants True = padded
-                    x_global_group,
-                    x_depth_flat[x_keep_group[:, :pile_width]],
-                    ~x_is_draw_flat[x_keep_group[:, :pile_width]],
-                )
-                for x_keep_group, x_packed, x_global_group, pile_width in zip(
-                    x_keep_groups,
-                    x_packed_groups,
-                    x_global_token[x_rows[x_order]].tensor_split(num_groups),
-                    pile_widths,
-                )
-            ]
-        )
-
-        # Scatter the refined tokens back to their slots, zeros elsewhere, and the global tokens
-        # back to row order
-        x_out = x_entities.x.new_zeros(num_rows * num_slots, dim)
-        x_out.index_copy_(0, x_keep, torch.cat([x.flatten(0, 1) for x in x_refined]))
-        x_out_global = torch.cat(x_refined_global)
-        return (
-            X_Entity(x_out.view(num_rows, num_slots, dim), x_slice_kind),
-            torch.empty_like(x_out_global).index_copy_(0, x_order, x_out_global),
-        )
+        return x_rows, x_out[:num_rows], x_out_global[:num_states]

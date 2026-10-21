@@ -896,12 +896,11 @@ _SCALED_LINEAR = ~_SCALED_SQRT
 
 def normalize_effect_rows(rows: np.ndarray) -> None:
     """Scale every channel in place. `rows` is any array whose LAST axis is the
-    channel axis — (n, D) or a (B, n, D) slice of the packed block.
+    channel axis.
 
-    Run it once per block, on the caller's used prefix: per row, or over the
-    padding, it costs far more. Fancy indexing copies, so the transform runs on a
-    gathered block and the final assignment scatters it back; `...` keeps it
-    rank-agnostic."""
+    Run it once per block, over all its rows: per row, it costs far more. Fancy
+    indexing copies, so the transform runs on a gathered block and the final
+    assignment scatters it back; `...` keeps it rank-agnostic."""
     if not rows.size:
         return
 
@@ -922,48 +921,53 @@ _WARNED_OVERFLOW: set[str] = set()
 def encode_batch_effects(
     game_states: list[GameState],
     sources: Sequence[BatchEffectRows],
+    np_first_offset: np.ndarray,
     device: torch.device,
 ) -> X_OwnedSparse:
-    """Every state's effect rows as one (B, E, D) block, held sparse, with their owner keys.
+    """Every state's effect rows as one (N, D) block, held sparse, every state's after the
+    previous state's, with their owners as offsets through `np_first_offset`; and each state's (B,)
+    row count.
 
-    `sources` is per-state (slice kind, rank, source, effect) rows in fill priority, so a state
+    `sources` is per-state (token kind, rank, source, effect) rows in fill priority, so a state
     past MAX_EFFECTS_STATE drops its last sources' rows."""
     batch_size = len(game_states)
 
+    # Each state's rows in fill priority, cut to MAX_EFFECTS_STATE
+    batch_rows = [
+        [effect_row for batch_effect_rows in sources for effect_row in batch_effect_rows[b]]
+        for b in range(batch_size)
+    ]
+    if "effects" not in _WARNED_OVERFLOW and any(
+        len(rows) > MAX_EFFECTS_STATE for rows in batch_rows
+    ):
+        _WARNED_OVERFLOW.add("effects")
+        warnings.warn(
+            f"effect rows exceeded {MAX_EFFECTS_STATE} in one state; "
+            "deep card piles dropped (constants.MAX_EFFECTS_STATE)"
+        )
+    np_count = np.array([min(len(rows), MAX_EFFECTS_STATE) for rows in batch_rows], dtype=np.int64)
+
     # Initialize NumPy arrays
-    np_effect = np.zeros((batch_size, MAX_EFFECTS_STATE, ENCODING_DIM_EFFECT), dtype=np.float32)
-    np_owner_slice_kind = np.full((batch_size, MAX_EFFECTS_STATE), -1, dtype=np.int64)
-    np_owner_rank = np.zeros((batch_size, MAX_EFFECTS_STATE), dtype=np.int64)
+    np_effect = np.zeros((np_count.sum(), ENCODING_DIM_EFFECT), dtype=np.float32)
+    np_owner_token_kind = np.empty(np_count.sum(), dtype=np.int64)
+    np_owner_rank = np.empty(np_count.sum(), dtype=np.int64)
 
-    idx_used = 0
-    for b in range(batch_size):
-        idx = 0
-        for batch_effect_rows in sources:
-            for slice_kind, rank, source, effect in batch_effect_rows[b]:
-                if idx == MAX_EFFECTS_STATE:
-                    if "effects" not in _WARNED_OVERFLOW:
-                        _WARNED_OVERFLOW.add("effects")
-                        warnings.warn(
-                            f"effect rows exceeded {MAX_EFFECTS_STATE} in one state; "
-                            "deep card piles dropped (constants.MAX_EFFECTS_STATE)"
-                        )
-                    break
+    row = 0
+    for rows, count in zip(batch_rows, np_count):
+        for token_kind, rank, source, effect in rows[:count]:
+            encode_effect_row_into_w_cache(effect, np_effect[row])
+            np_effect[row, OFF_EFFECT_SOURCE + source] = 1.0
+            np_owner_token_kind[row] = token_kind
+            np_owner_rank[row] = rank
+            row += 1
 
-                encode_effect_row_into_w_cache(effect, np_effect[b, idx])
-                np_effect[b, idx, OFF_EFFECT_SOURCE + source] = 1.0
-                np_owner_slice_kind[b, idx] = slice_kind
-                np_owner_rank[b, idx] = rank
-                idx += 1
-
-        idx_used = max(idx_used, idx)
-
-    # The batch's used rows only: the transport pads back to MAX_EFFECTS_STATE
-    np_effect = np.ascontiguousarray(np_effect[:, :idx_used])
     normalize_effect_rows(np_effect)
     return owned_sparse(
         np_effect,
-        np.ascontiguousarray(np_owner_slice_kind[:, :idx_used]),
-        np.ascontiguousarray(np_owner_rank[:, :idx_used]),
+        np_owner_token_kind,
+        np_owner_rank,
+        np_count,
+        np_first_offset,
         ENCODING_SPARSE_EFFECT,
         device,
     )
@@ -972,14 +976,19 @@ def encode_batch_effects(
 def encode_batch_effect_pending(
     game_states: list[GameState], device: torch.device
 ) -> X_EffectPending:
-    """Every state's pending effect row as one (B, D) block, held sparse: all (0, 0.0) entries
-    where no halt is pending."""
-    np_effect = np.zeros((len(game_states), ENCODING_DIM_EFFECT), dtype=np.float32)
-    for b, game_state in enumerate(game_states):
-        effect_pending = game_state.effect_pending
+    """The pending effect rows as one (P, D) block, held sparse, one per state with a halt
+    pending, every state's after the previous state's; and each state's (B,) row count, 1 or 0."""
+    batch_effect_pending = [game_state.effect_pending for game_state in game_states]
+    np_count = np.array(
+        [effect_pending is not None for effect_pending in batch_effect_pending], dtype=np.int64
+    )
+    np_effect = np.zeros((np_count.sum(), ENCODING_DIM_EFFECT), dtype=np.float32)
+    row = 0
+    for effect_pending in batch_effect_pending:
         if effect_pending is not None:
-            encode_effect_row_into_w_cache(effect_pending, np_effect[b])
-            np_effect[b, OFF_EFFECT_SOURCE + EffectSource.PENDING] = 1.0
+            encode_effect_row_into_w_cache(effect_pending, np_effect[row])
+            np_effect[row, OFF_EFFECT_SOURCE + EffectSource.PENDING] = 1.0
+            row += 1
 
     normalize_effect_rows(np_effect)
-    return effect_pending_sparse(np_effect, ENCODING_SPARSE_EFFECT, device)
+    return effect_pending_sparse(np_effect, np_count, ENCODING_SPARSE_EFFECT, device)

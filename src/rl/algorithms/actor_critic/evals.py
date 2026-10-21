@@ -1,4 +1,7 @@
+import os
 import signal
+import threading
+import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
@@ -24,6 +27,7 @@ from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import compute_reward
 from src.rl.utils import new_env
+from src.rl.utils import parent_alive
 from src.rl.utils import step_scripted
 
 
@@ -41,9 +45,7 @@ EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
 EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
 
 
-def _run_eval_episode(
-    model: ActorCritic, device: torch.device, gamma: float, ascension: int, seed: int
-) -> EpisodeStats:
+def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:
     env = new_env(ascension)
     obs = env.reset(seed=seed)
     stats = make_episode_stats()
@@ -56,9 +58,9 @@ def _run_eval_episode(
             )
 
         # Greedy step: Encode -> Mask -> Forward
-        x_game_state = encode_batch_game_state([obs], device)
-        x_mask = build_masks([obs], [legal], x_game_state, device)
-        x_action = model.act(x_game_state, x_mask, greedy=True)
+        x_gs = encode_batch_game_state([obs], torch.device("cpu"))
+        build_masks([obs], [legal], x_gs)
+        x_action = model.act(x_gs, greedy=True)
 
         # Game step
         prev = obs
@@ -72,14 +74,13 @@ def _run_eval_episode(
 
 
 def run_eval_battery(
-    model: ActorCritic, device: torch.device, gamma: float, c: float, ascension_max: int
+    model: ActorCritic, gamma: float, c: float, ascension_max: int
 ) -> dict[str, float]:
-    """The battery at curriculum position c: game i plays the level training's env i would"""
+    """The battery at curriculum position c, `model` on the CPU: game i plays the level
+    training's env i would"""
     with torch.no_grad():
         episodes = [
-            _run_eval_episode(
-                model, device, gamma, env_level(c, i, len(_EVAL_SEEDS), ascension_max), seed
-            )
+            _run_eval_episode(model, gamma, env_level(c, i, len(_EVAL_SEEDS), ascension_max), seed)
             for i, seed in enumerate(_EVAL_SEEDS)
         ]
 
@@ -152,11 +153,27 @@ def _eval_loop(
     # training loop can finish its iteration and checkpoint before it stops this process
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+    # A learner killed outright can't stop this process
+    threading.Thread(target=_exit_when_orphaned, daemon=True).start()
     torch.set_num_threads(1)  # Keeps the eval on the spare core, off the training critical path
-    device = torch.device("cpu")
     model = ActorCritic(**model_config)
     model.eval()
     while True:
-        state_dict, iteration, c = conn.recv()
+        try:
+            state_dict, iteration, c = conn.recv()
+        except (EOFError, OSError):  # the learner is gone
+            return
         model.load_state_dict(state_dict)
-        conn.send((iteration, c, run_eval_battery(model, device, gamma, c, ascension_max)))
+        metrics = run_eval_battery(model, gamma, c, ascension_max)
+        try:
+            conn.send((iteration, c, metrics))
+        except BrokenPipeError:  # the learner is gone
+            return
+
+
+def _exit_when_orphaned() -> None:
+    """End this process, even mid-battery, once the learner is gone"""
+    while parent_alive():
+        time.sleep(1.0)
+    os._exit(0)

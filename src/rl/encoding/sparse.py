@@ -1,54 +1,70 @@
 import numpy as np
 import torch
 
+from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import X_EffectPending
-from src.rl.types import X_EntitySparse
 from src.rl.types import X_OwnedSparse
+from src.rl.types import X_Tokens
 
 
-def entity_sparse(
-    np_rows: np.ndarray, np_slice_kind: np.ndarray, num_sparse: int, device: torch.device
-) -> X_EntitySparse:
-    """An entity block from its (B, W, D) rows, each with at most `num_sparse` nonzero
-    columns, and their (B, W) slice kinds"""
+def token_sparse(
+    np_rows: np.ndarray,
+    np_token_kind: np.ndarray,
+    np_count: np.ndarray,
+    num_sparse: int,
+    column_start: int,
+    device: torch.device,
+) -> X_Tokens:
+    """A family's tokens from their (N, D) rows, each with at most `num_sparse` nonzero columns,
+    their entries offset into the shared column space from `column_start`; their (N,) token kinds
+    and each state's (B,) count of them; their masks all False and their nodes 0"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
-    return X_EntitySparse(
+    np_column[np_value != 0] += column_start  # the (0, 0.0) padding stays
+    return X_Tokens(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
-        x_slice_kind=torch.from_numpy(np_slice_kind).to(device),
-        batch_size=[np_rows.shape[0]],
+        x_token_kind=torch.from_numpy(np_token_kind).to(device),
+        x_legal=torch.zeros(len(np_rows), NUM_ACTION_TYPES, dtype=torch.bool, device=device),
+        x_needs_target=torch.zeros(len(np_rows), dtype=torch.bool, device=device),
+        x_node_idx=torch.zeros(len(np_rows), dtype=torch.int16, device=device),
+        x_count=torch.from_numpy(np_count).to(device),
     )
 
 
 def owned_sparse(
     np_rows: np.ndarray,
-    np_owner_slice_kind: np.ndarray,
+    np_owner_token_kind: np.ndarray,
     np_owner_rank: np.ndarray,
+    np_count: np.ndarray,
+    np_first_offset: np.ndarray,
     num_sparse: int,
     device: torch.device,
 ) -> X_OwnedSparse:
-    """A family of owned rows from its (B, R, D) rows, each with at most `num_sparse` nonzero
-    columns, and their (B, R) owner keys"""
+    """A family of owned rows from its (N, D) rows, each with at most `num_sparse` nonzero
+    columns, their (N,) owners' token kinds and ranks, and each state's (B,) count of them. Each
+    owner becomes its offset among its state's tokens through `np_first_offset`, (B,
+    len(TokenKind)): each state's offset of each token kind's first token"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
+    np_state = np.repeat(np.arange(len(np_count)), np_count)
+    np_owner_offset = np_first_offset[np_state, np_owner_token_kind] + np_owner_rank
     return X_OwnedSparse(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
-        x_owner_slice_kind=torch.from_numpy(np_owner_slice_kind).to(device),
-        x_owner_rank=torch.from_numpy(np_owner_rank).to(device),
-        batch_size=[np_rows.shape[0]],
+        x_owner_offset=torch.from_numpy(np_owner_offset).to(device),
+        x_count=torch.from_numpy(np_count).to(device),
     )
 
 
 def effect_pending_sparse(
-    np_rows: np.ndarray, num_sparse: int, device: torch.device
+    np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_EffectPending:
-    """The pending effects from their (B, D) rows, each with at most `num_sparse` nonzero
-    columns"""
+    """The pending effects from their (P, D) rows, each with at most `num_sparse` nonzero
+    columns, and each state's (B,) count of them, 0 or 1"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_EffectPending(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
-        batch_size=[np_rows.shape[0]],
+        x_count=torch.from_numpy(np_count).to(device),
     )
 
 

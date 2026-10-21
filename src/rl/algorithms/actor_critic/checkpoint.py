@@ -64,4 +64,4 @@ def load_checkpoint(
     optimizer.load_state_dict(ckpt["optimizer"])
     start_iteration = ckpt["iteration"] + 1
     total_steps = ckpt["total_steps"]
-    return start_iteration, total_steps, ckpt.get("curriculum_c"), ckpt.get("lr_scale", 1.0)
+    return start_iteration, total_steps, ckpt["curriculum_c"], ckpt["lr_scale"]

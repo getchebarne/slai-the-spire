@@ -99,7 +99,7 @@ MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
 MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
 
 # Most card bundles one Reward holds (Orrery stages 5); each bundle is its own
-# CARD_REWARD_<b> slice kind, so a reward token's slice kind names its bundle
+# CARD_REWARD_<b> token kind, so a reward token's token kind names its bundle
 MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
 
 # Size ceiling for the master deck, used to normalize deck-scale counts (deck
@@ -122,8 +122,8 @@ MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
 MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_ROLL_COUNT + 2
 
-# Per-state effect-row pool, packed per STATE with an owner segment rather than padded per
-# entity, since entities are ragged (a Monster brings its whole moveset)
+# Per-state caps on the effect and modifier rows, per state rather than per entity since
+# entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
 MAX_EFFECTS_STATE = 224
 MAX_MODIFIER_ROWS_STATE = 64
 

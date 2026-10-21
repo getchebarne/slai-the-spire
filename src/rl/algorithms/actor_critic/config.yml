@@ -24,8 +24,8 @@ curriculum:
 ppo:
   lam: 0.95
   num_epochs: 4
-  # Activation memory grows with the states' token widths, so a size that fits early in a run
-  # can OOM later; scripts/probe_memory.py measures the peak at deep-run widths
+  # Activation memory grows with the states' token counts, so a size that fits early in a run
+  # can OOM later; scripts/probe_memory.py measures the peak at deep-run token counts
   minibatch_size: 4096
   clip_eps: 0.20
   clip_value_loss: false
