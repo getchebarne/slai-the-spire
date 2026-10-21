@@ -20,9 +20,9 @@ from src.rl.encoding.monster import outgoing_damage
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
-from src.rl.encoding.sparse import entity_sparse
-from src.rl.types import SliceKind
-from src.rl.types import X_EntitySparse
+from src.rl.encoding.sparse import token_sparse
+from src.rl.types import TokenKind
+from src.rl.types import X_Tokens
 from src.rl.types import make_channel_allocator
 
 
@@ -151,9 +151,12 @@ def _encode_character_into(
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(combat.orange_pellets_played_power)
 
 
-def encode_batch_character(game_states: list[GameState], device: torch.device) -> X_EntitySparse:
-    """The character block: one row per state, (B, dim) held sparse + the (B,) slice kind — the
-    singleton is always present — and each state's (B,) count, 1."""
+def encode_batch_character(
+    game_states: list[GameState], column_start: int, device: torch.device
+) -> X_Tokens:
+    """The character tokens: one row per state, (B, dim) held sparse, its columns from
+    `column_start` in the shared space, + the (B,) token kind — the singleton is always present —
+    and each state's (B,) count, 1."""
     batch_size = len(game_states)
 
     # Pre-allocate NumPy array
@@ -172,6 +175,8 @@ def encode_batch_character(game_states: list[GameState], device: torch.device) -
             np_out[b],
         )
 
-    np_slice_kind = np.full(batch_size, SliceKind.CHARACTER, dtype=np.int16)
+    np_token_kind = np.full(batch_size, TokenKind.CHARACTER, dtype=np.int16)
     np_count = np.ones(batch_size, dtype=np.int64)
-    return entity_sparse(np_out, np_slice_kind, np_count, ENCODING_SPARSE_CHARACTER, device)
+    return token_sparse(
+        np_out, np_token_kind, np_count, ENCODING_SPARSE_CHARACTER, column_start, device
+    )

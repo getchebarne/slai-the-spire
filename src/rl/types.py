@@ -36,8 +36,8 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
 
-# In packing order: the blocks in window order, each block's slice kinds in its SLICE_KINDS_* order
-class SliceKind(IntEnum):
+# In packing order: the families in window order, each family's token kinds in TOKEN_KINDS_* order
+class TokenKind(IntEnum):
     CARD_PILE_HAND = 0
     CARD_PILE_DISCOVER = 1
     CARD_PILE_SELECTED = 2
@@ -70,86 +70,105 @@ class SliceKind(IntEnum):
     ROOMS = 29
 
 
-SLICE_KINDS_CARD_REWARDS = (  # one slice kind per reward bundle (card.py owns their packing)
-    SliceKind.CARD_REWARD_0,
-    SliceKind.CARD_REWARD_1,
-    SliceKind.CARD_REWARD_2,
-    SliceKind.CARD_REWARD_3,
-    SliceKind.CARD_REWARD_4,
+TOKEN_KINDS_CARD_REWARDS = (  # one token kind per reward bundle (card.py owns their packing)
+    TokenKind.CARD_REWARD_0,
+    TokenKind.CARD_REWARD_1,
+    TokenKind.CARD_REWARD_2,
+    TokenKind.CARD_REWARD_3,
+    TokenKind.CARD_REWARD_4,
 )
 
-# Pack order within the card block: decision pools first, observational piles last
-SLICE_KINDS_CARD = (
-    SliceKind.CARD_PILE_HAND,
-    SliceKind.CARD_PILE_DISCOVER,
-    SliceKind.CARD_PILE_SELECTED,
-    *SLICE_KINDS_CARD_REWARDS,
-    SliceKind.CARD_SHOP,
-    SliceKind.CARD_PILE_EVENT_ROLL,
-    SliceKind.CARD_MATCH_FLIPPED,
-    SliceKind.CARD_PILE_STASIS,
-    SliceKind.CARD_PLAY_QUEUE,
-    SliceKind.CARD_PILE_NIGHTMARE,
-    SliceKind.CARD_PILE_DRAW,
-    SliceKind.CARD_PILE_DISCARD,
-    SliceKind.CARD_PILE_EXHAUST,
-    SliceKind.CARD_PILE_DECK,
+# Pack order within the card family: decision pools first, observational piles last
+TOKEN_KINDS_CARD = (
+    TokenKind.CARD_PILE_HAND,
+    TokenKind.CARD_PILE_DISCOVER,
+    TokenKind.CARD_PILE_SELECTED,
+    *TOKEN_KINDS_CARD_REWARDS,
+    TokenKind.CARD_SHOP,
+    TokenKind.CARD_PILE_EVENT_ROLL,
+    TokenKind.CARD_MATCH_FLIPPED,
+    TokenKind.CARD_PILE_STASIS,
+    TokenKind.CARD_PLAY_QUEUE,
+    TokenKind.CARD_PILE_NIGHTMARE,
+    TokenKind.CARD_PILE_DRAW,
+    TokenKind.CARD_PILE_DISCARD,
+    TokenKind.CARD_PILE_EXHAUST,
+    TokenKind.CARD_PILE_DECK,
 )
 
-# Pack order within the relic block: decision pools first, the owned relics last
-SLICE_KINDS_RELIC = (
-    SliceKind.RELIC_REWARD,
-    SliceKind.RELIC_SHOP,
-    SliceKind.RELIC_EVENT_ROLL,
-    SliceKind.RELIC_OWNED,
+# Pack order within the relic family: decision pools first, the owned relics last
+TOKEN_KINDS_RELIC = (
+    TokenKind.RELIC_REWARD,
+    TokenKind.RELIC_SHOP,
+    TokenKind.RELIC_EVENT_ROLL,
+    TokenKind.RELIC_OWNED,
 )
 
-# Pack order within the potion block; every source is engine-bounded
-SLICE_KINDS_POTION = (
-    SliceKind.POTION_OWNED,
-    SliceKind.POTION_REWARD,
-    SliceKind.POTION_SHOP,
-    SliceKind.POTION_EVENT_ROLL,
+# Pack order within the potion family; every source is engine-bounded
+TOKEN_KINDS_POTION = (
+    TokenKind.POTION_OWNED,
+    TokenKind.POTION_REWARD,
+    TokenKind.POTION_SHOP,
+    TokenKind.POTION_EVENT_ROLL,
 )
 
-# The single-slice-kind blocks
-SLICE_KINDS_MONSTER = (SliceKind.MONSTERS,)
-SLICE_KINDS_EVENT_OPTION = (SliceKind.EVENT_OPTIONS,)
-SLICE_KINDS_CHARACTER = (SliceKind.CHARACTER,)
-SLICE_KINDS_ROOM = (SliceKind.ROOMS,)
+# The single-token-kind families
+TOKEN_KINDS_MONSTER = (TokenKind.MONSTERS,)
+TOKEN_KINDS_EVENT_OPTION = (TokenKind.EVENT_OPTIONS,)
+TOKEN_KINDS_CHARACTER = (TokenKind.CHARACTER,)
+TOKEN_KINDS_ROOM = (TokenKind.ROOMS,)
 
-# Each slice kind's token cap: the slice its encoder applies to that collection
-CAP_OF_SLICE_KIND: dict[SliceKind, int] = {
-    SliceKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
-    SliceKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
-    SliceKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
-    SliceKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
-    SliceKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
-    SliceKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
-    SliceKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
-    SliceKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
-    SliceKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
-    SliceKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
-    SliceKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up card
-    SliceKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
-    SliceKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
-    SliceKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
-    SliceKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
-    SliceKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
-    SliceKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
-    SliceKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
-    SliceKind.RELIC_REWARD: MAX_RELIC_REWARDS,
-    SliceKind.RELIC_SHOP: MAX_SHOP_RELICS,
-    SliceKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
-    SliceKind.RELIC_OWNED: MAX_RELICS,
-    SliceKind.POTION_OWNED: MAX_POTION_SLOTS,
-    SliceKind.POTION_REWARD: MAX_POTION_REWARDS,
-    SliceKind.POTION_SHOP: MAX_SHOP_POTIONS,
-    SliceKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
-    SliceKind.MONSTERS: MAX_MONSTERS,
-    SliceKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
-    SliceKind.CHARACTER: 1,
-    SliceKind.ROOMS: MAP_WIDTH,
+# The families in window order, each its token kinds
+_TOKEN_KINDS_OF_FAMILY = (
+    TOKEN_KINDS_CARD,
+    TOKEN_KINDS_RELIC,
+    TOKEN_KINDS_POTION,
+    TOKEN_KINDS_MONSTER,
+    TOKEN_KINDS_EVENT_OPTION,
+    TOKEN_KINDS_CHARACTER,
+    TOKEN_KINDS_ROOM,
+)
+NUM_FAMILIES = len(_TOKEN_KINDS_OF_FAMILY)
+
+# Each token kind's family
+FAMILY_OF_TOKEN_KIND: dict[TokenKind, int] = {
+    token_kind: family
+    for family, token_kinds in enumerate(_TOKEN_KINDS_OF_FAMILY)
+    for token_kind in token_kinds
+}
+
+# Each token kind's token cap: the slice its encoder applies to that collection
+CAP_OF_TOKEN_KIND: dict[TokenKind, int] = {
+    TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
+    TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
+    TokenKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
+    TokenKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
+    TokenKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
+    TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
+    TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up card
+    TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
+    TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
+    TokenKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
+    TokenKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
+    TokenKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
+    TokenKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
+    TokenKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
+    TokenKind.RELIC_REWARD: MAX_RELIC_REWARDS,
+    TokenKind.RELIC_SHOP: MAX_SHOP_RELICS,
+    TokenKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
+    TokenKind.RELIC_OWNED: MAX_RELICS,
+    TokenKind.POTION_OWNED: MAX_POTION_SLOTS,
+    TokenKind.POTION_REWARD: MAX_POTION_REWARDS,
+    TokenKind.POTION_SHOP: MAX_SHOP_POTIONS,
+    TokenKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
+    TokenKind.MONSTERS: MAX_MONSTERS,
+    TokenKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
+    TokenKind.CHARACTER: 1,
+    TokenKind.ROOMS: MAP_WIDTH,
 }
 
 
@@ -193,18 +212,17 @@ class EffectSource(IntEnum):
     CARD_DRAW = 14
 
 
-# An effect before encoding: the slice kind and rank of the token that owns it (X_OwnedSparse's
-# x_owner_slice_kind and x_owner_rank), what applies it, and the effect. The rank is the
-# token's index among its slice kind's tokens in pack order: the same rank `X_Action` and
-# `masks.TokenIndex` use
-type EffectRow = tuple[SliceKind, int, EffectSource, Effect]
+# An effect before encoding: the token kind and rank of the token that owns it (which become
+# X_OwnedSparse's x_owner_offset), what applies it, and the effect. The rank is the token's index
+# among its token kind's tokens in pack order: the same rank `X_Action` and `masks.TokenIndex` use
+type EffectRow = tuple[TokenKind, int, EffectSource, Effect]
 
 # One list of EffectRows per state in the batch
 type BatchEffectRows = list[list[EffectRow]]
 
-# A shop token's price before encoding: the slice kind and rank of the shop token that sells it,
+# A shop token's price before encoding: the token kind and rank of the shop token that sells it,
 # and its price
-type PriceRow = tuple[SliceKind, int, int]
+type PriceRow = tuple[TokenKind, int, int]
 
 # One list of PriceRows per state in the batch
 type BatchPriceRows = list[list[PriceRow]]
@@ -212,15 +230,17 @@ type BatchPriceRows = list[list[PriceRow]]
 
 @final
 @dataclass
-class X_EntitySparse:
-    """One entity type's tokens as rows, every state's in token order, state after state;
-    `x_count` says how many each state has. K is the rows' most nonzero columns: no
-    fixed width anywhere but X_Step's regions. Each row is its nonzero (column, value) entries
-    in column order, then (0, 0.0) entries up to K"""
+class X_Tokens:
+    """Every entity token as a row, every state's in window order, state after state; `x_count`
+    says how many each state has. A family encoder's holds its family's tokens only, which the
+    state encoder lays out by state. K is the rows' most nonzero columns: no fixed width anywhere
+    but X_Step's regions. Each row is its nonzero (column, value) entries in column order, then
+    (0, 0.0) entries up to K; the entries index the shared column space, each family's columns from
+    its COLUMN_START"""
 
     x_column: torch.Tensor  # (N, K) int16
     x_value: torch.Tensor  # (N, K) float32
-    x_slice_kind: torch.Tensor  # (N,) int16
+    x_token_kind: torch.Tensor  # (N,) int16, which also names the family
 
     # L2 selection: legal under the action type, deduped by card identity
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
@@ -228,19 +248,7 @@ class X_EntitySparse:
     # selections whose legal actions carry a monster target (cards / potions)
     x_needs_target: torch.Tensor  # (N,) bool
 
-    x_count: torch.Tensor  # (B,) long
-
-
-@final
-@dataclass
-class X_Rooms:
-    """The next map row's reachable rooms as rows, every state's in column order, state after
-    state, with their masks as X_EntitySparse's; each row carries its map column in its node"""
-
-    x_node_idx: torch.Tensor  # (N,) long — the room's node in the map grid: its row and column
-    x_slice_kind: torch.Tensor  # (N,) int16 — ROOMS
-    x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
-    x_needs_target: torch.Tensor  # (N,) bool
+    x_node_idx: torch.Tensor  # (N,) int16: a room token's map node; 0 on every other token
     x_count: torch.Tensor  # (B,) long
 
 
@@ -250,10 +258,9 @@ class X_OwnedSparse:
     """Rows owned by tokens, one family per X_GameState field, which the projector adds into
     their owners: every state's rows, state after state"""
 
-    x_column: torch.Tensor  # (N, K) int16 — as in X_EntitySparse
+    x_column: torch.Tensor  # (N, K) int16 — as in X_Tokens
     x_value: torch.Tensor  # (N, K) float32
-    x_owner_slice_kind: torch.Tensor  # (N,) long — the owner token's `SliceKind`
-    x_owner_rank: torch.Tensor  # (N,) long — the owner's rank within its slice kind
+    x_owner_offset: torch.Tensor  # (N,) long: the owner is the offset-th of its state's tokens
     x_count: torch.Tensor  # (B,) long
 
 
@@ -271,30 +278,19 @@ class X_EffectPending:
 @dataclass
 class X_GameState:
     """The game state, as the encoders write it and the model, the rollout and the minibatches
-    hold it: each token-like block only its rows, every state's in the block's order, state after
-    state, and its sparse entries cut to the most a row uses; each block's `x_count` holds each
-    state's rows in it. The per-state fields are (B, ...). src/rl/packed.py chooses its states and
-    joins them"""
+    hold it: each block only its rows, every state's in the block's order, state after state, and
+    its sparse entries cut to the most a row uses; each block's `x_count` holds each state's rows
+    in it. The per-state fields are (B, ...). src/rl/packed.py chooses its states and joins them"""
 
-    # One block per type, in window order (the rooms last): the projector's window is their rows,
-    # block after block
-    cards: X_EntitySparse
-    relics: X_EntitySparse
-    potions: X_EntitySparse
-    monsters: X_EntitySparse
-    event_options: X_EntitySparse
-    character: X_EntitySparse
-    rooms: X_Rooms
+    tokens: X_Tokens
 
-    # One per Character / Monster
-    health_block: X_OwnedSparse  # the combatants' shared health/block family, by slice kind
-
-    # One per Shop token (Card / Relic / Potion)
-    prices: X_OwnedSparse  # the shop tokens' shared price family, by owner
-
+    # Rows owned by tokens, each naming its owner by x_owner_offset
+    health_block: X_OwnedSparse  # one per Character / Monster
+    prices: X_OwnedSparse  # one per Shop token (Card / Relic / Potion)
     effects: X_OwnedSparse  # any number per token
-    effect_pending: X_EffectPending
     modifiers: X_OwnedSparse  # any number per Character / Monster
+
+    effect_pending: X_EffectPending
     energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
     map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
     map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
@@ -308,18 +304,20 @@ class X_GameState:
 
 @dataclass
 class X_Window:
-    """The window packed for the model: only its tokens, in block order (the six blocks' rows, then
-    the rooms', each block's state after state, as X_GameState holds them). Per row: its slice
-    kind, its masks and its state. Per state: its tokens, and per slice kind its first row and its
-    tokens; a slice kind's tokens sit in consecutive rows"""
+    """The window packed for the model: only its tokens, every state's in window order, state after
+    state, as X_Tokens holds them. Per row: its token kind and family, its masks and its state. Per
+    state: its tokens, and per token kind its first row and its tokens; a token kind's tokens sit
+    in consecutive rows. Per family: its tokens, from the projector's one read"""
 
-    x_slice_kind: torch.Tensor  # (N,) long
+    x_token_kind: torch.Tensor  # (N,) long
+    x_family: torch.Tensor  # (N,) long
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
     x_needs_target: torch.Tensor  # (N,) bool
     x_state: torch.Tensor  # (N,) long
     x_count: torch.Tensor  # (B,) long
-    x_slice_kind_row: torch.Tensor  # (B, len(SliceKind)) long, N where the slice kind is absent
-    x_slice_kind_count: torch.Tensor  # (B, len(SliceKind)) long
+    x_token_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
+    x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) long
+    num_tokens_family: list[int]  # NUM_FAMILIES
 
 
 @dataclass
@@ -351,13 +349,13 @@ class X_CoreOutput:
 
 @dataclass
 class X_Action:
-    """The sampled hierarchy per row, engine-facing: `slice_kind` and `rank` name the L2
-    selection as the rank-th token of its slice kind, `target` the L3 selection as the
+    """The sampled hierarchy per row, engine-facing: `token_kind` and `rank` name the L2
+    selection as the rank-th token of its token kind, `target` the L3 selection as the
     rank-th monster token, and masks.engine_action names their entities by id. -1 where a
     level didn't apply."""
 
     action_type: torch.Tensor  # (B,) long
-    slice_kind: torch.Tensor  # (B,) long — SliceKind of the L2 selection
+    token_kind: torch.Tensor  # (B,) long — TokenKind of the L2 selection
     rank: torch.Tensor  # (B,) long
     target: torch.Tensor  # (B,) long
     log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
@@ -372,7 +370,7 @@ class X_Step:
     Every field is `num_regions` equal regions, a worker's each: its games' entries, and in every
     block rows for all its games at every cap, which it fills from the region's start"""
 
-    actions: torch.Tensor  # (E, 4) long: action type, slice kind, rank, target
+    actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
     rewards: torch.Tensor  # (E, K)
     dones: torch.Tensor  # (E,)
     game_state: X_GameState  # E games; a region's rows past its games' counts are stale
@@ -390,7 +388,7 @@ class X_Rollout:
     # game_state's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, X_GameState's blocks in order
 
-    actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
+    actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     rewards: torch.Tensor  # (T, E, K)
     dones: torch.Tensor  # (T, E)
@@ -409,7 +407,7 @@ class X_TrainingBatch:
     # game_state's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, X_GameState's blocks in order
 
-    actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
+    actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
     values_prox: torch.Tensor  # (N, K) the values that go with π_prox
@@ -426,32 +424,28 @@ NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 def _check_tables() -> None:
     """The tables that restate the engine or an enum still agree with it"""
-    if len(SLICE_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
+    if len(TOKEN_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
         raise RuntimeError(
             f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
-            "add CARD_REWARD_<b> slice kinds"
+            "add CARD_REWARD_<b> token kinds"
         )
-    if set(CAP_OF_SLICE_KIND) != set(SliceKind):
+    if set(CAP_OF_TOKEN_KIND) != set(TokenKind):
         raise RuntimeError(
-            "A SliceKind has no entry in CAP_OF_SLICE_KIND: "
-            f"{set(SliceKind) - set(CAP_OF_SLICE_KIND)}"
+            "A TokenKind has no entry in CAP_OF_TOKEN_KIND: "
+            f"{set(TokenKind) - set(CAP_OF_TOKEN_KIND)}"
         )
 
-    # SliceKind is declared in packing order, valued 0..len-1: the block tables, one after another,
-    # list it, every slice kind in one table
-    slice_kinds = [
-        *SLICE_KINDS_CARD,
-        *SLICE_KINDS_RELIC,
-        *SLICE_KINDS_POTION,
-        *SLICE_KINDS_MONSTER,
-        *SLICE_KINDS_EVENT_OPTION,
-        *SLICE_KINDS_CHARACTER,
-        *SLICE_KINDS_ROOM,
+    # TokenKind is declared in packing order, valued 0..len-1: the family tables, one after
+    # another, list it, every token kind in one table
+    token_kinds = [
+        token_kind
+        for token_kinds_family in _TOKEN_KINDS_OF_FAMILY
+        for token_kind in token_kinds_family
     ]
-    if slice_kinds != list(SliceKind) or slice_kinds != list(range(len(slice_kinds))):
-        names = [slice_kind.name for slice_kind in slice_kinds]
+    if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):
+        names = [token_kind.name for token_kind in token_kinds]
         raise RuntimeError(
-            "Declare SliceKind in packing order, valued 0..len-1: the SLICE_KINDS_* block "
+            "Declare TokenKind in packing order, valued 0..len-1: the TOKEN_KINDS_* family "
             f"tables, one after another, list {names}"
         )
 

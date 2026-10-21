@@ -240,7 +240,7 @@ def encode_batch_map(
     previous state's) and each state's (B,) room count, and the map meta"""
     batch_size = len(game_states)
     np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
-    np_node_idx = np.empty(batch_size * MAP_WIDTH, dtype=np.int64)  # every state's rooms at most
+    np_node_idx = np.empty(batch_size * MAP_WIDTH, dtype=np.int16)  # every state's rooms at most
     np_count = np.empty(batch_size, dtype=np.int64)
     np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
 

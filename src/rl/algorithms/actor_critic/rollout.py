@@ -58,7 +58,7 @@ def collect_rollout(
             chunks_count.append(x_count_cpu)
             step_rows = slice(t * E, (t + 1) * E)
             actions[step_rows] = torch.stack(
-                [out.action_type, out.slice_kind, out.rank, out.target], dim=1
+                [out.action_type, out.token_kind, out.rank, out.target], dim=1
             )
             log_probs[step_rows] = out.log_prob.sum(-1)
 

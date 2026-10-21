@@ -14,15 +14,15 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
-from src.rl.encoding.sparse import entity_sparse
-from src.rl.types import SLICE_KINDS_RELIC
+from src.rl.encoding.sparse import token_sparse
+from src.rl.types import TOKEN_KINDS_RELIC
 from src.rl.types import BatchEffectRows
 from src.rl.types import BatchPriceRows
 from src.rl.types import EffectRow
 from src.rl.types import EffectSource
 from src.rl.types import PriceRow
-from src.rl.types import SliceKind
-from src.rl.types import X_EntitySparse
+from src.rl.types import TokenKind
+from src.rl.types import X_Tokens
 from src.rl.types import make_channel_allocator
 
 
@@ -87,41 +87,42 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
     out[:] = row
 
 
-def _get_relic_entities(slice_kind: SliceKind, game_state: GameState) -> list:
+def _get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list:
     # Each collection truncated to its own cap: a relic past it has no token
-    match slice_kind:
-        case SliceKind.RELIC_OWNED:
+    match token_kind:
+        case TokenKind.RELIC_OWNED:
             return game_state.relics[:MAX_RELICS]
-        case SliceKind.RELIC_REWARD:
+        case TokenKind.RELIC_REWARD:
             reward = game_state.reward
             return reward.relics[:MAX_RELIC_REWARDS] if reward is not None else []
-        case SliceKind.RELIC_SHOP:
+        case TokenKind.RELIC_SHOP:
             shop = game_state.shop
             return shop.relics[:MAX_SHOP_RELICS] if shop is not None else []
-        case SliceKind.RELIC_EVENT_ROLL:
+        case TokenKind.RELIC_EVENT_ROLL:
             event = game_state.event
             if event is not None and not event.consumed:
                 return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
             return []
         case _:
-            raise ValueError(f"not a relic slice kind: {slice_kind}")
+            raise ValueError(f"not a relic token kind: {token_kind}")
 
 
-def iter_packed_relics(game_state: GameState) -> Iterator[tuple[SliceKind, int, Relic]]:
-    """(slice kind, rank, relic) for every relic token: the slice kinds back to back in
-    SLICE_KINDS_RELIC order, each collection in engine order."""
-    for slice_kind in SLICE_KINDS_RELIC:
-        for rank, relic in enumerate(_get_relic_entities(slice_kind, game_state)):
-            yield slice_kind, rank, relic
+def iter_packed_relics(game_state: GameState) -> Iterator[tuple[TokenKind, int, Relic]]:
+    """(token kind, rank, relic) for every relic token: the token kinds back to back in
+    TOKEN_KINDS_RELIC order, each collection in engine order."""
+    for token_kind in TOKEN_KINDS_RELIC:
+        for rank, relic in enumerate(_get_relic_entities(token_kind, game_state)):
+            yield token_kind, rank, relic
 
 
 def encode_batch_relics(
-    game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
-    """The relic block ((N, ENCODING_DIM_RELIC) rows held sparse, every state's tokens after the
-    previous state's, + the (N,) slice kind of each token + each state's (B,) token count) + each
-    state's (slice kind, rank, source, effect) rows (every trigger's, per relic) and its shop
-    tokens' (slice kind, rank, price) rows, keyed by the token they belong to."""
+    game_states: list[GameState], column_start: int, device: torch.device
+) -> tuple[X_Tokens, BatchEffectRows, BatchPriceRows]:
+    """The relic tokens ((N, ENCODING_DIM_RELIC) rows held sparse, their columns from
+    `column_start` in the shared space, every state's tokens after the previous state's, + the (N,)
+    token kind of each token + each state's (B,) token count) + each state's (token kind, rank,
+    source, effect) rows (every trigger's, per relic) and its shop tokens' (token kind, rank,
+    price) rows, keyed by the token they belong to."""
     batch_tokens = [list(iter_packed_relics(game_state)) for game_state in game_states]
     batch_relic_prices = []
     for game_state in game_states:
@@ -130,7 +131,7 @@ def encode_batch_relics(
 
     np_count = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
     np_out = np.zeros((np_count.sum(), ENCODING_DIM_RELIC), dtype=np.float32)  # (N, D)
-    np_slice_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
+    np_token_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
     batch_effect_rows: BatchEffectRows = []
     batch_price_rows: BatchPriceRows = []
 
@@ -141,19 +142,19 @@ def encode_batch_relics(
 
         # Shop tokens come in shop order, so they take the parallel price list in step
         relic_prices = iter(batch_relic_prices[b])
-        for slice_kind, rank, relic in tokens:
+        for token_kind, rank, relic in tokens:
             encode_relic_into_w_cache(relic, np_out[row])
 
-            # `SliceKind`
-            np_slice_kind[row] = slice_kind
+            # `TokenKind`
+            np_token_kind[row] = token_kind
 
             # Price
-            if slice_kind == SliceKind.RELIC_SHOP:
-                price_rows.append((slice_kind, rank, next(relic_prices)))
+            if token_kind == TokenKind.RELIC_SHOP:
+                price_rows.append((token_kind, rank, next(relic_prices)))
 
             # Effects
             effect_rows += [
-                (slice_kind, rank, source, effect)
+                (token_kind, rank, source, effect)
                 for effects, source in (
                     (relic.effects_combat_start, EffectSource.RELIC_COMBAT_START),
                     (relic.effects_turn_start, EffectSource.RELIC_TURN_START),
@@ -171,7 +172,7 @@ def encode_batch_relics(
         batch_price_rows.append(price_rows)
 
     return (
-        entity_sparse(np_out, np_slice_kind, np_count, ENCODING_SPARSE_RELIC, device),
+        token_sparse(np_out, np_token_kind, np_count, ENCODING_SPARSE_RELIC, column_start, device),
         batch_effect_rows,
         batch_price_rows,
     )

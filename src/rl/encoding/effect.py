@@ -921,12 +921,14 @@ _WARNED_OVERFLOW: set[str] = set()
 def encode_batch_effects(
     game_states: list[GameState],
     sources: Sequence[BatchEffectRows],
+    np_first_offset: np.ndarray,
     device: torch.device,
 ) -> X_OwnedSparse:
     """Every state's effect rows as one (N, D) block, held sparse, every state's after the
-    previous state's, with their owner keys; and each state's (B,) row count.
+    previous state's, with their owners as offsets through `np_first_offset`; and each state's (B,)
+    row count.
 
-    `sources` is per-state (slice kind, rank, source, effect) rows in fill priority, so a state
+    `sources` is per-state (token kind, rank, source, effect) rows in fill priority, so a state
     past MAX_EFFECTS_STATE drops its last sources' rows."""
     batch_size = len(game_states)
 
@@ -947,21 +949,27 @@ def encode_batch_effects(
 
     # Initialize NumPy arrays
     np_effect = np.zeros((np_count.sum(), ENCODING_DIM_EFFECT), dtype=np.float32)
-    np_owner_slice_kind = np.empty(np_count.sum(), dtype=np.int64)
+    np_owner_token_kind = np.empty(np_count.sum(), dtype=np.int64)
     np_owner_rank = np.empty(np_count.sum(), dtype=np.int64)
 
     row = 0
     for rows, count in zip(batch_rows, np_count):
-        for slice_kind, rank, source, effect in rows[:count]:
+        for token_kind, rank, source, effect in rows[:count]:
             encode_effect_row_into_w_cache(effect, np_effect[row])
             np_effect[row, OFF_EFFECT_SOURCE + source] = 1.0
-            np_owner_slice_kind[row] = slice_kind
+            np_owner_token_kind[row] = token_kind
             np_owner_rank[row] = rank
             row += 1
 
     normalize_effect_rows(np_effect)
     return owned_sparse(
-        np_effect, np_owner_slice_kind, np_owner_rank, np_count, ENCODING_SPARSE_EFFECT, device
+        np_effect,
+        np_owner_token_kind,
+        np_owner_rank,
+        np_count,
+        np_first_offset,
+        ENCODING_SPARSE_EFFECT,
+        device,
     )
 
 

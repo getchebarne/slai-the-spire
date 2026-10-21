@@ -9,15 +9,13 @@ import torch
 import torch.nn.functional as F
 
 from src.rl.types import X_EffectPending
-from src.rl.types import X_EntitySparse
 from src.rl.types import X_GameState
 from src.rl.types import X_OwnedSparse
-from src.rl.types import X_Rooms
+from src.rl.types import X_Tokens
 
 
-# A token-like block of the state, and one held sparse
-_Block = TypeVar("_Block", X_EntitySparse, X_Rooms, X_OwnedSparse, X_EffectPending)
-_BlockSparse = TypeVar("_BlockSparse", X_EntitySparse, X_OwnedSparse, X_EffectPending)
+# A block of the state, its rows held sparse
+_Block = TypeVar("_Block", X_Tokens, X_OwnedSparse, X_EffectPending)
 
 
 def take_states(
@@ -28,33 +26,21 @@ def take_states(
     count_blocks' order, summed on the CPU from the counts there: the sizes, which would
     otherwise be read back"""
     (
-        num_cards,
-        num_relics,
-        num_potions,
-        num_monsters,
-        num_event_options,
-        num_character,
-        num_rooms,
+        num_tokens,
         num_health_block,
         num_prices,
         num_effects,
-        num_effect_pending,
         num_modifiers,
+        num_effect_pending,
     ) = x_count_total.tolist()
     x = x_gs
     return X_GameState(
-        cards=_take_rows(x.cards, x_states, num_cards),
-        relics=_take_rows(x.relics, x_states, num_relics),
-        potions=_take_rows(x.potions, x_states, num_potions),
-        monsters=_take_rows(x.monsters, x_states, num_monsters),
-        event_options=_take_rows(x.event_options, x_states, num_event_options),
-        character=_take_rows(x.character, x_states, num_character),
-        rooms=_take_rows(x.rooms, x_states, num_rooms),
+        tokens=_take_rows(x.tokens, x_states, num_tokens),
         health_block=_take_rows(x.health_block, x_states, num_health_block),
         prices=_take_rows(x.prices, x_states, num_prices),
         effects=_take_rows(x.effects, x_states, num_effects),
-        effect_pending=_take_rows(x.effect_pending, x_states, num_effect_pending),
         modifiers=_take_rows(x.modifiers, x_states, num_modifiers),
+        effect_pending=_take_rows(x.effect_pending, x_states, num_effect_pending),
         energy=x.energy[x_states],
         map_grid=x.map_grid[x_states],
         map_meta=x.map_meta[x_states],
@@ -73,18 +59,12 @@ def count_blocks(x_gs: X_GameState) -> torch.Tensor:
     x = x_gs
     return torch.stack(
         [
-            x.cards.x_count,
-            x.relics.x_count,
-            x.potions.x_count,
-            x.monsters.x_count,
-            x.event_options.x_count,
-            x.character.x_count,
-            x.rooms.x_count,
+            x.tokens.x_count,
             x.health_block.x_count,
             x.prices.x_count,
             x.effects.x_count,
-            x.effect_pending.x_count,
             x.modifiers.x_count,
+            x.effect_pending.x_count,
         ],
         dim=1,
     )
@@ -94,18 +74,12 @@ def cat_states(x_gss: list[X_GameState]) -> X_GameState:
     """The states one after another, as one: the rollout joins its steps"""
     xs = x_gss
     return X_GameState(
-        cards=_cat_rows(_widened([x.cards for x in xs])),
-        relics=_cat_rows(_widened([x.relics for x in xs])),
-        potions=_cat_rows(_widened([x.potions for x in xs])),
-        monsters=_cat_rows(_widened([x.monsters for x in xs])),
-        event_options=_cat_rows(_widened([x.event_options for x in xs])),
-        character=_cat_rows(_widened([x.character for x in xs])),
-        rooms=_cat_rows([x.rooms for x in xs]),
+        tokens=_cat_rows(_widened([x.tokens for x in xs])),
         health_block=_cat_rows(_widened([x.health_block for x in xs])),
         prices=_cat_rows(_widened([x.prices for x in xs])),
         effects=_cat_rows(_widened([x.effects for x in xs])),
-        effect_pending=_cat_rows(_widened([x.effect_pending for x in xs])),
         modifiers=_cat_rows(_widened([x.modifiers for x in xs])),
+        effect_pending=_cat_rows(_widened([x.effect_pending for x in xs])),
         energy=torch.cat([x.energy for x in xs]),
         map_grid=torch.cat([x.map_grid for x in xs]),
         map_meta=torch.cat([x.map_meta for x in xs]),
@@ -145,7 +119,7 @@ def region_of_states(x_gs: X_GameState, first_state: int, num_states: int) -> X_
     """The region of the states [first_state, first_state + num_states) in a shared step's
     `x_gs`, whose every field holds the same rows per state: their counts and per-state
     fields, and their share of every block's rows, views all"""
-    num_states_step = len(x_gs.cards.x_count)
+    num_states_step = len(x_gs.tokens.x_count)
 
     def region(x_field: torch.Tensor) -> torch.Tensor:
         num_rows_state = len(x_field) // num_states_step
@@ -167,18 +141,12 @@ def join_regions(x_gs: X_GameState, num_regions: int) -> X_GameState:
     uses, as its count says; the counts and the per-state fields as they are"""
     x = x_gs
     return X_GameState(
-        cards=_cut_entries(_join_rows(x.cards, num_regions)),
-        relics=_cut_entries(_join_rows(x.relics, num_regions)),
-        potions=_cut_entries(_join_rows(x.potions, num_regions)),
-        monsters=_cut_entries(_join_rows(x.monsters, num_regions)),
-        event_options=_cut_entries(_join_rows(x.event_options, num_regions)),
-        character=_cut_entries(_join_rows(x.character, num_regions)),
-        rooms=_join_rows(x.rooms, num_regions),
+        tokens=_cut_entries(_join_rows(x.tokens, num_regions)),
         health_block=_cut_entries(_join_rows(x.health_block, num_regions)),
         prices=_cut_entries(_join_rows(x.prices, num_regions)),
         effects=_cut_entries(_join_rows(x.effects, num_regions)),
-        effect_pending=_cut_entries(_join_rows(x.effect_pending, num_regions)),
         modifiers=_cut_entries(_join_rows(x.modifiers, num_regions)),
+        effect_pending=_cut_entries(_join_rows(x.effect_pending, num_regions)),
         energy=x.energy,
         map_grid=x.map_grid,
         map_meta=x.map_meta,
@@ -240,7 +208,7 @@ def _take_rows(block: _Block, x_states: torch.Tensor, num_rows: int) -> _Block:
     )
 
 
-def _cut_entries(rows: _BlockSparse) -> _BlockSparse:
+def _cut_entries(rows: _Block) -> _Block:
     """`rows` with their entries cut to the most a row uses, at least one: a row's nonzero entries
     come first"""
     num_entries = max(int(rows.x_value.numpy().any(axis=0).sum()), 1)
@@ -258,7 +226,7 @@ def _cat_rows(blocks: list[_Block]) -> _Block:
     )
 
 
-def _widened(blocks: list[_BlockSparse]) -> list[_BlockSparse]:
+def _widened(blocks: list[_Block]) -> list[_Block]:
     """The blocks, every block's entries padded to the widest with (0, 0.0) entries, as the
     encoders pad"""
     num_entries = max(block.x_value.shape[1] for block in blocks)
@@ -274,18 +242,12 @@ def _widened(blocks: list[_BlockSparse]) -> list[_BlockSparse]:
 def _fields(x: X_GameState) -> list[torch.Tensor]:
     """Every field of `x`, block by block, in _map_fields' order, without rebuilding a block"""
     return [
-        *_block_fields(x.cards),
-        *_block_fields(x.relics),
-        *_block_fields(x.potions),
-        *_block_fields(x.monsters),
-        *_block_fields(x.event_options),
-        *_block_fields(x.character),
-        *_block_fields(x.rooms),
+        *_block_fields(x.tokens),
         *_block_fields(x.health_block),
         *_block_fields(x.prices),
         *_block_fields(x.effects),
-        *_block_fields(x.effect_pending),
         *_block_fields(x.modifiers),
+        *_block_fields(x.effect_pending),
         x.energy,
         x.map_grid,
         x.map_meta,
@@ -301,18 +263,12 @@ def _fields(x: X_GameState) -> list[torch.Tensor]:
 def _map_fields(x: X_GameState, fn: Callable[[torch.Tensor], torch.Tensor]) -> X_GameState:
     """`fn` on every field of `x`, block by block, in a fixed order"""
     return X_GameState(
-        cards=_map_block(x.cards, fn),
-        relics=_map_block(x.relics, fn),
-        potions=_map_block(x.potions, fn),
-        monsters=_map_block(x.monsters, fn),
-        event_options=_map_block(x.event_options, fn),
-        character=_map_block(x.character, fn),
-        rooms=_map_block(x.rooms, fn),
+        tokens=_map_block(x.tokens, fn),
         health_block=_map_block(x.health_block, fn),
         prices=_map_block(x.prices, fn),
         effects=_map_block(x.effects, fn),
-        effect_pending=_map_block(x.effect_pending, fn),
         modifiers=_map_block(x.modifiers, fn),
+        effect_pending=_map_block(x.effect_pending, fn),
         energy=fn(x.energy),
         map_grid=fn(x.map_grid),
         map_meta=fn(x.map_meta),
@@ -340,10 +296,8 @@ def _map_block(block: _Block, fn: Callable[[torch.Tensor], torch.Tensor]) -> _Bl
 def _row_fields(block: _Block) -> list[torch.Tensor]:
     """`block`'s row fields, every field but its count, in its block type's fixed order"""
     match block:
-        case X_EntitySparse():
-            return _row_fields_entity_sparse(block)
-        case X_Rooms():
-            return _row_fields_rooms(block)
+        case X_Tokens():
+            return _row_fields_tokens(block)
         case X_OwnedSparse():
             return _row_fields_owned_sparse(block)
         case X_EffectPending():
@@ -355,63 +309,41 @@ def _block_from_row_fields(
 ) -> _Block:
     """A block of `like`'s type from its row fields, in _row_fields' order, and its count"""
     match like:
-        case X_EntitySparse():
-            return _entity_sparse_from_row_fields(x_row_fields, x_count)
-        case X_Rooms():
-            return _rooms_from_row_fields(x_row_fields, x_count)
+        case X_Tokens():
+            return _tokens_from_row_fields(x_row_fields, x_count)
         case X_OwnedSparse():
             return _owned_sparse_from_row_fields(x_row_fields, x_count)
         case X_EffectPending():
             return _effect_pending_from_row_fields(x_row_fields, x_count)
 
 
-def _row_fields_entity_sparse(x: X_EntitySparse) -> list[torch.Tensor]:
-    return [x.x_column, x.x_value, x.x_slice_kind, x.x_legal, x.x_needs_target]
+def _row_fields_tokens(x: X_Tokens) -> list[torch.Tensor]:
+    return [x.x_column, x.x_value, x.x_token_kind, x.x_legal, x.x_needs_target, x.x_node_idx]
 
 
-def _entity_sparse_from_row_fields(
-    x_row_fields: list[torch.Tensor], x_count: torch.Tensor
-) -> X_EntitySparse:
-    x_column, x_value, x_slice_kind, x_legal, x_needs_target = x_row_fields
-    return X_EntitySparse(
+def _tokens_from_row_fields(x_row_fields: list[torch.Tensor], x_count: torch.Tensor) -> X_Tokens:
+    x_column, x_value, x_token_kind, x_legal, x_needs_target, x_node_idx = x_row_fields
+    return X_Tokens(
         x_column=x_column,
         x_value=x_value,
-        x_slice_kind=x_slice_kind,
+        x_token_kind=x_token_kind,
         x_legal=x_legal,
         x_needs_target=x_needs_target,
-        x_count=x_count,
-    )
-
-
-def _row_fields_rooms(x: X_Rooms) -> list[torch.Tensor]:
-    return [x.x_node_idx, x.x_slice_kind, x.x_legal, x.x_needs_target]
-
-
-def _rooms_from_row_fields(x_row_fields: list[torch.Tensor], x_count: torch.Tensor) -> X_Rooms:
-    x_node_idx, x_slice_kind, x_legal, x_needs_target = x_row_fields
-    return X_Rooms(
         x_node_idx=x_node_idx,
-        x_slice_kind=x_slice_kind,
-        x_legal=x_legal,
-        x_needs_target=x_needs_target,
         x_count=x_count,
     )
 
 
 def _row_fields_owned_sparse(x: X_OwnedSparse) -> list[torch.Tensor]:
-    return [x.x_column, x.x_value, x.x_owner_slice_kind, x.x_owner_rank]
+    return [x.x_column, x.x_value, x.x_owner_offset]
 
 
 def _owned_sparse_from_row_fields(
     x_row_fields: list[torch.Tensor], x_count: torch.Tensor
 ) -> X_OwnedSparse:
-    x_column, x_value, x_owner_slice_kind, x_owner_rank = x_row_fields
+    x_column, x_value, x_owner_offset = x_row_fields
     return X_OwnedSparse(
-        x_column=x_column,
-        x_value=x_value,
-        x_owner_slice_kind=x_owner_slice_kind,
-        x_owner_rank=x_owner_rank,
-        x_count=x_count,
+        x_column=x_column, x_value=x_value, x_owner_offset=x_owner_offset, x_count=x_count
     )
 
 
