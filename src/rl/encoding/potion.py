@@ -106,9 +106,9 @@ def iter_packed_potions(game_state: GameState) -> Iterator[tuple[SliceKind, int,
 
 def encode_batch_potions(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, torch.Tensor, BatchEffectRows, BatchPriceRows]:
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
     """The potion block ((N, ENCODING_DIM_POTION) rows held sparse, every state's tokens after the
-    previous state's, + the (N,) slice kind of each token) + each state's (B,) token count + each
+    previous state's, + the (N,) slice kind of each token + each state's (B,) token count) + each
     state's (slice kind, rank, source, effect) rows and its shop tokens' (slice kind, rank, price)
     rows, keyed by the token they belong to."""
     batch_tokens = [list(iter_packed_potions(game_state)) for game_state in game_states]
@@ -152,8 +152,7 @@ def encode_batch_potions(
         batch_price_rows.append(price_rows)
 
     return (
-        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_POTION, device),
-        torch.from_numpy(np_count).to(device),
+        entity_sparse(np_out, np_slice_kind, np_count, ENCODING_SPARSE_POTION, device),
         batch_effect_rows,
         batch_price_rows,
     )

@@ -8,10 +8,15 @@ from src.rl.types import X_OwnedSparse
 
 
 def entity_sparse(
-    np_rows: np.ndarray, np_slice_kind: np.ndarray, num_sparse: int, device: torch.device
+    np_rows: np.ndarray,
+    np_slice_kind: np.ndarray,
+    np_count: np.ndarray,
+    num_sparse: int,
+    device: torch.device,
 ) -> X_EntitySparse:
-    """An entity block from its (N, D) rows, each with at most `num_sparse` nonzero columns, and
-    their (N,) slice kinds; its masks all False, for build_masks to fill"""
+    """An entity block from its (N, D) rows, each with at most `num_sparse` nonzero columns,
+    their (N,) slice kinds and each state's (B,) count of them; its masks all False, for
+    build_masks to fill"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_EntitySparse(
         x_column=torch.from_numpy(np_column).to(device),
@@ -19,7 +24,7 @@ def entity_sparse(
         x_slice_kind=torch.from_numpy(np_slice_kind).to(device),
         x_legal=torch.zeros(len(np_rows), NUM_ACTION_TYPES, dtype=torch.bool, device=device),
         x_needs_target=torch.zeros(len(np_rows), dtype=torch.bool, device=device),
-        batch_size=[len(np_rows)],
+        x_count=torch.from_numpy(np_count).to(device),
     )
 
 
@@ -27,31 +32,32 @@ def owned_sparse(
     np_rows: np.ndarray,
     np_owner_slice_kind: np.ndarray,
     np_owner_rank: np.ndarray,
+    np_count: np.ndarray,
     num_sparse: int,
     device: torch.device,
 ) -> X_OwnedSparse:
     """A family of owned rows from its (N, D) rows, each with at most `num_sparse` nonzero
-    columns, and their (N,) owner keys"""
+    columns, their (N,) owner keys and each state's (B,) count of them"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_OwnedSparse(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
         x_owner_slice_kind=torch.from_numpy(np_owner_slice_kind).to(device),
         x_owner_rank=torch.from_numpy(np_owner_rank).to(device),
-        batch_size=[np_rows.shape[0]],
+        x_count=torch.from_numpy(np_count).to(device),
     )
 
 
 def effect_pending_sparse(
-    np_rows: np.ndarray, num_sparse: int, device: torch.device
+    np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_EffectPending:
     """The pending effects from their (P, D) rows, each with at most `num_sparse` nonzero
-    columns"""
+    columns, and each state's (B,) count of them, 0 or 1"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_EffectPending(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
-        batch_size=[np_rows.shape[0]],
+        x_count=torch.from_numpy(np_count).to(device),
     )
 
 

@@ -69,9 +69,7 @@ def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
     out[OFF_HEALTH_BLOCK_TOTAL_SCALAR] = min(total / _TOTAL_MAX, 1.0)
 
 
-def encode_batch_health_block(
-    game_states: list[GameState], device: torch.device
-) -> tuple[X_OwnedSparse, torch.Tensor]:
+def encode_batch_health_block(game_states: list[GameState], device: torch.device) -> X_OwnedSparse:
     """Every state's health/block rows as one (N, dim) block, held sparse, every state's after the
     previous state's, with their owner keys: each Monster's row (MONSTERS, its slot), then the
     Character's (CHARACTER, 0); and each state's (B,) row count, its monsters + 1."""
@@ -97,9 +95,6 @@ def encode_batch_health_block(
         np_owner_slice_kind[row] = SliceKind.CHARACTER
         row += 1
 
-    return (
-        owned_sparse(
-            np_out, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_HEALTH_BLOCK, device
-        ),
-        torch.from_numpy(np_count).to(device),
+    return owned_sparse(
+        np_out, np_owner_slice_kind, np_owner_rank, np_count, ENCODING_SPARSE_HEALTH_BLOCK, device
     )

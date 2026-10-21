@@ -16,13 +16,13 @@ from src.rl.encoding.state import empty_game_state
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.masks import build_masks
 from src.rl.masks import engine_action
+from src.rl.packed import count_blocks
 from src.rl.packed import join_regions
 from src.rl.packed import region_of_states
 from src.rl.packed import share_memory
 from src.rl.packed import to_device
 from src.rl.packed import write_rows
 from src.rl.reward import RewardStream
-from src.rl.types import X_Count
 from src.rl.types import X_GameState
 from src.rl.types import X_Step
 from src.rl.utils import set_rng_seeds
@@ -130,12 +130,12 @@ def _wait_for_replies(workers: list[Worker]) -> None:
                 raise RuntimeError(f"the learner died while rollout worker {w} stepped")
 
 
-def snapshot_to_device(step: X_Step, device: torch.device) -> tuple[X_GameState, X_Count]:
+def snapshot_to_device(step: X_Step, device: torch.device) -> tuple[X_GameState, torch.Tensor]:
     """Every game's state out of the shared step, the workers' rows joined on the CPU and copied
     onto the device in one copy, with its counts kept on the CPU. The copy is the snapshot: the
     rollout keeps it while the workers overwrite the step on the next request."""
     x = join_regions(step.game_state, step.num_regions)
-    return to_device(x, device), x.count
+    return to_device(x, device), count_blocks(x)
 
 
 def drain_episodes(episodes: Queue[EpisodeStats]) -> list[EpisodeStats]:

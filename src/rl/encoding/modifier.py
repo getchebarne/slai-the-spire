@@ -67,9 +67,7 @@ def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
 _WARNED_OVERFLOW: set[str] = set()
 
 
-def encode_batch_modifiers(
-    game_states: list[GameState], device: torch.device
-) -> tuple[X_OwnedSparse, torch.Tensor]:
+def encode_batch_modifiers(game_states: list[GameState], device: torch.device) -> X_OwnedSparse:
     """Every state's Modifier rows in one (N, D) block, held sparse, every state's after the
     previous state's, with their owner keys: the Character's rows (CHARACTER, 0), then each
     Monster's (MONSTERS, its slot); and each state's (B,) row count."""
@@ -117,7 +115,6 @@ def encode_batch_modifiers(
             np_owner_rank[row] = w
             row += 1
 
-    return (
-        owned_sparse(np_out, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_MODIFIER, device),
-        torch.from_numpy(np_count).to(device),
+    return owned_sparse(
+        np_out, np_owner_slice_kind, np_owner_rank, np_count, ENCODING_SPARSE_MODIFIER, device
     )

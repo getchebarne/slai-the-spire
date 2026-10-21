@@ -18,7 +18,6 @@ from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.packed import rows_of_states
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
-from src.rl.types import TokenCounts
 from src.rl.types import X_DrawOrderStates
 from src.rl.types import X_EffectPending
 from src.rl.types import X_EntitySparse
@@ -32,8 +31,8 @@ class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) entity embedder: a private first layer per block, the shared
     row families (health/block, prices, effects, modifiers) added into their owners, then one
     shared second layer + LayerNorm. Returns the window packed: its tokens (the six blocks then
-    the rooms, state after state) and their X_Window; then its valid tokens per entity type, the
-    draw-order layer's states, and the embedded pending halt."""
+    the rooms, state after state) and their X_Window; then the draw-order layer's states, and the
+    embedded pending halt."""
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
@@ -76,33 +75,27 @@ class EntityProjector(nn.Module):
         self._layer_norm = nn.LayerNorm(dim_entity)
 
     def forward(
-        self, x_game_state: X_GameState, x_rooms: torch.Tensor
-    ) -> tuple[torch.Tensor, X_Window, TokenCounts, X_DrawOrderStates, torch.Tensor]:
+        self, x_gs: X_GameState, x_rooms: torch.Tensor
+    ) -> tuple[torch.Tensor, X_Window, X_DrawOrderStates, torch.Tensor]:
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
-        x = x_game_state
-        x_count = x.count
 
         # X_GameState order: the list below IS the window's entity order, block after block
         # within each state. Per block: its rows, each state's count of them, and the rows through
         # the block's private first layer
-        window_blocks: list[tuple[X_EntitySparse | X_Rooms, torch.Tensor, torch.Tensor]] = [
-            (x.cards, x_count.cards, _project_sparse(self._pre_card, x.cards)),
-            (x.relics, x_count.relics, _project_sparse(self._pre_relic, x.relics)),
-            (x.potions, x_count.potions, _project_sparse(self._pre_potion, x.potions)),
-            (x.monsters, x_count.monsters, _project_sparse(self._pre_monster, x.monsters)),
-            (
-                x.event_options,
-                x_count.event_options,
-                _project_sparse(self._pre_event_option, x.event_options),
-            ),
-            (x.character, x_count.character, _project_sparse(self._pre_character, x.character)),
-            (x.rooms, x_count.rooms, self._pre_room(x_rooms)),
+        window_blocks: list[tuple[X_EntitySparse | X_Rooms, torch.Tensor]] = [
+            (x_gs.cards, _project_sparse(self._pre_card, x_gs.cards)),
+            (x_gs.relics, _project_sparse(self._pre_relic, x_gs.relics)),
+            (x_gs.potions, _project_sparse(self._pre_potion, x_gs.potions)),
+            (x_gs.monsters, _project_sparse(self._pre_monster, x_gs.monsters)),
+            (x_gs.event_options, _project_sparse(self._pre_event_option, x_gs.event_options)),
+            (x_gs.character, _project_sparse(self._pre_character, x_gs.character)),
+            (x_gs.rooms, self._pre_room(x_rooms)),
         ]
 
         # Each state's tokens of each block, and in all; its first row, and its first row of each
         # block
-        x_count_blocks = torch.stack([x_count_block for _, x_count_block, _ in window_blocks], 1)
+        x_count_blocks = torch.stack([x_block.x_count for x_block, _ in window_blocks], 1) # (B, 7)
         x_count_window = x_count_blocks.sum(dim=1)  # (B,)
         x_first_row = x_count_window.cumsum(0) - x_count_window  # (B,)
         x_first_row_blocks = x_first_row.unsqueeze(1) + x_count_blocks.cumsum(1) - x_count_blocks
@@ -113,23 +106,23 @@ class EntityProjector(nn.Module):
         x_block_row = torch.cat(
             [
                 rows_of_states(
-                    x_first_row_blocks[:, b], x_count_block, x_block.x_slice_kind.shape[0]
+                    x_first_row_blocks[:, b], x_block.x_count, x_block.x_slice_kind.shape[0]
                 )
-                for b, (x_block, x_count_block, _) in enumerate(window_blocks)
+                for b, (x_block, _) in enumerate(window_blocks)
             ]
         )  # (N_tok,)
         num_tokens = x_block_row.shape[0]
         x_tokens = x_rooms.new_empty(num_tokens, self._dim_entity)  # (N_tok, D)
-        x_tokens[x_block_row] = torch.cat([x_first for _, _, x_first in window_blocks])
+        x_tokens[x_block_row] = torch.cat([x_first for _, x_first in window_blocks])
         x_slice_kind = x_block_row.new_empty(num_tokens)  # (N_tok,)
         x_slice_kind[x_block_row] = torch.cat(
-            [x_block.x_slice_kind for x_block, _, _ in window_blocks]
+            [x_block.x_slice_kind for x_block, _ in window_blocks]
         ).long()
         x_legal = x_block_row.new_empty(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool)
-        x_legal[x_block_row] = torch.cat([x_block.x_legal for x_block, _, _ in window_blocks])
+        x_legal[x_block_row] = torch.cat([x_block.x_legal for x_block, _ in window_blocks])
         x_needs_target = x_block_row.new_empty(num_tokens, dtype=torch.bool)  # (N_tok,)
         x_needs_target[x_block_row] = torch.cat(
-            [x_block.x_needs_target for x_block, _, _ in window_blocks]
+            [x_block.x_needs_target for x_block, _ in window_blocks]
         )
         x_state = torch.repeat_interleave(x_count_window, output_size=num_tokens)  # (N_tok,)
         x_slice_kind_count, x_slice_kind_row = _slice_kind_tables(
@@ -139,7 +132,7 @@ class EntityProjector(nn.Module):
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
         x_count_pile = x_slice_kind_count[:, SliceKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = x.focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
+        x_draw_order_visible = x_gs.focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
         x_ordered = (x_count_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
@@ -176,28 +169,22 @@ class EntityProjector(nn.Module):
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
         # ReLU/LayerNorm. Family order matters: float sums are order-sensitive
-        _add_owned(x_tokens, x.prices, x_count.prices, self._pre_price, x_slice_kind_row)
-        _add_owned(
-            x_tokens,
-            x.health_block,
-            x_count.health_block,
-            self._pre_health_block,
-            x_slice_kind_row,
-        )
-        _add_owned(x_tokens, x.effects, x_count.effects, self._effects_mlp, x_slice_kind_row)
-        _add_owned(x_tokens, x.modifiers, x_count.modifiers, self._modifiers_mlp, x_slice_kind_row)
+        _add_owned(x_tokens, x_gs.prices, self._pre_price, x_slice_kind_row)
+        _add_owned(x_tokens, x_gs.health_block, self._pre_health_block, x_slice_kind_row)
+        _add_owned(x_tokens, x_gs.effects, self._effects_mlp, x_slice_kind_row)
+        _add_owned(x_tokens, x_gs.modifiers, self._modifiers_mlp, x_slice_kind_row)
 
         # The pending halt owns no token: its effect row is a global-context input instead
-        x_effect_pending = x.effect_pending
+        x_effect_pending = x_gs.effect_pending
         x_pending_state = torch.repeat_interleave(
-            x_count.effect_pending, output_size=x_effect_pending.x_column.shape[0]
+            x_effect_pending.x_count, output_size=x_effect_pending.x_column.shape[0]
         )  # (P,)
         x_pending_valid = _project_sparse(self._effects_mlp, x_effect_pending)  # (P, D)
         x_pending = x_pending_valid.new_zeros(batch_size, self._dim_entity).index_copy(
             0, x_pending_state, x_pending_valid
         )  # (B, D)
 
-        # Shared second layer + norm on the valid rows
+        # Shared second layer + norm on the rows
         x_hidden = self._layer_norm(self._post_shared(F.relu(x_tokens)))  # (N_tok, D)
 
         x_window = X_Window(
@@ -214,15 +201,6 @@ class EntityProjector(nn.Module):
         return (
             x_hidden,
             x_window,
-            TokenCounts(
-                cards=x.cards.x_slice_kind.shape[0],
-                relics=x.relics.x_slice_kind.shape[0],
-                potions=x.potions.x_slice_kind.shape[0],
-                monsters=x.monsters.x_slice_kind.shape[0],
-                event_options=x.event_options.x_slice_kind.shape[0],
-                character=x.character.x_slice_kind.shape[0],
-                rooms=x.rooms.x_slice_kind.shape[0],
-            ),
             x_draw_order,
             x_pending,
         )
@@ -282,13 +260,14 @@ def _project_sparse(
 def _add_owned(
     x_tokens: torch.Tensor,
     x_owned_sparse: X_OwnedSparse,
-    x_count: torch.Tensor,
     mapper: nn.Linear | nn.Sequential,
     x_slice_kind_row: torch.Tensor,
 ) -> None:
     """Add a family's rows, each state's `x_count` of them, into their owners' rows of `x_tokens`.
     An owner is the rank-th token of its slice kind, whose tokens sit in consecutive rows"""
-    x_state = torch.repeat_interleave(x_count, output_size=x_owned_sparse.x_column.shape[0])
+    x_state = torch.repeat_interleave(
+        x_owned_sparse.x_count, output_size=x_owned_sparse.x_column.shape[0]
+    )
     x_rows = _project_sparse(mapper, x_owned_sparse)  # (N, D)
     x_owner_first_row = x_slice_kind_row[x_state, x_owned_sparse.x_owner_slice_kind]  # (N,)
     _add_pooled(x_tokens, x_owner_first_row + x_owned_sparse.x_owner_rank, x_rows)
