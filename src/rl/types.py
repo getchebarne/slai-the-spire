@@ -36,38 +36,38 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
 
-# Values index Core._type_emb rows, so checkpoints pin them: append new slice kinds, never renumber
+# In packing order: the blocks in window order, each block's slice kinds in its SLICE_KINDS_* order
 class SliceKind(IntEnum):
     CARD_PILE_HAND = 0
-    CARD_PILE_DRAW = 1
-    CARD_PILE_DISCARD = 2
-    CARD_PILE_EXHAUST = 3
-    CARD_PILE_DECK = 4
-    CARD_PILE_DISCOVER = 5
-    CARD_REWARD_0 = 6
-    CARD_REWARD_1 = 7
-    CARD_REWARD_2 = 8
-    CARD_REWARD_3 = 9
-    CARD_REWARD_4 = 10
-    CARD_SHOP = 11
-    RELIC_OWNED = 12
-    RELIC_REWARD = 13
-    RELIC_SHOP = 14
-    POTION_OWNED = 15
-    POTION_REWARD = 16
-    POTION_SHOP = 17
-    MONSTERS = 18
-    EVENT_OPTIONS = 19
-    CHARACTER = 20
-    ROOMS = 21
-    CARD_PILE_STASIS = 22
-    CARD_PILE_EVENT_ROLL = 23
-    POTION_EVENT_ROLL = 24
-    RELIC_EVENT_ROLL = 25
-    CARD_PILE_SELECTED = 26
-    CARD_PLAY_QUEUE = 27
-    CARD_PILE_NIGHTMARE = 28
-    CARD_MATCH_FLIPPED = 29
+    CARD_PILE_DISCOVER = 1
+    CARD_PILE_SELECTED = 2
+    CARD_REWARD_0 = 3
+    CARD_REWARD_1 = 4
+    CARD_REWARD_2 = 5
+    CARD_REWARD_3 = 6
+    CARD_REWARD_4 = 7
+    CARD_SHOP = 8
+    CARD_PILE_EVENT_ROLL = 9
+    CARD_MATCH_FLIPPED = 10
+    CARD_PILE_STASIS = 11
+    CARD_PLAY_QUEUE = 12
+    CARD_PILE_NIGHTMARE = 13
+    CARD_PILE_DRAW = 14
+    CARD_PILE_DISCARD = 15
+    CARD_PILE_EXHAUST = 16
+    CARD_PILE_DECK = 17
+    RELIC_REWARD = 18
+    RELIC_SHOP = 19
+    RELIC_EVENT_ROLL = 20
+    RELIC_OWNED = 21
+    POTION_OWNED = 22
+    POTION_REWARD = 23
+    POTION_SHOP = 24
+    POTION_EVENT_ROLL = 25
+    MONSTERS = 26
+    EVENT_OPTIONS = 27
+    CHARACTER = 28
+    ROOMS = 29
 
 
 SLICE_KINDS_CARD_REWARDS = (  # one slice kind per reward bundle (card.py owns their packing)
@@ -437,7 +437,8 @@ def _check_tables() -> None:
             f"{set(SliceKind) - set(CAP_OF_SLICE_KIND)}"
         )
 
-    # The block tables split SliceKind exactly: every slice kind in one table, none in two
+    # SliceKind is declared in packing order, valued 0..len-1: the block tables, one after another,
+    # list it, every slice kind in one table
     slice_kinds = [
         *SLICE_KINDS_CARD,
         *SLICE_KINDS_RELIC,
@@ -447,11 +448,11 @@ def _check_tables() -> None:
         *SLICE_KINDS_CHARACTER,
         *SLICE_KINDS_ROOM,
     ]
-    if sorted(slice_kinds) != sorted(SliceKind):
-        repeated = {slice_kind for slice_kind in slice_kinds if slice_kinds.count(slice_kind) > 1}
+    if slice_kinds != list(SliceKind) or slice_kinds != list(range(len(slice_kinds))):
+        names = [slice_kind.name for slice_kind in slice_kinds]
         raise RuntimeError(
-            "Every SliceKind sits in exactly one SLICE_KINDS_* block table: missing "
-            f"{set(SliceKind) - set(slice_kinds)}, in two {repeated}"
+            "Declare SliceKind in packing order, valued 0..len-1: the SLICE_KINDS_* block "
+            f"tables, one after another, list {names}"
         )
 
 

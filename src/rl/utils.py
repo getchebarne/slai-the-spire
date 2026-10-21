@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import torch.nn as nn
 import yaml
 from slai import Action
@@ -55,3 +56,9 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
             break
         state, terminated = env.step(scripted[0])
     return state, terminated
+
+
+def parent_alive() -> bool:
+    """Whether the process that started this one is still alive"""
+    parent = mp.parent_process()
+    return parent is not None and parent.is_alive()

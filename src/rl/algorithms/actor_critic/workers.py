@@ -25,6 +25,7 @@ from src.rl.packed import write_rows
 from src.rl.reward import RewardStream
 from src.rl.types import X_GameState
 from src.rl.types import X_Step
+from src.rl.utils import parent_alive
 from src.rl.utils import set_rng_seeds
 
 
@@ -143,12 +144,6 @@ def drain_episodes(episodes: Queue[EpisodeStats]) -> list[EpisodeStats]:
     while not episodes.empty():
         completed.append(episodes.get())
     return completed
-
-
-def parent_alive() -> bool:
-    """Whether the process that started this one is still alive"""
-    parent = mp.parent_process()
-    return parent is not None and parent.is_alive()
 
 
 def stop_workers(exchange: Exchange, workers: list[Worker]) -> None:

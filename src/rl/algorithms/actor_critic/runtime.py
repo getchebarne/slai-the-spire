@@ -17,11 +17,11 @@ from src.rl.algorithms.actor_critic.curriculum import AscensionCurriculum
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.rollout import collect_rollout
 from src.rl.algorithms.actor_critic.workers import RolloutConfig
-from src.rl.algorithms.actor_critic.workers import parent_alive
 from src.rl.algorithms.actor_critic.workers import start_workers
 from src.rl.algorithms.actor_critic.workers import stop_workers
 from src.rl.models import ActorCritic
 from src.rl.types import X_Rollout
+from src.rl.utils import parent_alive
 
 
 @dataclass
