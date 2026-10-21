@@ -150,7 +150,7 @@ class EntityProjector(nn.Module):
         )
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
-        # ReLU/LayerNorm. Family order matters: float sums are order-sensitive
+        # ReLU/LayerNorm
         _add_owned(x_tokens, x_gs.prices, self._pre_price, x_slice_kind_row)
         _add_owned(x_tokens, x_gs.health_block, self._pre_health_block, x_slice_kind_row)
         _add_owned(x_tokens, x_gs.effects, self._effects_mlp, x_slice_kind_row)

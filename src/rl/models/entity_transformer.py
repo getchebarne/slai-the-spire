@@ -94,42 +94,49 @@ def _same_state_mask(
     return x_state_query.unsqueeze(1) == x_state_key.unsqueeze(0)
 
 
-def _attention(
-    mha: nn.MultiheadAttention,
-    x_query: torch.Tensor,
-    x_key: torch.Tensor,
-    mask: BlockMask | torch.Tensor | None,
-) -> torch.Tensor:
-    """`mha` over packed rows, its own projections around the attention kernel: each query row
-    (N_q, D) reads the key rows (N_k, D) that `mask` lets it. FlexAttention, compiled, on the GPU;
-    SDPA on the CPU"""
-    dim = mha.embed_dim
-    x_q = F.linear(x_query, mha.in_proj_weight[:dim], mha.in_proj_bias[:dim])
-    x_k, x_v = F.linear(x_key, mha.in_proj_weight[dim:], mha.in_proj_bias[dim:]).chunk(2, dim=1)
+class _Attention(nn.Module):
+    """Multi-head attention over packed rows: the query and key/value projections, the attention
+    kernel, the output projection. FlexAttention, compiled, on the GPU; SDPA on the CPU"""
 
-    # Both kernels' layout: (1, heads, rows, head dim)
-    x_q, x_k, x_v = (
-        x.unflatten(1, (mha.num_heads, -1)).transpose(0, 1).unsqueeze(0) for x in (x_q, x_k, x_v)
-    )
+    def __init__(self, dim_entity: int, num_heads: int) -> None:
+        super().__init__()
 
-    # One tensor, (1, H, N_q, D / H): no log-sum-exp is asked for
-    if isinstance(mask, BlockMask):
-        x_read = cast(
-            torch.Tensor,
-            _flex_attention_compiled(
-                x_q, x_k, x_v, block_mask=mask, kernel_options=_FLEX_KERNEL_OPTIONS
-            ),
+        self._projection_query = nn.Linear(dim_entity, dim_entity)
+        self._projection_key_value = nn.Linear(dim_entity, 2 * dim_entity)
+        self._projection_out = nn.Linear(dim_entity, dim_entity)
+        self._num_heads = num_heads
+
+    def forward(
+        self, x_query: torch.Tensor, x_key: torch.Tensor, mask: BlockMask | torch.Tensor | None
+    ) -> torch.Tensor:
+        """Each query row (N_q, D) reads the key rows (N_k, D) that `mask` lets it"""
+        x_q = self._projection_query(x_query)
+        x_k, x_v = self._projection_key_value(x_key).chunk(2, dim=1)
+
+        # Both kernels' layout: (1, heads, rows, head dim)
+        x_q, x_k, x_v = (
+            x.unflatten(1, (self._num_heads, -1)).transpose(0, 1).unsqueeze(0)
+            for x in (x_q, x_k, x_v)
         )
-    else:
-        x_read = F.scaled_dot_product_attention(x_q, x_k, x_v, attn_mask=mask)
-    return mha.out_proj(x_read.squeeze(0).transpose(0, 1).flatten(1))
+
+        # One tensor, (1, H, N_q, D / H): no log-sum-exp is asked for
+        if isinstance(mask, BlockMask):
+            x_read = cast(
+                torch.Tensor,
+                _flex_attention_compiled(
+                    x_q, x_k, x_v, block_mask=mask, kernel_options=_FLEX_KERNEL_OPTIONS
+                ),
+            )
+        else:
+            x_read = F.scaled_dot_product_attention(x_q, x_k, x_v, attn_mask=mask)
+        return self._projection_out(x_read.squeeze(0).transpose(0, 1).flatten(1))
 
 
 class _EntityTransformerBlock(nn.Module):
     def __init__(self, dim_entity: int, dim_feed_forward: int, num_heads: int) -> None:
         super().__init__()
 
-        self._multi_head_attention = nn.MultiheadAttention(dim_entity, num_heads, batch_first=True)
+        self._self_attention = _Attention(dim_entity, num_heads)
         self._layer_norm_1 = nn.LayerNorm(dim_entity)
         self._layer_norm_2 = nn.LayerNorm(dim_entity)
         self._mlp = nn.Sequential(
@@ -143,8 +150,8 @@ class _EntityTransformerBlock(nn.Module):
     ) -> torch.Tensor:
         # Pre-LN (norm inside the residual branch): stable at depth, unlike post-LN
         x_normed = self._layer_norm_1(x_packed)
-        x_mha = _attention(self._multi_head_attention, x_normed, x_normed, mask)
-        x_out = x_packed + x_mha
+        x_read = self._self_attention(x_normed, x_normed, mask)
+        x_out = x_packed + x_read
 
         # Feedforward with residual connection
         x_out = x_out + self._mlp(self._layer_norm_2(x_out))
@@ -170,7 +177,7 @@ class EntityTransformer(nn.Module):
 
         # Learned global token, refined with the entities (replaces pooling). It
         # has no slice kind, so it joins the sequence here and leaves it here
-        self._entity_global = nn.Parameter(torch.empty(1, 1, dim_entity))
+        self._entity_global = nn.Parameter(torch.empty(dim_entity))
         nn.init.normal_(self._entity_global, std=0.02)
 
     def forward(
@@ -199,7 +206,7 @@ class EntityTransformer(nn.Module):
         num_places = _padded(num_rows + batch_size, x_tokens.device)
         x_sequence = x_tokens.new_zeros(num_places, dim)
         x_sequence[x_place_row] = x_tokens
-        x_sequence[x_place_global] = self._entity_global.view(1, dim)
+        x_sequence[x_place_global] = self._entity_global
         x_refined = self._refine(
             x_sequence, _same_state_mask(x_offsets, x_offsets, num_places, num_places)
         )
@@ -221,8 +228,8 @@ class _DrawOrderBlock(nn.Module):
         # One row per depth in the draw pile: the cards above the token
         self._draw_depth_emb = nn.Embedding(MAX_SIZE_CARD_PILE_DRAW, dim_entity)
 
-        self._cross_attention = nn.MultiheadAttention(dim_entity, num_heads, batch_first=True)
-        self._readout_attention = nn.MultiheadAttention(dim_entity, num_heads, batch_first=True)
+        self._cross_attention = _Attention(dim_entity, num_heads)
+        self._readout_attention = _Attention(dim_entity, num_heads)
         self._layer_norm_1 = nn.LayerNorm(dim_entity)
         self._layer_norm_2 = nn.LayerNorm(dim_entity)
         self._layer_norm_3 = nn.LayerNorm(dim_entity)
@@ -252,14 +259,13 @@ class _DrawOrderBlock(nn.Module):
         x_pile = self._layer_norm_1(x_pile + self._draw_depth_emb(x_depth))
 
         # Every token reads the pile, then the feedforward
-        x_read = _attention(self._cross_attention, self._layer_norm_1(x_packed), x_pile, mask_pile)
+        x_read = self._cross_attention(self._layer_norm_1(x_packed), x_pile, mask_pile)
         x_out = x_packed + x_read
         x_out = x_out + self._mlp(self._layer_norm_2(x_out))
 
         # The global token reads the order-aware tokens
         x_normed = self._layer_norm_3(x_out)
-        x_read_global = _attention(
-            self._readout_attention,
+        x_read_global = self._readout_attention(
             self._layer_norm_3(x_global_token),
             x_normed,
             mask_readout,

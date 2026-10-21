@@ -222,11 +222,6 @@ class ActorCritic(nn.Module):
                 nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
-            if isinstance(m, nn.MultiheadAttention):
-                # in_proj is a raw Parameter, not a Linear — the isinstance walk
-                # above misses it, which would leave the Q/K/V projections at xavier
-                nn.init.orthogonal_(m.in_proj_weight, gain=math.sqrt(2))
-                nn.init.zeros_(m.in_proj_bias)
         nn.init.orthogonal_(self._head_action_type._scorer[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_2._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)

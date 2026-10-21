@@ -24,39 +24,9 @@ from src.rl.types import X_GameState
 
 # Count features: one per slice kind except the character singleton (a constant 1.0), each
 # normalized by its slice kind's cap (a count never exceeds it), in window order
-_COUNT_SLICE_KINDS: tuple[SliceKind, ...] = (  # Explicit: checkpoints pin this column order
-    SliceKind.CARD_PILE_HAND,
-    SliceKind.CARD_PILE_DISCOVER,
-    SliceKind.CARD_PILE_SELECTED,
-    SliceKind.CARD_REWARD_0,
-    SliceKind.CARD_REWARD_1,
-    SliceKind.CARD_REWARD_2,
-    SliceKind.CARD_REWARD_3,
-    SliceKind.CARD_REWARD_4,
-    SliceKind.CARD_SHOP,
-    SliceKind.CARD_PILE_EVENT_ROLL,
-    SliceKind.CARD_MATCH_FLIPPED,
-    SliceKind.CARD_PILE_STASIS,
-    SliceKind.CARD_PLAY_QUEUE,
-    SliceKind.CARD_PILE_NIGHTMARE,
-    SliceKind.CARD_PILE_DRAW,
-    SliceKind.CARD_PILE_DISCARD,
-    SliceKind.CARD_PILE_EXHAUST,
-    SliceKind.CARD_PILE_DECK,
-    SliceKind.RELIC_REWARD,
-    SliceKind.RELIC_SHOP,
-    SliceKind.RELIC_EVENT_ROLL,
-    SliceKind.RELIC_OWNED,
-    SliceKind.POTION_OWNED,
-    SliceKind.POTION_REWARD,
-    SliceKind.POTION_SHOP,
-    SliceKind.POTION_EVENT_ROLL,
-    SliceKind.MONSTERS,
-    SliceKind.EVENT_OPTIONS,
-    SliceKind.ROOMS,
+_COUNT_SLICE_KINDS = tuple(
+    slice_kind for slice_kind in SliceKind if slice_kind is not SliceKind.CHARACTER
 )
-_REWARD_LO = SLICE_KINDS_CARD_REWARDS[0]
-_REWARD_HI = SLICE_KINDS_CARD_REWARDS[-1]
 
 # The copies of a table that _SpreadEmbedding's backward sums over
 _SPREAD_COPIES = 256
@@ -68,15 +38,13 @@ class _SpreadEmbedding(torch.autograd.Function):
     add up. The same sums in another order, in short loops"""
 
     @staticmethod
-    def forward(
-        ctx: Any, x_weight: torch.Tensor, x_idxs: torch.Tensor, padding_idx: int | None
-    ) -> torch.Tensor:
+    def forward(ctx: Any, x_weight: torch.Tensor, x_idxs: torch.Tensor) -> torch.Tensor:
         ctx.save_for_backward(x_idxs)
-        ctx.num_embeddings, ctx.padding_idx = x_weight.shape[0], padding_idx
+        ctx.num_embeddings = x_weight.shape[0]
         return F.embedding(x_idxs, x_weight)
 
     @staticmethod
-    def backward(ctx: Any, x_grad: torch.Tensor) -> tuple[torch.Tensor, None, None]:
+    def backward(ctx: Any, x_grad: torch.Tensor) -> tuple[torch.Tensor, None]:
         (x_idxs,) = ctx.saved_tensors
         x_copy = (
             torch.arange(x_idxs.numel(), device=x_idxs.device).view_as(x_idxs) % _SPREAD_COPIES
@@ -89,22 +57,14 @@ class _SpreadEmbedding(torch.autograd.Function):
             scale_grad_by_freq=False,
         )
         x_grad_weight = x_grad_copies.view(_SPREAD_COPIES, ctx.num_embeddings, -1).sum(0)
-
-        # As nn.Embedding's: the padding row gets no gradient
-        if ctx.padding_idx is not None:
-            x_grad_weight[ctx.padding_idx] = 0
-        return x_grad_weight, None, None
-
-
-def _embedding(table: nn.Embedding, x_idxs: torch.Tensor) -> torch.Tensor:
-    """`table`'s rows at `x_idxs`, the gradient's sums spread by _SpreadEmbedding"""
-    return _SpreadEmbedding.apply(table.weight, x_idxs, table.padding_idx)
+        return x_grad_weight, None
 
 
 class Core(nn.Module):
     # The buffers __init__ registers, typed for mypy
     _count_slice_kinds: torch.Tensor
     _count_norm: torch.Tensor
+    _is_reward: torch.Tensor
 
     def __init__(
         self,
@@ -171,9 +131,17 @@ class Core(nn.Module):
             persistent=False,
         )
 
-        # The per-bundle slice kinds carry their own type rows; this shared embedding
+        # The per-bundle slice kinds carry their own type rows; this shared vector
         # is the global CARD_REWARD identity summed on top of all of them
-        self._reward_emb = nn.Embedding(2, dim_entity, padding_idx=0)
+        self._reward_identity = nn.Parameter(torch.empty(dim_entity))
+        nn.init.normal_(self._reward_identity)  # N(0, 1), as the type rows
+
+        # Per slice kind, whether it is a reward bundle's; derived, so excluded from checkpoints
+        self.register_buffer(
+            "_is_reward",
+            torch.tensor([slice_kind in SLICE_KINDS_CARD_REWARDS for slice_kind in SliceKind]),
+            persistent=False,
+        )
 
     def forward(self, x_gs: X_GameState, with_value: bool = True) -> X_CoreOutput:
         """The core's output; `with_value=False` runs the draw-order layer only on the states the
@@ -275,30 +243,12 @@ class Core(nn.Module):
     def _embed_identity(self, x_tokens: torch.Tensor, x_slice_kind: torch.Tensor) -> torch.Tensor:
         # Every token's identity comes from its slice kind: the slice kind's type row, plus the
         # shared CARD_REWARD identity on the reward slice kinds
-        x_is_reward = (x_slice_kind >= _REWARD_LO) & (x_slice_kind <= _REWARD_HI)
-        x_type = _embedding(self._type_emb, x_slice_kind)
-        return x_tokens + x_type + _embedding(self._reward_emb, x_is_reward.long())
+        x_is_reward = self._is_reward[x_slice_kind]
+        x_type = _SpreadEmbedding.apply(self._type_emb.weight, x_slice_kind)
+        return x_tokens + x_type + x_is_reward.unsqueeze(1) * self._reward_identity
 
     def _get_token_counts(self, x_slice_kind_count: torch.Tensor) -> torch.Tensor:
         """Per-slice-kind token counts, sqrt-normalized by the slice kind's cap (a count never
         exceeds it, so the ratio is in [0, 1])."""
         x_count = x_slice_kind_count[:, self._count_slice_kinds].float()
         return (x_count / self._count_norm).sqrt()
-
-
-def _check_tables() -> None:
-    """The count slice kinds cover every slice kind but the character, and the reward slice
-    kinds are a range"""
-    if set(_COUNT_SLICE_KINDS) != set(SliceKind) - {SliceKind.CHARACTER}:
-        raise RuntimeError(
-            "every slice kind counts once: _COUNT_SLICE_KINDS and every SliceKind but CHARACTER "
-            f"differ on {set(_COUNT_SLICE_KINDS) ^ (set(SliceKind) - {SliceKind.CHARACTER})}"
-        )
-    if SLICE_KINDS_CARD_REWARDS != tuple(range(_REWARD_LO, _REWARD_HI + 1)):
-        raise RuntimeError(
-            "The reward slice kinds must be contiguous and ascending: _embed_identity "
-            "range-tests them"
-        )
-
-
-_check_tables()
