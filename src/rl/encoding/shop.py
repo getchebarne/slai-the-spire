@@ -44,7 +44,7 @@ def encode_batch_prices(
     game_states: list[GameState],
     sources: Sequence[BatchPriceRows],
     device: torch.device,
-) -> tuple[X_OwnedSparse, torch.Tensor]:
+) -> X_OwnedSparse:
     """Every state's shop-token price rows as one (N, ENCODING_DIM_PRICE) block, held sparse,
     every state's after the previous state's, with their owner keys; and each state's (B,) row
     count."""
@@ -70,9 +70,8 @@ def encode_batch_prices(
             np_owner_rank[row] = rank
             row += 1
 
-    return (
-        owned_sparse(np_price, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_PRICE, device),
-        torch.from_numpy(np_count).to(device),
+    return owned_sparse(
+        np_price, np_owner_slice_kind, np_owner_rank, np_count, ENCODING_SPARSE_PRICE, device
     )
 
 

@@ -16,7 +16,6 @@ from src.rl.reward import RewardStream
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
-from src.rl.types import TokenCounts
 from src.rl.types import X_Action
 from src.rl.types import X_CoreOutput
 from src.rl.types import X_GameState
@@ -232,7 +231,7 @@ class ActorCritic(nn.Module):
     def _select_actions(
         self,
         heads: Callable[..., tuple[torch.Tensor, ...]],
-        x_game_state: X_GameState,
+        x_gs: X_GameState,
         x_core_out: X_CoreOutput,
         greedy: bool,
         generator: torch.Generator | None = None,
@@ -240,12 +239,18 @@ class ActorCritic(nn.Module):
     ) -> X_Action:
         x_action_type, x_slice_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
             self,
-            x_focus=x_game_state.focus,
+            x_focus=x_gs.focus,
             x_global=x_core_out.global_,
             x_tokens=x_core_out.x_tokens,
             x_window=x_core_out.window,
-            x_legal_action_type=x_game_state.x_legal_action_type,
-            num_tokens=x_core_out.num_tokens,
+            x_legal_action_type=x_gs.x_legal_action_type,
+            num_cards=x_gs.cards.x_slice_kind.shape[0],
+            num_relics=x_gs.relics.x_slice_kind.shape[0],
+            num_potions=x_gs.potions.x_slice_kind.shape[0],
+            num_monsters=x_gs.monsters.x_slice_kind.shape[0],
+            num_event_options=x_gs.event_options.x_slice_kind.shape[0],
+            num_character=x_gs.character.x_slice_kind.shape[0],
+            num_rooms=x_gs.rooms.x_slice_kind.shape[0],
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
@@ -258,39 +263,38 @@ class ActorCritic(nn.Module):
             log_prob=x_log_prob,
             entropy=x_entropy,
             kl_uniform=x_kl_uniform,
-            batch_size=[x_action_type.shape[0]],
         )
 
-    def forward(self, x_game_state: X_GameState) -> torch.Tensor:
+    def forward(self, x_gs: X_GameState) -> torch.Tensor:
         """The (B, len(RewardStream)) values"""
-        return self._head_value(self.core(x_game_state).global_value)
+        return self._head_value(self.core(x_gs).global_value)
 
     def act(
         self,
-        x_game_state: X_GameState,
+        x_gs: X_GameState,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> X_Action:
         """The X_Action, each level's argmax under `greedy` and sampled from `generator`
         otherwise; without values to compute, the core runs the draw-order layer only on the states
         the policy reads"""
-        x_core_out = self.core(x_game_state, with_value=False)
+        x_core_out = self.core(x_gs, with_value=False)
 
         # Sampling actions runs eager
-        return self._select_actions(policy_heads, x_game_state, x_core_out, greedy, generator)
+        return self._select_actions(policy_heads, x_gs, x_core_out, greedy, generator)
 
     def evaluate_actions(
-        self, x_game_state: X_GameState, x_recorded_actions: torch.Tensor
+        self, x_gs: X_GameState, x_recorded_actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """The recorded actions' log-prob summed over levels (B,), each level's entropy and
         KL(uniform‖π) (B, 3), and the (B, len(RewardStream)) values"""
-        x_core_out = self.core(x_game_state)
+        x_core_out = self.core(x_gs)
         x_values = self._head_value(x_core_out.global_value)
 
         # Recorded actions run the attribute, compiled on the learner
         x_action = self._select_actions(
             self.policy_heads_recorded,
-            x_game_state,
+            x_gs,
             x_core_out,
             greedy=True,
             x_recorded_actions=x_recorded_actions,
@@ -305,13 +309,19 @@ def policy_heads(
     x_tokens: torch.Tensor,
     x_window: X_Window,
     x_legal_action_type: torch.Tensor,
-    num_tokens: TokenCounts,
+    num_cards: int,
+    num_relics: int,
+    num_potions: int,
+    num_monsters: int,
+    num_event_options: int,
+    num_character: int,
+    num_rooms: int,
     greedy: bool,
     generator: torch.Generator | None,
     x_recorded_actions: torch.Tensor | None,
 ) -> tuple[torch.Tensor, ...]:
     """`model`'s L1-L3 selections, or the recorded ones scored, over the core's global vector and
-    refined rows of the packed window, given the L1 mask and the window's valid tokens per class.
+    refined rows of the packed window, given the L1 mask and the window's rows per block.
     L2 and L3 select per state over its rows. Returns X_Action's fields in order"""
     # The recorded actions' columns, or None when selecting
     x_recorded_action_type, x_recorded_slice_kind, x_recorded_rank, x_recorded_target = (
@@ -334,13 +344,13 @@ def policy_heads(
         x_window.x_block_row
     ].split(
         [
-            num_tokens.cards,
-            num_tokens.relics,
-            num_tokens.potions,
-            num_tokens.monsters,
-            num_tokens.event_options,
-            num_tokens.character,
-            num_tokens.rooms,
+            num_cards,
+            num_relics,
+            num_potions,
+            num_monsters,
+            num_event_options,
+            num_character,
+            num_rooms,
         ]
     )
 
@@ -352,9 +362,9 @@ def policy_heads(
             model._pointer_key_card(x_cards),
             model._pointer_key_relic(x_relics),
             model._pointer_key_potion(x_potions),
-            x_tokens.new_zeros(num_tokens.monsters, model._dim_key),
+            x_tokens.new_zeros(num_monsters, model._dim_key),
             model._pointer_key_event(x_event_options),
-            x_tokens.new_zeros(num_tokens.character, model._dim_key),
+            x_tokens.new_zeros(num_character, model._dim_key),
             model._pointer_key_room(x_rooms),
         ]
     )
@@ -396,7 +406,7 @@ def policy_heads(
     # legal where its state takes a target; then each state's "no target" choice, a zero key,
     # legal where it takes none
     x_count_monster = x_window.x_slice_kind_count[:, SliceKind.MONSTERS]
-    x_monster_state = torch.repeat_interleave(x_count_monster, output_size=num_tokens.monsters)
+    x_monster_state = torch.repeat_interleave(x_count_monster, output_size=num_monsters)
     x_choice_state = torch.cat([x_monster_state, x_states])
     x_mask_l3 = torch.cat([x_has_target[x_monster_state], ~x_has_target])
 
@@ -413,7 +423,7 @@ def policy_heads(
     x_recorded_choice = None
     if x_recorded_target is not None:
         x_recorded_choice = torch.where(
-            x_has_target, x_first_monster + x_recorded_target, num_tokens.monsters + x_states
+            x_has_target, x_first_monster + x_recorded_target, num_monsters + x_states
         )
 
     # Calculate the choices' logits & select from each state's

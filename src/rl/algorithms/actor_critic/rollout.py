@@ -10,7 +10,6 @@ from src.rl.algorithms.actor_critic.workers import step_workers
 from src.rl.models import ActorCritic
 from src.rl.packed import cat_states
 from src.rl.reward import RewardStream
-from src.rl.types import X_Count
 from src.rl.types import X_GameState
 from src.rl.types import X_Rollout
 
@@ -39,7 +38,7 @@ def collect_rollout(
     K = len(RewardStream)
     exchange.curriculum_c.fill_(curriculum_c)
     chunks_x: list[X_GameState] = []  # per step, in state order
-    chunks_count: list[X_Count] = []  # their counts, on the CPU
+    chunks_count: list[torch.Tensor] = []  # their counts, on the CPU
     actions = torch.empty(N, 4, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
     rewards = torch.empty(T, E, K, device=device)
@@ -52,11 +51,11 @@ def collect_rollout(
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
-        x, x_count = snapshot_to_device(exchange.step, device)
+        x, x_count_cpu = snapshot_to_device(exchange.step, device)
         for t in range(T):
             out = model.act(x, generator=generator)
             chunks_x.append(x)
-            chunks_count.append(x_count)
+            chunks_count.append(x_count_cpu)
             step_rows = slice(t * E, (t + 1) * E)
             actions[step_rows] = torch.stack(
                 [out.action_type, out.slice_kind, out.rank, out.target], dim=1
@@ -73,7 +72,7 @@ def collect_rollout(
             step_workers(workers)
             rewards[t] = exchange.step.rewards
             dones[t] = exchange.step.dones
-            x, x_count = snapshot_to_device(exchange.step, device)
+            x, x_count_cpu = snapshot_to_device(exchange.step, device)
 
     # Set model to training mode
     model.train()
@@ -93,7 +92,7 @@ def collect_rollout(
     return (
         X_Rollout(
             game_state=cat_states(chunks_x),
-            count_cpu=torch.cat(chunks_count),
+            x_count_cpu=torch.cat(chunks_count),
             actions=actions,
             log_probs_behavior=log_probs,
             rewards=rewards,

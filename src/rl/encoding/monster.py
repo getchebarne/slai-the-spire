@@ -217,9 +217,9 @@ def _get_monster_entities(combat: Combat | None) -> list[Monster]:
 
 def encode_batch_monsters(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, torch.Tensor, BatchEffectRows, BatchEffectRows]:
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchEffectRows]:
     """The monster block ((N, dim) rows held sparse, every state's monsters after the previous
-    state's, + the (N,) slice kind of each token) + each state's (B,) monster count + each state's
+    state's, + the (N,) slice kind of each token + each state's (B,) monster count) + each state's
     live-move effect rows and whole-moveset rows (what it could do, not the live intent), both
     keyed by monster slot."""
     batch_monsters = []
@@ -268,8 +268,7 @@ def encode_batch_monsters(
         batch_effect_rows_moveset.append(effect_rows_moveset)
 
     return (
-        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_MONSTER, device),
-        torch.from_numpy(np_count).to(device),
+        entity_sparse(np_out, np_slice_kind, np_count, ENCODING_SPARSE_MONSTER, device),
         batch_effect_rows_move,
         batch_effect_rows_moveset,
     )

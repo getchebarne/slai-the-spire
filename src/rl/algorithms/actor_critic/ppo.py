@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.models import ActorCritic
-from src.rl.packed import count_total
 from src.rl.packed import take_states
 from src.rl.reward import RewardStream
 from src.rl.types import X_Rollout
@@ -65,7 +64,7 @@ def _recompute(
 
     # Each minibatch's rows in each block, summed on the CPU before the first one runs
     x_count_totals = [
-        count_total(rollout.count_cpu[start : start + minibatch_size]) for start in starts
+        rollout.x_count_cpu[start : start + minibatch_size].sum(0) for start in starts
     ]
     with torch.no_grad():
         for start, x_count_total in zip(starts, x_count_totals):
@@ -102,7 +101,7 @@ def prepare_batch(
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     return X_TrainingBatch(
         game_state=rollout.game_state,
-        count_cpu=rollout.count_cpu,
+        x_count_cpu=rollout.x_count_cpu,
         actions=rollout.actions,
         log_probs_behavior=rollout.log_probs_behavior,
         log_probs_prox=log_probs_prox,
@@ -187,7 +186,7 @@ def update_ppo(
     )
     x_count_totals = [
         [
-            count_total(batch.count_cpu[x_order_epoch[start : start + ppo.minibatch_size]])
+            batch.x_count_cpu[x_order_epoch[start : start + ppo.minibatch_size]].sum(0)
             for start in starts
         ]
         for x_order_epoch in x_order

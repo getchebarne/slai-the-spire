@@ -51,7 +51,6 @@ from src.rl.types import SLICE_KINDS_CARD
 from src.rl.types import SLICE_KINDS_POTION
 from src.rl.types import SLICE_KINDS_RELIC
 from src.rl.types import SliceKind
-from src.rl.types import X_Count
 from src.rl.types import X_EffectPending
 from src.rl.types import X_EntitySparse
 from src.rl.types import X_GameState
@@ -71,29 +70,20 @@ CAP_PRICES = MAX_SIZE_SHOP_CARDS + MAX_SHOP_RELICS + MAX_SHOP_POTIONS
 def encode_batch_game_state(game_states: list[GameState], device: torch.device) -> X_GameState:
     # Entity blocks as rows, with each state's count of them, plus the effect and price rows their
     # tokens own — emitted by the loop that writes the token, so each names its slice kind and rank
-    x_cards, x_count_cards, effect_rows_cards, price_rows_cards = encode_batch_cards(
+    x_cards, effect_rows_cards, price_rows_cards = encode_batch_cards(game_states, device)
+    x_relics, effect_rows_relics, price_rows_relics = encode_batch_relics(game_states, device)
+    x_potions, effect_rows_potions, price_rows_potions = encode_batch_potions(game_states, device)
+    x_monsters, effect_rows_moves, effect_rows_movesets = encode_batch_monsters(
         game_states, device
     )
-    x_relics, x_count_relics, effect_rows_relics, price_rows_relics = encode_batch_relics(
+    x_event_meta, x_event_options, effect_rows_event_options = encode_batch_events(
         game_states, device
     )
-    x_potions, x_count_potions, effect_rows_potions, price_rows_potions = encode_batch_potions(
-        game_states, device
-    )
-    x_monsters, x_count_monsters, effect_rows_moves, effect_rows_movesets = encode_batch_monsters(
-        game_states, device
-    )
-    (
-        x_event_meta,
-        x_event_options,
-        x_count_event_options,
-        effect_rows_event_options,
-    ) = encode_batch_events(game_states, device)
-    x_character, x_count_character = encode_batch_character(game_states, device)
+    x_character = encode_batch_character(game_states, device)
 
     # Effects, in fill priority; an overflow drops the cards first (the deep
     # piles before the hand), then the static movesets
-    x_effects, x_count_effects = encode_batch_effects(
+    x_effects = encode_batch_effects(
         game_states,
         (
             effect_rows_event_options,
@@ -110,14 +100,14 @@ def encode_batch_game_state(game_states: list[GameState], device: torch.device) 
     x_map_grid, x_room_node_idx, x_count_rooms, x_map_meta = encode_batch_map(game_states, device)
 
     # Prices: one row per shop token, emitted by the loop that writes the token
-    x_prices, x_count_prices = encode_batch_prices(
+    x_prices = encode_batch_prices(
         game_states, (price_rows_cards, price_rows_relics, price_rows_potions), device
     )
 
     # The combatants' health/block and modifier rows, and the pending halt's effect row
-    x_health_block, x_count_health_block = encode_batch_health_block(game_states, device)
-    x_effect_pending, x_count_effect_pending = encode_batch_effect_pending(game_states, device)
-    x_modifiers, x_count_modifiers = encode_batch_modifiers(game_states, device)
+    x_health_block = encode_batch_health_block(game_states, device)
+    x_effect_pending = encode_batch_effect_pending(game_states, device)
+    x_modifiers = encode_batch_modifiers(game_states, device)
 
     return X_GameState(
         cards=x_cards,
@@ -135,28 +125,13 @@ def encode_batch_game_state(game_states: list[GameState], device: torch.device) 
                 len(x_room_node_idx), NUM_ACTION_TYPES, dtype=torch.bool, device=device
             ),
             x_needs_target=torch.zeros(len(x_room_node_idx), dtype=torch.bool, device=device),
-            batch_size=[len(x_room_node_idx)],
+            x_count=x_count_rooms,
         ),
         health_block=x_health_block,
         prices=x_prices,
         effects=x_effects,
         effect_pending=x_effect_pending,
         modifiers=x_modifiers,
-        count=X_Count(
-            cards=x_count_cards,
-            relics=x_count_relics,
-            potions=x_count_potions,
-            monsters=x_count_monsters,
-            event_options=x_count_event_options,
-            character=x_count_character,
-            rooms=x_count_rooms,
-            health_block=x_count_health_block,
-            prices=x_count_prices,
-            effects=x_count_effects,
-            effect_pending=x_count_effect_pending,
-            modifiers=x_count_modifiers,
-            batch_size=[len(game_states)],
-        ),
         energy=encode_batch_energy(game_states, device),
         map_grid=x_map_grid,
         map_meta=x_map_meta,
@@ -184,43 +159,28 @@ def empty_game_state(batch_size: int) -> X_GameState:
     """`batch_size` game states with nothing in them, every block with rows for all of them at
     every cap: the shared step's, which each worker fills from its region's start"""
     return X_GameState(
-        cards=_empty_entity(batch_size * CAP_CARDS, ENCODING_SPARSE_CARD),
-        relics=_empty_entity(batch_size * CAP_RELICS, ENCODING_SPARSE_RELIC),
-        potions=_empty_entity(batch_size * CAP_POTIONS, ENCODING_SPARSE_POTION),
-        monsters=_empty_entity(batch_size * MAX_MONSTERS, ENCODING_SPARSE_MONSTER),
-        event_options=_empty_entity(batch_size * MAX_EVENT_OPTIONS, ENCODING_SPARSE_EVENT_OPTION),
-        character=_empty_entity(batch_size, ENCODING_SPARSE_CHARACTER),
+        cards=_empty_entity(batch_size, CAP_CARDS, ENCODING_SPARSE_CARD),
+        relics=_empty_entity(batch_size, CAP_RELICS, ENCODING_SPARSE_RELIC),
+        potions=_empty_entity(batch_size, CAP_POTIONS, ENCODING_SPARSE_POTION),
+        monsters=_empty_entity(batch_size, MAX_MONSTERS, ENCODING_SPARSE_MONSTER),
+        event_options=_empty_entity(batch_size, MAX_EVENT_OPTIONS, ENCODING_SPARSE_EVENT_OPTION),
+        character=_empty_entity(batch_size, 1, ENCODING_SPARSE_CHARACTER),
         rooms=X_Rooms(
             x_node_idx=torch.zeros(batch_size * MAP_WIDTH, dtype=torch.long),
             x_slice_kind=torch.zeros(batch_size * MAP_WIDTH, dtype=torch.int16),
             x_legal=torch.zeros(batch_size * MAP_WIDTH, NUM_ACTION_TYPES, dtype=torch.bool),
             x_needs_target=torch.zeros(batch_size * MAP_WIDTH, dtype=torch.bool),
-            batch_size=[batch_size * MAP_WIDTH],
+            x_count=torch.zeros(batch_size, dtype=torch.long),
         ),
-        health_block=_empty_owned(batch_size * (MAX_MONSTERS + 1), ENCODING_SPARSE_HEALTH_BLOCK),
-        prices=_empty_owned(batch_size * CAP_PRICES, ENCODING_SPARSE_PRICE),
-        effects=_empty_owned(batch_size * MAX_EFFECTS_STATE, ENCODING_SPARSE_EFFECT),
+        health_block=_empty_owned(batch_size, MAX_MONSTERS + 1, ENCODING_SPARSE_HEALTH_BLOCK),
+        prices=_empty_owned(batch_size, CAP_PRICES, ENCODING_SPARSE_PRICE),
+        effects=_empty_owned(batch_size, MAX_EFFECTS_STATE, ENCODING_SPARSE_EFFECT),
         effect_pending=X_EffectPending(
             x_column=torch.zeros(batch_size, ENCODING_SPARSE_EFFECT, dtype=torch.int16),
             x_value=torch.zeros(batch_size, ENCODING_SPARSE_EFFECT),
-            batch_size=[batch_size],
+            x_count=torch.zeros(batch_size, dtype=torch.long),
         ),
-        modifiers=_empty_owned(batch_size * MAX_MODIFIER_ROWS_STATE, ENCODING_SPARSE_MODIFIER),
-        count=X_Count(
-            cards=torch.zeros(batch_size, dtype=torch.long),
-            relics=torch.zeros(batch_size, dtype=torch.long),
-            potions=torch.zeros(batch_size, dtype=torch.long),
-            monsters=torch.zeros(batch_size, dtype=torch.long),
-            event_options=torch.zeros(batch_size, dtype=torch.long),
-            character=torch.zeros(batch_size, dtype=torch.long),
-            rooms=torch.zeros(batch_size, dtype=torch.long),
-            health_block=torch.zeros(batch_size, dtype=torch.long),
-            prices=torch.zeros(batch_size, dtype=torch.long),
-            effects=torch.zeros(batch_size, dtype=torch.long),
-            effect_pending=torch.zeros(batch_size, dtype=torch.long),
-            modifiers=torch.zeros(batch_size, dtype=torch.long),
-            batch_size=[batch_size],
-        ),
+        modifiers=_empty_owned(batch_size, MAX_MODIFIER_ROWS_STATE, ENCODING_SPARSE_MODIFIER),
         energy=torch.zeros(batch_size, ENCODING_DIM_ENERGY),
         map_grid=torch.zeros(batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
         map_meta=torch.zeros(batch_size, ENCODING_DIM_MAP_META),
@@ -233,22 +193,24 @@ def empty_game_state(batch_size: int) -> X_GameState:
     )
 
 
-def _empty_entity(num_rows: int, num_sparse: int) -> X_EntitySparse:
+def _empty_entity(batch_size: int, cap: int, num_sparse: int) -> X_EntitySparse:
+    num_rows = batch_size * cap
     return X_EntitySparse(
         torch.zeros(num_rows, num_sparse, dtype=torch.int16),
         torch.zeros(num_rows, num_sparse),
         torch.zeros(num_rows, dtype=torch.int16),
         torch.zeros(num_rows, NUM_ACTION_TYPES, dtype=torch.bool),
         torch.zeros(num_rows, dtype=torch.bool),
-        batch_size=[num_rows],
+        torch.zeros(batch_size, dtype=torch.long),
     )
 
 
-def _empty_owned(num_rows: int, num_sparse: int) -> X_OwnedSparse:
+def _empty_owned(batch_size: int, cap: int, num_sparse: int) -> X_OwnedSparse:
+    num_rows = batch_size * cap
     return X_OwnedSparse(
         x_column=torch.zeros(num_rows, num_sparse, dtype=torch.int16),
         x_value=torch.zeros(num_rows, num_sparse),
         x_owner_slice_kind=torch.zeros(num_rows, dtype=torch.long),
         x_owner_rank=torch.zeros(num_rows, dtype=torch.long),
-        batch_size=[num_rows],
+        x_count=torch.zeros(batch_size, dtype=torch.long),
     )

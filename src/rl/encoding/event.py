@@ -117,10 +117,10 @@ def _get_event_option_entities(event: Event | None) -> list[EventOption]:
 
 def encode_batch_events(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, X_EntitySparse, torch.Tensor, BatchEffectRows]:
+) -> tuple[torch.Tensor, X_EntitySparse, BatchEffectRows]:
     """Event meta + the option block ((N, dim) rows held sparse, every state's options after the
-    previous state's, + their slice kinds) + each state's (B,) option count, capped at
-    MAX_EVENT_OPTIONS + each state's option effect rows, keyed by option slot. The option row
+    previous state's, + their slice kinds + each state's (B,) option count, capped at
+    MAX_EVENT_OPTIONS) + each state's option effect rows, keyed by option slot. The option row
     itself is just a slot OHE — everything it does lives in its effect rows."""
     batch_size = len(game_states)
     batch_event = [game_state.event for game_state in game_states]  # hoisted: reads clone
@@ -166,7 +166,6 @@ def encode_batch_events(
 
     return (
         torch.from_numpy(np_meta).to(device),
-        entity_sparse(np_options, np_slice_kind, ENCODING_SPARSE_EVENT_OPTION, device),
-        torch.from_numpy(np_count).to(device),
+        entity_sparse(np_options, np_slice_kind, np_count, ENCODING_SPARSE_EVENT_OPTION, device),
         batch_effect_rows,
     )

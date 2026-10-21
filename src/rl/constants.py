@@ -122,8 +122,8 @@ MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
 MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_ROLL_COUNT + 2
 
-# Per-state effect-row pool, packed per STATE with an owner segment rather than padded per
-# entity, since entities are ragged (a Monster brings its whole moveset)
+# Per-state caps on the effect and modifier rows, per state rather than per entity since
+# entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
 MAX_EFFECTS_STATE = 224
 MAX_MODIFIER_ROWS_STATE = 64
 

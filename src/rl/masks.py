@@ -144,9 +144,9 @@ _WARNED_DROPPED: set[int] = set()
 def build_masks(
     states: list[slai.GameState],
     batch_legal_actions: list[list[slai.Action]],
-    x_game_state: X_GameState,
+    x_gs: X_GameState,
 ) -> None:
-    """Fill the masks of the CPU `x_game_state` from each state's legal actions: its
+    """Fill the masks of the CPU `x_gs` from each state's legal actions: its
     `x_legal_action_type`, and each block's `x_legal` and `x_needs_target`. Wasted Potion discards
     are engine-legal but masked.
 
@@ -160,22 +160,22 @@ def build_masks(
     # lives in one block
     blocks = [
         (
-            np.concatenate([[0], np.cumsum(x_count_block.numpy())]),
+            np.concatenate([[0], np.cumsum(x_block.x_count.numpy())]),
             x_block.x_slice_kind.numpy(),
             x_block.x_legal.numpy(),
             x_block.x_needs_target.numpy(),
         )
-        for x_block, x_count_block in (
-            (x_game_state.cards, x_game_state.count.cards),
-            (x_game_state.relics, x_game_state.count.relics),
-            (x_game_state.potions, x_game_state.count.potions),
-            (x_game_state.monsters, x_game_state.count.monsters),
-            (x_game_state.event_options, x_game_state.count.event_options),
-            (x_game_state.character, x_game_state.count.character),
-            (x_game_state.rooms, x_game_state.count.rooms),
+        for x_block in (
+            x_gs.cards,
+            x_gs.relics,
+            x_gs.potions,
+            x_gs.monsters,
+            x_gs.event_options,
+            x_gs.character,
+            x_gs.rooms,
         )
     ]
-    np_legal_action_type = x_game_state.x_legal_action_type.numpy()
+    np_legal_action_type = x_gs.x_legal_action_type.numpy()
 
     for b, state in enumerate(states):
         combat = state.combat  # hoisted once: FFI context accesses deep-clone

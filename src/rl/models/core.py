@@ -175,20 +175,18 @@ class Core(nn.Module):
         # is the global CARD_REWARD identity summed on top of all of them
         self._reward_emb = nn.Embedding(2, dim_entity, padding_idx=0)
 
-    def forward(self, x_game_state: X_GameState, with_value: bool = True) -> X_CoreOutput:
+    def forward(self, x_gs: X_GameState, with_value: bool = True) -> X_CoreOutput:
         """The core's output; `with_value=False` runs the draw-order layer only on the states the
         policy reads, for callers that need no value, and leaves `global_value` the policy's"""
 
         # Map GNN: next-row room features + whole-graph readout
         x_rooms, x_map_readout = self._map_gnn(
-            x_game_state.map_grid, x_game_state.rooms.x_node_idx, x_game_state.count.rooms
+            x_gs.map_grid, x_gs.rooms.x_node_idx, x_gs.rooms.x_count
         )
 
-        # The window packed (its tokens and their X_Window), its valid tokens per entity type, the
-        # draw-order layer's states, and the embedded pending halt
-        x_tokens, x_window, num_tokens, x_draw_order, x_pending = self._entity_projector(
-            x_game_state, x_rooms
-        )
+        # The window packed (its tokens and their X_Window), the draw-order layer's states, and
+        # the embedded pending halt
+        x_tokens, x_window, x_draw_order, x_pending = self._entity_projector(x_gs, x_rooms)
 
         # One transformer pass over every state, without the draw depths
         x_refined, x_global_token = self._entity_transformer(
@@ -201,13 +199,13 @@ class Core(nn.Module):
             [
                 x_map_readout,
                 self._get_token_counts(x_window.x_slice_kind_count),
-                x_game_state.energy,
-                x_game_state.focus,
-                x_game_state.ascension,
-                x_game_state.map_meta,
-                x_game_state.reward_meta,
-                x_game_state.shop_meta,
-                x_game_state.event_meta,
+                x_gs.energy,
+                x_gs.focus,
+                x_gs.ascension,
+                x_gs.map_meta,
+                x_gs.reward_meta,
+                x_gs.shop_meta,
+                x_gs.event_meta,
                 x_pending,
             ],
             dim=1,
@@ -230,7 +228,6 @@ class Core(nn.Module):
                 global_value=x_global,
                 x_tokens=x_refined,
                 window=x_window,
-                num_tokens=num_tokens,
             )
 
         # The value head reads the layer on every one of its states
@@ -267,7 +264,6 @@ class Core(nn.Module):
             global_value=x_global_value,
             x_tokens=x_refined,
             window=x_window,
-            num_tokens=num_tokens,
         )
 
     def _global_context(

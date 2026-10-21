@@ -898,10 +898,9 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
     """Scale every channel in place. `rows` is any array whose LAST axis is the
     channel axis.
 
-    Run it once per block, on the caller's used prefix: per row, or over the
-    padding, it costs far more. Fancy indexing copies, so the transform runs on a
-    gathered block and the final assignment scatters it back; `...` keeps it
-    rank-agnostic."""
+    Run it once per block, over all its rows: per row, it costs far more. Fancy
+    indexing copies, so the transform runs on a gathered block and the final
+    assignment scatters it back; `...` keeps it rank-agnostic."""
     if not rows.size:
         return
 
@@ -923,7 +922,7 @@ def encode_batch_effects(
     game_states: list[GameState],
     sources: Sequence[BatchEffectRows],
     device: torch.device,
-) -> tuple[X_OwnedSparse, torch.Tensor]:
+) -> X_OwnedSparse:
     """Every state's effect rows as one (N, D) block, held sparse, every state's after the
     previous state's, with their owner keys; and each state's (B,) row count.
 
@@ -961,17 +960,14 @@ def encode_batch_effects(
             row += 1
 
     normalize_effect_rows(np_effect)
-    return (
-        owned_sparse(
-            np_effect, np_owner_slice_kind, np_owner_rank, ENCODING_SPARSE_EFFECT, device
-        ),
-        torch.from_numpy(np_count).to(device),
+    return owned_sparse(
+        np_effect, np_owner_slice_kind, np_owner_rank, np_count, ENCODING_SPARSE_EFFECT, device
     )
 
 
 def encode_batch_effect_pending(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EffectPending, torch.Tensor]:
+) -> X_EffectPending:
     """The pending effect rows as one (P, D) block, held sparse, one per state with a halt
     pending, every state's after the previous state's; and each state's (B,) row count, 1 or 0."""
     batch_effect_pending = [game_state.effect_pending for game_state in game_states]
@@ -987,7 +983,4 @@ def encode_batch_effect_pending(
             row += 1
 
     normalize_effect_rows(np_effect)
-    return (
-        effect_pending_sparse(np_effect, ENCODING_SPARSE_EFFECT, device),
-        torch.from_numpy(np_count).to(device),
-    )
+    return effect_pending_sparse(np_effect, np_count, ENCODING_SPARSE_EFFECT, device)

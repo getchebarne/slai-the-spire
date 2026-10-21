@@ -2,11 +2,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from enum import StrEnum
+from typing import final
 
 import torch
 from slai import ActionType
 from slai import Effect
-from tensordict import tensorclass
 
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_CARD_REWARD_ROLL
@@ -210,10 +210,11 @@ type PriceRow = tuple[SliceKind, int, int]
 type BatchPriceRows = list[list[PriceRow]]
 
 
-@tensorclass
+@final
+@dataclass
 class X_EntitySparse:
     """One entity type's tokens as rows, every state's in token order, state after state;
-    X_GameState.count says how many each state has. K is the rows' most nonzero columns: no
+    `x_count` says how many each state has. K is the rows' most nonzero columns: no
     fixed width anywhere but X_Step's regions. Each row is its nonzero (column, value) entries
     in column order, then (0, 0.0) entries up to K"""
 
@@ -227,8 +228,11 @@ class X_EntitySparse:
     # selections whose legal actions carry a monster target (cards / potions)
     x_needs_target: torch.Tensor  # (N,) bool
 
+    x_count: torch.Tensor  # (B,) long
 
-@tensorclass
+
+@final
+@dataclass
 class X_Rooms:
     """The next map row's reachable rooms as rows, every state's in column order, state after
     state, with their masks as X_EntitySparse's; each row carries its map column in its node"""
@@ -237,9 +241,11 @@ class X_Rooms:
     x_slice_kind: torch.Tensor  # (N,) int16 — ROOMS
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
     x_needs_target: torch.Tensor  # (N,) bool
+    x_count: torch.Tensor  # (B,) long
 
 
-@tensorclass
+@final
+@dataclass
 class X_OwnedSparse:
     """Rows owned by tokens, one family per X_GameState field, which the projector adds into
     their owners: every state's rows, state after state"""
@@ -248,42 +254,27 @@ class X_OwnedSparse:
     x_value: torch.Tensor  # (N, K) float32
     x_owner_slice_kind: torch.Tensor  # (N,) long — the owner token's `SliceKind`
     x_owner_rank: torch.Tensor  # (N,) long — the owner's rank within its slice kind
+    x_count: torch.Tensor  # (B,) long
 
 
-@tensorclass
+@final
+@dataclass
 class X_EffectPending:
     """The pending halts' effect rows, held sparse, one per state with a halt pending, state
     after state: global context, since no token owns them"""
 
     x_column: torch.Tensor  # (P, K) int16
     x_value: torch.Tensor  # (P, K) float32
-
-
-@tensorclass
-class X_Count:
-    """Each state's rows in each token-like block of an X_GameState, block for block"""
-
-    cards: torch.Tensor  # (B,) long
-    relics: torch.Tensor  # (B,) long
-    potions: torch.Tensor  # (B,) long
-    monsters: torch.Tensor  # (B,) long
-    event_options: torch.Tensor  # (B,) long
-    character: torch.Tensor  # (B,) long
-    rooms: torch.Tensor  # (B,) long
-    health_block: torch.Tensor  # (B,) long
-    prices: torch.Tensor  # (B,) long
-    effects: torch.Tensor  # (B,) long
-    effect_pending: torch.Tensor  # (B,) long, 0 or 1
-    modifiers: torch.Tensor  # (B,) long
+    x_count: torch.Tensor  # (B,) long, 0 or 1
 
 
 @dataclass
 class X_GameState:
     """The game state, as the encoders write it and the model, the rollout and the minibatches
     hold it: each token-like block only its rows, every state's in the block's order, state after
-    state, and its sparse entries cut to the most a row uses; `count` holds each state's rows in
-    each block. The per-state fields are (B, ...). src/rl/packed.py chooses its states and joins
-    them"""
+    state, and its sparse entries cut to the most a row uses; each block's `x_count` holds each
+    state's rows in it. The per-state fields are (B, ...). src/rl/packed.py chooses its states and
+    joins them"""
 
     # One block per type, in window order (the rooms last). The projector writes their tokens,
     # slice kinds and masks at their rows of the window
@@ -304,7 +295,6 @@ class X_GameState:
     effects: X_OwnedSparse  # any number per token
     effect_pending: X_EffectPending
     modifiers: X_OwnedSparse  # any number per Character / Monster
-    count: X_Count
     energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
     map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
     map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
@@ -336,20 +326,6 @@ class X_Window:
 
 
 @dataclass
-class TokenCounts:
-    """The window's valid tokens per entity type across the batch, from the blocks' shapes: they
-    size the heads' one gather, which would otherwise read them back from the GPU"""
-
-    cards: int
-    relics: int
-    potions: int
-    monsters: int
-    event_options: int
-    character: int
-    rooms: int
-
-
-@dataclass
 class X_DrawOrderStates:
     """The states the draw-order layer reads, those whose draw pile shows an order (2 or more draw
     tokens): the ones under Frozen Eye (visible) first. With, from the projector's one read, how
@@ -368,17 +344,15 @@ class X_CoreOutput:
     """`global_` and `x_tokens` are the policy heads': the transformer's, but the draw-order
     layer's on the states under Frozen Eye whose draw pile shows an order. `global_value` is the
     value head's: the layer's on every state whose draw pile shows an order, the transformer's
-    elsewhere. `window` is the packed window's X_Window and `num_tokens` its valid tokens per
-    entity type."""
+    elsewhere. `window` is the packed window's X_Window."""
 
     global_: torch.Tensor  # (B, dim_global)
     global_value: torch.Tensor  # (B, dim_global)
     x_tokens: torch.Tensor  # (N, dim_entity) the refined rows
     window: X_Window
-    num_tokens: TokenCounts
 
 
-@tensorclass
+@dataclass
 class X_Action:
     """The sampled hierarchy per row, engine-facing: `slice_kind` and `rank` name the L2
     selection as the rank-th token of its slice kind, `target` the L3 selection as the
@@ -415,7 +389,10 @@ class X_Rollout:
     the bootstrap value"""
 
     game_state: X_GameState  # N states
-    count_cpu: X_Count  # (N,) game_state's counts on the CPU, where minibatches sum their sizes
+
+    # game_state's counts on the CPU, where minibatches sum their sizes
+    x_count_cpu: torch.Tensor  # (N, number of blocks) long, X_GameState's blocks in order
+
     actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     rewards: torch.Tensor  # (T, E, K)
@@ -431,7 +408,10 @@ class X_TrainingBatch:
     advantage is the per-stream advantages summed, then normalized."""
 
     game_state: X_GameState  # N states — taken per minibatch (take_states)
-    count_cpu: X_Count  # (N,) game_state's counts on the CPU, where minibatches sum their sizes
+
+    # game_state's counts on the CPU, where minibatches sum their sizes
+    x_count_cpu: torch.Tensor  # (N, number of blocks) long, X_GameState's blocks in order
+
     actions: torch.Tensor  # (N, 4): action type, slice kind, rank, target
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it

@@ -339,9 +339,9 @@ def iter_packed_cards(
 
 def encode_batch_cards(
     game_states: list[GameState], device: torch.device
-) -> tuple[X_EntitySparse, torch.Tensor, BatchEffectRows, BatchPriceRows]:
+) -> tuple[X_EntitySparse, BatchEffectRows, BatchPriceRows]:
     """The card block ((N, ENCODING_DIM_CARD) rows held sparse, every state's tokens after the
-    previous state's, + the (N,) `SliceKind` of each token) + each state's (B,) token count + each
+    previous state's, + the (N,) `SliceKind` of each token + each state's (B,) token count) + each
     state's (slice kind, rank, source, effect) rows and its shop tokens' (slice kind, rank, price)
     rows, keyed by the token they belong to."""
     batch_tokens = []
@@ -396,8 +396,7 @@ def encode_batch_cards(
         batch_price_rows.append(price_rows)
 
     return (
-        entity_sparse(np_out, np_slice_kind, ENCODING_SPARSE_CARD, device),
-        torch.from_numpy(np_count).to(device),
+        entity_sparse(np_out, np_slice_kind, np_count, ENCODING_SPARSE_CARD, device),
         batch_effect_rows,
         batch_price_rows,
     )
