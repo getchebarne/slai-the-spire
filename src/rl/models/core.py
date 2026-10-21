@@ -235,14 +235,11 @@ class Core(nn.Module):
             x_refined, x_global_token, x_window, x_states, num_rows, num_pile
         )
 
-        # Each layer state's character among the layer's rows: its state's first, plus its rank
-        x_count_layer = x_window.x_count[x_states]
-        x_character_layer = (
-            x_count_layer.cumsum(0)
-            - x_count_layer
-            + x_character_row[x_states]
-            - x_window.x_first_row[x_states]
-        )
+        # Each layer state's character among the layer's rows: the one CHARACTER row of each of
+        # its states, state after state
+        x_character_layer = torch.nonzero_static(
+            x_window.x_slice_kind[x_rows] == SliceKind.CHARACTER, size=x_states.shape[0]
+        ).squeeze(1)
         x_global_layer = self._global_context(
             x_refined_layer[x_character_layer], x_global_token_layer, x_state_inputs[x_states]
         )

@@ -15,8 +15,6 @@ from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
-from src.rl.packed import rows_of_states
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import SliceKind
 from src.rl.types import X_DrawOrderStates
 from src.rl.types import X_EffectPending
@@ -30,9 +28,9 @@ from src.rl.types import X_Window
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) entity embedder: a private first layer per block, the shared
     row families (health/block, prices, effects, modifiers) added into their owners, then one
-    shared second layer + LayerNorm. Returns the window packed: its tokens (the six blocks then
-    the rooms, state after state) and their X_Window; then the draw-order layer's states, and the
-    embedded pending halt."""
+    shared second layer + LayerNorm. Returns the window packed: its tokens in block order (the six
+    blocks' rows then the rooms', each block's state after state) and their X_Window; then the
+    draw-order layer's states, and the embedded pending halt."""
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
@@ -80,9 +78,9 @@ class EntityProjector(nn.Module):
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
 
-        # X_GameState order: the list below IS the window's entity order, block after block
-        # within each state. Per block: its rows, each state's count of them, and the rows through
-        # the block's private first layer
+        # X_GameState order: the list below IS the window's order, block after block, each block's
+        # rows state after state. Per block: its rows, each state's count of them, and the rows
+        # through the block's private first layer
         window_blocks: list[tuple[X_EntitySparse | X_Rooms, torch.Tensor]] = [
             (x_gs.cards, _project_sparse(self._pre_card, x_gs.cards)),
             (x_gs.relics, _project_sparse(self._pre_relic, x_gs.relics)),
@@ -93,38 +91,22 @@ class EntityProjector(nn.Module):
             (x_gs.rooms, self._pre_room(x_rooms)),
         ]
 
-        # Each state's tokens of each block, and in all; its first row, and its first row of each
-        # block
+        # Each state's tokens of each block, and in all
         x_count_blocks = torch.stack([x_block.x_count for x_block, _ in window_blocks], 1) # (B, 7)
         x_count_window = x_count_blocks.sum(dim=1)  # (B,)
-        x_first_row = x_count_window.cumsum(0) - x_count_window  # (B,)
-        x_first_row_blocks = x_first_row.unsqueeze(1) + x_count_blocks.cumsum(1) - x_count_blocks
         batch_size = x_count_window.shape[0]
 
-        # Each block's tokens written at their rows of the window, with their slice kinds and
-        # masks
-        x_block_row = torch.cat(
+        # The blocks' tokens one after another, with their slice kinds, masks and states
+        x_tokens = torch.cat([x_first for _, x_first in window_blocks])  # (N_tok, D)
+        x_slice_kind = torch.cat([x_block.x_slice_kind for x_block, _ in window_blocks]).long()
+        x_legal = torch.cat([x_block.x_legal for x_block, _ in window_blocks])  # (N_tok, A)
+        x_needs_target = torch.cat([x_block.x_needs_target for x_block, _ in window_blocks])
+        x_state = torch.cat(
             [
-                rows_of_states(
-                    x_first_row_blocks[:, b], x_block.x_count, x_block.x_slice_kind.shape[0]
-                )
-                for b, (x_block, _) in enumerate(window_blocks)
+                torch.repeat_interleave(x_block.x_count, output_size=x_block.x_slice_kind.shape[0])
+                for x_block, _ in window_blocks
             ]
         )  # (N_tok,)
-        num_tokens = x_block_row.shape[0]
-        x_tokens = x_rooms.new_empty(num_tokens, self._dim_entity)  # (N_tok, D)
-        x_tokens[x_block_row] = torch.cat([x_first for _, x_first in window_blocks])
-        x_slice_kind = x_block_row.new_empty(num_tokens)  # (N_tok,)
-        x_slice_kind[x_block_row] = torch.cat(
-            [x_block.x_slice_kind for x_block, _ in window_blocks]
-        ).long()
-        x_legal = x_block_row.new_empty(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool)
-        x_legal[x_block_row] = torch.cat([x_block.x_legal for x_block, _ in window_blocks])
-        x_needs_target = x_block_row.new_empty(num_tokens, dtype=torch.bool)  # (N_tok,)
-        x_needs_target[x_block_row] = torch.cat(
-            [x_block.x_needs_target for x_block, _ in window_blocks]
-        )
-        x_state = torch.repeat_interleave(x_count_window, output_size=num_tokens)  # (N_tok,)
         x_slice_kind_count, x_slice_kind_row = _slice_kind_tables(
             x_state, x_slice_kind, batch_size
         )
@@ -192,8 +174,6 @@ class EntityProjector(nn.Module):
             x_legal=x_legal,
             x_needs_target=x_needs_target,
             x_state=x_state,
-            x_block_row=x_block_row,
-            x_first_row=x_first_row,
             x_count=x_count_window,
             x_slice_kind_row=x_slice_kind_row,
             x_slice_kind_count=x_slice_kind_count,

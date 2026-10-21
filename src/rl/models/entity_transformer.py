@@ -39,6 +39,12 @@ def _states_and_ranks(x_offsets: torch.Tensor, num_rows: int) -> tuple[torch.Ten
     return x_state, x_row - x_offsets[x_state]
 
 
+def _rows_by_state(x_window: X_Window) -> torch.Tensor:
+    """The window's rows laid out by state: each state's rows, state after state, (N,). The sort
+    is stable, so each state's rows keep their block order"""
+    return torch.argsort(x_window.x_state, stable=True)
+
+
 def _block_mask(
     x_offsets_query: torch.Tensor, x_offsets_key: torch.Tensor, num_query: int, num_key: int
 ) -> BlockMask:
@@ -170,17 +176,22 @@ class EntityTransformer(nn.Module):
     def forward(
         self, x_tokens: torch.Tensor, x_window: X_Window
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Refine the packed window's rows (N, D) together with each state's global token, which
-        joins the sequence at the end of its state's rows.
+        """Refine the packed window's rows (N, D), in block order, together with each state's
+        global token, which joins the sequence at the end of its state's rows.
 
-        Returns the refined rows (N, D) and global tokens (B, D)."""
+        Returns the refined rows (N, D), in block order, and global tokens (B, D)."""
         num_rows, dim = x_tokens.shape
         batch_size = x_window.x_count.shape[0]
 
         # The sequence: each state's rows, then its global token, state after state. Each state's
-        # first place in it, then the end; each row's place and each global token's
+        # first place in it, then the end; each row's place, its position by state past one global
+        # token per state before its own, and each global token's
         x_offsets = F.pad((x_window.x_count + 1).cumsum(0), (1, 0))  # (B + 1,)
-        x_place_row = torch.arange(num_rows, device=x_tokens.device) + x_window.x_state  # (N,)
+        x_row_by_state = _rows_by_state(x_window)  # (N,)
+        x_place_row = torch.empty_like(x_row_by_state)
+        x_place_row[x_row_by_state] = (
+            torch.arange(num_rows, device=x_tokens.device) + x_window.x_state[x_row_by_state]
+        )  # (N,)
         x_place_global = x_offsets[1:] - 1  # (B,)
 
         # On the GPU, a tail of zero rows pads it to FlexAttention's block. Zeros, not empty: a
@@ -272,20 +283,22 @@ class DrawOrderLayer(nn.Module):
         num_pile: int,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """The layer over the states `x_states` (S,), each with an ordered draw pile, of the
-        transformer's refined rows (N, D) and global tokens (B, D); `num_rows` and `num_pile` are
-        those states' rows and draw tokens.
+        transformer's refined rows (N, D), in block order, and global tokens (B, D); `num_rows`
+        and `num_pile` are those states' rows and draw tokens.
 
-        Returns those states' rows in the window (num_rows,), state after state, their
-        order-aware rows (num_rows, D), and the states' global tokens (S, D)."""
+        Returns those states' rows in the window (num_rows,), state after state, each state's in
+        block order, their order-aware rows (num_rows, D), and the states' global tokens (S, D)."""
         num_states = x_states.shape[0]
 
-        # The states' rows, state after state: each state's first among them, then the end
+        # The states' rows, state after state: each state's first among them, then the end. Each
+        # is the row `_rows_by_state` puts at its state's first position plus its rank
         x_offsets = F.pad(x_window.x_count[x_states].cumsum(0), (1, 0))  # (S + 1,)
         x_state_layer, x_rank = _states_and_ranks(x_offsets, num_rows)  # (num_rows,)
-        x_rows = x_window.x_first_row[x_states][x_state_layer] + x_rank
+        x_first_by_state = x_window.x_count.cumsum(0) - x_window.x_count  # (B,)
+        x_rows = _rows_by_state(x_window)[x_first_by_state[x_states][x_state_layer] + x_rank]
 
-        # Their piles' rows the same way, bottom first; a draw token's depth is the cards above
-        # it, its pile's count - 1 - its rank
+        # Their piles' rows the same way, each pile's first row plus its rank, bottom first; a draw
+        # token's depth is the cards above it, its pile's count - 1 - its rank
         x_count_pile = x_window.x_slice_kind_count[x_states, SliceKind.CARD_PILE_DRAW]  # (S,)
         x_offsets_pile = F.pad(x_count_pile.cumsum(0), (1, 0))  # (S + 1,)
         x_state_layer_pile, x_rank_pile = _states_and_ranks(x_offsets_pile, num_pile)
