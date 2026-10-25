@@ -7,50 +7,42 @@ from src.rl.types import X_OwnedSparse
 from src.rl.types import X_Tokens
 
 
-def token_sparse(
+def tokens_sparse(
     np_rows: np.ndarray,
     np_token_kind: np.ndarray,
+    np_node_idx: np.ndarray,
     np_count: np.ndarray,
     num_sparse: int,
-    column_start: int,
     device: torch.device,
+    effects: X_OwnedSparse,
+    modifiers: X_OwnedSparse,
 ) -> X_Tokens:
-    """A family's tokens from their (N, D) rows, each with at most `num_sparse` nonzero columns,
-    their entries offset into the shared column space from `column_start`; their (N,) token kinds
-    and each state's (B,) count of them; their masks all False and their nodes 0"""
+    """The tokens from their (N, D) rows, each with at most `num_sparse` nonzero columns, their
+    (N,) token kinds and nodes, and each state's (B,) count of them; their masks all False, for
+    build_masks to fill; and the rows they own"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
-    np_column[np_value != 0] += column_start  # the (0, 0.0) padding stays
     return X_Tokens(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
         x_token_kind=torch.from_numpy(np_token_kind).to(device),
         x_legal=torch.zeros(len(np_rows), NUM_ACTION_TYPES, dtype=torch.bool, device=device),
         x_needs_target=torch.zeros(len(np_rows), dtype=torch.bool, device=device),
-        x_node_idx=torch.zeros(len(np_rows), dtype=torch.int16, device=device),
+        x_node_idx=torch.from_numpy(np_node_idx).to(device),
+        effects=effects,
+        modifiers=modifiers,
         x_count=torch.from_numpy(np_count).to(device),
     )
 
 
 def owned_sparse(
-    np_rows: np.ndarray,
-    np_owner_token_kind: np.ndarray,
-    np_owner_rank: np.ndarray,
-    np_count: np.ndarray,
-    np_first_offset: np.ndarray,
-    num_sparse: int,
-    device: torch.device,
+    np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_OwnedSparse:
-    """A family of owned rows from its (N, D) rows, each with at most `num_sparse` nonzero
-    columns, their (N,) owners' token kinds and ranks, and each state's (B,) count of them. Each
-    owner becomes its offset among its state's tokens through `np_first_offset`, (B,
-    len(TokenKind)): each state's offset of each token kind's first token"""
+    """A family of owned rows from its (M, D) rows, each with at most `num_sparse` nonzero
+    columns, token after token, and each token's (N,) count of them"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
-    np_state = np.repeat(np.arange(len(np_count)), np_count)
-    np_owner_offset = np_first_offset[np_state, np_owner_token_kind] + np_owner_rank
     return X_OwnedSparse(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
-        x_owner_offset=torch.from_numpy(np_owner_offset).to(device),
         x_count=torch.from_numpy(np_count).to(device),
     )
 

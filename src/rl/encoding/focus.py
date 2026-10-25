@@ -6,20 +6,14 @@ from typing import get_args
 import numpy as np
 import torch
 from slai import CandidatePool
-from slai import Chest
 from slai import ChestKind
-from slai import Combat
 from slai import EffectBombArm
-from slai import Event
 from slai import GameEnv
 from slai import GameState
 from slai import PendingEffect
 from slai import RelicName
-from slai import RestSite
-from slai import Reward
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
-from slai import Shop
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
@@ -40,41 +34,26 @@ class Focus(IntEnum):
     MAP = 6
 
 
-def _focus_from(
-    reward: Reward | None,
-    combat: Combat | None,
-    shop: Shop | None,
-    chest: Chest | None,
-    rest_site: RestSite | None,
-    event: Event | None,
-) -> Focus:
-    """Precedence over pre-fetched context snapshots (FFI accesses deep-clone —
-    callers that already hold the contexts must not re-fetch them)."""
-    if reward is not None:
+def derive_focus(game_state: GameState) -> Focus:
+    if game_state.reward is not None:
         return Focus.REWARD
-    if combat is not None:
+    if game_state.combat is not None:
         return Focus.COMBAT
-    if shop is not None:
+    if game_state.shop is not None:
         return Focus.SHOP
-    if chest is not None:
+    if game_state.chest is not None:
         return Focus.CHEST
-    if rest_site is not None:
+    if game_state.rest_site is not None:
         return Focus.REST_SITE
-    if event is not None:
+    if game_state.event is not None:
         return Focus.EVENT
 
     return Focus.MAP
 
 
-def derive_focus(state: GameState) -> Focus:
-    return _focus_from(
-        state.reward, state.combat, state.shop, state.chest, state.rest_site, state.event
-    )
-
-
-def draw_order_visible(state: GameState) -> bool:
+def draw_order_visible(game_state: GameState) -> bool:
     """Frozen Eye shows the draw pile's order."""
-    return any(relic.name == RelicName.FrozenEye for relic in state.relics)
+    return any(relic.name == RelicName.FrozenEye for relic in game_state.relics)
 
 
 # The engine's halting kinds, straight from the FFI's PendingEffect union, so a new halting
@@ -132,16 +111,13 @@ _INPUT_POOL_CAP = {
 }
 
 
-def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
-    combat = state.combat
-    reward = state.reward
-    shop = state.shop
-    chest = state.chest
-    rest_site = state.rest_site
-    event = state.event
-    pending = state.effect_pending
+def _encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
+    combat = game_state.combat
+    chest = game_state.chest
+    rest_site = game_state.rest_site
+    pending = game_state.effect_pending
 
-    out[OFF_FOCUS_KIND + _focus_from(reward, combat, shop, chest, rest_site, event)] = 1.0
+    out[OFF_FOCUS_KIND + derive_focus(game_state)] = 1.0
 
     # Pending input
     if pending is not None:
@@ -179,21 +155,23 @@ def _encode_focus_into(state: GameState, out: np.ndarray) -> None:
         out[OFF_FOCUS_REST_DONE] = float(rest_site.done)
 
     # Context-presence bits: the Focus OHE alone can't express overlays
-    for i, ctx in enumerate((combat, reward, shop, event, rest_site, chest)):
+    for i, ctx in enumerate(
+        (combat, game_state.reward, game_state.shop, game_state.event, rest_site, chest)
+    ):
         if ctx is not None:
             out[OFF_FOCUS_PRESENCE + i] = 1.0
 
-    out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(state))
+    out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(game_state))
 
 
-def encode_batch_focus(batch_state: list[GameState], device: torch.device) -> torch.Tensor:
-    batch_size = len(batch_state)
+def encode_batch_focus(game_states: list[GameState], device: torch.device) -> torch.Tensor:
+    batch_size = len(game_states)
 
     # Pre-allocate NumPy array
     np_out = np.zeros((batch_size, ENCODING_DIM_FOCUS), dtype=np.float32)
 
-    for b, state in enumerate(batch_state):
-        _encode_focus_into(state, np_out[b])
+    for b, game_state in enumerate(game_states):
+        _encode_focus_into(game_state, np_out[b])
 
     return torch.from_numpy(np_out).to(device)
 

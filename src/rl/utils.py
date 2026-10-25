@@ -49,13 +49,13 @@ _SCRIPTED_ACTION_TYPES = frozenset({ActionType.RewardTakeGold, ActionType.Reward
 def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
     """`env.step(action)`, then the scripted actions until none is legal, all inside
     this one policy step."""
-    state, terminated = env.step(action)
+    game_state, terminated = env.step(action)
     while not terminated:
         scripted = [a for a in env.get_legal_actions() if a.action_type in _SCRIPTED_ACTION_TYPES]
         if not scripted:
             break
-        state, terminated = env.step(scripted[0])
-    return state, terminated
+        game_state, terminated = env.step(scripted[0])
+    return game_state, terminated
 
 
 def parent_alive() -> bool:

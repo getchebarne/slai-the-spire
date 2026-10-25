@@ -3,8 +3,6 @@ from enum import StrEnum
 from enum import auto
 
 import numpy as np
-import torch
-from slai import Combat
 from slai import Effect
 from slai import GameState
 from slai import IntentKind
@@ -23,12 +21,6 @@ from src.rl.constants import MONSTER_MOVESET_MAX
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
-from src.rl.encoding.sparse import token_sparse
-from src.rl.types import BatchEffectRows
-from src.rl.types import EffectRow
-from src.rl.types import EffectSource
-from src.rl.types import TokenKind
-from src.rl.types import X_Tokens
 from src.rl.types import make_channel_allocator
 
 
@@ -51,7 +43,7 @@ _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 _DAMAGE_TOTAL_DIM = get_piecewise_dim(0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
 
 
-# Health/block is not here: it is the combatants' shared family (health_block.py)
+# Health/block is not here: it is the combatants' health/block columns (health_block.py)
 class MonsterChannel(StrEnum):
     NAME = auto()
     INTENT_DAMAGE = auto()
@@ -112,11 +104,12 @@ def _intent_total_damage(monster: Monster) -> int:
     return (intent.damage or 0) * (intent.instances or 1)
 
 
-def _encode_monster_into(
+def encode_monster_into(
     monster: Monster,
     char_health: int,
     char_block: int,
     outgoing_damage: int | None,
+    holds_stasis: bool,
     out: np.ndarray,
 ) -> None:
     out[OFF_MONSTER_NAME + _MAP_MONSTER_NAME[monster.name]] = 1.0
@@ -180,6 +173,9 @@ def _encode_monster_into(
     if len(move_history) >= 2 + shift:
         out[OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
 
+    # Stasis
+    out[OFF_MONSTER_HOLDS_STASIS] = float(holds_stasis)
+
 
 def outgoing_damage(monsters: list[Monster]) -> int | None:
     # Runic Dome hides every intent, so the incoming damage is unknown
@@ -194,7 +190,7 @@ def outgoing_damage(monsters: list[Monster]) -> int | None:
 _MOVESET_EFFECTS: dict[int, dict[MonsterName, tuple[Effect, ...]]] = {}
 
 
-def _moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
+def moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
     by_name = _MOVESET_EFFECTS.get(ascension)
     if by_name is None:
         by_name = {
@@ -210,67 +206,7 @@ def _moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
     return by_name
 
 
-def _get_monster_entities(combat: Combat | None) -> list[Monster]:
+def get_monster_entities(game_state: GameState) -> list[Monster]:
     """The monsters behind the monster tokens, in slot order"""
+    combat = game_state.combat
     return combat.monsters if combat is not None else []
-
-
-def encode_batch_monsters(
-    game_states: list[GameState], column_start: int, device: torch.device
-) -> tuple[X_Tokens, BatchEffectRows, BatchEffectRows]:
-    """The monster tokens ((N, dim) rows held sparse, their columns from `column_start` in the
-    shared space, every state's monsters after the previous state's, + the (N,) token kind of each
-    token + each state's (B,) monster count) + each state's live-move effect rows and whole-moveset
-    rows (what it could do, not the live intent), both keyed by monster slot."""
-    batch_monsters = []
-    batch_card_pile_stasis = []
-    for game_state in game_states:
-        combat = game_state.combat  # Hoisted: each read clones across the FFI
-        batch_monsters.append(_get_monster_entities(combat))
-        batch_card_pile_stasis.append(combat.card_pile_stasis if combat is not None else [])
-
-    np_count = np.array([len(monsters) for monsters in batch_monsters], dtype=np.int64)  # (B,)
-    np_out = np.zeros((np_count.sum(), ENCODING_DIM_MONSTER), dtype=np.float32)  # (N, D)
-    np_token_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
-    batch_effect_rows_move: BatchEffectRows = []
-    batch_effect_rows_moveset: BatchEffectRows = []
-
-    row = 0
-    for game_state, monsters, card_pile_stasis in zip(
-        game_states, batch_monsters, batch_card_pile_stasis
-    ):
-        character = game_state.character
-        damage = outgoing_damage(monsters)
-        by_name = _moveset_effects(game_state.ascension)
-        effect_rows_move: list[EffectRow] = []
-        effect_rows_moveset: list[EffectRow] = []
-        for i, monster in enumerate(monsters):
-            _encode_monster_into(monster, character.health, character.block, damage, np_out[row])
-
-            # The stasis pile is slot-aligned with the monsters: None where one holds no card
-            np_out[row, OFF_MONSTER_HOLDS_STASIS] = float(card_pile_stasis[i] is not None)
-
-            # `TokenKind`
-            np_token_kind[row] = TokenKind.MONSTERS
-
-            # Effects
-            effects = monster.move_effects  # Bound once: each read clones the Vec
-            effect_rows_move += [
-                (TokenKind.MONSTERS, i, EffectSource.MONSTER_MOVE, effect) for effect in effects
-            ]
-            effect_rows_moveset += [
-                (TokenKind.MONSTERS, i, EffectSource.MONSTER_MOVESET, effect)
-                for effect in by_name[monster.name]
-            ]
-            row += 1
-
-        batch_effect_rows_move.append(effect_rows_move)
-        batch_effect_rows_moveset.append(effect_rows_moveset)
-
-    return (
-        token_sparse(
-            np_out, np_token_kind, np_count, ENCODING_SPARSE_MONSTER, column_start, device
-        ),
-        batch_effect_rows_move,
-        batch_effect_rows_moveset,
-    )

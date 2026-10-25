@@ -6,11 +6,13 @@ import torch.nn as nn
 from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.state import COLUMN_START_CHARACTER
-from src.rl.encoding.state import COLUMN_START_EVENT_OPTION
-from src.rl.encoding.state import COLUMN_START_MONSTER
-from src.rl.encoding.state import COLUMN_START_POTION
-from src.rl.encoding.state import COLUMN_START_RELIC
+from src.rl.encoding.state import COL_START_CHARACTER
+from src.rl.encoding.state import COL_START_EVENT_OPTION
+from src.rl.encoding.state import COL_START_HEALTH_BLOCK
+from src.rl.encoding.state import COL_START_MONSTER
+from src.rl.encoding.state import COL_START_POTION
+from src.rl.encoding.state import COL_START_PRICE
+from src.rl.encoding.state import COL_START_RELIC
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -228,21 +230,23 @@ class ActorCritic(nn.Module):
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per family's columns, split at each family's start, as a family's
-        # own layer: orthogonal over all of them would shrink each column's scale
+        # The shared first layer per column range, each family's then the health/block and price
+        # ones, as its own layer: orthogonal over all of them would shrink each column's scale
         with torch.no_grad():
-            for x_weight_family in torch.tensor_split(
+            for x_weight_range in torch.tensor_split(
                 self.core._entity_projector._pre_token.weight,
                 (
-                    COLUMN_START_RELIC,
-                    COLUMN_START_POTION,
-                    COLUMN_START_MONSTER,
-                    COLUMN_START_EVENT_OPTION,
-                    COLUMN_START_CHARACTER,
+                    COL_START_RELIC,
+                    COL_START_POTION,
+                    COL_START_MONSTER,
+                    COL_START_EVENT_OPTION,
+                    COL_START_CHARACTER,
+                    COL_START_HEALTH_BLOCK,
+                    COL_START_PRICE,
                 ),
                 dim=1,
             ):
-                nn.init.orthogonal_(x_weight_family, gain=math.sqrt(2))
+                nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
         nn.init.orthogonal_(self._head_action_type._scorer[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_2._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)
