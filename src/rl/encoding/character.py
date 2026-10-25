@@ -3,11 +3,7 @@ from enum import StrEnum
 from enum import auto
 
 import numpy as np
-import torch
-from slai import Card
 from slai import CardCostKindMinusDiscardsThisTurn
-from slai import Character
-from slai import Combat
 from slai import GameEnv
 from slai import GameState
 from slai import get_card_templates
@@ -16,13 +12,9 @@ from src.rl.constants import CHARACTER_HEALTH_CAP
 from src.rl.constants import FACTOR_VULN
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.encoding.monster import outgoing_damage
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
-from src.rl.encoding.sparse import token_sparse
-from src.rl.types import TokenKind
-from src.rl.types import X_Tokens
 from src.rl.types import make_channel_allocator
 
 
@@ -50,7 +42,7 @@ _THIS_TURN_DISCARDS_MAX = max(
 _PANACHE_PLAYS = 5
 
 
-# Health / Block is not here: it is the combatants' shared family (health_block.py)
+# Health / Block is not here: it is the combatants' health/block columns (health_block.py)
 class CharacterChannel(StrEnum):
     GOLD = auto()
     GOLD_SCALAR = auto()
@@ -100,14 +92,11 @@ ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 ENCODING_SPARSE_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
 
 
-def _encode_character_into(
-    character: Character,
-    incoming_damage: int | None,
-    deck: list[Card],
-    combat: Combat | None,
-    potion_drop_mod: int,
-    out: np.ndarray,
+def encode_character_into(
+    game_state: GameState, incoming_damage: int | None, out: np.ndarray
 ) -> None:
+    character = game_state.character
+    deck = game_state.card_pile_deck
     gold_bucket = get_piecewise_bucket(
         character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD
     )
@@ -124,8 +113,9 @@ def _encode_character_into(
         character.reward_roll_offset - _REWARD_ROLL_OFFSET_MIN
     ) / (_REWARD_ROLL_OFFSET_BASE - _REWARD_ROLL_OFFSET_MIN)
     out[OFF_CHARACTER_POTION_DROP_CHANCE] = (
-        min(max(GameEnv.POTION_DROP_CHANCE_BASE + potion_drop_mod, 0), 100) / 100
+        min(max(GameEnv.POTION_DROP_CHANCE_BASE + game_state.potion_drop_mod, 0), 100) / 100
     )
+    combat = game_state.combat
     if combat is not None:
         if incoming_damage is None:
             out[OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
@@ -149,34 +139,3 @@ def _encode_character_into(
         )
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_SKILL] = float(combat.orange_pellets_played_skill)
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(combat.orange_pellets_played_power)
-
-
-def encode_batch_character(
-    game_states: list[GameState], column_start: int, device: torch.device
-) -> X_Tokens:
-    """The character tokens: one row per state, (B, dim) held sparse, its columns from
-    `column_start` in the shared space, + the (B,) token kind — the singleton is always present —
-    and each state's (B,) count, 1."""
-    batch_size = len(game_states)
-
-    # Pre-allocate NumPy array
-    np_out = np.zeros((batch_size, ENCODING_DIM_CHARACTER), dtype=np.float32)
-
-    for b, game_state in enumerate(game_states):
-        combat = game_state.combat
-        monsters = combat.monsters if combat is not None else []
-
-        _encode_character_into(
-            game_state.character,
-            outgoing_damage(monsters),
-            game_state.card_pile_deck,
-            combat,
-            game_state.potion_drop_mod,
-            np_out[b],
-        )
-
-    np_token_kind = np.full(batch_size, TokenKind.CHARACTER, dtype=np.int16)
-    np_count = np.ones(batch_size, dtype=np.int64)
-    return token_sparse(
-        np_out, np_token_kind, np_count, ENCODING_SPARSE_CHARACTER, column_start, device
-    )

@@ -19,7 +19,7 @@ FAST_MODE = False
 NEOW = True
 
 # Actor encoding limits. Monster and character share ENTITY caps: health_block.py
-# builds the one health/block row both feed EntityProjector's shared family block.
+# writes the health/block columns both share.
 
 # Every Monster template across every ascension, for the catalog folds below
 _MONSTER_TEMPLATES = [

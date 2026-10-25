@@ -14,11 +14,9 @@ Two rules the layout depends on:
 """
 
 import math
-import warnings
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
-from collections.abc import Sequence
 from enum import StrEnum
 from enum import auto
 from types import UnionType
@@ -55,16 +53,12 @@ from slai import get_potion_templates
 from slai import get_relic_templates
 
 from src.rl.constants import ASCENSION_LEVEL
-from src.rl.constants import MAX_EFFECTS_STATE
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.sparse import effect_pending_sparse
-from src.rl.encoding.sparse import owned_sparse
-from src.rl.types import BatchEffectRows
 from src.rl.types import EffectSource
 from src.rl.types import X_EffectPending
-from src.rl.types import X_OwnedSparse
 from src.rl.types import make_channel_allocator
 
 
@@ -282,7 +276,7 @@ class EffectChannel(StrEnum):
     SELECTION_KIND = auto()
     SELECT_COUNT = auto()
     CANDIDATE_FILTER = auto()
-    EFFECT_SOURCE = auto()  # written by encode_batch_effects, not the row encoders
+    EFFECT_SOURCE = auto()  # written by encode_effect_row_into_w_cache, outside the row cache
 
     # Categorical params, named for the engine type they one-hot
     MODIFIER_KIND = auto()
@@ -843,7 +837,7 @@ def effect_key(effects: Iterable[Effect]) -> tuple[Effect, ...]:
     return tuple(effects)
 
 
-def encode_effect_row_into_w_cache(effect: Effect, out: np.ndarray) -> None:
+def encode_effect_row_into_w_cache(effect: Effect, source: EffectSource, out: np.ndarray) -> None:
     row = _EFFECT_ROW_CACHE.get(effect)
     if row is None:
         row = np.zeros(ENCODING_DIM_EFFECT, dtype=np.float32)
@@ -853,6 +847,7 @@ def encode_effect_row_into_w_cache(effect: Effect, out: np.ndarray) -> None:
             _EFFECT_ROW_CACHE.clear()
         _EFFECT_ROW_CACHE[effect] = row
     out[:] = row
+    out[OFF_EFFECT_SOURCE + source] = 1.0
 
 
 class _NormMode(StrEnum):
@@ -914,65 +909,6 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
     rows[..., _IDXS_SCALED] = rows_gather
 
 
-# Row families that have already warned about overflow — truncation is never silent
-_WARNED_OVERFLOW: set[str] = set()
-
-
-def encode_batch_effects(
-    game_states: list[GameState],
-    sources: Sequence[BatchEffectRows],
-    np_first_offset: np.ndarray,
-    device: torch.device,
-) -> X_OwnedSparse:
-    """Every state's effect rows as one (N, D) block, held sparse, every state's after the
-    previous state's, with their owners as offsets through `np_first_offset`; and each state's (B,)
-    row count.
-
-    `sources` is per-state (token kind, rank, source, effect) rows in fill priority, so a state
-    past MAX_EFFECTS_STATE drops its last sources' rows."""
-    batch_size = len(game_states)
-
-    # Each state's rows in fill priority, cut to MAX_EFFECTS_STATE
-    batch_rows = [
-        [effect_row for batch_effect_rows in sources for effect_row in batch_effect_rows[b]]
-        for b in range(batch_size)
-    ]
-    if "effects" not in _WARNED_OVERFLOW and any(
-        len(rows) > MAX_EFFECTS_STATE for rows in batch_rows
-    ):
-        _WARNED_OVERFLOW.add("effects")
-        warnings.warn(
-            f"effect rows exceeded {MAX_EFFECTS_STATE} in one state; "
-            "deep card piles dropped (constants.MAX_EFFECTS_STATE)"
-        )
-    np_count = np.array([min(len(rows), MAX_EFFECTS_STATE) for rows in batch_rows], dtype=np.int64)
-
-    # Initialize NumPy arrays
-    np_effect = np.zeros((np_count.sum(), ENCODING_DIM_EFFECT), dtype=np.float32)
-    np_owner_token_kind = np.empty(np_count.sum(), dtype=np.int64)
-    np_owner_rank = np.empty(np_count.sum(), dtype=np.int64)
-
-    row = 0
-    for rows, count in zip(batch_rows, np_count):
-        for token_kind, rank, source, effect in rows[:count]:
-            encode_effect_row_into_w_cache(effect, np_effect[row])
-            np_effect[row, OFF_EFFECT_SOURCE + source] = 1.0
-            np_owner_token_kind[row] = token_kind
-            np_owner_rank[row] = rank
-            row += 1
-
-    normalize_effect_rows(np_effect)
-    return owned_sparse(
-        np_effect,
-        np_owner_token_kind,
-        np_owner_rank,
-        np_count,
-        np_first_offset,
-        ENCODING_SPARSE_EFFECT,
-        device,
-    )
-
-
 def encode_batch_effect_pending(
     game_states: list[GameState], device: torch.device
 ) -> X_EffectPending:
@@ -986,8 +922,7 @@ def encode_batch_effect_pending(
     row = 0
     for effect_pending in batch_effect_pending:
         if effect_pending is not None:
-            encode_effect_row_into_w_cache(effect_pending, np_effect[row])
-            np_effect[row, OFF_EFFECT_SOURCE + EffectSource.PENDING] = 1.0
+            encode_effect_row_into_w_cache(effect_pending, EffectSource.PENDING, np_effect[row])
             row += 1
 
     normalize_effect_rows(np_effect)

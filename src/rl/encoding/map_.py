@@ -121,9 +121,9 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
     return grid
 
 
-def _wing_boots_charged(state: GameState) -> bool:
+def _wing_boots_charged(game_state: GameState) -> bool:
     """Wing Boots with charges left: the engine offers every next-row Room, not just the edges."""
-    return any(r.name == RelicName.WingBoots and r.counter > 0 for r in state.relics)
+    return any(r.name == RelicName.WingBoots and r.counter > 0 for r in game_state.relics)
 
 
 def _next_row_candidate_cols(
@@ -148,7 +148,7 @@ def _next_row_candidate_cols(
     return list(room_curr.edges)
 
 
-def _get_room_entities(game_state: GameState) -> list[Room]:
+def get_room_entities(game_state: GameState) -> list[Room]:
     """The Rooms a RoomSelect can name, in column order: the room tokens' rank order"""
     map_ = game_state.map
     rooms = map_.rooms  # reconstructs the whole grid across the FFI; fetched once
@@ -199,15 +199,14 @@ def _encode_map_meta_into(
     out[OFF_MAP_ACT + (act - 1)] = 1.0
 
 
-def _encode_unknown_room_into(
-    game_state: GameState, room_kind_resolved: RoomKind | None, out: np.ndarray
-) -> None:
+def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
     # The chances drift up by their base until rolled, and the roll caps them at 1
     out[OFF_MAP_UNKNOWN_CHANCE_MONSTER] = min(game_state.unknown_chance_monster, 1.0)
     out[OFF_MAP_UNKNOWN_CHANCE_SHOP] = min(game_state.unknown_chance_shop, 1.0)
     out[OFF_MAP_UNKNOWN_CHANCE_TREASURE] = min(game_state.unknown_chance_treasure, 1.0)
 
     # None before the first Room
+    room_kind_resolved = game_state.map.room_kind_resolved
     if room_kind_resolved is not None:
         out[OFF_MAP_ROOM_KIND_RESOLVED + _MAP_ROOM_KIND[room_kind_resolved]] = 1.0
 
@@ -235,9 +234,10 @@ def _encode_room_node_idx_into(
 
 def encode_batch_map(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """The map grid, the reachable next-row rooms' node indices as rows (every state's after the
-    previous state's) and each state's (B,) room count, and the map meta"""
+) -> tuple[torch.Tensor, np.ndarray, np.ndarray, torch.Tensor]:
+    """The map grid, the reachable next-row rooms' node indices (every state's after the previous
+    state's) and each state's (B,) room count, as NumPy arrays for the tokens' layout, and the map
+    meta"""
     batch_size = len(game_states)
     np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
     np_node_idx = np.empty(batch_size * MAP_WIDTH, dtype=np.int16)  # every state's rooms at most
@@ -268,11 +268,11 @@ def encode_batch_map(
         _encode_map_meta_into(
             rooms, y_current, x_current, map_.boss, game_state.act, winged, np_meta[b]
         )
-        _encode_unknown_room_into(game_state, map_.room_kind_resolved, np_meta[b])
+        _encode_unknown_room_into(game_state, np_meta[b])
 
     return (
         torch.from_numpy(np_grid).to(device),
-        torch.from_numpy(np_node_idx[:row]).to(device),
-        torch.from_numpy(np_count).to(device),
+        np_node_idx[:row],
+        np_count,
         torch.from_numpy(np_meta).to(device),
     )

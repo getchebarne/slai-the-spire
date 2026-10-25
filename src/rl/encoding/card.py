@@ -1,11 +1,9 @@
 import warnings
-from collections.abc import Iterator
 from enum import StrEnum
 from enum import auto
 from typing import get_args
 
 import numpy as np
-import torch
 from slai import CandidatePool
 from slai import Card
 from slai import CardColor
@@ -14,7 +12,6 @@ from slai import CardCostKindXCost
 from slai import CardKind
 from slai import CardName
 from slai import CardRarity
-from slai import Combat
 from slai import CostScope
 from slai import EffectSetCostOverride
 from slai import GameState
@@ -35,16 +32,8 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
 from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.encoding.effect import catalog_effects
-from src.rl.encoding.sparse import token_sparse
-from src.rl.types import TOKEN_KINDS_CARD
 from src.rl.types import TOKEN_KINDS_CARD_REWARDS
-from src.rl.types import BatchEffectRows
-from src.rl.types import BatchPriceRows
-from src.rl.types import EffectRow
-from src.rl.types import EffectSource
-from src.rl.types import PriceRow
 from src.rl.types import TokenKind
-from src.rl.types import X_Tokens
 from src.rl.types import make_channel_allocator
 
 
@@ -238,16 +227,11 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
     return cards[:cap]
 
 
-def _get_card_entities(
-    token_kind: TokenKind, game_state: GameState, combat: Combat | None
-) -> list[Card]:
+def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
     """The GameState card pile a card token kind names, truncated to the pile's cap
-    (used by iter_packed_cards + masks dedup). A card past the cap has no token,
-    so masks and prices cannot name it.
-
-    `combat` is the caller's hoisted `game_state.combat`: every context access
-    deep-clones the whole snapshot across the FFI, so it is fetched once per
-    state, never per token kind."""
+    (used by get_entities_for_token_kind + masks dedup). A card past the cap has no token,
+    so masks and prices cannot name it."""
+    combat = game_state.combat
     match token_kind:
         case TokenKind.CARD_PILE_HAND:
             return combat.card_pile_hand[:MAX_SIZE_CARD_PILE_HAND] if combat is not None else []
@@ -327,77 +311,3 @@ def _get_card_entities(
             return game_state.card_pile_selected[:MAX_SIZE_CARD_PILE_SELECTED]
         case _:
             raise ValueError(f"Unsupported `TokenKind`: {token_kind}")
-
-
-def iter_packed_cards(
-    game_state: GameState, combat: Combat | None
-) -> Iterator[tuple[TokenKind, int, Card]]:
-    for token_kind in TOKEN_KINDS_CARD:
-        for rank, card in enumerate(_get_card_entities(token_kind, game_state, combat)):
-            yield token_kind, rank, card
-
-
-def encode_batch_cards(
-    game_states: list[GameState], column_start: int, device: torch.device
-) -> tuple[X_Tokens, BatchEffectRows, BatchPriceRows]:
-    """The card tokens ((N, ENCODING_DIM_CARD) rows held sparse, their columns from
-    `column_start` in the shared space, every state's tokens after the previous state's, + the (N,)
-    `TokenKind` of each token + each state's (B,) token count) + each state's (token kind, rank,
-    source, effect) rows and its shop tokens' (token kind, rank, price) rows, keyed by the token
-    they belong to."""
-    batch_tokens = []
-    batch_energy_current = []
-    batch_card_prices = []
-    for game_state in game_states:
-        combat = game_state.combat  # Hoisted; each read clones across the FFI
-        batch_tokens.append(list(iter_packed_cards(game_state, combat)))
-        batch_energy_current.append(combat.energy.energy_current if combat is not None else 0)
-        shop = game_state.shop
-        batch_card_prices.append(shop.card_prices if shop is not None else [])
-
-    np_count = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
-    np_out = np.zeros((np_count.sum(), ENCODING_DIM_CARD), dtype=np.float32)  # (N, D)
-    np_token_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
-    batch_effect_rows: BatchEffectRows = []
-    batch_price_rows: BatchPriceRows = []
-
-    row = 0
-    for b, (tokens, energy_current) in enumerate(zip(batch_tokens, batch_energy_current)):
-        effect_rows: list[EffectRow] = []
-        price_rows: list[PriceRow] = []
-
-        # Shop tokens come in shop order, so they take the parallel price list in step
-        card_prices = iter(batch_card_prices[b])
-        for token_kind, rank, card in tokens:
-            # Encode card
-            encode_card_into_w_cache(card, energy_current, np_out[row])
-
-            # Stamp `TokenKind`
-            np_token_kind[row] = token_kind
-
-            # Collect its price
-            if token_kind == TokenKind.CARD_SHOP:
-                price_rows.append((token_kind, rank, next(card_prices)))
-
-            # Collect Effects
-            effects_play = card.effects_play  # Bound once; each read clones the Vec
-            if effects_play:
-                effect_rows += [
-                    (token_kind, rank, EffectSource.CARD_PLAY, effect) for effect in effects_play
-                ]
-            effect_rows += [
-                (token_kind, rank, EffectSource.CARD_DISCARD, effect)
-                for effect in card.effects_discard
-            ]
-            effect_rows += [
-                (token_kind, rank, EffectSource.CARD_DRAW, effect) for effect in card.effects_draw
-            ]
-            row += 1
-        batch_effect_rows.append(effect_rows)
-        batch_price_rows.append(price_rows)
-
-    return (
-        token_sparse(np_out, np_token_kind, np_count, ENCODING_SPARSE_CARD, column_start, device),
-        batch_effect_rows,
-        batch_price_rows,
-    )

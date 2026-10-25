@@ -1,9 +1,7 @@
-from collections.abc import Iterator
 from enum import StrEnum
 from enum import auto
 
 import numpy as np
-import torch
 from slai import GameState
 from slai import Relic
 from slai import RelicName
@@ -14,15 +12,7 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
-from src.rl.encoding.sparse import token_sparse
-from src.rl.types import TOKEN_KINDS_RELIC
-from src.rl.types import BatchEffectRows
-from src.rl.types import BatchPriceRows
-from src.rl.types import EffectRow
-from src.rl.types import EffectSource
-from src.rl.types import PriceRow
 from src.rl.types import TokenKind
-from src.rl.types import X_Tokens
 from src.rl.types import make_channel_allocator
 
 
@@ -87,7 +77,7 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
     out[:] = row
 
 
-def _get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list:
+def get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list:
     # Each collection truncated to its own cap: a relic past it has no token
     match token_kind:
         case TokenKind.RELIC_OWNED:
@@ -105,74 +95,3 @@ def _get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list:
             return []
         case _:
             raise ValueError(f"not a relic token kind: {token_kind}")
-
-
-def iter_packed_relics(game_state: GameState) -> Iterator[tuple[TokenKind, int, Relic]]:
-    """(token kind, rank, relic) for every relic token: the token kinds back to back in
-    TOKEN_KINDS_RELIC order, each collection in engine order."""
-    for token_kind in TOKEN_KINDS_RELIC:
-        for rank, relic in enumerate(_get_relic_entities(token_kind, game_state)):
-            yield token_kind, rank, relic
-
-
-def encode_batch_relics(
-    game_states: list[GameState], column_start: int, device: torch.device
-) -> tuple[X_Tokens, BatchEffectRows, BatchPriceRows]:
-    """The relic tokens ((N, ENCODING_DIM_RELIC) rows held sparse, their columns from
-    `column_start` in the shared space, every state's tokens after the previous state's, + the (N,)
-    token kind of each token + each state's (B,) token count) + each state's (token kind, rank,
-    source, effect) rows (every trigger's, per relic) and its shop tokens' (token kind, rank,
-    price) rows, keyed by the token they belong to."""
-    batch_tokens = [list(iter_packed_relics(game_state)) for game_state in game_states]
-    batch_relic_prices = []
-    for game_state in game_states:
-        shop = game_state.shop
-        batch_relic_prices.append(shop.relic_prices if shop is not None else [])
-
-    np_count = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
-    np_out = np.zeros((np_count.sum(), ENCODING_DIM_RELIC), dtype=np.float32)  # (N, D)
-    np_token_kind = np.empty(np_count.sum(), dtype=np.int16)  # (N,)
-    batch_effect_rows: BatchEffectRows = []
-    batch_price_rows: BatchPriceRows = []
-
-    row = 0
-    for b, tokens in enumerate(batch_tokens):
-        effect_rows: list[EffectRow] = []
-        price_rows: list[PriceRow] = []
-
-        # Shop tokens come in shop order, so they take the parallel price list in step
-        relic_prices = iter(batch_relic_prices[b])
-        for token_kind, rank, relic in tokens:
-            encode_relic_into_w_cache(relic, np_out[row])
-
-            # `TokenKind`
-            np_token_kind[row] = token_kind
-
-            # Price
-            if token_kind == TokenKind.RELIC_SHOP:
-                price_rows.append((token_kind, rank, next(relic_prices)))
-
-            # Effects
-            effect_rows += [
-                (token_kind, rank, source, effect)
-                for effects, source in (
-                    (relic.effects_combat_start, EffectSource.RELIC_COMBAT_START),
-                    (relic.effects_turn_start, EffectSource.RELIC_TURN_START),
-                    (relic.effects_turn_end, EffectSource.RELIC_TURN_END),
-                    (relic.effects_pickup, EffectSource.RELIC_PICKUP),
-                    (relic.effects_rest, EffectSource.RELIC_REST),
-                    (relic.effects_counter, EffectSource.RELIC_COUNTER),
-                    (relic.effects_combat_end, EffectSource.RELIC_COMBAT_END),
-                )
-                for effect in effects
-            ]
-            row += 1
-
-        batch_effect_rows.append(effect_rows)
-        batch_price_rows.append(price_rows)
-
-    return (
-        token_sparse(np_out, np_token_kind, np_count, ENCODING_SPARSE_RELIC, column_start, device),
-        batch_effect_rows,
-        batch_price_rows,
-    )

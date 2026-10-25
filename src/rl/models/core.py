@@ -13,7 +13,7 @@ from src.rl.models.entity_projector import SpreadEmbedding
 from src.rl.models.entity_transformer import DrawOrderLayer
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
-from src.rl.types import CAP_OF_TOKEN_KIND
+from src.rl.types import MAP_TOKEN_KIND_CAP
 from src.rl.types import TOKEN_KINDS_CARD_REWARDS
 from src.rl.types import TokenKind
 from src.rl.types import X_CoreOutput
@@ -93,7 +93,7 @@ class Core(nn.Module):
         self.register_buffer(
             "_count_norm",
             torch.tensor(
-                [float(CAP_OF_TOKEN_KIND[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
+                [float(MAP_TOKEN_KIND_CAP[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
             ).view(1, -1),
             persistent=False,
         )

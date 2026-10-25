@@ -2,16 +2,11 @@ from enum import StrEnum
 from enum import auto
 
 import numpy as np
-import torch
-from slai import GameState
 
 from src.rl.constants import BLOCK_MAX_ENTITY
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
-from src.rl.encoding.sparse import owned_sparse
-from src.rl.types import TokenKind
-from src.rl.types import X_OwnedSparse
 from src.rl.types import make_channel_allocator
 
 
@@ -42,14 +37,14 @@ OFF_HEALTH_BLOCK_HEALTH_SCALAR = _alloc(HealthBlockChannel.HEALTH_SCALAR)
 OFF_HEALTH_BLOCK_BLOCK_SCALAR = _alloc(HealthBlockChannel.BLOCK_SCALAR)
 OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc(HealthBlockChannel.TOTAL_SCALAR)
 
-# The one width every combatant builds: EntityProjector projects it with ONE shared block
+# The one width every combatant writes: the token rows' health/block columns
 ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w in CHANNEL_LAYOUT_HEALTH_BLOCK)
 
-# Most nonzero columns a health/block row holds: one per channel, each a one-hot or a scalar
+# Most nonzero health/block columns a row holds: one per channel, each a one-hot or a scalar
 ENCODING_SPARSE_HEALTH_BLOCK = len(CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 
-def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
+def encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
     total = health + block
 
     health_bucket = get_piecewise_bucket(
@@ -67,43 +62,3 @@ def _encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
     out[OFF_HEALTH_BLOCK_HEALTH_SCALAR] = min(health / HEALTH_MAX_ENTITY, 1.0)
     out[OFF_HEALTH_BLOCK_BLOCK_SCALAR] = min(block / BLOCK_MAX_ENTITY, 1.0)
     out[OFF_HEALTH_BLOCK_TOTAL_SCALAR] = min(total / _TOTAL_MAX, 1.0)
-
-
-def encode_batch_health_block(
-    game_states: list[GameState], np_first_offset: np.ndarray, device: torch.device
-) -> X_OwnedSparse:
-    """Every state's health/block rows as one (N, dim) block, held sparse, every state's after the
-    previous state's, with their owners: each Monster's row (MONSTERS, its slot), then the
-    Character's (CHARACTER, 0), as offsets through `np_first_offset`; and each state's (B,) row
-    count, its monsters + 1."""
-    batch_monsters = []
-    for game_state in game_states:
-        combat = game_state.combat  # hoisted: each read clones across the FFI
-        batch_monsters.append(combat.monsters if combat is not None else [])
-
-    np_count = np.array([len(monsters) + 1 for monsters in batch_monsters], dtype=np.int64)
-    np_out = np.zeros((np_count.sum(), ENCODING_DIM_HEALTH_BLOCK), dtype=np.float32)
-    np_owner_token_kind = np.empty(np_count.sum(), dtype=np.int64)
-    np_owner_rank = np.zeros(np_count.sum(), dtype=np.int64)
-
-    row = 0
-    for game_state, monsters in zip(game_states, batch_monsters):
-        for k, monster in enumerate(monsters):
-            _encode_health_block_into(monster.health, monster.block, np_out[row])
-            np_owner_token_kind[row] = TokenKind.MONSTERS
-            np_owner_rank[row] = k
-            row += 1
-        character = game_state.character
-        _encode_health_block_into(character.health, character.block, np_out[row])
-        np_owner_token_kind[row] = TokenKind.CHARACTER
-        row += 1
-
-    return owned_sparse(
-        np_out,
-        np_owner_token_kind,
-        np_owner_rank,
-        np_count,
-        np_first_offset,
-        ENCODING_SPARSE_HEALTH_BLOCK,
-        device,
-    )

@@ -6,12 +6,9 @@ import torch.nn.functional as F
 
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
-from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
-from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.state import ENCODING_DIM_TOKEN
-from src.rl.types import FAMILY_OF_TOKEN_KIND
-from src.rl.types import NUM_FAMILIES
+from src.rl.types import TOKEN_KINDS_OF_FAMILY
 from src.rl.types import TokenKind
 from src.rl.types import X_DrawOrderStates
 from src.rl.types import X_EffectPending
@@ -21,13 +18,20 @@ from src.rl.types import X_Tokens
 from src.rl.types import X_Window
 
 
+# Each token kind's family: its index in TOKEN_KINDS_OF_FAMILY
+_FAMILY_OF_TOKEN_KIND = {
+    token_kind: family
+    for family, token_kinds in enumerate(TOKEN_KINDS_OF_FAMILY)
+    for token_kind in token_kinds
+}
+
+
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) entity embedder: one first layer over the shared columns plus
     each token's family bias, the rooms' map nodes through their own, the shared row families
-    (health/block, prices, effects, modifiers) added into their owners, then one shared second
-    layer + LayerNorm. Returns the window packed: its tokens, every state's in window order, state
-    after state, and their X_Window; then the draw-order layer's states, and the embedded pending
-    halt."""
+    (effects, modifiers) added into their owners, then one shared second layer + LayerNorm.
+    Returns the window packed: its tokens, every state's in window order, state after state, and
+    their X_Window; then the draw-order layer's states, and the embedded pending halt."""
 
     # The buffer __init__ registers, typed for mypy
     _family_of_token_kind: torch.Tensor
@@ -40,14 +44,8 @@ class EntityProjector(nn.Module):
         # Every family's first layer: one projection over the shared columns, then the family's
         # bias
         self._pre_token = nn.Linear(ENCODING_DIM_TOKEN, dim_entity, bias=False)
-        self._bias_family = nn.Parameter(torch.zeros(NUM_FAMILIES, dim_entity))
+        self._bias_family = nn.Parameter(torch.zeros(len(TOKEN_KINDS_OF_FAMILY), dim_entity))
         self._pre_room = nn.Linear(dim_map, dim_entity)  # Rooms come processed by `MapGNN`
-
-        # Health and Block's mapper is shared between the Character and the Monsters
-        self._pre_health_block = nn.Linear(ENCODING_DIM_HEALTH_BLOCK, dim_entity, bias=False)
-
-        # Prices' mapper is shared between the Cards, Relics and Potions
-        self._pre_price = nn.Linear(ENCODING_DIM_PRICE, dim_entity, bias=False)
 
         # Per-Effect embedder w/ >=2 layers is a must due to OHE-summing semantics
         self._effects_mlp = nn.Sequential(
@@ -72,7 +70,7 @@ class EntityProjector(nn.Module):
         # Each token kind's family; derived, so excluded from checkpoints
         self.register_buffer(
             "_family_of_token_kind",
-            torch.tensor([FAMILY_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind]),
+            torch.tensor([_FAMILY_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind]),
             persistent=False,
         )
 
@@ -84,12 +82,11 @@ class EntityProjector(nn.Module):
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
 
-        # Each token's kind, family and state; each state's tokens, and its first token's row
+        # Each token's kind, family and state, and each state's tokens
         x_token_kind = x_gs.tokens.x_token_kind.long()  # (N_tok,)
         x_family = self._family_of_token_kind[x_token_kind]  # (N_tok,)
         x_count_window = x_gs.tokens.x_count  # (B,)
         x_state = torch.repeat_interleave(x_count_window, output_size=x_token_kind.shape[0])
-        x_first_row = x_count_window.cumsum(0) - x_count_window  # (B,)
         batch_size = x_count_window.shape[0]
         x_token_kind_count, x_token_kind_row = _token_kind_tables(
             x_state, x_token_kind, batch_size
@@ -123,7 +120,7 @@ class EntityProjector(nn.Module):
                 x_ordered.sum(dim=1),
                 (x_ordered * x_count_window).sum(dim=1),
                 (x_ordered * x_count_pile).sum(dim=1),
-                x_family.new_zeros(NUM_FAMILIES).index_add_(
+                x_family.new_zeros(len(TOKEN_KINDS_OF_FAMILY)).index_add_(
                     0, x_family, torch.ones_like(x_family)
                 ),
             ]
@@ -144,7 +141,7 @@ class EntityProjector(nn.Module):
 
         # Rooms: each room token's node in its state's map, through _pre_room in place of the first
         # layer (no entries, no family bias)
-        num_rooms = num_tokens_family[FAMILY_OF_TOKEN_KIND[TokenKind.ROOMS]]
+        num_rooms = num_tokens_family[_FAMILY_OF_TOKEN_KIND[TokenKind.ROOMS]]
         x_room_row = torch.nonzero_static(x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
         x_node_hidden = x_hidden_map[
@@ -154,10 +151,8 @@ class EntityProjector(nn.Module):
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
         # ReLU/LayerNorm
-        _add_owned(x_first, x_gs.prices, self._pre_price, x_first_row)
-        _add_owned(x_first, x_gs.health_block, self._pre_health_block, x_first_row)
-        _add_owned(x_first, x_gs.effects, self._effects_mlp, x_first_row)
-        _add_owned(x_first, x_gs.modifiers, self._modifiers_mlp, x_first_row)
+        _add_owned(x_first, x_gs.tokens.effects, self._effects_mlp)
+        _add_owned(x_first, x_gs.tokens.modifiers, self._modifiers_mlp)
 
         # The pending halt owns no token: its effect row is a global-context input instead
         x_effect_pending = x_gs.effect_pending
@@ -189,15 +184,6 @@ class EntityProjector(nn.Module):
             x_draw_order,
             x_pending,
         )
-
-
-def _add_pooled(x_target: torch.Tensor, x_pos: torch.Tensor, x_rows: torch.Tensor) -> None:
-    """Add each row into `x_target[pos]`, scaled by 1/sqrt(the rows sharing its pos)."""
-
-    # Counted at the target's length: bincount reads max(pos) back to size its output
-    x_count = torch.zeros(x_target.shape[0], dtype=torch.long, device=x_pos.device)
-    x_count = x_count.index_add_(0, x_pos, torch.ones_like(x_pos))[x_pos]  # (N,)
-    x_target.index_add_(0, x_pos, x_rows / x_count.to(x_rows.dtype).sqrt().unsqueeze(1))
 
 
 # The copies of a table that SpreadEmbedding's backward sums over
@@ -275,18 +261,18 @@ def _project_sparse(
 
 
 def _add_owned(
-    x_first: torch.Tensor,
-    x_owned_sparse: X_OwnedSparse,
-    mapper: nn.Linear | nn.Sequential,
-    x_first_row: torch.Tensor,
+    x_first: torch.Tensor, x_owned_sparse: X_OwnedSparse, mapper: nn.Sequential
 ) -> None:
-    """Add a family's rows, each state's `x_count` of them, into their owners' rows of `x_first`.
-    An owner is the offset-th token of its state, whose first token's row is `x_first_row`"""
-    x_state = torch.repeat_interleave(
-        x_owned_sparse.x_count, output_size=x_owned_sparse.x_column.shape[0]
-    )
-    x_rows = _project_sparse(mapper, x_owned_sparse)  # (N, D)
-    _add_pooled(x_first, x_first_row[x_state] + x_owned_sparse.x_owner_offset, x_rows)
+    """Add a family's rows, each token's `x_count` of them, into their owners' rows of `x_first`,
+    scaled by 1/sqrt(the owner's count)"""
+    x_count = x_owned_sparse.x_count  # (N_tok,) int16
+
+    # Each row's owner, from the counts widened: repeat_interleave takes no int16
+    x_owner = torch.repeat_interleave(
+        x_count.long(), output_size=x_owned_sparse.x_column.shape[0]
+    )  # (M,)
+    x_rows = _project_sparse(mapper, x_owned_sparse)  # (M, D)
+    x_first.index_add_(0, x_owner, x_rows / x_count[x_owner].to(x_rows.dtype).sqrt().unsqueeze(1))
 
 
 def _token_kind_tables(
