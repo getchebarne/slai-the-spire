@@ -8,7 +8,7 @@ from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.state import ENCODING_DIM_TOKEN
-from src.rl.types import TOKEN_KINDS_OF_FAMILY
+from src.rl.types import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.types import TokenKind
 from src.rl.types import X_DrawOrderStates
 from src.rl.types import X_EffectPending
@@ -18,33 +18,35 @@ from src.rl.types import X_Tokens
 from src.rl.types import X_Window
 
 
-# Each token kind's family: its index in TOKEN_KINDS_OF_FAMILY
-_FAMILY_OF_TOKEN_KIND = {
-    token_kind: family
-    for family, token_kinds in enumerate(TOKEN_KINDS_OF_FAMILY)
+# Each token kind's entity kind: its index in TOKEN_KINDS_OF_ENTITY_KIND
+_ENTITY_KIND_OF_TOKEN_KIND = {
+    token_kind: entity_kind
+    for entity_kind, token_kinds in enumerate(TOKEN_KINDS_OF_ENTITY_KIND)
     for token_kind in token_kinds
 }
 
 
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) entity embedder: one first layer over the shared columns plus
-    each token's family bias, the rooms' map nodes through their own, the shared row families
+    each token's entity kind bias, the rooms' map nodes through their own, the owned row kinds
     (effects, modifiers) added into their owners, then one shared second layer + LayerNorm.
     Returns the window packed: its tokens, every state's in window order, state after state, and
     their X_Window; then the draw-order layer's states, and the embedded pending halt."""
 
     # The buffer __init__ registers, typed for mypy
-    _family_of_token_kind: torch.Tensor
+    _entity_kind_of_token_kind: torch.Tensor
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
 
         self._dim_entity = dim_entity
 
-        # Every family's first layer: one projection over the shared columns, then the family's
-        # bias
+        # Every entity kind's first layer: one projection over the shared columns, then the
+        # entity kind's bias
         self._pre_token = nn.Linear(ENCODING_DIM_TOKEN, dim_entity, bias=False)
-        self._bias_family = nn.Parameter(torch.zeros(len(TOKEN_KINDS_OF_FAMILY), dim_entity))
+        self._bias_entity_kind = nn.Parameter(
+            torch.zeros(len(TOKEN_KINDS_OF_ENTITY_KIND), dim_entity)
+        )
         self._pre_room = nn.Linear(dim_map, dim_entity)  # Rooms come processed by `MapGNN`
 
         # Per-Effect embedder w/ >=2 layers is a must due to OHE-summing semantics
@@ -67,10 +69,10 @@ class EntityProjector(nn.Module):
         # LayerNorm cuz LayerNorm
         self._layer_norm = nn.LayerNorm(dim_entity)
 
-        # Each token kind's family; derived, so excluded from checkpoints
+        # Each token kind's entity kind; derived, so excluded from checkpoints
         self.register_buffer(
-            "_family_of_token_kind",
-            torch.tensor([_FAMILY_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind]),
+            "_entity_kind_of_token_kind",
+            torch.tensor([_ENTITY_KIND_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind]),
             persistent=False,
         )
 
@@ -82,9 +84,9 @@ class EntityProjector(nn.Module):
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
 
-        # Each token's kind, family and state, and each state's tokens
+        # Each token's token kind, entity kind and state, and each state's tokens
         x_token_kind = x_gs.tokens.x_token_kind.long()  # (N_tok,)
-        x_family = self._family_of_token_kind[x_token_kind]  # (N_tok,)
+        x_entity_kind = self._entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
         x_count_window = x_gs.tokens.x_count  # (B,)
         x_state = torch.repeat_interleave(x_count_window, output_size=x_token_kind.shape[0])
         batch_size = x_count_window.shape[0]
@@ -92,9 +94,9 @@ class EntityProjector(nn.Module):
             x_state, x_token_kind, batch_size
         )
 
-        # First layer: the shared columns' projection, then each token's family bias
+        # First layer: the shared columns' projection, then each token's entity kind bias
         x_first = _project_sparse(self._pre_token, x_gs.tokens) + SpreadEmbedding.apply(
-            self._bias_family, x_family
+            self._bias_entity_kind, x_entity_kind
         )
 
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
@@ -105,8 +107,8 @@ class EntityProjector(nn.Module):
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
 
-        # The layer's sizes and each family's tokens in one read: the CPU waits for the GPU here,
-        # and nowhere else; every other size is a shape
+        # The layer's sizes and each entity kind's tokens in one read: the CPU waits for the GPU
+        # here, and nowhere else; every other size is a shape
         (
             num_states_visible,
             num_states_hidden,
@@ -114,14 +116,14 @@ class EntityProjector(nn.Module):
             num_rows_hidden,
             num_pile_visible,
             num_pile_hidden,
-            *num_tokens_family,
+            *num_tokens_entity_kind,
         ) = torch.cat(
             [
                 x_ordered.sum(dim=1),
                 (x_ordered * x_count_window).sum(dim=1),
                 (x_ordered * x_count_pile).sum(dim=1),
-                x_family.new_zeros(len(TOKEN_KINDS_OF_FAMILY)).index_add_(
-                    0, x_family, torch.ones_like(x_family)
+                x_entity_kind.new_zeros(len(TOKEN_KINDS_OF_ENTITY_KIND)).index_add_(
+                    0, x_entity_kind, torch.ones_like(x_entity_kind)
                 ),
             ]
         ).tolist()
@@ -140,8 +142,8 @@ class EntityProjector(nn.Module):
         )
 
         # Rooms: each room token's node in its state's map, through _pre_room in place of the first
-        # layer (no entries, no family bias)
-        num_rooms = num_tokens_family[_FAMILY_OF_TOKEN_KIND[TokenKind.ROOMS]]
+        # layer (no entries, no entity kind bias)
+        num_rooms = num_tokens_entity_kind[_ENTITY_KIND_OF_TOKEN_KIND[TokenKind.ROOMS]]
         x_room_row = torch.nonzero_static(x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
         x_node_hidden = x_hidden_map[
@@ -169,14 +171,14 @@ class EntityProjector(nn.Module):
 
         x_window = X_Window(
             x_token_kind=x_token_kind,
-            x_family=x_family,
+            x_entity_kind=x_entity_kind,
             x_legal=x_gs.tokens.x_legal,
             x_needs_target=x_gs.tokens.x_needs_target,
             x_state=x_state,
             x_count=x_count_window,
             x_token_kind_row=x_token_kind_row,
             x_token_kind_count=x_token_kind_count,
-            num_tokens_family=num_tokens_family,
+            num_tokens_entity_kind=num_tokens_entity_kind,
         )
         return (
             x_hidden,
@@ -263,8 +265,8 @@ def _project_sparse(
 def _add_owned(
     x_first: torch.Tensor, x_owned_sparse: X_OwnedSparse, mapper: nn.Sequential
 ) -> None:
-    """Add a family's rows, each token's `x_count` of them, into their owners' rows of `x_first`,
-    scaled by 1/sqrt(the owner's count)"""
+    """Add an owned row kind's rows, each token's `x_count` of them, into their owners' rows of
+    `x_first`, scaled by 1/sqrt(the owner's count)"""
     x_count = x_owned_sparse.x_count  # (N_tok,) int16
 
     # Each row's owner, from the counts widened: repeat_interleave takes no int16

@@ -89,7 +89,7 @@ OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER = _alloc(CharacterChannel.ORANGE_PELLE
 ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 
 # Most nonzero columns a character row holds: one per channel, each a one-hot or a scalar
-ENCODING_SPARSE_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
+ENCODING_DIM_SPARSE_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
 
 
 def encode_character_into(

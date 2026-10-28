@@ -41,7 +41,7 @@ OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc(HealthBlockChannel.TOTAL_SCALAR)
 ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w in CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 # Most nonzero health/block columns a row holds: one per channel, each a one-hot or a scalar
-ENCODING_SPARSE_HEALTH_BLOCK = len(CHANNEL_LAYOUT_HEALTH_BLOCK)
+ENCODING_DIM_SPARSE_HEALTH_BLOCK = len(CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 
 def encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:

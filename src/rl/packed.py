@@ -114,7 +114,7 @@ def join_regions(x_gs: X_GameState, num_regions: int) -> X_GameState:
     x_count = x.tokens.x_count
     fn_token = _joined(x_count, len(x.tokens.x_token_kind), num_regions)
 
-    # An owned family's states hold the rows their joined tokens' counts say
+    # An owned row kind's states hold the rows their joined tokens' counts say
     fns_owned = [
         _joined(
             _count_state(fn_token(x_owned.x_count), x_count), len(x_owned.x_column), num_regions
@@ -144,7 +144,7 @@ def _rows_of_states(
 
 
 def _count_state(x_count_token: torch.Tensor, x_count: torch.Tensor) -> torch.Tensor:
-    """Each state's rows of an owned family, (B,): its tokens' `x_count_token` (N,) summed, the
+    """Each state's rows of an owned row kind, (B,): its tokens' `x_count_token` (N,) summed, the
     states holding `x_count` (B,) tokens each"""
     # The rows owned by each state's tokens and every token before them
     x_rows_through = F.pad(x_count_token.cumsum(0), (1, 0))[x_count.cumsum(0)]  # (B,)
@@ -204,12 +204,12 @@ def _widened(x_gss: list[X_GameState]) -> list[X_GameState]:
 
 
 def _owned(x: X_Tokens) -> list[X_OwnedSparse]:
-    """The tokens' owned families, in X_Tokens' order"""
+    """The tokens' owned row kinds, in X_Tokens' order"""
     return [x.effects, x.modifiers]
 
 
 def _blocks(x: X_GameState) -> list[_Block]:
-    """Every block of `x`: the tokens, their owned families and the pending effects"""
+    """Every block of `x`: the tokens, their owned row kinds and the pending effects"""
     return [x.tokens, *_owned(x.tokens), x.effect_pending]
 
 
@@ -257,8 +257,8 @@ def _map_rows(
     fn_state: _FieldFn,
 ) -> X_GameState:
     """`x` with every field through the function of its rows, in _fields' order: `fn_token` on
-    the token rows' fields, the owned families' counts among them; `fns_owned` on each owned
-    family's rows, in X_Tokens' order; `fn_effect_pending` on the pending effects' rows; and
+    the token rows' fields, the owned row kinds' counts among them; `fns_owned` on each owned
+    row kind's rows, in X_Tokens' order; `fn_effect_pending` on the pending effects' rows; and
     `fn_state` on the per-state fields, the tokens' and the pending effects' counts among them"""
     x_tokens, x_effect_pending = x.tokens, x.effect_pending
     fn_effects, fn_modifiers = fns_owned
@@ -292,7 +292,7 @@ def _map_rows(
 
 
 def _map_owned(x: X_OwnedSparse, fn_rows: _FieldFn, fn_token: _FieldFn) -> X_OwnedSparse:
-    """An owned family with its rows through `fn_rows`, and its counts through the token rows'
+    """An owned row kind with its rows through `fn_rows`, and its counts through the token rows'
     `fn_token`"""
     return X_OwnedSparse(
         x_column=fn_rows(x.x_column), x_value=fn_rows(x.x_value), x_count=fn_token(x.x_count)

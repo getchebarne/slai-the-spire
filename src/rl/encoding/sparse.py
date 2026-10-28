@@ -7,7 +7,7 @@ from src.rl.types import X_OwnedSparse
 from src.rl.types import X_Tokens
 
 
-def tokens_sparse(
+def compile_sparse_tokens(
     np_rows: np.ndarray,
     np_token_kind: np.ndarray,
     np_node_idx: np.ndarray,
@@ -34,10 +34,10 @@ def tokens_sparse(
     )
 
 
-def owned_sparse(
+def compile_sparse_owned(
     np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_OwnedSparse:
-    """A family of owned rows from its (M, D) rows, each with at most `num_sparse` nonzero
+    """An owned row kind's rows from its (M, D) rows, each with at most `num_sparse` nonzero
     columns, token after token, and each token's (N,) count of them"""
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_OwnedSparse(
@@ -47,7 +47,7 @@ def owned_sparse(
     )
 
 
-def effect_pending_sparse(
+def compile_sparse_effect_pending(
     np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_EffectPending:
     """The pending effects from their (P, D) rows, each with at most `num_sparse` nonzero

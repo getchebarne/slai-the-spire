@@ -124,8 +124,8 @@ MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_ROLL_COUNT + 2
 
 # Per-state caps on the effect and modifier rows, per state rather than per entity since
 # entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
-MAX_EFFECTS_STATE = 224
-MAX_MODIFIER_ROWS_STATE = 64
+MAX_EFFECTS = 224
+MAX_MODIFIERS = 64
 
 # Caps for the piles the engine doesn't bound: each encoder slices its pile to the cap. Draw
 # and discard hold a full deck; stasis is slot-parallel to the monsters, so its cap is exact

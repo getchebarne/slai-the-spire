@@ -64,8 +64,6 @@ OFF_EVENT_MATCH_ATTEMPTS = _alloc(EventMetaChannel.MATCH_ATTEMPTS)
 OFF_EVENT_CARD_MATCH_UNSEEN_COUNT = _alloc(EventMetaChannel.CARD_MATCH_UNSEEN_COUNT)
 
 ENCODING_DIM_EVENT_META = sum(w for _, w in CHANNEL_LAYOUT_EVENT_META)
-ENCODING_DIM_EVENT_OPTION = MAX_EVENT_OPTIONS  # Slot-index OHE; Effects are separate rows
-ENCODING_SPARSE_EVENT_OPTION = 1  # The slot one-hot's one nonzero column
 
 # Event kinds whose option list overflowed the cap (warn-once per kind)
 _WARNED_EVENT_TRUNCATED: set = set()

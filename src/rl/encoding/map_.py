@@ -151,7 +151,7 @@ def _next_row_candidate_cols(
 def get_room_entities(game_state: GameState) -> list[Room]:
     """The Rooms a RoomSelect can name, in column order: the room tokens' rank order"""
     map_ = game_state.map
-    rooms = map_.rooms  # reconstructs the whole grid across the FFI; fetched once
+    rooms = map_.rooms
     y_current = map_.y_current
     winged = _wing_boots_charged(game_state)
     cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
@@ -216,39 +216,16 @@ def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
         out[OFF_MAP_POOL_EVENT_SPECIAL + _MAP_EVENT_NAME[event_name]] = 1.0
 
 
-def _encode_room_node_idx_into(
-    rooms: list[list[Room | None]],
-    y_current: int | None,
-    x_current: int | None,
-    winged: bool,
-    out: np.ndarray,
-) -> int:
-    """Each reachable next-row room's node index, in column order, into `out`'s leading rows;
-    returns how many"""
-    y_next = 0 if y_current is None else y_current + 1
-    cols = _next_row_candidate_cols(rooms, y_current, x_current, winged)
-    node_idx = [y_next * MAP_WIDTH + x for x in range(MAP_WIDTH) if x in cols]
-    out[: len(node_idx)] = node_idx
-    return len(node_idx)
-
-
 def encode_batch_map(
     game_states: list[GameState], device: torch.device
-) -> tuple[torch.Tensor, np.ndarray, np.ndarray, torch.Tensor]:
-    """The map grid, the reachable next-row rooms' node indices (every state's after the previous
-    state's) and each state's (B,) room count, as NumPy arrays for the tokens' layout, and the map
-    meta"""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The map grid and the map meta"""
     batch_size = len(game_states)
     np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
-    np_node_idx = np.empty(batch_size * MAP_WIDTH, dtype=np.int16)  # every state's rooms at most
-    np_count = np.empty(batch_size, dtype=np.int64)
     np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
 
-    row = 0
     for b, game_state in enumerate(game_states):
         map_ = game_state.map
-
-        # `map_.rooms` reconstructs the whole grid across the FFI; fetch it once per state
         rooms = map_.rooms
         y_current = map_.y_current
         x_current = map_.x_current
@@ -261,10 +238,6 @@ def encode_batch_map(
             np_grid[b, y_current, x_current, OFF_MAP_POSITION] = 1.0
 
         winged = _wing_boots_charged(game_state)
-        np_count[b] = _encode_room_node_idx_into(
-            rooms, y_current, x_current, winged, np_node_idx[row:]
-        )
-        row += np_count[b]
         _encode_map_meta_into(
             rooms, y_current, x_current, map_.boss, game_state.act, winged, np_meta[b]
         )
@@ -272,7 +245,5 @@ def encode_batch_map(
 
     return (
         torch.from_numpy(np_grid).to(device),
-        np_node_idx[:row],
-        np_count,
         torch.from_numpy(np_meta).to(device),
     )

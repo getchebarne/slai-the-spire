@@ -29,7 +29,7 @@ type TokenIndex = dict[int, tuple[TokenKind, int]]
 
 def _token_index(game_state: slai.GameState) -> TokenIndex:
     """Each entity id's token over the window, as its token kind and rank. An id on several tokens
-    names its first in window order, where each family packs its decision pools first (the
+    names its first in window order, where each entity kind packs its decision pools first (the
     relic event roll before the owned relics it can repeat)."""
     index: TokenIndex = {}
     for token_kind in (

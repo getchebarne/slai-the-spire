@@ -116,7 +116,7 @@ OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(CardChannel.FREE_TO_PLAY_ONCE)
 ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
 # Most nonzero columns a card row holds: one per channel, each a one-hot or a scalar
-ENCODING_SPARSE_CARD = len(CHANNEL_LAYOUT_CARD)
+ENCODING_DIM_SPARSE_CARD = len(CHANNEL_LAYOUT_CARD)
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -230,7 +230,7 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
 def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
     """The GameState card pile a card token kind names, truncated to the pile's cap
     (used by get_entities_for_token_kind + masks dedup). A card past the cap has no token,
-    so masks and prices cannot name it."""
+    so masks cannot name it."""
     combat = game_state.combat
     match token_kind:
         case TokenKind.CARD_PILE_HAND:
