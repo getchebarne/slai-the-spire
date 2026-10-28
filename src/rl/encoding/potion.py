@@ -37,7 +37,7 @@ OFF_POTION_DOUBLED = _alloc(PotionChannel.DOUBLED)
 ENCODING_DIM_POTION = sum(w for _, w in CHANNEL_LAYOUT_POTION)
 
 # Most nonzero columns a potion row holds: one per channel, each a one-hot or a scalar
-ENCODING_SPARSE_POTION = len(CHANNEL_LAYOUT_POTION)
+ENCODING_DIM_SPARSE_POTION = len(CHANNEL_LAYOUT_POTION)
 
 # Per-potion encoding cache keyed by (name, doubled): every other field is fixed by name
 _POTION_ROW_CACHE: dict[tuple[PotionName, bool], np.ndarray] = {}

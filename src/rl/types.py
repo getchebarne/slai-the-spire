@@ -35,7 +35,8 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
 
-# In packing order: TOKEN_KINDS_OF_FAMILY's families, one after another, each its kinds in order
+# In packing order: TOKEN_KINDS_OF_ENTITY_KIND's entity kinds, one after another, each its
+# token kinds in order
 class TokenKind(IntEnum):
     CARD_PILE_HAND = 0
     CARD_PILE_DISCOVER = 1
@@ -77,7 +78,7 @@ TOKEN_KINDS_CARD_REWARDS = (  # one token kind per reward bundle (card.py owns t
     TokenKind.CARD_REWARD_4,
 )
 
-# Pack order within the card family: decision pools first, observational piles last
+# Pack order within the card entity kind: decision pools first, observational piles last
 TOKEN_KINDS_CARD = (
     TokenKind.CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER,
@@ -95,7 +96,7 @@ TOKEN_KINDS_CARD = (
     TokenKind.CARD_PILE_DECK,
 )
 
-# Pack order within the relic family: decision pools first, the owned relics last
+# Pack order within the relic entity kind: decision pools first, the owned relics last
 TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_REWARD,
     TokenKind.RELIC_SHOP,
@@ -103,7 +104,7 @@ TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_OWNED,
 )
 
-# Pack order within the potion family; every source is engine-bounded
+# Pack order within the potion entity kind; every source is engine-bounded
 TOKEN_KINDS_POTION = (
     TokenKind.POTION_OWNED,
     TokenKind.POTION_REWARD,
@@ -111,8 +112,8 @@ TOKEN_KINDS_POTION = (
     TokenKind.POTION_EVENT_ROLL,
 )
 
-# The families in window order, each its token kinds; the last four hold a single token kind
-TOKEN_KINDS_OF_FAMILY = (
+# The entity kinds in window order, each its token kinds; the last four hold a single token kind
+TOKEN_KINDS_OF_ENTITY_KIND = (
     TOKEN_KINDS_CARD,
     TOKEN_KINDS_RELIC,
     TOKEN_KINDS_POTION,
@@ -200,8 +201,8 @@ class EffectSource(IntEnum):
 @final
 @dataclass
 class X_OwnedSparse:
-    """Rows owned by tokens, one family per X_Tokens field, which the projector adds into their
-    owners: every token's rows, token after token; `x_count` says how many each token owns"""
+    """Rows owned by tokens, one owned row kind per X_Tokens field, which the projector adds into
+    their owners: every token's rows, token after token; `x_count` says how many each token owns"""
 
     x_column: torch.Tensor  # (M, K) int16 — as in X_Tokens
     x_value: torch.Tensor  # (M, K) float32
@@ -214,12 +215,12 @@ class X_Tokens:
     """Every entity token as a row, every state's in window order, state after state; `x_count`
     says how many each state has. K is the rows' most nonzero columns: no fixed width anywhere but
     X_Step's regions. Each row is its nonzero (column, value) entries in column order, then
-    (0, 0.0) entries up to K; the entries index the shared column space, each family's columns from
-    its COL_START, then the health/block and price columns families share"""
+    (0, 0.0) entries up to K; the entries index the shared column space, each entity kind's columns
+    from its COL_START, then the health/block, price and slot columns entity kinds share"""
 
     x_column: torch.Tensor  # (N, K) int16
     x_value: torch.Tensor  # (N, K) float32
-    x_token_kind: torch.Tensor  # (N,) int16, which also names the family
+    x_token_kind: torch.Tensor  # (N,) int16, which also names the entity kind
 
     # L2 selection: legal under the action type, deduped by card identity
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
@@ -252,7 +253,7 @@ class X_GameState:
     """The game state, as the encoders write it and the model, the rollout and the minibatches
     hold it: each block only its rows, every state's in the block's order, state after state, and
     its sparse entries cut to the most a row uses; each block's `x_count` holds each state's rows
-    in it; an owned family's holds each token's. The per-state fields are (B, ...).
+    in it; an owned row kind's holds each token's. The per-state fields are (B, ...).
     src/rl/packed.py chooses its states and joins them"""
 
     tokens: X_Tokens
@@ -271,19 +272,19 @@ class X_GameState:
 @dataclass
 class X_Window:
     """The window packed for the model: only its tokens, every state's in window order, state after
-    state, as X_Tokens holds them. Per row: its token kind and family, its masks and its state. Per
-    state: its tokens, and per token kind its first row and its tokens; a token kind's tokens sit
-    in consecutive rows. Per family: its tokens, from the projector's one read"""
+    state, as X_Tokens holds them. Per row: its token kind and entity kind, its masks and its
+    state. Per state: its tokens, and per token kind its first row and its tokens; a token kind's
+    tokens sit in consecutive rows. Per entity kind: its tokens, from the projector's one read"""
 
     x_token_kind: torch.Tensor  # (N,) long
-    x_family: torch.Tensor  # (N,) long
+    x_entity_kind: torch.Tensor  # (N,) long
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
     x_needs_target: torch.Tensor  # (N,) bool
     x_state: torch.Tensor  # (N,) long
     x_count: torch.Tensor  # (B,) long
     x_token_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
     x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) long
-    num_tokens_family: list[int]  # one per family, in TOKEN_KINDS_OF_FAMILY's order
+    num_tokens_entity_kind: list[int]  # one per entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
 
 
 @dataclass
@@ -401,18 +402,18 @@ def _check_tables() -> None:
             f"{set(TokenKind) - set(MAP_TOKEN_KIND_CAP)}"
         )
 
-    # TokenKind is declared in packing order, valued 0..len-1: the family tables, one after
+    # TokenKind is declared in packing order, valued 0..len-1: the entity kind tables, one after
     # another, list it, every token kind in one table
     token_kinds = [
         token_kind
-        for token_kinds_family in TOKEN_KINDS_OF_FAMILY
-        for token_kind in token_kinds_family
+        for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND
+        for token_kind in token_kinds_entity_kind
     ]
     if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):
         names = [token_kind.name for token_kind in token_kinds]
         raise RuntimeError(
-            "Declare TokenKind in packing order, valued 0..len-1: TOKEN_KINDS_OF_FAMILY's "
-            f"families, one after another, list {names}"
+            "Declare TokenKind in packing order, valued 0..len-1: TOKEN_KINDS_OF_ENTITY_KIND's "
+            f"entity kinds, one after another, list {names}"
         )
 
 

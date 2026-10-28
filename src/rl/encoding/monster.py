@@ -65,7 +65,6 @@ class MonsterChannel(StrEnum):
     MOVE_CURRENT = auto()  # index into the spawn-rolled moveset
     MOVE_PREV_1 = auto()  # one move back (move_history's last entry is the current move)
     MOVE_PREV_2 = auto()
-    HOLDS_STASIS = auto()  # a card it took sits in its Combat.card_pile_stasis slot
 
 
 CHANNEL_LAYOUT_MONSTER, _alloc = make_channel_allocator()
@@ -89,12 +88,11 @@ OFF_MONSTER_INTENT_HIDDEN = _alloc(MonsterChannel.INTENT_HIDDEN)
 OFF_MONSTER_MOVE_CURRENT = _alloc(MonsterChannel.MOVE_CURRENT, MONSTER_MOVESET_MAX)
 OFF_MONSTER_MOVE_PREV_1 = _alloc(MonsterChannel.MOVE_PREV_1, MONSTER_MOVESET_MAX)
 OFF_MONSTER_MOVE_PREV_2 = _alloc(MonsterChannel.MOVE_PREV_2, MONSTER_MOVESET_MAX)
-OFF_MONSTER_HOLDS_STASIS = _alloc(MonsterChannel.HOLDS_STASIS)
 
 ENCODING_DIM_MONSTER = sum(w for _, w in CHANNEL_LAYOUT_MONSTER)
 
 # Most nonzero columns a monster row holds: one per channel, each a one-hot or a scalar
-ENCODING_SPARSE_MONSTER = len(CHANNEL_LAYOUT_MONSTER)
+ENCODING_DIM_SPARSE_MONSTER = len(CHANNEL_LAYOUT_MONSTER)
 
 
 def _intent_total_damage(monster: Monster) -> int:
@@ -109,7 +107,6 @@ def encode_monster_into(
     char_health: int,
     char_block: int,
     outgoing_damage: int | None,
-    holds_stasis: bool,
     out: np.ndarray,
 ) -> None:
     out[OFF_MONSTER_NAME + _MAP_MONSTER_NAME[monster.name]] = 1.0
@@ -172,9 +169,6 @@ def encode_monster_into(
         out[OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
     if len(move_history) >= 2 + shift:
         out[OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
-
-    # Stasis
-    out[OFF_MONSTER_HOLDS_STASIS] = float(holds_stasis)
 
 
 def outgoing_damage(monsters: list[Monster]) -> int | None:

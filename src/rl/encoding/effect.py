@@ -56,7 +56,7 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
-from src.rl.encoding.sparse import effect_pending_sparse
+from src.rl.encoding.sparse import compile_sparse_effect_pending
 from src.rl.types import EffectSource
 from src.rl.types import X_EffectPending
 from src.rl.types import make_channel_allocator
@@ -437,7 +437,7 @@ _MULTI_HOT_CHANNELS = (EffectChannel.CANDIDATE_FILTER, EffectChannel.RELIC_NAME)
 
 # Most nonzero columns an effect row holds: one per one-hot or scalar channel, and every column
 # of the multi-hot ones
-ENCODING_SPARSE_EFFECT = sum(
+ENCODING_DIM_SPARSE_EFFECT = sum(
     width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in CHANNEL_LAYOUT_EFFECT
 )
 
@@ -926,4 +926,4 @@ def encode_batch_effect_pending(
             row += 1
 
     normalize_effect_rows(np_effect)
-    return effect_pending_sparse(np_effect, np_count, ENCODING_SPARSE_EFFECT, device)
+    return compile_sparse_effect_pending(np_effect, np_count, ENCODING_DIM_SPARSE_EFFECT, device)

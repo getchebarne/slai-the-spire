@@ -7,12 +7,12 @@ from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.state import COL_START_CHARACTER
-from src.rl.encoding.state import COL_START_EVENT_OPTION
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
 from src.rl.encoding.state import COL_START_MONSTER
 from src.rl.encoding.state import COL_START_POTION
 from src.rl.encoding.state import COL_START_PRICE
 from src.rl.encoding.state import COL_START_RELIC
+from src.rl.encoding.state import COL_START_STASIS_SLOT
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -230,8 +230,9 @@ class ActorCritic(nn.Module):
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per column range, each family's then the health/block and price
-        # ones, as its own layer: orthogonal over all of them would shrink each column's scale
+        # The shared first layer per column range, each entity kind's then the health/block, price
+        # and slot ones, as its own layer: orthogonal over all of them would shrink each column's
+        # scale
         with torch.no_grad():
             for x_weight_range in torch.tensor_split(
                 self.core._entity_projector._pre_token.weight,
@@ -239,10 +240,10 @@ class ActorCritic(nn.Module):
                     COL_START_RELIC,
                     COL_START_POTION,
                     COL_START_MONSTER,
-                    COL_START_EVENT_OPTION,
                     COL_START_CHARACTER,
                     COL_START_HEALTH_BLOCK,
                     COL_START_PRICE,
+                    COL_START_STASIS_SLOT,
                 ),
                 dim=1,
             ):
@@ -332,7 +333,7 @@ def _policy_heads(
 ) -> tuple[torch.Tensor, ...]:
     """`model`'s L1-L3 selections, or the recorded ones scored, over the core's global vector and
     refined rows of the packed window, given the L1 mask. L2 and L3 select per state over its rows,
-    grouped by family. Returns X_Action's fields in order"""
+    grouped by entity kind. Returns X_Action's fields in order"""
     # The recorded actions' columns, or None when selecting
     x_recorded_action_type, x_recorded_token_kind, x_recorded_rank, x_recorded_target = (
         x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 4
@@ -348,9 +349,10 @@ def _policy_heads(
     batch_size = x_action_type.shape[0]
     x_states = torch.arange(batch_size, device=x_action_type.device)
 
-    # The rows grouped by family, family after family and each family's state after state: what
-    # the key nets split and the scoring runs on. Selections map back to the window through it
-    x_order = torch.argsort(x_window.x_family, stable=True)  # (N,)
+    # The rows grouped by entity kind, entity kind after entity kind and each entity kind's state
+    # after state: what the key nets split and the scoring runs on. Selections map back to the
+    # window through it
+    x_order = torch.argsort(x_window.x_entity_kind, stable=True)  # (N,)
     x_state = x_window.x_state[x_order]
     (
         num_cards,
@@ -360,12 +362,12 @@ def _policy_heads(
         num_event_options,
         num_character,
         _,
-    ) = x_window.num_tokens_family
+    ) = x_window.num_tokens_entity_kind
 
     # The split hands each class its rows
     x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_tokens[
         x_order
-    ].split(x_window.num_tokens_family)
+    ].split(x_window.num_tokens_entity_kind)
 
     # L2 keys, once per token: its own class's net, the one every action type scores
     # it with. Monsters and the character are never L2 selections: zero keys
@@ -389,7 +391,7 @@ def _policy_heads(
 
     # Every state at once: a type that selects no token (TurnEnd...) gets its state's character
     # row as a placeholder, so its categorical stays finite. One per state, past the earlier
-    # families' rows
+    # entity kinds' rows
     num_rows_before_character = (
         num_cards + num_relics + num_potions + num_monsters + num_event_options
     )

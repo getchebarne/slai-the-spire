@@ -41,7 +41,7 @@ OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MA
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
 # Most nonzero columns a relic row holds: one per channel, each a one-hot or a scalar
-ENCODING_SPARSE_RELIC = len(CHANNEL_LAYOUT_RELIC)
+ENCODING_DIM_SPARSE_RELIC = len(CHANNEL_LAYOUT_RELIC)
 
 # Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
