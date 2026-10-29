@@ -3,6 +3,7 @@ from collections.abc import Sequence
 
 import numpy as np
 import torch
+from slai import Action
 from slai import Card
 from slai import Character
 from slai import Effect
@@ -46,6 +47,7 @@ from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import encode_batch_map
 from src.rl.encoding.map_ import get_room_entities
+from src.rl.encoding.mask import encode_batch_masks
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.modifier import encode_modifier_row_into
@@ -78,6 +80,7 @@ from src.rl.types import TOKEN_KINDS_CARD
 from src.rl.types import TOKEN_KINDS_POTION
 from src.rl.types import TOKEN_KINDS_RELIC
 from src.rl.types import EffectSource
+from src.rl.types import Entity
 from src.rl.types import TokenKind
 from src.rl.types import X_EffectPending
 from src.rl.types import X_GameState
@@ -87,7 +90,7 @@ from src.rl.types import X_Tokens
 
 ENCODING_DIM_ASCENSION = ASCENSION_LEVEL
 
-# The stasis slot columns: a one-hot over the monsters' slots in Combat.monsters
+# The stasis slot columns: a one-hot over the Monsters' slots in Combat.monsters
 ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
 ENCODING_DIM_SPARSE_SLOT = 1
 
@@ -119,13 +122,10 @@ ENCODING_DIM_SPARSE_TOKEN = max(
 CAP_TOKENS = sum(MAP_TOKEN_KIND_CAP.values())
 
 
-# An entity behind a token
-type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
-
 # The owned row kinds that have already warned about overflow — truncation is never silent
 _WARNED_OVERFLOW: set[str] = set()
 
-# Each effect source's fill priority: past MAX_EFFECTS, a state keeps the lowest first
+# Each Effect source's fill priority: past MAX_EFFECTS, a state keeps the lowest first
 _MAP_EFFECT_SOURCE_FILL_PRIORITY = {
     EffectSource.EVENT_OPTION_SELECT: 0,
     EffectSource.MONSTER_MOVE: 1,
@@ -143,10 +143,32 @@ _MAP_EFFECT_SOURCE_FILL_PRIORITY = {
     EffectSource.CARD_DRAW: 5,
 }
 
+# The token kinds whose Entity ids the masks look up; no action names the Character. The selected
+# pile and the play queue repeat the ids of Cards still in their piles
+_TOKEN_KINDS_ID_LOOKUP = frozenset(TokenKind) - {
+    TokenKind.CHARACTER,
+    TokenKind.CARD_PILE_SELECTED,
+    TokenKind.CARD_PLAY_QUEUE,
+}
+
 
 def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) -> Sequence[Entity]:
-    """The entities of a token kind's tokens in rank order: the encoder's own lists, so an
-    entity's id and its token share one placement."""
+    """Return the Entities of a token kind's tokens in rank order.
+
+    They are the encoder's own lists, so an Entity's id and its token share one placement.
+
+    Parameters
+    ----------
+    token_kind : TokenKind
+        The token kind.
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    Sequence[Entity]
+        One Entity per token of the token kind, in rank order.
+    """
     if token_kind in TOKEN_KINDS_CARD:
         return get_card_entities(token_kind, game_state)
     if token_kind in TOKEN_KINDS_RELIC:
@@ -166,12 +188,14 @@ def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) ->
             raise ValueError(f"Unsupported `TokenKind`: {token_kind}")
 
 
-def encode_batch_game_state(game_states: list[GameState], device: torch.device) -> X_GameState:
+def encode_batch_game_state(
+    game_states: list[GameState], batch_legal_actions: list[list[Action]], device: torch.device
+) -> X_GameState:
     # Map: GNN node-feature grid + flat meta
     x_map_grid, x_map_meta = encode_batch_map(game_states, device)
 
-    # The tokens and the rows they own
-    x_tokens = _encode_batch_tokens(game_states, device)
+    # The tokens and the rows they own, with their masks, and each state's legal action types
+    x_tokens, x_legal_action_type = _encode_batch_tokens(game_states, batch_legal_actions, device)
     return X_GameState(
         tokens=x_tokens,
         effect_pending=encode_batch_effect_pending(game_states, device),
@@ -183,16 +207,33 @@ def encode_batch_game_state(game_states: list[GameState], device: torch.device) 
         reward_meta=encode_batch_rewards(game_states, device),
         shop_meta=encode_batch_shop_meta(game_states, device),
         event_meta=encode_batch_event_meta(game_states, device),
-        x_legal_action_type=torch.zeros(
-            len(game_states), NUM_ACTION_TYPES, dtype=torch.bool, device=device
-        ),
+        x_legal_action_type=x_legal_action_type,
     )
 
 
-def _encode_batch_tokens(game_states: list[GameState], device: torch.device) -> X_Tokens:
-    """The tokens, each state's in window order, state after state, their masks all False for
-    build_masks to fill; and the effect and modifier rows they own"""
-    # Each state's tokens, as (token kind, entity) in window order
+def _encode_batch_tokens(
+    game_states: list[GameState], batch_legal_actions: list[list[Action]], device: torch.device
+) -> tuple[X_Tokens, torch.Tensor]:
+    """Encode the tokens and each state's legal action types.
+
+    Parameters
+    ----------
+    game_states : list[GameState]
+        The states to encode, B of them.
+    batch_legal_actions : list[list[Action]]
+        Each state's legal actions.
+    device : torch.device
+        The device of the returned tensors.
+
+    Returns
+    -------
+    x_tokens : X_Tokens
+        The tokens, each state's in window order, state after state, with their masks from each
+        state's legal actions, and the Effect and Modifier rows they own.
+    x_legal_action_type : torch.Tensor
+        (B, NUM_ACTION_TYPES) bool. Each state's legal action types.
+    """
+    # Each state's tokens, as (token kind, Entity) in window order
     batch_tokens = [
         [
             (token_kind, entity)
@@ -209,27 +250,35 @@ def _encode_batch_tokens(game_states: list[GameState], device: torch.device) -> 
     num_tokens = int(np_count.sum())
 
     # Initialize arrays to store dense token encodings and their kinds
-    np_tokens = np.zeros((num_tokens, ENCODING_DIM_TOKEN), dtype=np.float32) # (N_tok, ENCODING_DIM_TOKEN)
+    np_tokens = np.zeros(
+        (num_tokens, ENCODING_DIM_TOKEN), dtype=np.float32
+    )  # (N_tok, ENCODING_DIM_TOKEN)
     np_token_kinds = np.empty(num_tokens, dtype=np.int16)
 
-    # Initialize an array to store each room token's map node; 0 on every other token
+    # Initialize an array to store each Room token's Map node; 0 on every other token
     np_node_idx = np.zeros(num_tokens, dtype=np.int16)
 
     # Initialize lists to store owned rows (Effects, Modifiers)
     batch_effect_rows: list[tuple[int, Effect, EffectSource]] = []
     batch_modifier_rows: list[tuple[int, Modifier]] = []
 
+    # Initialize a list to store each state's Entity ids, each at its first row, for the masks
+    batch_row_of_id: list[dict[int, int]] = []
+
     # Iterate over states
     for game_state, tokens, start_idx in zip(
         game_states, batch_tokens, np.cumsum(np_count) - np_count
     ):
-        effect_rows, modifier_rows = _encode_tokens_into(
+        effect_rows, modifier_rows, row_of_id = _encode_tokens_into(
             game_state, tokens, start_idx, np_tokens, np_token_kinds, np_node_idx
         )
 
         # Accumlate Effect and Modifier rows
         batch_effect_rows += effect_rows
         batch_modifier_rows += modifier_rows
+
+        # Accumulate the Entity ids
+        batch_row_of_id.append(row_of_id)
 
     # The Effect rows scale after they're written: over the whole block at once
     np_effects = np.zeros((len(batch_effect_rows), ENCODING_DIM_EFFECT), dtype=np.float32)
@@ -244,21 +293,29 @@ def _encode_batch_tokens(game_states: list[GameState], device: torch.device) -> 
         encode_modifier_row_into(modifier, np_modifier)
     np_count_modifiers = np.bincount([row for row, _ in batch_modifier_rows], minlength=num_tokens)
 
-    # Return sparse representation
-    return compile_sparse_tokens(
+    # The masks, from each state's legal actions
+    np_legal, np_needs_target, np_legal_action_type = encode_batch_masks(
+        game_states, batch_legal_actions, batch_tokens, batch_row_of_id, np_token_kinds, np_count
+    )
+
+    # Return sparse representation, and each state's legal action types
+    x_tokens = compile_sparse_tokens(
         np_tokens,
         np_token_kinds,
+        np_legal,
+        np_needs_target,
         np_node_idx,
         np_count,
         ENCODING_DIM_SPARSE_TOKEN,
         device,
-        effects=compile_sparse_owned(
+        x_effect_rows=compile_sparse_owned(
             np_effects, np_count_effects.astype(np.int16), ENCODING_DIM_SPARSE_EFFECT, device
         ),
-        modifiers=compile_sparse_owned(
+        x_modifier_rows=compile_sparse_owned(
             np_modifiers, np_count_modifiers.astype(np.int16), ENCODING_DIM_SPARSE_MODIFIER, device
         ),
     )
+    return x_tokens, torch.from_numpy(np_legal_action_type).to(device)
 
 
 def _encode_tokens_into(
@@ -268,12 +325,42 @@ def _encode_tokens_into(
     np_tokens: np.ndarray,
     np_token_kinds: np.ndarray,
     np_node_idx: np.ndarray,
-) -> tuple[list[tuple[int, Effect, EffectSource]], list[tuple[int, Modifier]]]:
-    """Write a state's tokens into their rows from `start_idx` on, each at its entity kind's
-    columns, a combatant's health/block at the health/block columns, a shop token's price at the
-    price columns, a monster's slot and a stasis card's holder's at the slot columns and a room's
-    map node into `np_node_idx`; and return the effect and modifier rows they own, token after
-    token, each its token's row, then what the row's writer reads"""
+) -> tuple[list[tuple[int, Effect, EffectSource]], list[tuple[int, Modifier]], dict[int, int]]:
+    """Write a state's tokens into their rows from `start_idx` on.
+
+    Each token goes at its Entity kind's columns, a combatant's health/block at the health/block
+    columns, a Shop token's price at the price columns, a Monster's slot and a stasis Card's
+    holder's at the slot columns and a Room's Map node into `np_node_idx`.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    tokens : Sequence[tuple[TokenKind, Entity]]
+        The state's tokens, as (token kind, Entity) in window order.
+    start_idx : int
+        The state's first row.
+    np_tokens : np.ndarray
+        (N_tok, ENCODING_DIM_TOKEN) float32. The batch's token rows; the state's are written in
+        place.
+    np_token_kinds : np.ndarray
+        (N_tok,) int16. The batch's token kinds; the state's are written in place.
+    np_node_idx : np.ndarray
+        (N_tok,) int16. The batch's tokens' Map nodes; the state's Room tokens' are written in
+        place.
+
+    Returns
+    -------
+    effect_rows : list[tuple[int, Effect, EffectSource]]
+        The Effect rows the tokens own, token after token, at most MAX_EFFECTS: each its token's
+        row, then what the row's writer reads.
+    modifier_rows : list[tuple[int, Modifier]]
+        The Modifier rows the tokens own, token after token, at most MAX_MODIFIERS: each its
+        token's row, then what the row's writer reads.
+    row_of_id : dict[int, int]
+        The first row of each Entity id the masks look up: every token kind's but the
+        Character's, the selected pile's and the play queue's (`_TOKEN_KINDS_ID_LOOKUP`).
+    """
     monsters = get_monster_entities(game_state)
     damage = outgoing_damage(monsters)
     energy_current = (
@@ -281,8 +368,9 @@ def _encode_tokens_into(
     )
     effect_rows: list[tuple[int, Effect, EffectSource]] = []
     modifier_rows: list[tuple[int, Modifier]] = []
+    row_of_id: dict[int, int] = {}
 
-    # The rows at each entity kind's columns, then at the Health/Block, Price and Slot columns
+    # The rows at each Entity kind's columns, then at the Health/Block, Price and Slot columns
     np_tokens_card = np_tokens[:, COL_START_CARD:COL_START_RELIC]
     np_tokens_relic = np_tokens[:, COL_START_RELIC:COL_START_POTION]
     np_tokens_potion = np_tokens[:, COL_START_POTION:COL_START_MONSTER]
@@ -295,6 +383,10 @@ def _encode_tokens_into(
     # Iterate over tokens; `start_idx` gives the offset this state starts writing from
     for row, (token_kind, entity) in enumerate(tokens, start_idx):
         np_token_kinds[row] = token_kind
+
+        # Its Entity's id, at the id's first row
+        if token_kind in _TOKEN_KINDS_ID_LOOKUP:
+            row_of_id.setdefault(entity.id, row)
         match entity:
             case Card():
                 encode_card_into_w_cache(entity, energy_current, np_tokens_card[row])
@@ -398,7 +490,7 @@ def _encode_tokens_into(
                 if game_state.combat is not None:
                     modifier_rows += [(row, modifier) for modifier in entity.modifiers]
             case Room():
-                # Its map node: no columns, the model reads the map network's output there
+                # Its Map node: no columns, the model reads the Map network's output there
                 np_node_idx[row] = entity.y * MAP_WIDTH + entity.x
 
     # Cap Effect and Modifier rows and return them
@@ -432,21 +524,34 @@ def _encode_tokens_into(
         order = sorted(range(len(modifier_rows)), key=lambda i: fill_priorities[i])
         modifier_rows = [modifier_rows[i] for i in sorted(order[:MAX_MODIFIERS])]
 
-    return effect_rows, modifier_rows
+    return effect_rows, modifier_rows, row_of_id
 
 
 # Multi-Hot vector; bit i = (ascension > i)
 def _encode_batch_ascension(game_states: list[GameState], device: torch.device) -> torch.Tensor:
     np_out = np.zeros((len(game_states), ENCODING_DIM_ASCENSION), dtype=np.float32)
     for b, game_state in enumerate(game_states):
-        np_out[b, : game_state.ascension] = 1.01
+        np_out[b, : game_state.ascension] = 1.0
 
     return torch.from_numpy(np_out).to(device)
 
 
 def empty_game_state(batch_size: int) -> X_GameState:
-    """`batch_size` game states with nothing in them, every block with rows for all of them at
-    every cap: the shared step's, which each worker fills from its region's start"""
+    """Return `batch_size` game states with nothing in them.
+
+    Every block has rows for all of them at every cap: the shared step's, which each worker fills
+    from its region's start.
+
+    Parameters
+    ----------
+    batch_size : int
+        The number of game states, B.
+
+    Returns
+    -------
+    X_GameState
+        The game states, every tensor zero.
+    """
     num_tokens = batch_size * CAP_TOKENS
     return X_GameState(
         tokens=X_Tokens(
@@ -456,10 +561,8 @@ def empty_game_state(batch_size: int) -> X_GameState:
             x_legal=torch.zeros(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
             x_needs_target=torch.zeros(num_tokens, dtype=torch.bool),
             x_node_idx=torch.zeros(num_tokens, dtype=torch.int16),
-            effects=_empty_owned(batch_size, MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT),
-            modifiers=_empty_owned(
-                batch_size, MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER
-            ),
+            effect_rows=_empty_owned(batch_size, MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT),
+            modifier_rows=_empty_owned(batch_size, MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER),
             x_count=torch.zeros(batch_size, dtype=torch.long),
         ),
         effect_pending=X_EffectPending(
@@ -489,7 +592,7 @@ def _empty_owned(batch_size: int, cap: int, num_sparse: int) -> X_OwnedSparse:
 
 
 def _check_tables() -> None:
-    """Every effect source a token's rows carry has a fill priority"""
+    """Check that every Effect source a token's rows carry has a fill priority."""
     sources = set(EffectSource) - {EffectSource.PENDING}
     if set(_MAP_EFFECT_SOURCE_FILL_PRIORITY) != sources:
         raise RuntimeError(

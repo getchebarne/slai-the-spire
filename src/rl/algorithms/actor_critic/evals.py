@@ -10,6 +10,7 @@ from typing import Any
 import torch
 import torch.multiprocessing as mp
 
+from src.rl.actions import action_from_actiontype
 from src.rl.algorithms.actor_critic.curriculum import env_level
 from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
@@ -22,8 +23,6 @@ from src.rl.algorithms.actor_critic.episode import finish_episode
 from src.rl.algorithms.actor_critic.episode import make_episode_stats
 from src.rl.algorithms.actor_critic.episode import tally_step
 from src.rl.encoding.state import encode_batch_game_state
-from src.rl.masks import action_from_actiontype
-from src.rl.masks import build_masks
 from src.rl.models import ActorCritic
 from src.rl.reward import compute_reward
 from src.rl.utils import new_env
@@ -35,7 +34,7 @@ from src.rl.utils import step_scripted
 # well above an episode's length: a truncated run counts as a loss for the curriculum gate
 _EVAL_MAX_STEPS = 2000
 _EVAL_NUM_EPISODES = 64
-_EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # fixed test set => low-variance trend
+_EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # Fixed test set => low-variance trend
 
 # Full eval tags, composed from the shared prefix + key constants; imported by
 # train()'s eval print.
@@ -57,9 +56,8 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
                 f"non-terminal state has no legal action (seed={seed}, step={stats.length})"
             )
 
-        # Greedy step: Encode -> Mask -> Forward
-        x_gs = encode_batch_game_state([obs], torch.device("cpu"))
-        build_masks([obs], [legal], x_gs)
+        # Greedy step: Encode (masks included) -> Forward
+        x_gs = encode_batch_game_state([obs], [legal], torch.device("cpu"))
         x_action = model.act(x_gs, greedy=True)
 
         # Game step
@@ -76,8 +74,27 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
 def run_eval_battery(
     model: ActorCritic, gamma: float, c: float, ascension_max: int
 ) -> dict[str, float]:
-    """The battery at curriculum position c, `model` on the CPU: game i plays the level
-    training's env i would"""
+    """Run the battery at curriculum position c, `model` on the CPU.
+
+    The games play training's mix of levels at c: the first round(frac(c)*games) play the
+    frontier level ceil(c), the rest floor(c).
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The model to evaluate; it plays greedily.
+    gamma : float
+        The discount the rewards and discounted returns use.
+    c : float
+        The curriculum position.
+    ascension_max : int
+        The highest level, which caps every game's.
+
+    Returns
+    -------
+    dict[str, float]
+        The battery's outcome metrics, keyed by their eval/* names.
+    """
     with torch.no_grad():
         episodes = [
             _run_eval_episode(model, gamma, env_level(c, i, len(_EVAL_SEEDS), ascension_max), seed)
@@ -89,7 +106,7 @@ def run_eval_battery(
 
 @dataclass
 class Evaluator:
-    """The eval process, the parent's end of its pipe, and whether a battery is running"""
+    """The eval process, the parent's end of its pipe, and whether a battery is running."""
 
     process: BaseProcess
     conn: Connection
@@ -97,20 +114,48 @@ class Evaluator:
 
 
 def start_eval(model_config: dict[str, Any], gamma: float, ascension_max: int) -> Evaluator:
-    """Start the eval process, idle until its first weights arrive"""
+    """Start the eval process, idle until its first weights arrive.
+
+    Parameters
+    ----------
+    model_config : dict[str, Any]
+        ActorCritic's keyword arguments, for the eval process's own model.
+    gamma : float
+        The discount the batteries' rewards and discounted returns use.
+    ascension_max : int
+        The highest level, which caps every game's.
+
+    Returns
+    -------
+    Evaluator
+        The eval process and the parent's end of its pipe, with no battery running.
+    """
     ctx = mp.get_context("spawn")
     conn, child = ctx.Pipe()
     process = ctx.Process(
         target=_eval_loop, args=(child, model_config, gamma, ascension_max), daemon=True
     )
     process.start()
-    child.close()  # the eval process holds its own copy
+    child.close()  # The eval process holds its own copy
     return Evaluator(process, conn, busy=False)
 
 
 def submit_eval(evaluator: Evaluator, model: ActorCritic, iteration: int, c: float) -> None:
-    """Hand the eval process the model's CPU weights for a battery at curriculum position `c`,
-    unless one is running"""
+    """Hand the eval process the model's CPU weights for a battery at curriculum position `c`.
+
+    It does nothing while a battery is running.
+
+    Parameters
+    ----------
+    evaluator : Evaluator
+        The eval process, marked busy once handed the weights.
+    model : ActorCritic
+        The model whose weights the battery plays.
+    iteration : int
+        The iteration the weights are from, which the battery's result carries back.
+    c : float
+        The curriculum position the battery plays at.
+    """
     _check_alive(evaluator)
     if not evaluator.busy:
         evaluator.conn.send((_cpu_state_dict(model), iteration, c))
@@ -118,7 +163,19 @@ def submit_eval(evaluator: Evaluator, model: ActorCritic, iteration: int, c: flo
 
 
 def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | None:
-    """A finished battery's (iteration, c, metrics), or None"""
+    """Return a finished battery's (iteration, c, metrics), or None.
+
+    Parameters
+    ----------
+    evaluator : Evaluator
+        The eval process, marked idle once its battery's result is taken.
+
+    Returns
+    -------
+    tuple[int, float, dict[str, float]] | None
+        The battery's iteration, curriculum position and eval/* metrics; None while no battery
+        has finished.
+    """
     _check_alive(evaluator)
     if not evaluator.busy or not evaluator.conn.poll():
         return None
@@ -127,12 +184,18 @@ def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | Non
 
 
 def stop_eval(evaluator: Evaluator) -> None:
-    evaluator.process.kill()  # it ignores SIGTERM, and an eval in progress has nothing to save
+    evaluator.process.kill()  # It ignores SIGTERM, and an eval in progress has nothing to save
     evaluator.process.join()
 
 
 def _check_alive(evaluator: Evaluator) -> None:
-    """A dead eval process would never finish a battery: fail the run instead"""
+    """Fail the run if the eval process died: it would never finish a battery.
+
+    Parameters
+    ----------
+    evaluator : Evaluator
+        The eval process to check.
+    """
     if not evaluator.process.is_alive():
         raise RuntimeError(
             f"the eval process died (exitcode {evaluator.process.exitcode}); "
@@ -141,8 +204,20 @@ def _check_alive(evaluator: Evaluator) -> None:
 
 
 def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
-    """Model weights as CPU tensors, picklable to the eval process on any backend (MPS
-    tensors can't be shared across processes); the GPU->CPU copy is negligible."""
+    """Return the model's weights as CPU tensors, picklable to the eval process on any backend.
+
+    MPS tensors can't be shared across processes; the GPU->CPU copy is negligible.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The model, on any device.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        The model's state dict, every tensor on the CPU.
+    """
     return {k: v.cpu() for k, v in model.state_dict().items()}
 
 
@@ -162,18 +237,18 @@ def _eval_loop(
     while True:
         try:
             state_dict, iteration, c = conn.recv()
-        except (EOFError, OSError):  # the learner is gone
+        except (EOFError, OSError):  # The learner is gone
             return
         model.load_state_dict(state_dict)
         metrics = run_eval_battery(model, gamma, c, ascension_max)
         try:
             conn.send((iteration, c, metrics))
-        except BrokenPipeError:  # the learner is gone
+        except BrokenPipeError:  # The learner is gone
             return
 
 
 def _exit_when_orphaned() -> None:
-    """End this process, even mid-battery, once the learner is gone"""
+    """End this process, even mid-battery, once the learner is gone."""
     while parent_alive():
         time.sleep(1.0)
     os._exit(0)

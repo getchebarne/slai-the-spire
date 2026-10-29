@@ -36,7 +36,7 @@ OFF_POTION_DOUBLED = _alloc(PotionChannel.DOUBLED)
 
 ENCODING_DIM_POTION = sum(w for _, w in CHANNEL_LAYOUT_POTION)
 
-# Most nonzero columns a potion row holds: one per channel, each a one-hot or a scalar
+# Most nonzero columns a Potion row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_POTION = len(CHANNEL_LAYOUT_POTION)
 
 # Per-potion encoding cache keyed by (name, doubled): every other field is fixed by name
@@ -53,13 +53,21 @@ def encode_potion_into(potion: Potion, out: np.ndarray) -> None:
 
 
 def encode_potion_into_w_cache(potion: Potion, out: np.ndarray) -> None:
-    """Write the full potion encoding into `out`, cached by (name, doubled)."""
+    """Write the full Potion encoding into `out`, cached by (name, doubled).
+
+    Parameters
+    ----------
+    potion : Potion
+        The Potion to encode.
+    out : np.ndarray
+        (ENCODING_DIM_POTION,) float32. The Potion's row, overwritten.
+    """
     cache_key = (potion.name, potion.doubled)  # Sacred Bark's variant keeps the name
     row = _POTION_ROW_CACHE.get(cache_key)
     if row is None:
         row = np.zeros(ENCODING_DIM_POTION, dtype=np.float32)
         encode_potion_into(potion, row)
-        row.flags.writeable = False  # guard the cached master copy
+        row.flags.writeable = False  # Guard the cached master copy
         if len(_POTION_ROW_CACHE) >= _POTION_ROW_CACHE_MAX:
             _POTION_ROW_CACHE.clear()
         _POTION_ROW_CACHE[cache_key] = row
@@ -79,7 +87,7 @@ def get_potion_entities(token_kind: TokenKind, game_state: GameState) -> list:
             return shop.potions[:MAX_SHOP_POTIONS] if shop is not None else []
         case TokenKind.POTION_EVENT_ROLL:
             event = game_state.event
-            if event is not None and not event.consumed:  # post-choice: the offer is dead
+            if event is not None and not event.consumed:  # Post-choice: the offer is dead
                 return event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
             return []
         case _:

@@ -53,21 +53,21 @@ SLICE_MAP_EDGES = slice(OFF_MAP_EDGES, OFF_MAP_EDGES + NUM_EDGE_CHANNELS)
 SLICE_MAP_ROOM_KIND = slice(OFF_MAP_ROOM_KIND, OFF_MAP_ROOM_KIND + _MAP_NUM_ROOM_KINDS)
 
 
-# Flat map-global meta — position-anchored facts the pooled GNN readout can't carry
+# Flat Map-global meta — position-anchored facts the pooled GNN readout can't carry
 class MapMetaChannel(StrEnum):
     FLOOR_DEPTH = auto()  # y_current / MAP_HEIGHT
     ON_MAP = auto()  # y_current is not None
-    BOSS = auto()  # act-boss identity OHE
+    BOSS = auto()  # Act-boss identity OHE
     CURRENT_ROOM_KIND = auto()
     NEXT_ROOM_KINDS = auto()  # RoomKind OHE per next-row column
-    ACT = auto()  # each act is a fresh 15-row map; depth alone is ambiguous
+    ACT = auto()  # Each act is a fresh 15-row Map; depth alone is ambiguous
 
     # "?" Rooms
-    UNKNOWN_CHANCE_MONSTER = auto()  # the event chance is what the three odds leave
+    UNKNOWN_CHANCE_MONSTER = auto()  # The Event chance is what the three odds leave
     UNKNOWN_CHANCE_SHOP = auto()
     UNKNOWN_CHANCE_TREASURE = auto()
-    ROOM_KIND_RESOLVED = auto()  # a "?" stays Unknown in `rooms`; no Shop right after a Shop
-    POOL_EVENTS = auto()  # events a "?" can still become, each drawn once
+    ROOM_KIND_RESOLVED = auto()  # A "?" stays Unknown in `rooms`; no Shop right after a Shop
+    POOL_EVENTS = auto()  # Events a "?" can still become, each drawn once
     POOL_EVENT_SPECIAL = auto()
 
 
@@ -87,7 +87,7 @@ OFF_MAP_POOL_EVENT_SPECIAL = _alloc(MapMetaChannel.POOL_EVENT_SPECIAL, len(_MAP_
 
 ENCODING_DIM_MAP_META = sum(w for _, w in CHANNEL_LAYOUT_MAP_META)
 
-# Static map-grid cache keyed by map.identity_hash: room kinds + edges are fixed per map
+# Static Map-grid cache keyed by map.identity_hash: Room kinds + edges are fixed per Map
 _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
 _MAP_GRID_CACHE_MAX = 100_000
 
@@ -100,7 +100,7 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
     # Initialize empty grid
     grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
 
-    # Iterate over rooms
+    # Iterate over Rooms
     for y, row in enumerate(rooms):
         for x, room in enumerate(row):
             if room is None:
@@ -122,7 +122,20 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
 
 
 def _wing_boots_charged(game_state: GameState) -> bool:
-    """Wing Boots with charges left: the engine offers every next-row Room, not just the edges."""
+    """Return whether the Character holds Wing Boots with charges left.
+
+    With charges left, the engine offers every next-row Room, not just the edges.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    bool
+        True when a Wing Boots Relic's counter is above 0.
+    """
     return any(r.name == RelicName.WingBoots and r.counter > 0 for r in game_state.relics)
 
 
@@ -136,7 +149,7 @@ def _next_row_candidate_cols(
     if y_current is None or winged:
         return [x for x in range(MAP_WIDTH) if rooms[y_next][x] is not None]
 
-    # Agent always stands on a real room; cur is never None here, so fail loud if it is
+    # Agent always stands on a real Room; cur is never None here, so fail loud if it is
     room_curr = rooms[y_current][x_current]
     if room_curr is None:
         raise ValueError(f"Current room ({y_current}, {x_current}) is None")
@@ -149,7 +162,20 @@ def _next_row_candidate_cols(
 
 
 def get_room_entities(game_state: GameState) -> list[Room]:
-    """The Rooms a RoomSelect can name, in column order: the room tokens' rank order"""
+    """Return the Rooms a RoomSelect can name, in column order: the Room tokens' rank order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[Room]
+        The next Map row's Rooms the Character can move to: all of them before the first Room
+        or with charged Wing Boots, else the ones the current Room's edges lead to; empty when
+        there is no next row.
+    """
     map_ = game_state.map
     rooms = map_.rooms
     y_current = map_.y_current
@@ -219,7 +245,23 @@ def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
 def encode_batch_map(
     game_states: list[GameState], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """The map grid and the map meta"""
+    """Encode each state's Map grid and Map meta.
+
+    Parameters
+    ----------
+    game_states : list[GameState]
+        The states to encode, B of them.
+    device : torch.device
+        The device of the returned tensors.
+
+    Returns
+    -------
+    x_map_grid : torch.Tensor
+        (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32. Each state's Map grid: each cell's Room
+        kind and edges, and the Character's position.
+    x_map_meta : torch.Tensor
+        (B, ENCODING_DIM_MAP_META) float32. Each state's Map meta.
+    """
     batch_size = len(game_states)
     np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
     np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
@@ -230,7 +272,7 @@ def encode_batch_map(
         y_current = map_.y_current
         x_current = map_.x_current
 
-        # Grid: copy the cached static (room+edge) grid, then set the live position bit
+        # Grid: copy the cached static (Room+edge) grid, then set the live position bit
         np_grid[b] = _get_static_grid(map_.identity_hash, rooms)
 
         # Stamp current position. Do it outside the cache to maximize cache hits

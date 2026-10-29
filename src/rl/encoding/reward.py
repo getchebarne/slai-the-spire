@@ -10,7 +10,7 @@ from src.rl.types import make_channel_allocator
 
 
 class RewardMetaChannel(StrEnum):
-    RELICS_EXCLUSIVE = auto()  # Boss rewards: take one Relic, lose the rest
+    RELICS_EXCLUSIVE = auto()  # Boss Rewards: take one Relic, lose the rest
     CARDS_FORCED = auto()  # The Library: one selection, no skip
 
 
@@ -27,8 +27,23 @@ def _encode_reward_meta_into(reward: Reward, out: np.ndarray) -> None:
 
 
 def encode_batch_rewards(game_states: list[GameState], device: torch.device) -> torch.Tensor:
-    """Reward meta only — the offered card/relic/potion entities are encoded by
-    their entity-class encoders (the reward's token kinds per the encoders)."""
+    """Encode each state's Reward meta only.
+
+    The offered Card/Relic/Potion Entities are encoded by their Entity-class encoders (the
+    Reward's token kinds per the encoders).
+
+    Parameters
+    ----------
+    game_states : list[GameState]
+        The states to encode, B of them.
+    device : torch.device
+        The device of the returned tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        (B, ENCODING_DIM_REWARD_META) float32. Each state's Reward meta; 0 outside Rewards.
+    """
     batch_size = len(game_states)
     np_meta = np.zeros((batch_size, ENCODING_DIM_REWARD_META), dtype=np.float32)
 

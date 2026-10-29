@@ -38,7 +38,7 @@ _OFF_MODIFIER_STACKS_OHE = _alloc(ModifierChannel.STACKS_OHE, _STACKS_BUCKET_DIM
 
 ENCODING_DIM_MODIFIER = sum(w for _, w in CHANNEL_LAYOUT_MODIFIER)
 
-# Most nonzero columns a modifier row holds: one per channel, each a one-hot or a scalar
+# Most nonzero columns a Modifier row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_MODIFIER = len(CHANNEL_LAYOUT_MODIFIER)
 
 

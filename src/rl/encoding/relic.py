@@ -26,7 +26,7 @@ class RelicChannel(StrEnum):
     TIER = auto()
     USED_UP = auto()
     COUNTER = auto()
-    COUNTER_PROGRESS = auto()  # counter / counter_reset for firing counters, else 0
+    COUNTER_PROGRESS = auto()  # Counter / counter_reset for firing counters, else 0
     COUNTER_REMAINING = auto()  # Triggers left until it fires, bucket 0 the next one
 
 
@@ -40,7 +40,7 @@ OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MA
 
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
-# Most nonzero columns a relic row holds: one per channel, each a one-hot or a scalar
+# Most nonzero columns a Relic row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_RELIC = len(CHANNEL_LAYOUT_RELIC)
 
 # Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
@@ -64,7 +64,15 @@ def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
 
 
 def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
-    """Write the full relic encoding into `out`, cached by (name, used_up, clamped counter)."""
+    """Write the full Relic encoding into `out`, cached by (name, used_up, clamped counter).
+
+    Parameters
+    ----------
+    relic : Relic
+        The Relic to encode.
+    out : np.ndarray
+        (ENCODING_DIM_RELIC,) float32. The Relic's row, overwritten.
+    """
     cache_key = (relic.name, relic.used_up, min(relic.counter, _COUNTER_MAX))
     row = _RELIC_ROW_CACHE.get(cache_key)
     if row is None:
@@ -78,7 +86,7 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
 
 
 def get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list:
-    # Each collection truncated to its own cap: a relic past it has no token
+    # Each collection truncated to its own cap: a Relic past it has no token
     match token_kind:
         case TokenKind.RELIC_OWNED:
             return game_state.relics[:MAX_RELICS]

@@ -16,7 +16,7 @@ from src.rl.utils import step_scripted
 
 @dataclass
 class ShardSettings:
-    """The settings of one worker's games, fixed for the run"""
+    """The settings of one worker's games, fixed for the run."""
 
     num_envs: int
 
@@ -32,12 +32,12 @@ class ShardSettings:
 
 @dataclass
 class Shard:
-    """One worker's games, each with its episode's running tally"""
+    """One worker's games, each with its episode's running tally."""
 
     envs: list[slai.GameEnv]
     obs: list[slai.GameState]
     stats: list[EpisodeStats]
-    ascension_c: float  # soft-curriculum position; envs adopt their level on reset
+    ascension_c: float  # Soft-curriculum position; envs adopt their level on reset
 
 
 def _make_env(ascension: int) -> tuple[slai.GameEnv, slai.GameState]:
@@ -71,7 +71,27 @@ def make_shard(settings: ShardSettings) -> Shard:
 def step_env(
     shard: Shard, j: int, action: slai.Action, settings: ShardSettings
 ) -> tuple[np.ndarray, EpisodeStats | None]:
-    """Play `action` in game j: its reward, and its episode's stats if the episode ended"""
+    """Play `action` in game j.
+
+    Parameters
+    ----------
+    shard : Shard
+        The worker's games. Game j's state and tally are updated in place, and a game whose
+        episode ended is replaced by a new one at its curriculum level.
+    j : int
+        The game's index in the shard.
+    action : slai.Action
+        The action to play.
+    settings : ShardSettings
+        The shard's settings, for the reward's discount and a new game's level.
+
+    Returns
+    -------
+    reward : np.ndarray
+        (K,) float64. The step's reward, one per reward stream.
+    finished : EpisodeStats | None
+        The episode's stats if the episode ended, None otherwise.
+    """
     prev = shard.obs[j]
     nxt, terminated = step_scripted(shard.envs[j], action)
     reward = compute_reward(prev, nxt, terminated, settings.gamma, action)  # (K,)

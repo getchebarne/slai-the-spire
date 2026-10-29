@@ -115,7 +115,7 @@ OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(CardChannel.FREE_TO_PLAY_ONCE)
 
 ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
-# Most nonzero columns a card row holds: one per channel, each a one-hot or a scalar
+# Most nonzero columns a Card row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_CARD = len(CHANNEL_LAYOUT_CARD)
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
@@ -157,13 +157,25 @@ def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
 
 
 def card_key(card: Card) -> tuple:
-    """The fields _encode_card_into reads, minus energy — two cards with equal
-    identity encode the same ROW at any given energy. It keys the row cache and,
-    with effect_key, masks' identity dedup; effects are rows of their own, so absent.
+    """Return the fields _encode_card_into reads, minus energy.
 
-    Explicit rather than hash(card): live entities carry a unique arena `id`
-    that participates in the engine's __hash__, so hashing the object would make
-    every card distinct and silently kill the cache."""
+    Two Cards with equal identity encode the same ROW at any given energy. It keys the row cache
+    and, with effect_key, masks' identity dedup; Effects are rows of their own, so absent.
+
+    Explicit rather than hash(Card): live Entities carry a unique arena `id` that participates in
+    the engine's __hash__, so hashing the object would make every Card distinct and silently kill
+    the cache.
+
+    Parameters
+    ----------
+    card : Card
+        The Card to key.
+
+    Returns
+    -------
+    tuple
+        The Card's identity key: those fields' values.
+    """
 
     return (
         card.name,
@@ -194,7 +206,7 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
 
     # Cache miss
     if row is None:
-        # Encode card
+        # Encode Card
         row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
         _encode_card_into(card, energy_current, row)
 
@@ -217,7 +229,22 @@ _WARNED_OVERFLOW: set[TokenKind] = set()
 
 
 def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
-    """`cards` cut to `cap`, warning once per token kind when that drops any."""
+    """Cut `cards` to `cap`, warning once per token kind when that drops any.
+
+    Parameters
+    ----------
+    token_kind : TokenKind
+        The Cards' token kind.
+    cards : list[Card]
+        The Cards to cut.
+    cap : int
+        The token kind's cap.
+
+    Returns
+    -------
+    list[Card]
+        The first `cap` Cards.
+    """
     if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
         _WARNED_OVERFLOW.add(token_kind)
         warnings.warn(
@@ -228,9 +255,24 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
 
 
 def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
-    """The GameState card pile a card token kind names, truncated to the pile's cap
-    (used by get_entities_for_token_kind + masks dedup). A card past the cap has no token,
-    so masks cannot name it."""
+    """Return the GameState Card pile a Card token kind names, truncated to the pile's cap.
+
+    Used by get_entities_for_token_kind. A Card past the cap has no token, so masks cannot name
+    it.
+
+    Parameters
+    ----------
+    token_kind : TokenKind
+        A Card token kind.
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[Card]
+        The pile's Cards in engine order, the draw pile's cut to the ones nearest its top; empty
+        when the state has no such pile.
+    """
     combat = game_state.combat
     match token_kind:
         case TokenKind.CARD_PILE_HAND:
@@ -254,7 +296,7 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             if combat is None:
                 return []
 
-            # Index-aligned with the monsters: a monster holding no card is None
+            # Index-aligned with the Monsters: a Monster holding no Card is None
             cards = [card for card in combat.card_pile_stasis if card is not None]
             return cards[:MAX_SIZE_CARD_PILE_STASIS]
         case TokenKind.CARD_PILE_DECK:
@@ -288,7 +330,7 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             if event is None:
                 return []
 
-            # A consumed event's offer is dead, unless a halt still selects from it (Neow's cards)
+            # A consumed Event's offer is dead, unless a halt still selects from it (Neow's Cards)
             if event.consumed:
                 effect_pending = game_state.effect_pending
                 pool = effect_pending.target.candidate_pool if effect_pending is not None else None

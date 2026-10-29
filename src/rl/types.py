@@ -6,6 +6,13 @@ from typing import final
 
 import torch
 from slai import ActionType
+from slai import Card
+from slai import Character
+from slai import EventOption
+from slai import Monster
+from slai import Potion
+from slai import Relic
+from slai import Room
 
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_CARD_REWARD_ROLL
@@ -35,7 +42,7 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
 
-# In packing order: TOKEN_KINDS_OF_ENTITY_KIND's entity kinds, one after another, each its
+# In packing order: TOKEN_KINDS_OF_ENTITY_KIND's Entity kinds, one after another, each its
 # token kinds in order
 class TokenKind(IntEnum):
     CARD_PILE_HAND = 0
@@ -70,7 +77,7 @@ class TokenKind(IntEnum):
     ROOMS = 29
 
 
-TOKEN_KINDS_CARD_REWARDS = (  # one token kind per reward bundle (card.py owns their packing)
+TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (card.py owns their packing)
     TokenKind.CARD_REWARD_0,
     TokenKind.CARD_REWARD_1,
     TokenKind.CARD_REWARD_2,
@@ -78,7 +85,7 @@ TOKEN_KINDS_CARD_REWARDS = (  # one token kind per reward bundle (card.py owns t
     TokenKind.CARD_REWARD_4,
 )
 
-# Pack order within the card entity kind: decision pools first, observational piles last
+# Pack order within the Card Entity kind: decision pools first, observational piles last
 TOKEN_KINDS_CARD = (
     TokenKind.CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER,
@@ -96,7 +103,7 @@ TOKEN_KINDS_CARD = (
     TokenKind.CARD_PILE_DECK,
 )
 
-# Pack order within the relic entity kind: decision pools first, the owned relics last
+# Pack order within the Relic Entity kind: decision pools first, the owned Relics last
 TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_REWARD,
     TokenKind.RELIC_SHOP,
@@ -104,7 +111,7 @@ TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_OWNED,
 )
 
-# Pack order within the potion entity kind; every source is engine-bounded
+# Pack order within the Potion Entity kind; every source is engine-bounded
 TOKEN_KINDS_POTION = (
     TokenKind.POTION_OWNED,
     TokenKind.POTION_REWARD,
@@ -112,7 +119,7 @@ TOKEN_KINDS_POTION = (
     TokenKind.POTION_EVENT_ROLL,
 )
 
-# The entity kinds in window order, each its token kinds; the last four hold a single token kind
+# The Entity kinds in window order, each its token kinds; the last four hold a single token kind
 TOKEN_KINDS_OF_ENTITY_KIND = (
     TOKEN_KINDS_CARD,
     TOKEN_KINDS_RELIC,
@@ -135,7 +142,7 @@ MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
     TokenKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
     TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
     TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
-    TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up card
+    TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up Card
     TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
     TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
     TokenKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
@@ -157,10 +164,23 @@ MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
     TokenKind.ROOMS: MAP_WIDTH,
 }
 
+# An Entity behind a token
+type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
+
 
 def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., int]]:
-    """A (layout, alloc) pair: alloc(channel, width=1) appends and returns the
-    offset, so offsets, widths and the total all derive from one list."""
+    """Make a (layout, alloc) pair.
+
+    `alloc(channel, width=1)` appends and returns the offset, so offsets, widths and the total
+    all derive from one list.
+
+    Returns
+    -------
+    layout : list[tuple[StrEnum, int]]
+        Every allocated channel and its width, in allocation order.
+    alloc : Callable[..., int]
+        The allocator over `layout`.
+    """
     layout: list[tuple[StrEnum, int]] = []
 
     def alloc(channel: StrEnum, width: int = 1) -> int:
@@ -172,8 +192,10 @@ def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., i
 
 
 class EffectSource(IntEnum):
-    """What applies the effect, and for relics on which trigger; stamped into the
-    row by the effects encoder, outside the row cache."""
+    """What applies the Effect, and for Relics on which trigger.
+
+    Stamped into the row by the Effects encoder, outside the row cache.
+    """
 
     CARD_PLAY = 0
     POTION_USE = 1
@@ -201,8 +223,11 @@ class EffectSource(IntEnum):
 @final
 @dataclass
 class X_OwnedSparse:
-    """Rows owned by tokens, one owned row kind per X_Tokens field, which the projector adds into
-    their owners: every token's rows, token after token; `x_count` says how many each token owns"""
+    """Rows owned by tokens, one owned row kind per X_Tokens field.
+
+    The projector adds them into their owners. Every token's rows, token after token; `x_count`
+    says how many each token owns.
+    """
 
     x_column: torch.Tensor  # (M, K) int16 — as in X_Tokens
     x_value: torch.Tensor  # (M, K) float32
@@ -212,36 +237,43 @@ class X_OwnedSparse:
 @final
 @dataclass
 class X_Tokens:
-    """Every entity token as a row, every state's in window order, state after state; `x_count`
-    says how many each state has. K is the rows' most nonzero columns: no fixed width anywhere but
-    X_Step's regions. Each row is its nonzero (column, value) entries in column order, then
-    (0, 0.0) entries up to K; the entries index the shared column space, each entity kind's columns
-    from its COL_START, then the health/block, price and slot columns entity kinds share"""
+    """Every Entity token as a row, every state's in window order, state after state.
+
+    `x_count` says how many each state has. K is the rows' most nonzero columns, except in
+    X_Step's regions, which have a fixed width, and in a minibatch, which keeps its rollout's K.
+    Each row is its nonzero (column, value) entries in column order, then (0, 0.0) entries up
+    to K; the entries index the shared column space, each Entity kind's columns from its
+    COL_START, then the health/block, price and slot columns Entity kinds share.
+    """
 
     x_column: torch.Tensor  # (N, K) int16
     x_value: torch.Tensor  # (N, K) float32
-    x_token_kind: torch.Tensor  # (N,) int16, which also names the entity kind
+    x_token_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
 
-    # L2 selection: legal under the action type, deduped by card identity
+    # L2 selection: legal under the action type, deduped by Card identity
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
 
-    # selections whose legal actions carry a monster target (cards / potions)
+    # Selections whose legal actions carry a Monster target (Cards / Potions)
     x_needs_target: torch.Tensor  # (N,) bool
 
-    x_node_idx: torch.Tensor  # (N,) int16: a room token's map node; 0 on every other token
+    x_node_idx: torch.Tensor  # (N,) int16: a Room token's Map node; 0 on every other token
 
     # The rows the tokens own
-    effects: X_OwnedSparse  # any number per token
-    modifiers: X_OwnedSparse  # any number per Character / Monster
+    effect_rows: X_OwnedSparse  # Any number per token
+    modifier_rows: X_OwnedSparse  # Any number per Character / Monster
 
+    # Number of tokens per state
     x_count: torch.Tensor  # (B,) long
 
 
 @final
 @dataclass
 class X_EffectPending:
-    """The pending halts' effect rows, held sparse, one per state with a halt pending, state
-    after state: global context, since no token owns them"""
+    """The pending halts' Effect rows, held sparse.
+
+    One per state with a halt pending, state after state: global context, since no token owns
+    them.
+    """
 
     x_column: torch.Tensor  # (P, K) int16
     x_value: torch.Tensor  # (P, K) float32
@@ -250,11 +282,14 @@ class X_EffectPending:
 
 @dataclass
 class X_GameState:
-    """The game state, as the encoders write it and the model, the rollout and the minibatches
-    hold it: each block only its rows, every state's in the block's order, state after state, and
-    its sparse entries cut to the most a row uses; each block's `x_count` holds each state's rows
-    in it; an owned row kind's holds each token's. The per-state fields are (B, ...).
-    src/rl/packed.py chooses its states and joins them"""
+    """The game state, as the encoders write it and the model, rollout and minibatches hold it.
+
+    Each block holds only its rows, every state's in the block's order, state after state, and its
+    sparse entries cut to the most a row uses, except in a minibatch, which keeps its rollout's
+    width; each block's `x_count` holds each state's rows in it; an owned row kind's holds each
+    token's. The per-state fields are (B, ...).
+    `src/rl/packed.py` chooses its states and joins them.
+    """
 
     tokens: X_Tokens
     effect_pending: X_EffectPending
@@ -271,10 +306,13 @@ class X_GameState:
 
 @dataclass
 class X_Window:
-    """The window packed for the model: only its tokens, every state's in window order, state after
-    state, as X_Tokens holds them. Per row: its token kind and entity kind, its masks and its
-    state. Per state: its tokens, and per token kind its first row and its tokens; a token kind's
-    tokens sit in consecutive rows. Per entity kind: its tokens, from the projector's one read"""
+    """The window packed for the model.
+
+    Only its tokens, every state's in window order, state after state, as X_Tokens holds them.
+    Per row: its token kind and Entity kind, its masks and its state. Per state: its tokens, and
+    per token kind its first row and its tokens; a token kind's tokens sit in consecutive rows.
+    Per Entity kind: its tokens, from the projector's one read.
+    """
 
     x_token_kind: torch.Tensor  # (N,) long
     x_entity_kind: torch.Tensor  # (N,) long
@@ -284,14 +322,17 @@ class X_Window:
     x_count: torch.Tensor  # (B,) long
     x_token_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
     x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) long
-    num_tokens_entity_kind: list[int]  # one per entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
+    num_tokens_entity_kind: list[int]  # One per Entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
 
 
 @dataclass
 class X_DrawOrderStates:
-    """The states the draw-order layer reads, those whose draw pile shows an order (2 or more draw
-    tokens): the ones under Frozen Eye (visible) first. With, from the projector's one read, how
-    many are visible, and their rows and pile rows (their draw tokens), visible and in all"""
+    """The states the draw-order layer reads.
+
+    Those whose draw pile shows an order (2 or more draw tokens): the ones under Frozen Eye
+    (visible) first. With, from the projector's one read, how many are visible, and their rows and
+    pile rows (their draw tokens), visible and in all.
+    """
 
     x_states: torch.Tensor  # (S,) long
     num_states_visible: int
@@ -303,10 +344,13 @@ class X_DrawOrderStates:
 
 @dataclass
 class X_CoreOutput:
-    """`global_` and `x_tokens` are the policy heads': the transformer's, but the draw-order
-    layer's on the states under Frozen Eye whose draw pile shows an order. `global_value` is the
-    value head's: the layer's on every state whose draw pile shows an order, the transformer's
-    elsewhere. `window` is the packed window's X_Window."""
+    """The core's output.
+
+    `global_` and `x_tokens` are the policy heads': the transformer's, but the draw-order layer's
+    on the states under Frozen Eye whose draw pile shows an order. `global_value` is the value
+    head's: the layer's on every state whose draw pile shows an order, the transformer's
+    elsewhere. `window` is the packed window's X_Window.
+    """
 
     global_: torch.Tensor  # (B, dim_global)
     global_value: torch.Tensor  # (B, dim_global)
@@ -316,10 +360,12 @@ class X_CoreOutput:
 
 @dataclass
 class X_Action:
-    """The sampled hierarchy per row, engine-facing: `token_kind` and `rank` name the L2
-    selection as the rank-th token of its token kind, `target` the L3 selection as the
-    rank-th monster token, and masks.engine_action names their entities by id. -1 where a
-    level didn't apply."""
+    """The sampled hierarchy per row, engine-facing.
+
+    `token_kind` and `rank` name the L2 selection as the rank-th token of its token kind, `target`
+    the L3 selection as the target-th Monster token, and `actions.engine_action` names their
+    Entities by id. A level that didn't apply holds -1.
+    """
 
     action_type: torch.Tensor  # (B,) long
     token_kind: torch.Tensor  # (B,) long — TokenKind of the L2 selection
@@ -332,10 +378,13 @@ class X_Action:
 
 @dataclass
 class X_Step:
-    """One step of every game, shared by the step loop and its workers: the action the step
-    loop sampled, then the reward, done flag and state, masks included, the worker wrote back.
-    Every field is `num_regions` equal regions, a worker's each: its games' entries, and in every
-    block rows for all its games at every cap, which it fills from the region's start"""
+    """One step of every game, shared by the step loop and its workers.
+
+    The action the step loop sampled, then the reward, done flag and state, masks included, the
+    worker wrote back. Every field is `num_regions` equal regions, a worker's each: its games'
+    entries, and in every block rows for all its games at every cap, which it fills from the
+    region's start.
+    """
 
     actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
     rewards: torch.Tensor  # (E, K)
@@ -346,9 +395,11 @@ class X_Step:
 
 @dataclass
 class X_Rollout:
-    """What the actor collected, before GAE: T steps of E games, state t * E + e of the
-    N = T * E states. The `final_` field is each game's state after the last step, for
-    the bootstrap value"""
+    """What the actor collected, before GAE.
+
+    T steps of E games, state t * E + e of the N = T * E states. The `final_` field is each game's
+    state after the last step, for the bootstrap value.
+    """
 
     game_state: X_GameState  # N states
 
@@ -364,10 +415,13 @@ class X_Rollout:
 
 @dataclass
 class X_TrainingBatch:
-    """Columnar rollout (N = rollout_length * num_envs states). The full-batch states, masks
-    included, are stored once and taken per minibatch; GAE returns/advantages are
-    precomputed. Values/returns are per reward stream (K = len(RewardStream)); the policy
-    advantage is the per-stream advantages summed, then normalized."""
+    """Columnar rollout (N = rollout_length * num_envs states).
+
+    The full-batch states, masks included, are stored once and taken per minibatch; GAE
+    returns/advantages are precomputed. Values/returns are per reward stream
+    (K = len(RewardStream)); the policy advantage is the per-stream advantages summed, then
+    normalized.
+    """
 
     game_state: X_GameState  # N states — taken per minibatch (take_states)
 
@@ -390,7 +444,7 @@ NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 
 def _check_tables() -> None:
-    """The tables that restate the engine or an enum still agree with it"""
+    """Check that the tables that restate the engine or an enum still agree with it."""
     if len(TOKEN_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
         raise RuntimeError(
             f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
@@ -402,7 +456,7 @@ def _check_tables() -> None:
             f"{set(TokenKind) - set(MAP_TOKEN_KIND_CAP)}"
         )
 
-    # TokenKind is declared in packing order, valued 0..len-1: the entity kind tables, one after
+    # TokenKind is declared in packing order, valued 0..len-1: the Entity kind tables, one after
     # another, list it, every token kind in one table
     token_kinds = [
         token_kind
