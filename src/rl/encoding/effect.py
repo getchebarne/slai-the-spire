@@ -1,14 +1,16 @@
 """Per-effect feature rows.
 
-Each `Effect` becomes one factored row — effect kind OHE + target features + typed
+Each `Effect` becomes one factored row — Effect kind OHE + target features + typed
 param channels + magnitudes on shared physical scales — embedded model-side by
-one shared MLP and sum-pooled into its owning entity's token.
+one shared MLP and added into its owning Entity's token, scaled by 1/sqrt(the
+owner's count of Effect rows). A pending halt's Effect row has no owning token:
+it is global context.
 
 Two rules the layout depends on:
 
-- **Referents contribute identity, never effects.** `CardAdd{Bite}` writes a
+- **Referents contribute identity, never Effects.** `CardAdd{Bite}` writes a
   name-vocabulary column, not Bite's own encoding. That makes the row depth-0 by
-  construction, which matters because the engine's effect-reference graph
+  construction, which matters because the engine's Effect-reference graph
   contains a self-loop (Endless Agony adds itself).
 - **Normalization is vectorized and scoped** — see `normalize_effect_rows`.
 """
@@ -69,7 +71,14 @@ _ASCENSIONS = range(ASCENSION_LEVEL + 1)
 
 
 def catalog_effects() -> Iterator[Effect]:
-    """Every effect reachable from a static definition, at every ascension"""
+    """Yield every Effect reachable from a static definition, at every ascension.
+
+    Yields
+    ------
+    Effect
+        One Effect of a Card, Potion or Relic template, or of an Event Option or a Monster move
+        at an ascension from 0 to ASCENSION_LEVEL.
+    """
 
     # Cards
     for template in get_card_templates():
@@ -112,8 +121,24 @@ del _effect
 
 
 def _amount_parts(amount: Amount) -> tuple[float, float, bool]:
-    """Amount union -> (absolute, relative_fraction, is_range). A range folds to
-    its midpoint in the absolute channel."""
+    """Split an Amount union into (absolute, relative_fraction, is_range).
+
+    A range folds to its midpoint in the absolute channel.
+
+    Parameters
+    ----------
+    amount : Amount
+        The amount to split.
+
+    Returns
+    -------
+    absolute : float
+        An absolute amount, or a range's midpoint; 0.0 for a relative one.
+    relative_fraction : float
+        A relative amount's numerator / denominator; 0.0 otherwise.
+    is_range : bool
+        Whether the amount is a range.
+    """
     if isinstance(amount, AmountAbsolute):
         return float(amount.amount), 0.0, False
     if isinstance(amount, AmountRelative):
@@ -138,14 +163,40 @@ M = TypeVar("M", bound=_MirrorEnum)
 
 
 def _field(cls: type[E], get: Callable[[E], V]) -> Iterator[V]:
-    """One field across every catalog instance of an Effect type"""
+    """Yield one field across every catalog instance of an Effect type.
+
+    Parameters
+    ----------
+    cls : type[E]
+        The Effect type.
+    get : Callable[[E], V]
+        The field's getter, called on each instance.
+
+    Yields
+    ------
+    V
+        The field of one catalog instance of `cls`.
+    """
     effects: list[E] = _BY_TYPE.get(cls, [])
     for effect in effects:
         yield get(effect)
 
 
 def _cap(*specs: Iterable[Amount | float], floor: float = 1.0) -> float:
-    """Max |value| over catalog fields sharing a physical scale."""
+    """Return the max |value| over catalog fields sharing a physical scale.
+
+    Parameters
+    ----------
+    *specs : Iterable[Amount | float]
+        Each field's values; an Amount counts as its absolute part, a range as its midpoint.
+    floor : float, default 1.0
+        The smallest cap returned.
+
+    Returns
+    -------
+    float
+        The largest |value|, at least `floor`.
+    """
     max_ = floor
     for spec in specs:
         for value in spec:
@@ -160,7 +211,18 @@ def _cap(*specs: Iterable[Amount | float], floor: float = 1.0) -> float:
 
 
 def _vocabulary(*specs: Iterable[M | list[M]]) -> dict[M, int]:
-    """Catalog-derived identity vocabulary; index 0 is reserved as unseen."""
+    """Build a catalog-derived identity vocabulary; index 0 is reserved as unseen.
+
+    Parameters
+    ----------
+    *specs : Iterable[M | list[M]]
+        Each field's values; a list adds each of its names.
+
+    Returns
+    -------
+    dict[M, int]
+        Each name, mapped to its index from 1, in the names' int order.
+    """
     names: set[M] = set()
     for spec in specs:
         for value in spec:
@@ -276,7 +338,7 @@ class EffectChannel(StrEnum):
     SELECTION_KIND = auto()
     SELECT_COUNT = auto()
     CANDIDATE_FILTER = auto()
-    EFFECT_SOURCE = auto()  # written by encode_effect_row_into_w_cache, outside the row cache
+    EFFECT_SOURCE = auto()  # Written by encode_effect_row_into_w_cache, outside the row cache
 
     # Categorical params, named for the engine type they one-hot
     MODIFIER_KIND = auto()
@@ -435,7 +497,7 @@ ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT_EFFECT)
 # The channels that set several of a row's columns
 _MULTI_HOT_CHANNELS = (EffectChannel.CANDIDATE_FILTER, EffectChannel.RELIC_NAME)
 
-# Most nonzero columns an effect row holds: one per one-hot or scalar channel, and every column
+# Most nonzero columns an Effect row holds: one per one-hot or scalar channel, and every column
 # of the multi-hot ones
 ENCODING_DIM_SPARSE_EFFECT = sum(
     width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in CHANNEL_LAYOUT_EFFECT
@@ -444,7 +506,19 @@ ENCODING_DIM_SPARSE_EFFECT = sum(
 
 # Per-effect-kind encoders
 def _write_amount(row: np.ndarray, value: Amount, off_abs: int, off_rel: int) -> None:
-    """Amount union -> absolute/relative channels, plus the shared range flag."""
+    """Write an Amount union into absolute/relative channels, plus the shared range flag.
+
+    Parameters
+    ----------
+    row : np.ndarray
+        (ENCODING_DIM_EFFECT,) float32. The Effect's raw row, updated in place.
+    value : Amount
+        The amount; a relative one also writes its ReadAt and Rounding one-hots.
+    off_abs : int
+        The absolute channel's column.
+    off_rel : int
+        The relative channel's column.
+    """
     absolute, relative, is_range = _amount_parts(value)
     row[off_abs] += absolute
     row[off_rel] += relative
@@ -458,7 +532,15 @@ def _write_amount(row: np.ndarray, value: Amount, off_abs: int, off_rel: int) ->
 
 
 def _cost_zero(row: np.ndarray, value: CostScope | None) -> None:
-    """Optional[CostScope]: a presence flag plus the scope one-hot."""
+    """Write an Optional[CostScope]: a presence flag plus the scope one-hot.
+
+    Parameters
+    ----------
+    row : np.ndarray
+        (ENCODING_DIM_EFFECT,) float32. The Effect's raw row, updated in place.
+    value : CostScope | None
+        The Effect's `cost_zero` scope; None writes nothing.
+    """
     if value is not None:
         row[OFF_COST_ZERO_PRESENT] = 1.0
         row[OFF_COST_SCOPE + _INDEX_COST_SCOPE[value]] = 1.0
@@ -791,10 +873,18 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
 
 
 def encode_effect_row_into(effect: Effect, row: np.ndarray) -> None:
-    """Write one effect's RAW (un-normalized) features into `row`.
+    """Write one Effect's RAW (un-normalized) features into `row`.
 
     Callers that write many rows should normalize the whole block once with
-    `normalize_effect_rows`."""
+    `normalize_effect_rows`.
+
+    Parameters
+    ----------
+    effect : Effect
+        The Effect to encode.
+    row : np.ndarray
+        (ENCODING_DIM_EFFECT,) float32. A zeroed row, written in place.
+    """
 
     # Effect's kind
     row[OFF_EFFECT_KIND + _INDEX_EFFECT[type(effect)]] = 1.0
@@ -833,7 +923,18 @@ _EFFECT_ROW_CACHE_MAX = 100_000
 
 
 def effect_key(effects: Iterable[Effect]) -> tuple[Effect, ...]:
-    """Value-key over an effect list (frozen pyclasses hash by field)."""
+    """Return a value-key over an Effect list (frozen pyclasses hash by field).
+
+    Parameters
+    ----------
+    effects : Iterable[Effect]
+        The Effects to key.
+
+    Returns
+    -------
+    tuple[Effect, ...]
+        The Effects, in order.
+    """
     return tuple(effects)
 
 
@@ -842,7 +943,7 @@ def encode_effect_row_into_w_cache(effect: Effect, source: EffectSource, out: np
     if row is None:
         row = np.zeros(ENCODING_DIM_EFFECT, dtype=np.float32)
         encode_effect_row_into(effect, row)
-        row.flags.writeable = False  # guard the cached master copy
+        row.flags.writeable = False  # Guard the cached master copy
         if len(_EFFECT_ROW_CACHE) >= _EFFECT_ROW_CACHE_MAX:
             _EFFECT_ROW_CACHE.clear()
         _EFFECT_ROW_CACHE[effect] = row
@@ -890,12 +991,20 @@ _SCALED_LINEAR = ~_SCALED_SQRT
 
 
 def normalize_effect_rows(rows: np.ndarray) -> None:
-    """Scale every channel in place. `rows` is any array whose LAST axis is the
-    channel axis.
+    """Scale the `_NORM_META` channels in place.
 
-    Run it once per block, over all its rows: per row, it costs far more. Fancy
-    indexing copies, so the transform runs on a gathered block and the final
-    assignment scatters it back; `...` keeps it rank-agnostic."""
+    Each is clipped to ±its cap, then divided by the cap or sqrt-compressed.
+
+    Run it once per block, over all its rows: per row, it costs far more. Fancy indexing copies,
+    so the transform runs on a gathered block and the final assignment scatters it back; `...`
+    keeps it rank-agnostic.
+
+    Parameters
+    ----------
+    rows : np.ndarray
+        (..., ENCODING_DIM_EFFECT) float32. Raw Effect rows: any array whose LAST axis is the
+        channel axis.
+    """
     if not rows.size:
         return
 
@@ -912,8 +1021,22 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
 def encode_batch_effect_pending(
     game_states: list[GameState], device: torch.device
 ) -> X_EffectPending:
-    """The pending effect rows as one (P, D) block, held sparse, one per state with a halt
-    pending, every state's after the previous state's; and each state's (B,) row count, 1 or 0."""
+    """Encode the pending Effect rows as one (P, D) block, held sparse.
+
+    One row per state with a halt pending, every state's after the previous state's.
+
+    Parameters
+    ----------
+    game_states : list[GameState]
+        The states to encode, B of them.
+    device : torch.device
+        The device of the returned tensors.
+
+    Returns
+    -------
+    X_EffectPending
+        The pending Effect rows, held sparse, and each state's (B,) row count, 1 or 0.
+    """
     batch_effect_pending = [game_state.effect_pending for game_state in game_states]
     np_count = np.array(
         [effect_pending is not None for effect_pending in batch_effect_pending], dtype=np.int64

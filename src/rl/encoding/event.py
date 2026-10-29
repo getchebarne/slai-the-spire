@@ -27,7 +27,7 @@ _MONSTER_ENCOUNTER_TO_IDX = {
     MonsterEncounter.LagavulinEvent: 2,
 }
 
-# Match and Keep! deals six card names twice, face down: the engine's
+# Match and Keep! deals six Card names twice, face down: the engine's
 # src/events/match_and_keep.rs, which GameEnv doesn't expose
 _MATCH_AND_KEEP_BOARD_SIZE = 12
 
@@ -74,7 +74,7 @@ def _encode_event_meta_into(event: Event, out: np.ndarray) -> None:
     out[OFF_EVENT_CONSUMED] = float(event.consumed)
     out[OFF_EVENT_STAGE] = min(event.stage, EVENT_STAGE_CAP) / EVENT_STAGE_CAP
 
-    # On the character row's max-health scale, so the two compare directly
+    # On the Character row's max-health scale, so the two compare directly
     out[OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_sqrt_norm(
         event.health_max_at_open, CHARACTER_HEALTH_CAP
     )
@@ -101,13 +101,37 @@ def _encode_event_meta_into(event: Event, out: np.ndarray) -> None:
 
 
 def get_event_option_entities(game_state: GameState) -> list[EventOption]:
-    """The options behind the option tokens, in slot order, cut to MAX_EVENT_OPTIONS"""
+    """Return the options behind the option tokens, in slot order, cut to MAX_EVENT_OPTIONS.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[EventOption]
+        The Event's first MAX_EVENT_OPTIONS options; empty outside Events.
+    """
     event = game_state.event
     return event.options[:MAX_EVENT_OPTIONS] if event is not None else []
 
 
 def encode_batch_event_meta(game_states: list[GameState], device: torch.device) -> torch.Tensor:
-    """Each state's event meta; 0 outside events"""
+    """Encode each state's Event meta.
+
+    Parameters
+    ----------
+    game_states : list[GameState]
+        The states to encode, B of them.
+    device : torch.device
+        The device of the returned tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        (B, ENCODING_DIM_EVENT_META) float32. Each state's Event meta; 0 outside Events.
+    """
     np_meta = np.zeros((len(game_states), ENCODING_DIM_EVENT_META), dtype=np.float32)
     for b, game_state in enumerate(game_states):
         event = game_state.event

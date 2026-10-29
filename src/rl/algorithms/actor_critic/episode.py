@@ -18,7 +18,7 @@ from src.rl.reward import shop_gold_spent
 # Cumulative floor of Act II's first row: reaching it ⟺ beat the Act I boss.
 _ACT2_FLOOR_MIN = ACT_SPAN
 
-# Final boss room: reaching it splits the act-2 plateau into reach x conversion
+# Final boss Room: reaching it splits the act-2 plateau into reach x conversion
 _BOSS_FLOOR_MIN = (GameEnv.ACT_FINAL - 1) * ACT_SPAN + MAP_HEIGHT
 
 
@@ -27,12 +27,12 @@ class EpisodeStats:
     stream_rewards: np.ndarray  # (K,) per-stream episode totals, undiscounted
     length: int  # Policy steps: step_scripted folds the scripted gold takes into one step
     won: bool  # Game over with health > 0
-    floor: int  # run-CUMULATIVE floor (reward.cumulative_floor), 0..31
+    floor: int  # Run-CUMULATIVE floor (reward.cumulative_floor), 0..31
     stream_returns: np.ndarray  # (K,) per-stream DISCOUNTED returns (γ^t·r_t sums)
-    gold_gained: int  # sum of positive gold deltas over the episode
-    gold_spent: int  # gold spent at shops (reward.shop_gold_spent) over the episode
-    deck_size: int  # deck size at episode end
-    cards_added: int  # deck-size increases over the episode
+    gold_gained: int  # Sum of positive gold deltas over the episode
+    gold_spent: int  # Gold spent at Shops (reward.shop_gold_spent) over the episode
+    deck_size: int  # Deck size at episode end
+    cards_added: int  # Deck-size increases over the episode
     purges: int  # ShopPurge actions over the episode
 
     @property
@@ -41,7 +41,13 @@ class EpisodeStats:
 
 
 def make_episode_stats() -> EpisodeStats:
-    """A zeroed tally: won, floor and deck_size are placeholders until finish_episode"""
+    """Return a zeroed tally: won, floor and deck_size are placeholders until finish_episode.
+
+    Returns
+    -------
+    EpisodeStats
+        A new episode's tally.
+    """
     return EpisodeStats(
         stream_rewards=np.zeros(len(RewardStream)),
         length=0,
@@ -64,7 +70,23 @@ def tally_step(
     reward: np.ndarray,
     gamma: float,
 ) -> None:
-    """Add one policy step: `action` took game_state to game_state_next and paid `reward`"""
+    """Add one policy step: `action` took game_state to game_state_next and paid `reward`.
+
+    Parameters
+    ----------
+    stats : EpisodeStats
+        The episode's tally, updated in place.
+    game_state : GameState
+        The state before the step.
+    game_state_next : GameState
+        The state after the step.
+    action : Action
+        The action the policy took.
+    reward : np.ndarray
+        (K,) float64. The step's reward, one per reward stream.
+    gamma : float
+        The discount, for the discounted returns.
+    """
     stats.stream_rewards += reward
     stats.stream_returns += gamma**stats.length * reward
     stats.length += 1
@@ -77,7 +99,17 @@ def tally_step(
 
 
 def finish_episode(stats: EpisodeStats, game_state: GameState, terminated: bool) -> None:
-    """Fill the fields an episode settles at its end, from its last snapshot"""
+    """Fill the fields an episode settles at its end, from its last snapshot.
+
+    Parameters
+    ----------
+    stats : EpisodeStats
+        The episode's tally; its won, floor and deck_size are set in place.
+    game_state : GameState
+        The episode's last snapshot.
+    terminated : bool
+        Whether the game is over; an episode cut short is not won.
+    """
     stats.won = bool(terminated and game_state.character.health > 0)
     stats.floor = cumulative_floor(game_state)
     stats.deck_size = len(game_state.card_pile_deck)
@@ -102,7 +134,18 @@ KEY_PURGES_AVG = "purges_avg"
 
 
 def aggregate_episode_stats(episodes: list[EpisodeStats]) -> dict[str, float]:
-    """Outcome metrics over a batch of episodes, keyed by the KEY_* names."""
+    """Compute outcome metrics over a batch of episodes.
+
+    Parameters
+    ----------
+    episodes : list[EpisodeStats]
+        The episodes, at least one.
+
+    Returns
+    -------
+    dict[str, float]
+        The metrics, keyed by the KEY_* names.
+    """
     n = len(episodes)
     rewards = [e.total_reward for e in episodes]
     return {
@@ -123,7 +166,19 @@ def aggregate_episode_stats(episodes: list[EpisodeStats]) -> dict[str, float]:
 
 
 def episode_scalars(completed: list[EpisodeStats]) -> dict[str, float]:
-    """The train/* scalars of the episodes an iteration's rollouts finished, or none without one"""
+    """Return the train/* scalars of the episodes an iteration's rollouts finished.
+
+    Parameters
+    ----------
+    completed : list[EpisodeStats]
+        The finished episodes, possibly none.
+
+    Returns
+    -------
+    dict[str, float]
+        The outcome metrics, the episode count, and each reward stream's average reward and
+        discounted return, keyed by their train/* names; none without an episode.
+    """
     if not completed:
         return {}
     n = len(completed)

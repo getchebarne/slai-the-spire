@@ -37,7 +37,20 @@ def encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
 
 
 def encode_batch_shop_meta(game_states: list[GameState], device: torch.device) -> torch.Tensor:
-    """The purge service's price row + the purged flag; 0 outside shops."""
+    """Encode each state's Shop meta: the purge service's price row + the purged flag.
+
+    Parameters
+    ----------
+    game_states : list[GameState]
+        The states to encode, B of them.
+    device : torch.device
+        The device of the returned tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        (B, ENCODING_DIM_SHOP_META) float32. Each state's Shop meta; 0 outside Shops.
+    """
     np_meta = np.zeros((len(game_states), ENCODING_DIM_SHOP_META), dtype=np.float32)
     for b, game_state in enumerate(game_states):
         shop = game_state.shop

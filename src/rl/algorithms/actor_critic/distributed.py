@@ -1,6 +1,8 @@
-"""Data parallelism over GPU ranks launched by torchrun. Every rank runs its own actor
-and learner on its own games; the learners average gradients each step, so their
-weights stay identical. Without torchrun every function is a no-op on rank 0 of 1"""
+"""Data parallelism over GPU ranks launched by torchrun.
+
+Every rank runs its own actor and learner on its own games; the learners average gradients each
+step, so their weights stay identical. Without torchrun every function is a no-op on rank 0 of 1.
+"""
 
 import os
 from dataclasses import dataclass
@@ -20,7 +22,17 @@ class RankInfo:
 
 
 def init() -> RankInfo:
-    """This process's rank, the world size and the device it trains on"""
+    """Start the process group under torchrun; return the rank, the world size and the device.
+
+    Under torchrun, the local rank's GPU becomes the current device and the group runs NCCL on it,
+    or Gloo without a GPU. Without torchrun nothing starts, and the process is rank 0 of 1.
+
+    Returns
+    -------
+    RankInfo
+        The rank, the world size and the device it trains on: the local rank's GPU, or the CPU
+        without one.
+    """
     if "WORLD_SIZE" not in os.environ:
         return RankInfo(0, 1, torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
     if torch.cuda.is_available():
@@ -39,15 +51,28 @@ def close() -> None:
 
 
 def broadcast_from_rank0(model: nn.Module) -> None:
-    """Start every rank from rank 0's weights"""
+    """Start every rank from rank 0's weights.
+
+    Parameters
+    ----------
+    model : nn.Module
+        This rank's model, its weights overwritten in place with rank 0's.
+    """
     if dist.is_initialized():
         for x in model.state_dict().values():
             dist.broadcast(x, src=0)
 
 
 def average_gradients(model: nn.Module) -> None:
-    """Average the gradients over the ranks in one all-reduce. A parameter no rank
-    reached keeps no gradient, so Adam skips it as it does on one GPU"""
+    """Average the gradients over the ranks in one all-reduce.
+
+    A parameter no rank reached keeps no gradient, so Adam skips it as it does on one GPU.
+
+    Parameters
+    ----------
+    model : nn.Module
+        This rank's model, each parameter's gradient replaced by its average over the ranks.
+    """
     if not dist.is_initialized():
         return
     params = list(model.parameters())
@@ -64,7 +89,20 @@ def average_gradients(model: nn.Module) -> None:
 
 
 def mean_over_ranks(value: float, device: torch.device) -> float:
-    """`value` averaged over the ranks: the same number on every rank"""
+    """Average `value` over the ranks: the same number on every rank.
+
+    Parameters
+    ----------
+    value : float
+        This rank's value.
+    device : torch.device
+        This rank's device, where the all-reduce runs.
+
+    Returns
+    -------
+    float
+        The mean of every rank's `value`.
+    """
     if not dist.is_initialized():
         return value
     x = torch.tensor([value], dtype=torch.float64, device=device)
@@ -73,7 +111,20 @@ def mean_over_ranks(value: float, device: torch.device) -> float:
 
 
 def any_rank(flag: bool, device: torch.device) -> bool:
-    """Whether `flag` is set on at least one rank"""
+    """Check whether `flag` is set on at least one rank.
+
+    Parameters
+    ----------
+    flag : bool
+        This rank's flag.
+    device : torch.device
+        This rank's device, where the all-reduce runs.
+
+    Returns
+    -------
+    bool
+        True if `flag` is set on at least one rank; the same on every rank.
+    """
     if not dist.is_initialized():
         return flag
     x = torch.tensor([float(flag)], device=device)
@@ -82,7 +133,20 @@ def any_rank(flag: bool, device: torch.device) -> bool:
 
 
 def broadcast_float(value: float, device: torch.device) -> float:
-    """Rank 0's `value` on every rank"""
+    """Broadcast rank 0's `value` to every rank.
+
+    Parameters
+    ----------
+    value : float
+        This rank's value; only rank 0's is kept.
+    device : torch.device
+        This rank's device, where the broadcast runs.
+
+    Returns
+    -------
+    float
+        Rank 0's `value`.
+    """
     if not dist.is_initialized():
         return value
     x = torch.tensor([value], dtype=torch.float64, device=device)
@@ -91,7 +155,18 @@ def broadcast_float(value: float, device: torch.device) -> float:
 
 
 def gather_episodes(episodes: list[EpisodeStats]) -> list[EpisodeStats]:
-    """Every rank's finished episodes, on every rank"""
+    """Gather every rank's finished episodes, on every rank.
+
+    Parameters
+    ----------
+    episodes : list[EpisodeStats]
+        This rank's finished episodes.
+
+    Returns
+    -------
+    list[EpisodeStats]
+        Every rank's finished episodes, rank after rank.
+    """
     if not dist.is_initialized():
         return episodes
     gathered: list[list[EpisodeStats]] = [[] for _ in range(dist.get_world_size())]

@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import X_EffectPending
 from src.rl.types import X_OwnedSparse
 from src.rl.types import X_Tokens
@@ -10,26 +9,55 @@ from src.rl.types import X_Tokens
 def compile_sparse_tokens(
     np_rows: np.ndarray,
     np_token_kind: np.ndarray,
+    np_legal: np.ndarray,
+    np_needs_target: np.ndarray,
     np_node_idx: np.ndarray,
     np_count: np.ndarray,
     num_sparse: int,
     device: torch.device,
-    effects: X_OwnedSparse,
-    modifiers: X_OwnedSparse,
+    x_effect_rows: X_OwnedSparse,
+    x_modifier_rows: X_OwnedSparse,
 ) -> X_Tokens:
-    """The tokens from their (N, D) rows, each with at most `num_sparse` nonzero columns, their
-    (N,) token kinds and nodes, and each state's (B,) count of them; their masks all False, for
-    build_masks to fill; and the rows they own"""
+    """Compile the tokens, held sparse, and the rows they own.
+
+    Parameters
+    ----------
+    np_rows : np.ndarray
+        (N, D) float32. The tokens' rows, each with at most `num_sparse` nonzero columns.
+    np_token_kind : np.ndarray
+        (N,) int16. The tokens' token kinds.
+    np_legal : np.ndarray
+        (N, NUM_ACTION_TYPES) bool. The tokens' legal bits.
+    np_needs_target : np.ndarray
+        (N,) bool. The tokens' needs-target bits.
+    np_node_idx : np.ndarray
+        (N,) int16. The tokens' Map nodes; 0 on every token but a Room's.
+    np_count : np.ndarray
+        (B,) int64. Each state's count of tokens.
+    num_sparse : int
+        The most nonzero columns a row may hold.
+    device : torch.device
+        The device of the returned tensors.
+    x_effect_rows : X_OwnedSparse
+        The Effect rows the tokens own.
+    x_modifier_rows : X_OwnedSparse
+        The Modifier rows the tokens own.
+
+    Returns
+    -------
+    X_Tokens
+        The tokens, held sparse, and the rows they own.
+    """
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_Tokens(
         x_column=torch.from_numpy(np_column).to(device),
         x_value=torch.from_numpy(np_value).to(device),
         x_token_kind=torch.from_numpy(np_token_kind).to(device),
-        x_legal=torch.zeros(len(np_rows), NUM_ACTION_TYPES, dtype=torch.bool, device=device),
-        x_needs_target=torch.zeros(len(np_rows), dtype=torch.bool, device=device),
+        x_legal=torch.from_numpy(np_legal).to(device),
+        x_needs_target=torch.from_numpy(np_needs_target).to(device),
         x_node_idx=torch.from_numpy(np_node_idx).to(device),
-        effects=effects,
-        modifiers=modifiers,
+        effect_rows=x_effect_rows,
+        modifier_rows=x_modifier_rows,
         x_count=torch.from_numpy(np_count).to(device),
     )
 
@@ -37,8 +65,25 @@ def compile_sparse_tokens(
 def compile_sparse_owned(
     np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_OwnedSparse:
-    """An owned row kind's rows from its (M, D) rows, each with at most `num_sparse` nonzero
-    columns, token after token, and each token's (N,) count of them"""
+    """Compile an owned row kind's rows, held sparse.
+
+    Parameters
+    ----------
+    np_rows : np.ndarray
+        (M, D) float32. The rows, token after token, each with at most `num_sparse` nonzero
+        columns.
+    np_count : np.ndarray
+        (N,) int16. Each token's count of them.
+    num_sparse : int
+        The most nonzero columns a row may hold.
+    device : torch.device
+        The device of the returned tensors.
+
+    Returns
+    -------
+    X_OwnedSparse
+        The rows, held sparse, and each token's count of them.
+    """
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_OwnedSparse(
         x_column=torch.from_numpy(np_column).to(device),
@@ -50,8 +95,25 @@ def compile_sparse_owned(
 def compile_sparse_effect_pending(
     np_rows: np.ndarray, np_count: np.ndarray, num_sparse: int, device: torch.device
 ) -> X_EffectPending:
-    """The pending effects from their (P, D) rows, each with at most `num_sparse` nonzero
-    columns, and each state's (B,) count of them, 0 or 1"""
+    """Compile the pending Effects, held sparse.
+
+    Parameters
+    ----------
+    np_rows : np.ndarray
+        (P, D) float32. The pending Effects' rows, each with at most `num_sparse` nonzero
+        columns.
+    np_count : np.ndarray
+        (B,) int64. Each state's count of them, 0 or 1.
+    num_sparse : int
+        The most nonzero columns a row may hold.
+    device : torch.device
+        The device of the returned tensors.
+
+    Returns
+    -------
+    X_EffectPending
+        The pending Effects, held sparse, and each state's count of them.
+    """
     np_column, np_value = _dense_to_sparse(np_rows, num_sparse)
     return X_EffectPending(
         x_column=torch.from_numpy(np_column).to(device),
@@ -61,9 +123,25 @@ def compile_sparse_effect_pending(
 
 
 def _dense_to_sparse(np_rows: np.ndarray, num_sparse: int) -> tuple[np.ndarray, np.ndarray]:
-    """Each row of the (..., D) float32 `np_rows` as its nonzero (column, value) entries in
-    column order, then (0, 0.0) entries: (..., K) int16 columns and float32 values, K the rows'
-    most nonzero columns (at least one). A row with more than `num_sparse` raises an IndexError"""
+    """Convert each row of `np_rows` to its nonzero (column, value) entries.
+
+    Each row holds its entries in column order, then (0, 0.0) entries. K is the rows' most nonzero
+    columns (at least one). A row with more than `num_sparse` raises an IndexError.
+
+    Parameters
+    ----------
+    np_rows : np.ndarray
+        (..., D) float32. The rows.
+    num_sparse : int
+        The most nonzero columns a row may hold.
+
+    Returns
+    -------
+    np_column : np.ndarray
+        (..., K) int16. Each row's entries' columns.
+    np_value : np.ndarray
+        (..., K) float32. Each row's entries' values.
+    """
     encoding_dim = np_rows.shape[-1]
 
     # Number of rows in `np_rows.reshape(-1, encoding_dim)`

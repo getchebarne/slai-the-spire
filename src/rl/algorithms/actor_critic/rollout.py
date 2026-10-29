@@ -29,16 +29,43 @@ def collect_rollout(
     curriculum_c: float,
     generator: torch.Generator,
 ) -> tuple[X_Rollout, list[EpisodeStats], dict[str, float]]:
-    """Play `rollout_length` lockstep steps of every game with `model`, sampling from
-    `generator`: each step one forward over all games, then the workers step them. GAE is the
-    learner's"""
+    """Play `rollout_length` lockstep steps of every game with `model`, sampling from `generator`.
+
+    Each step runs one forward over all games, then the workers step them. GAE is the learner's.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The actor's model, in eval mode during the rollout and back in training mode after it.
+    exchange : Exchange
+        What the step loop and its workers share; its step holds the E games.
+    workers : list[Worker]
+        The worker processes that step the games.
+    rollout_length : int
+        The steps to play, T.
+    device : torch.device
+        The model's device.
+    curriculum_c : float
+        The soft-curriculum position, which sets the level of a game that resets.
+    generator : torch.Generator
+        The generator the actions are sampled from.
+
+    Returns
+    -------
+    x_rollout : X_Rollout
+        The T steps of the E games, before GAE.
+    completed : list[EpisodeStats]
+        The finished episodes, drained from the workers' queue.
+    info : dict[str, float]
+        The rollout's scalars: its terminations, boundary truncations and Rest Site upgrade rate.
+    """
     E = len(exchange.step.actions)
     T = rollout_length
     N = T * E
     K = len(RewardStream)
     exchange.curriculum_c.fill_(curriculum_c)
-    chunks_x: list[X_GameState] = []  # per step, in state order
-    chunks_count: list[torch.Tensor] = []  # their counts, on the CPU
+    chunks_x: list[X_GameState] = []  # Per step, in state order
+    chunks_count: list[torch.Tensor] = []  # Their counts, on the CPU
     actions = torch.empty(N, 4, dtype=torch.long, device=device)
     log_probs = torch.empty(N, device=device)
     rewards = torch.empty(T, E, K, device=device)

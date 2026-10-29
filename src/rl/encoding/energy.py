@@ -29,7 +29,7 @@ def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
     energy_clamp = min(max(energy.energy_current, _ENERGY_MIN), _ENERGY_MAX)
     out[OFF_ENERGY + energy_clamp - _ENERGY_MIN] = 1.0
 
-    # Clamped — energy_current can exceed _ENERGY_MAX via relics
+    # Clamped — energy_current can exceed _ENERGY_MAX via Relics
     out[OFF_ENERGY_SCALAR] = min(energy.energy_current / _ENERGY_MAX, 1.0)
 
 

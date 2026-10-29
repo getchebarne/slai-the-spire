@@ -51,7 +51,7 @@ class CharacterChannel(StrEnum):
     DECK_SIZE = auto()
     DECK_UPGRADED_FRACTION = auto()
     REWARD_ROLL_OFFSET = auto()
-    POTION_DROP_CHANCE = auto()  # Combat potion odds, ignoring White Beast Statue's 100%
+    POTION_DROP_CHANCE = auto()  # Combat Potion odds, ignoring White Beast Statue's 100%
 
     # Combat only: 0 outside it
     INCOMING_DAMAGE = auto()
@@ -88,7 +88,7 @@ OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER = _alloc(CharacterChannel.ORANGE_PELLE
 
 ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 
-# Most nonzero columns a character row holds: one per channel, each a one-hot or a scalar
+# Most nonzero columns a Character row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
 
 

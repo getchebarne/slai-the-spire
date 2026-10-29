@@ -41,9 +41,32 @@ def _categorical_step(
     greedy: bool,
     generator: torch.Generator | None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Each row's selection, its log-prob, the entropy and KL(uniform‖π), all (B,), from a head's
-    (B, N) logits, which the head already masked; `x_mask` is the KL's legal set. Samples draw
-    from `generator`, or the global one when it is None"""
+    """Compute each row's selection, its log-prob, the entropy and KL(uniform‖π).
+
+    Parameters
+    ----------
+    x_logits : torch.Tensor
+        (B, N). A head's logits, which the head already masked.
+    x_mask : torch.Tensor
+        (B, N) bool. The KL's legal set.
+    x_recorded_idx : torch.Tensor | None
+        (B,) long. The recorded selections to score (PPO recompute), or None to select.
+    greedy : bool
+        Whether to select each row's highest logit rather than sample.
+    generator : torch.Generator | None
+        The generator samples draw from, or None for the global one.
+
+    Returns
+    -------
+    x_idx : torch.Tensor
+        (B,) long. Each row's selection.
+    x_log_prob : torch.Tensor
+        (B,). Its log-prob.
+    x_entropy : torch.Tensor
+        (B,). The entropy.
+    x_kl_uniform : torch.Tensor
+        (B,). KL(uniform‖π) over the legal set.
+    """
     # No argument checks: each one reads the logits back, making the CPU wait for the GPU
     dist = torch.distributions.Categorical(logits=x_logits, validate_args=False)
 
@@ -68,21 +91,68 @@ def _categorical_step(
 
 
 def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> torch.Tensor:
-    """Each state's sum of its rows' `x`, (S,)"""
-    return x.new_zeros(num_states).index_add_(0, x_state, x)
+    """Sum each state's rows' `x`.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        (R,). Each row's value.
+    x_state : torch.Tensor
+        (R,) long. Each row's state.
+    num_states : int
+        The number of states, S.
+
+    Returns
+    -------
+    torch.Tensor
+        (S,). Each state's sum of its rows' `x`.
+    """
+    return torch.zeros(num_states, dtype=x.dtype, device=x.device).index_add_(0, x_state, x)
 
 
 def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> torch.Tensor:
-    """Each state's max of its rows' `x`, (S,)"""
-    return x.new_full((num_states,), float("-inf")).scatter_reduce_(0, x_state, x, reduce="amax")
+    """Find each state's max of its rows' `x`.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        (R,). Each row's value.
+    x_state : torch.Tensor
+        (R,) long. Each row's state.
+    num_states : int
+        The number of states, S.
+
+    Returns
+    -------
+    torch.Tensor
+        (S,). Each state's max of its rows' `x`.
+    """
+    return torch.full(
+        (num_states,), float("-inf"), dtype=x.dtype, device=x.device
+    ).scatter_reduce_(0, x_state, x, reduce="amax")
 
 
 def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> torch.Tensor:
-    """Each state's row of its highest `x`, the first of a tie, (S,)"""
+    """Find each state's row of its highest `x`, the first of a tie.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        (R,). Each row's value.
+    x_state : torch.Tensor
+        (R,) long. Each row's state.
+    num_states : int
+        The number of states, S.
+
+    Returns
+    -------
+    torch.Tensor
+        (S,) long. Each state's row of its highest `x`, the first of a tie.
+    """
     num_rows = x.shape[0]
     x_row = torch.arange(num_rows, device=x.device)
     x_is_max = x == _max_by_state(x, x_state, num_states)[x_state]
-    return x_row.new_full((num_states,), num_rows).scatter_reduce_(
+    return torch.full((num_states,), num_rows, dtype=torch.long, device=x.device).scatter_reduce_(
         0, x_state, x_row.masked_fill(~x_is_max, num_rows), reduce="amin"
     )
 
@@ -96,10 +166,39 @@ def _categorical_rows(
     greedy: bool,
     generator: torch.Generator | None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """`_categorical_step` over packed rows: each state's selected row, its log-prob, the entropy
-    and KL(uniform‖π), all (S,), from its rows' logits (R,), which the head already masked;
-    `x_mask` is the KL's legal set and `x_state` each row's state. Samples are Gumbel-max: one
-    draw per row from `generator`, or the global one when it is None, then each state's argmax"""
+    """Select over packed rows as `_categorical_step` does, one row per state.
+
+    Samples are Gumbel-max: one draw per row from `generator`, or the global one when it is None,
+    then each state's argmax.
+
+    Parameters
+    ----------
+    x_logits : torch.Tensor
+        (R,). The rows' logits, which the head already masked.
+    x_mask : torch.Tensor
+        (R,) bool. The KL's legal set.
+    x_state : torch.Tensor
+        (R,) long. Each row's state.
+    num_states : int
+        The number of states, S.
+    x_recorded_row : torch.Tensor | None
+        (S,) long. The recorded selected rows to score (PPO recompute), or None to select.
+    greedy : bool
+        Whether to select each state's highest logit rather than sample.
+    generator : torch.Generator | None
+        The generator samples draw from, or None for the global one.
+
+    Returns
+    -------
+    x_row : torch.Tensor
+        (S,) long. Each state's selected row.
+    x_log_prob : torch.Tensor
+        (S,). Its log-prob.
+    x_entropy : torch.Tensor
+        (S,). The entropy.
+    x_kl_uniform : torch.Tensor
+        (S,). KL(uniform‖π) over the legal set.
+    """
     # Each row's log-prob within its state; the max keeps the exponentials finite, and takes no
     # gradient, as in logsumexp
     x_shifted = x_logits - _max_by_state(x_logits.detach(), x_state, num_states)[x_state]
@@ -132,8 +231,24 @@ def _categorical_rows(
 
 
 def _row(x_window: X_Window, x_token_kind: torch.Tensor, x_rank: torch.Tensor) -> torch.Tensor:
-    """The row of the rank-th token of `token_kind`, per state; where the token kind is -1, the
-    placeholder's: its state's character row."""
+    """Find the row of the rank-th token of `x_token_kind`, per state.
+
+    Where the token kind is -1, the row is the placeholder's: its state's Character row.
+
+    Parameters
+    ----------
+    x_window : X_Window
+        The packed window's X_Window.
+    x_token_kind : torch.Tensor
+        (B,) long. Each state's token kind, -1 for none.
+    x_rank : torch.Tensor
+        (B,) long. Each state's rank within its token kind.
+
+    Returns
+    -------
+    torch.Tensor
+        (B,) long. Each state's row in the window.
+    """
     x_first_row = x_window.x_token_kind_row.gather(1, x_token_kind.clamp(min=0).unsqueeze(1))
     return torch.where(
         x_token_kind >= 0,
@@ -143,7 +258,22 @@ def _row(x_window: X_Window, x_token_kind: torch.Tensor, x_rank: torch.Tensor) -
 
 
 def _token_kind_rank(x_window: X_Window, x_row: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """A row's token kind and its rank within that token kind, per state."""
+    """Find a row's token kind and its rank within that token kind, per state.
+
+    Parameters
+    ----------
+    x_window : X_Window
+        The packed window's X_Window.
+    x_row : torch.Tensor
+        (B,) long. Each state's row in the window.
+
+    Returns
+    -------
+    x_token_kind : torch.Tensor
+        (B,) long. The row's token kind.
+    x_rank : torch.Tensor
+        (B,) long. The row's rank within that token kind.
+    """
     x_token_kind = x_window.x_token_kind[x_row]
     x_first_row = x_window.x_token_kind_row.gather(1, x_token_kind.unsqueeze(1)).squeeze(1)
     return x_token_kind, x_row - x_first_row
@@ -191,10 +321,10 @@ class ActorCritic(nn.Module):
         self._head_level_3 = HeadPointerSelect(dim_global, dim_entity, dim_key)
         self._head_value = HeadValue(dim_global, dim_ff_value, len(RewardStream))
 
-        # L2/L3 pointer selection: one key net per entity class + a shared query net per level
+        # L2/L3 pointer selection: one key net per Entity class + a shared query net per level
         self._action_type_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
 
-        # One key net per entity class; every TokenKind of that class shares it, so an entity maps
+        # One key net per Entity class; every TokenKind of that class shares it, so an Entity maps
         # to the same key in every selection context
         self._pointer_key_card = PointerKeys(dim_entity, dim_key)
         self._pointer_key_relic = PointerKeys(dim_entity, dim_key)
@@ -223,14 +353,17 @@ class ActorCritic(nn.Module):
         self._init_weights()
 
     def _init_weights(self) -> None:
-        """PPO init: orthogonal (√2), near-zero logit layers (policy ≈ uniform), unit-gain value"""
+        """Apply the PPO init.
+
+        Orthogonal (√2), near-zero logit layers (policy ≈ uniform), unit-gain value.
+        """
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per column range, each entity kind's then the health/block, price
+        # The shared first layer per column range, each Entity kind's then the health/block, price
         # and slot ones, as its own layer: orthogonal over all of them would shrink each column's
         # scale
         with torch.no_grad():
@@ -284,7 +417,18 @@ class ActorCritic(nn.Module):
         )
 
     def forward(self, x_gs: X_GameState) -> torch.Tensor:
-        """The (B, len(RewardStream)) values"""
+        """Compute the values.
+
+        Parameters
+        ----------
+        x_gs : X_GameState
+            The game states.
+
+        Returns
+        -------
+        torch.Tensor
+            (B, len(RewardStream)). The values.
+        """
         return self._head_value(self.core(x_gs).global_value)
 
     def act(
@@ -293,9 +437,26 @@ class ActorCritic(nn.Module):
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> X_Action:
-        """The X_Action, each level's argmax under `greedy` and sampled from `generator`
-        otherwise; without values to compute, the core runs the draw-order layer only on the states
-        the policy reads"""
+        """Select each state's action.
+
+        Without values to compute, the core runs the draw-order layer only on the states the
+        policy reads.
+
+        Parameters
+        ----------
+        x_gs : X_GameState
+            The game states.
+        greedy : bool, default False
+            Whether each level takes its argmax rather than a sample.
+        generator : torch.Generator | None, default None
+            The generator samples draw from, or None for the global one.
+
+        Returns
+        -------
+        X_Action
+            The X_Action, each level's argmax under `greedy` and sampled from `generator`
+            otherwise.
+        """
         x_core_out = self.core(x_gs, with_value=False)
 
         # Sampling actions runs eager
@@ -304,8 +465,27 @@ class ActorCritic(nn.Module):
     def evaluate_actions(
         self, x_gs: X_GameState, x_recorded_actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """The recorded actions' log-prob summed over levels (B,), each level's entropy and
-        KL(uniform‖π) (B, 3), and the (B, len(RewardStream)) values"""
+        """Score the recorded actions and compute the values.
+
+        Parameters
+        ----------
+        x_gs : X_GameState
+            The game states.
+        x_recorded_actions : torch.Tensor
+            (B, 4) long. Each state's recorded action: action type, token kind, rank, target, -1
+            where a level didn't apply.
+
+        Returns
+        -------
+        x_log_prob : torch.Tensor
+            (B,). The recorded actions' log-prob, summed over levels.
+        x_entropy : torch.Tensor
+            (B, 3). Each level's entropy.
+        x_kl_uniform : torch.Tensor
+            (B, 3). Each level's KL(uniform‖π).
+        x_values : torch.Tensor
+            (B, len(RewardStream)). The values.
+        """
         x_core_out = self.core(x_gs)
         x_values = self._head_value(x_core_out.global_value)
 
@@ -331,9 +511,40 @@ def _policy_heads(
     generator: torch.Generator | None,
     x_recorded_actions: torch.Tensor | None,
 ) -> tuple[torch.Tensor, ...]:
-    """`model`'s L1-L3 selections, or the recorded ones scored, over the core's global vector and
-    refined rows of the packed window, given the L1 mask. L2 and L3 select per state over its rows,
-    grouped by entity kind. Returns X_Action's fields in order"""
+    """Make `model`'s L1-L3 selections, or score the recorded ones.
+
+    The heads read the core's global vector and refined rows of the packed window, given the L1
+    mask. L2 and L3 select per state over its rows, grouped by Entity kind.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The model whose heads run.
+    x_focus : torch.Tensor
+        (B, ENCODING_DIM_FOCUS) float32. Each state's focus row, the L1 head's context.
+    x_global : torch.Tensor
+        (B, dim_global). The core's global vector of each state.
+    x_tokens : torch.Tensor
+        (N, dim_entity). The core's refined rows of the packed window.
+    x_window : X_Window
+        The packed window's X_Window.
+    x_legal_action_type : torch.Tensor
+        (B, NUM_ACTION_TYPES) bool. The L1 mask.
+    greedy : bool
+        Whether each level takes its argmax rather than a sample.
+    generator : torch.Generator | None
+        The generator samples draw from, or None for the global one.
+    x_recorded_actions : torch.Tensor | None
+        (B, 4) long. The recorded actions to score: action type, token kind, rank, target; None
+        to select.
+
+    Returns
+    -------
+    tuple[torch.Tensor, ...]
+        X_Action's fields in order: the action type, the L2 selection's token kind and rank, and
+        the L3 target, each (B,) long and -1 where its level doesn't apply; then each level's
+        log-prob, entropy and KL(uniform‖π), each (B, 3) and 0 where the level doesn't apply.
+    """
     # The recorded actions' columns, or None when selecting
     x_recorded_action_type, x_recorded_token_kind, x_recorded_rank, x_recorded_target = (
         x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 4
@@ -349,7 +560,7 @@ def _policy_heads(
     batch_size = x_action_type.shape[0]
     x_states = torch.arange(batch_size, device=x_action_type.device)
 
-    # The rows grouped by entity kind, entity kind after entity kind and each entity kind's state
+    # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's state
     # after state: what the key nets split and the scoring runs on. Selections map back to the
     # window through it
     x_order = torch.argsort(x_window.x_entity_kind, stable=True)  # (N,)
@@ -370,15 +581,19 @@ def _policy_heads(
     ].split(x_window.num_tokens_entity_kind)
 
     # L2 keys, once per token: its own class's net, the one every action type scores
-    # it with. Monsters and the character are never L2 selections: zero keys
+    # it with. Monsters and the Character are never L2 selections: zero keys
     x_keys = torch.cat(
         [
             model._pointer_key_card(x_cards),
             model._pointer_key_relic(x_relics),
             model._pointer_key_potion(x_potions),
-            x_tokens.new_zeros(num_monsters, model._dim_key),
+            torch.zeros(
+                num_monsters, model._dim_key, dtype=x_tokens.dtype, device=x_tokens.device
+            ),
             model._pointer_key_event(x_event_options),
-            x_tokens.new_zeros(num_character, model._dim_key),
+            torch.zeros(
+                num_character, model._dim_key, dtype=x_tokens.dtype, device=x_tokens.device
+            ),
             model._pointer_key_room(x_rooms),
         ]
     )
@@ -389,9 +604,9 @@ def _policy_heads(
     x_legal = x_window.x_legal.gather(1, x_action_type[x_window.x_state].unsqueeze(1))
     x_mask_rows = x_legal.squeeze(1)[x_order]
 
-    # Every state at once: a type that selects no token (TurnEnd...) gets its state's character
+    # Every state at once: a type that selects no token (TurnEnd...) gets its state's Character
     # row as a placeholder, so its categorical stays finite. One per state, past the earlier
-    # entity kinds' rows
+    # Entity kinds' rows
     num_rows_before_character = (
         num_cards + num_relics + num_potions + num_monsters + num_event_options
     )
@@ -418,7 +633,7 @@ def _policy_heads(
     x_token_selected = x_order[x_row_selected]
     x_token_kind, x_rank = _token_kind_rank(x_window, x_token_selected)
 
-    # L3: monster target, only for actions that take one (CardPlay / PotionUse)
+    # L3: Monster target, only for actions that take one (CardPlay / PotionUse)
     # Keep only rows whose committed L2 selection takes a target: at recompute
     # the recorded selection says so (-1 = none), at sample time the mask does
     x_has_target = (
@@ -427,22 +642,27 @@ def _policy_heads(
         else model._is_targeted[x_action_type] & x_window.x_needs_target[x_token_selected]
     )
 
-    # The choices: each monster row, scored against its state's selected card/potion token and
+    # The choices: each Monster row, scored against its state's selected Card/potion token and
     # legal where its state takes a target; then each state's "no target" choice, a zero key,
     # legal where it takes none
     x_monster_state = x_state.narrow(0, num_cards + num_relics + num_potions, num_monsters)
     x_choice_state = torch.cat([x_monster_state, x_states])
     x_mask_l3 = torch.cat([x_has_target[x_monster_state], ~x_has_target])
 
-    # A cat, not F.pad: compiled, F.pad's backward fails on an empty monster block
+    # A cat, not F.pad: compiled, F.pad's backward fails on an empty Monster block
     x_keys = torch.cat(
         [
             model._pointer_key_monster(x_monster_tokens),
-            x_monster_tokens.new_zeros(batch_size, model._dim_key),
+            torch.zeros(
+                batch_size,
+                model._dim_key,
+                dtype=x_monster_tokens.dtype,
+                device=x_monster_tokens.device,
+            ),
         ]
     )
 
-    # A target is a monster's rank: its choice is its state's first monster choice plus the rank
+    # A target is a Monster's rank: its choice is its state's first Monster choice plus the rank
     x_count_monster = x_window.x_token_kind_count[:, TokenKind.MONSTERS]
     x_first_monster = x_count_monster.cumsum(0) - x_count_monster
     x_recorded_choice = None
@@ -484,9 +704,17 @@ def _policy_heads(
 
 
 def compile_hot_paths(model: ActorCritic) -> None:
-    """Fuse the update's hot paths: each transformer block, the draw-order layer's block, the map
-    GNN's message passing, and the policy heads on recorded actions. All but the heads are
-    autotuned, so the first update compiles for a minute or two"""
+    """Fuse the update's hot paths.
+
+    They are each transformer block, the draw-order layer's block, the Map GNN's message passing,
+    and the policy heads on recorded actions. All but the heads are autotuned, so the first update
+    compiles for a minute or two.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The model, compiled in place.
+    """
     mode = "max-autotune-no-cudagraphs"
     for block in model.core._entity_transformer._entity_transformer_blocks:
         block.compile(dynamic=True, mode=mode)

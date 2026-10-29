@@ -36,10 +36,33 @@ def _compute_gae(
     gamma: float,
     lam: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """GAE over E parallel games, one recursion per reward stream: rewards and values are
-    (T, E, K), `bootstrap` (E, K) and `dones` (T, E, 1). A done zeroes the next value and the
-    carried advantage, so nothing leaks across an episode boundary. Returns (returns,
-    advantages), each (T, E, K)."""
+    """Compute GAE over E parallel games, one recursion per reward stream.
+
+    A done zeroes the next value and the carried advantage, so nothing leaks across an episode
+    boundary.
+
+    Parameters
+    ----------
+    rewards : torch.Tensor
+        (T, E, K) float32. Each step's rewards, one per reward stream.
+    values : torch.Tensor
+        (T, E, K). Each state's values.
+    dones : torch.Tensor
+        (T, E, 1) float32. Whether each step ended its game's episode: 1.0 if so, else 0.0.
+    bootstrap : torch.Tensor
+        (E, K). Each game's value after the last step.
+    gamma : float
+        The discount.
+    lam : float
+        GAE's λ.
+
+    Returns
+    -------
+    returns : torch.Tensor
+        (T, E, K). Each step's advantages plus its values.
+    advantages : torch.Tensor
+        (T, E, K). Each step's advantages.
+    """
     T = rewards.shape[0]
     advantages = torch.zeros_like(rewards)
     gae = torch.zeros_like(bootstrap)
@@ -55,8 +78,28 @@ def _compute_gae(
 def _recompute(
     model: ActorCritic, rollout: X_Rollout, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """The rollout's log-probs (N,) and values (T, E, K) under the learner's current
-    weights, a minibatch of states at a time, and each game's final value (E, K)"""
+    """Recompute the rollout's log-probs and values under the learner's current weights.
+
+    The model runs a minibatch of states at a time.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The learner's model.
+    rollout : X_Rollout
+        The rollout: T steps of E games.
+    minibatch_size : int
+        The most states per forward.
+
+    Returns
+    -------
+    log_probs : torch.Tensor
+        (N,). Each state's recorded action's log-prob, summed over the levels.
+    values : torch.Tensor
+        (T, E, K). Each state's values.
+    final_values : torch.Tensor
+        (E, K). Each game's final value.
+    """
     T, E, K = rollout.rewards.shape
     log_probs, values = [], []
     x_order = torch.arange(T * E, device=rollout.actions.device)
@@ -85,7 +128,25 @@ def _recompute(
 def prepare_batch(
     model: ActorCritic, rollout: X_Rollout, gamma: float, ppo: PPOConfig
 ) -> X_TrainingBatch:
-    """The update's batch: GAE, and the anchor π_prox the clip and the KL measure from"""
+    """Prepare the update's batch: GAE, and the anchor π_prox the clip and the KL measure from.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The learner's model; its current weights give π_prox and the values.
+    rollout : X_Rollout
+        The collected rollout.
+    gamma : float
+        The discount.
+    ppo : PPOConfig
+        The PPO settings, for GAE's λ and the minibatch size.
+
+    Returns
+    -------
+    X_TrainingBatch
+        The rollout's states, actions and behavior log-probs, with π_prox's log-probs and
+        values, the returns and the normalized advantages.
+    """
     T, E, K = rollout.rewards.shape
     log_probs_prox, values, final_values = _recompute(model, rollout, ppo.minibatch_size)
 
@@ -124,9 +185,41 @@ def _minibatch_metrics(
     grad_norm: torch.Tensor,
     clip_eps: float,
 ) -> dict[str, float]:
-    """Per-minibatch TensorBoard scalars (minibatch means). Schulman's approx-KL
-    estimator; clip fraction = share of moved-off ratios; grad norm is the pre-clip
-    total (otherwise discarded by clip_grad_norm_)."""
+    """Return the per-minibatch TensorBoard scalars (minibatch means).
+
+    Schulman's approx-KL estimator; clip fraction = share of moved-off ratios; grad norm is the
+    pre-clip total (otherwise discarded by clip_grad_norm_).
+
+    Parameters
+    ----------
+    loss_policy : torch.Tensor
+        (). The policy loss.
+    loss_value : torch.Tensor
+        (). The value loss.
+    loss_entropy : torch.Tensor
+        (). The entropy loss.
+    entropies : torch.Tensor
+        (B, 3). The entropy of each of the minibatch's B states at each level.
+    loss_kl_uniform : torch.Tensor
+        (). The uniform-KL loss.
+    kl_uniform : torch.Tensor
+        (B, 3). Each state's KL(uniform‖π) at each level.
+    ratio : torch.Tensor
+        (B,). Each recorded action's probability ratio, the current weights' over π_prox's.
+    log_probs_new : torch.Tensor
+        (B,). The recorded actions' log-probs under the current weights.
+    log_probs_prox : torch.Tensor
+        (B,). The recorded actions' log-probs under π_prox.
+    grad_norm : torch.Tensor
+        (). The gradients' total norm before clipping.
+    clip_eps : float
+        The clip range.
+
+    Returns
+    -------
+    dict[str, float]
+        Each scalar under its TensorBoard name.
+    """
     ent_mean = entropies.mean(dim=0)
     kl_uniform_mean = kl_uniform.mean(dim=0)
     metrics = {
@@ -158,8 +251,30 @@ def update_ppo(
     device: torch.device,
     generator: torch.Generator,
 ) -> dict[str, float]:
-    """One PPO update over the batch. Returns iteration-mean metrics keyed by their
-    TensorBoard scalar names."""
+    """Run one PPO update over the batch.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The learner's model, updated in place.
+    batch : X_TrainingBatch
+        The update's batch.
+    optimizer : torch.optim.Optimizer
+        The model's optimizer.
+    ppo : PPOConfig
+        The PPO settings.
+    device : torch.device
+        The learner's device.
+    generator : torch.Generator
+        The CPU generator the epochs' shuffles draw from.
+
+    Returns
+    -------
+    dict[str, float]
+        The update's metrics, keyed by their TensorBoard scalar names: each per-minibatch metric
+        averaged over the minibatches run, then `update/epochs_run`, the `Value/ev_*` explained
+        variances and the `offpolicy/*` scalars, each computed once per update.
+    """
     records: list[dict[str, float]] = []
 
     # Per-stream explained variance of the values the learner recomputed before the update:
@@ -299,7 +414,23 @@ def update_ppo(
 
 
 def adapt_lr_scale(lr_scale: float, approx_kl: float, target_kl: float) -> float:
-    """The next adaptive-KL lr scale"""
+    """Return the next adaptive-KL lr scale.
+
+    Parameters
+    ----------
+    lr_scale : float
+        The current lr scale.
+    approx_kl : float
+        The last update's approx KL.
+    target_kl : float
+        The target KL.
+
+    Returns
+    -------
+    float
+        `lr_scale` divided by 1.5 when `approx_kl` is above twice `target_kl`, down to 1/64;
+        multiplied by 1.5 when below half of it, up to 1.0; unchanged otherwise.
+    """
     if approx_kl > 2.0 * target_kl:
         return max(lr_scale / 1.5, 1.0 / 64.0)
     if approx_kl < 0.5 * target_kl:

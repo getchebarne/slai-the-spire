@@ -62,8 +62,8 @@ class MonsterChannel(StrEnum):
     GOLD_STOLEN = auto()
     INTENT_KIND = auto()
     INTENT_HIDDEN = auto()  # Runic Dome: every intent channel and hit flag reads 0
-    MOVE_CURRENT = auto()  # index into the spawn-rolled moveset
-    MOVE_PREV_1 = auto()  # one move back (move_history's last entry is the current move)
+    MOVE_CURRENT = auto()  # Index into the spawn-rolled moveset
+    MOVE_PREV_1 = auto()  # One move back (move_history's last entry is the current move)
     MOVE_PREV_2 = auto()
 
 
@@ -91,7 +91,7 @@ OFF_MONSTER_MOVE_PREV_2 = _alloc(MonsterChannel.MOVE_PREV_2, MONSTER_MOVESET_MAX
 
 ENCODING_DIM_MONSTER = sum(w for _, w in CHANNEL_LAYOUT_MONSTER)
 
-# Most nonzero columns a monster row holds: one per channel, each a one-hot or a scalar
+# Most nonzero columns a Monster row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_MONSTER = len(CHANNEL_LAYOUT_MONSTER)
 
 
@@ -201,6 +201,17 @@ def moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
 
 
 def get_monster_entities(game_state: GameState) -> list[Monster]:
-    """The monsters behind the monster tokens, in slot order"""
+    """Return the Monsters behind the Monster tokens, in slot order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[Monster]
+        The Combat's Monsters; empty outside Combat.
+    """
     combat = game_state.combat
     return combat.monsters if combat is not None else []

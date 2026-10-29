@@ -47,8 +47,11 @@ from src.rl.utils import set_rng_seeds
 
 @dataclass
 class CadenceConfig:
-    """Every how many iterations the run logs, checkpoints, starts an eval and archives a copy
-    of its checkpoint"""
+    """The run's cadences, in iterations.
+
+    Every how many iterations the run logs, checkpoints, starts an eval and archives a copy of
+    its checkpoint.
+    """
 
     log_every: int
     save_every: int
@@ -77,7 +80,7 @@ def train(
     writer = SummaryWriter(experiment_dir(exp_name)) if rank_info.rank == 0 else None
     distributed.broadcast_from_rank0(model)
     ckpt_path = checkpoint_path(exp_name)
-    c = curriculum.ascension_start  # soft-curriculum position (see step_curriculum)
+    c = curriculum.ascension_start  # Soft-curriculum position (see step_curriculum)
     streak = 0
 
     # Eval runs a fixed-seed greedy battery in a persistent side process

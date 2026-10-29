@@ -52,7 +52,18 @@ def derive_focus(game_state: GameState) -> Focus:
 
 
 def draw_order_visible(game_state: GameState) -> bool:
-    """Frozen Eye shows the draw pile's order."""
+    """Return whether Frozen Eye shows the draw pile's order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    bool
+        True when the Character holds Frozen Eye.
+    """
     return any(relic.name == RelicName.FrozenEye for relic in game_state.relics)
 
 
@@ -73,7 +84,7 @@ class FocusChannel(StrEnum):
     CHEST_KIND = auto()
     CHEST_OPENED = auto()
     REST_DONE = auto()
-    PRESENCE = auto()  # Context-presence bits: combat/reward/shop/event/rest/chest
+    PRESENCE = auto()  # Context-presence bits: Combat/reward/shop/event/rest/chest
     DRAW_ORDER_VISIBLE = auto()  # Frozen Eye: the Actor may see the draw pile's order
 
 
@@ -99,7 +110,7 @@ OFF_FOCUS_DRAW_ORDER_VISIBLE = _alloc(FocusChannel.DRAW_ORDER_VISIBLE)
 ENCODING_DIM_FOCUS = sum(w for _, w in CHANNEL_LAYOUT_FOCUS)
 
 # Every pool the engine can halt over; the selection count normalizes against the
-# pool's size ceiling (combat piles are bounded by the deck)
+# pool's size ceiling (Combat piles are bounded by the deck)
 _INPUT_POOL_CAP = {
     CandidatePool.CardPileHand: MAX_SIZE_CARD_PILE_HAND,
     CandidatePool.CardPileDeck: MAX_SIZE_CARD_PILE_DECK,
@@ -177,7 +188,7 @@ def encode_batch_focus(game_states: list[GameState], device: torch.device) -> to
 
 
 def _check_tables() -> None:
-    """The selection-count caps cover exactly the pools the catalog's halts select from"""
+    """Check the selection-count caps cover exactly the pools the catalog's halts select from."""
     halting: set[CandidatePool] = set()
     for effect in catalog_effects():
         # Rows the engine never targets carry no `target` field at all

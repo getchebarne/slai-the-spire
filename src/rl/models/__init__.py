@@ -1,8 +1,7 @@
-"""
-Neural network models for reinforcement learning.
+"""Neural network models for reinforcement learning.
 
 Main exports:
-- ActorCritic: The main model
+- ActorCritic: The main model.
 """
 
 from src.rl.models.actor_critic import ActorCritic

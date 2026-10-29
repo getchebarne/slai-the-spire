@@ -1,4 +1,4 @@
-"""The run's experiment folder: its config copy, its checkpoint and the checkpoint's archives"""
+"""The run's experiment folder: its config copy, its checkpoint and the checkpoint's archives."""
 
 import os
 import shutil
@@ -21,7 +21,15 @@ def archive_path(exp_name: str, iteration: int) -> str:
 
 
 def make_experiment_dir(exp_name: str, config_path: str) -> None:
-    """Create the run's folder and copy its config there"""
+    """Create the run's folder and copy its config there.
+
+    Parameters
+    ----------
+    exp_name : str
+        The run's name, which names its folder under experiments/.
+    config_path : str
+        The run's config file, copied into the folder as config.yml.
+    """
     os.makedirs(experiment_dir(exp_name), exist_ok=True)
     shutil.copy(config_path, f"{experiment_dir(exp_name)}/config.yml")
 
@@ -51,10 +59,31 @@ def save_checkpoint(
 def load_checkpoint(
     path: str, model: ActorCritic, optimizer: torch.optim.Optimizer
 ) -> tuple[int, int, float | None, float]:
-    """Resume model/optimizer from `path` if it exists; returns
-    (start_iteration, total_steps, curriculum_c, lr_scale), or (0, 0, None, 1.0)
-    for a fresh run. `model` must already sit on its device: optimizer.load_state_dict puts
-    each moment beside its parameter."""
+    """Resume model/optimizer from `path` if it exists.
+
+    `model` must already sit on its device: optimizer.load_state_dict puts each moment beside its
+    parameter.
+
+    Parameters
+    ----------
+    path : str
+        The checkpoint's path.
+    model : ActorCritic
+        The model, its weights loaded in place.
+    optimizer : torch.optim.Optimizer
+        The model's optimizer, its state loaded in place.
+
+    Returns
+    -------
+    start_iteration : int
+        The iteration after the checkpoint's, or 0 for a fresh run.
+    total_steps : int
+        The steps played so far, every rank's games counted, or 0 for a fresh run.
+    curriculum_c : float | None
+        The checkpoint's soft-curriculum position, or None for a fresh run.
+    lr_scale : float
+        The checkpoint's adaptive-KL lr scale, or 1.0 for a fresh run.
+    """
     if not os.path.exists(path):
         return 0, 0, None, 1.0
 

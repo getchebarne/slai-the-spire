@@ -1,5 +1,4 @@
-"""
-Constants for the RL module.
+"""Constants for the RL module.
 
 Centralizes magic numbers and configuration values used across the RL codebase.
 """
@@ -18,7 +17,7 @@ FAST_MODE = False
 # Start runs with Neow's blessing (choice states + bonuses)
 NEOW = True
 
-# Actor encoding limits. Monster and character share ENTITY caps: health_block.py
+# Actor encoding limits. Monster and Character share ENTITY caps: health_block.py
 # writes the health/block columns both share.
 
 # Every Monster template across every ascension, for the catalog folds below
@@ -29,7 +28,7 @@ _MONSTER_TEMPLATES = [
 ]
 _MONSTER_MOVES = [move for template in _MONSTER_TEMPLATES for move in template.moves]
 
-# Character max-health normalization clamp (health grows via events/relics with no
+# Character max-health normalization clamp (health grows via Events/relics with no
 # engine ceiling); also the scale Hexaghost's Divider is bridged from
 CHARACTER_HEALTH_CAP = 200
 
@@ -49,7 +48,7 @@ BLOCK_MAX_ENTITY = max(
     )
 )
 
-# The catalog's widest monster HP roll (Champ 440 at Ascension 9+); the
+# The catalog's widest Monster HP roll (Champ 440 at Ascension 9+); the
 # Character rides the same buckets far below
 HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
 
@@ -80,7 +79,7 @@ INTENT_INSTANCES_MAX = max(
 # Widest moveset in the catalog: the move-index OHE width
 MONSTER_MOVESET_MAX = max(len(template.moves) for template in _MONSTER_TEMPLATES)
 
-# Thievery steals its stacks per landed attack (Looter/Mugger spawn modifier)
+# Thievery steals its stacks per landed attack (Looter/Mugger spawn Modifier)
 GOLD_STEAL_MAX = max(
     spawn.stacks_max
     for template in _MONSTER_TEMPLATES
@@ -98,37 +97,37 @@ MAX_SIZE_RELIC_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_RELIC_EVENT_ROLL
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
 MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
 
-# Most card bundles one Reward holds (Orrery stages 5); each bundle is its own
-# CARD_REWARD_<b> token kind, so a reward token's token kind names its bundle
+# Most Card bundles one Reward holds (Orrery stages 5); each bundle is its own
+# CARD_REWARD_<b> token kind, so a Reward token's token kind names its bundle
 MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
 
 # Size ceiling for the master deck, used to normalize deck-scale counts (deck
-# size, halt selections over the deck and the combat piles it feeds)
+# size, halt selections over the deck and the Combat piles it feeds)
 MAX_SIZE_CARD_PILE_DECK = 55
 
-# Relics offered per reward: boss rewards roll mutually
-# exclusive relics (taking one discards the others).
+# Relics offered per Reward: boss Rewards roll mutually
+# exclusive Relics (taking one discards the others).
 MAX_RELIC_REWARDS = _slai.GameEnv.BOSS_RELIC_REWARD_COUNT
 
-# Cauldron stages CAULDRON_POTION_COUNT potions as one reward batch; combat
-# rewards offer at most 1.
+# Cauldron stages CAULDRON_POTION_COUNT Potions as one Reward batch; Combat
+# Rewards offer at most 1.
 MAX_POTION_REWARDS = _slai.GameEnv.CAULDRON_POTION_COUNT
 
 # Engine slot counts + provisional headroom
-MAX_POTION_SLOTS = _slai.GameEnv.POTION_SLOTS_MAX  # belt capacity; the FFI list is dense
+MAX_POTION_SLOTS = _slai.GameEnv.POTION_SLOTS_MAX  # Belt capacity; the FFI list is dense
 MAX_SIZE_SHOP_CARDS = _slai.GameEnv.SHOP_SLOTS_CARD_TOTAL + 1
 MAX_SHOP_RELICS = _slai.GameEnv.SHOP_SLOTS_RELIC + 1
 MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
 MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_ROLL_COUNT + 2
 
-# Per-state caps on the effect and modifier rows, per state rather than per entity since
-# entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
+# Per-state caps on the Effect and Modifier rows, per state rather than per Entity since
+# Entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
 MAX_EFFECTS = 224
 MAX_MODIFIERS = 64
 
 # Caps for the piles the engine doesn't bound: each encoder slices its pile to the cap. Draw
-# and discard hold a full deck; stasis is slot-parallel to the monsters, so its cap is exact
+# and discard hold a full deck; stasis is slot-parallel to the Monsters, so its cap is exact
 MAX_SIZE_CARD_PILE_DRAW = MAX_SIZE_CARD_PILE_DECK
 MAX_SIZE_CARD_PILE_DISCARD = MAX_SIZE_CARD_PILE_DECK
 MAX_SIZE_CARD_PILE_EXHAUST = 45
@@ -142,11 +141,11 @@ MAX_SIZE_CARD_PILE_SELECTED = MAX_SIZE_CARD_PILE_HAND
 MAX_SIZE_CARD_PLAY_QUEUE = MAX_SIZE_CARD_PILE_HAND
 MAX_SIZE_CARD_PILE_NIGHTMARE = MAX_SIZE_CARD_PILE_HAND
 
-# Owned relics: no duplicates, so the true ceiling is the catalog; sized with headroom
+# Owned Relics: no duplicates, so the true ceiling is the catalog; sized with headroom
 MAX_RELICS = 24
 
 # Reward bundle widths: bundle 0 must hold The Library's single wide roll, the
-# rest hold combat rolls
+# rest hold Combat rolls
 MAX_CARD_REWARD_ROLL = _slai.GameEnv.MAX_CARD_REWARD_ROLL
 MAX_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 
