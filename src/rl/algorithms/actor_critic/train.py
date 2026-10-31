@@ -21,6 +21,7 @@ from src.rl.algorithms.actor_critic.curriculum import step_curriculum
 from src.rl.algorithms.actor_critic.distributed import RankInfo
 from src.rl.algorithms.actor_critic.episode import episode_scalars
 from src.rl.algorithms.actor_critic.evals import EVAL_ACT2_RATE
+from src.rl.algorithms.actor_critic.evals import EVAL_ACT3_RATE
 from src.rl.algorithms.actor_critic.evals import EVAL_FLOOR_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_REWARD_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_WIN_RATE
@@ -155,6 +156,7 @@ def train(
                     f"win_rate={eval_metrics[EVAL_WIN_RATE]:.3f} "
                     f"floor={eval_metrics[EVAL_FLOOR_AVG]:.2f} "
                     f"act2={eval_metrics[EVAL_ACT2_RATE]:.2f} "
+                    f"act3={eval_metrics[EVAL_ACT3_RATE]:.2f} "
                     f"reward={eval_metrics[EVAL_REWARD_AVG]:.4f}"
                 )
                 c_prev = c

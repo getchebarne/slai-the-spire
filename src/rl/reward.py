@@ -9,7 +9,7 @@ from src.rl.constants import MAP_HEIGHT
 
 _WEIGHT_HEALTH = 0.1000  # Φ scale, per HP
 _WEIGHT_WIN = 3.0  # A death pays −1
-_WEIGHT_FLOOR = 0.12  # Per floor climbed; capped by the win margin at γ = 0.999
+_WEIGHT_FLOOR = 0.12  # Per floor climbed
 _WEIGHT_GOLD_SPENT = _WEIGHT_FLOOR / 750  # Per gold spent at a Shop
 
 _SHOP_SPEND_ACTIONS = frozenset(
@@ -23,6 +23,9 @@ _SHOP_SPEND_ACTIONS = frozenset(
 
 ACT_SPAN = MAP_HEIGHT + 1  # Rows 0..14 + the boss-room sentinel (y_current = 15)
 
+# The engine's level from which the final act's first boss fight is followed by a second
+_ASCENSION_DOUBLE_BOSS_LEVEL = 20
+
 
 # One critic output per stream; the policy's advantage is the sum of theirs
 class RewardStream(StrEnum):
@@ -33,9 +36,10 @@ class RewardStream(StrEnum):
 
 
 def cumulative_floor(game_state: slai.GameState) -> int:
-    """Return the run-cumulative floor, 0..31 over two acts: (act−1)·16 + (y_current or 0).
+    """Return the run-cumulative floor, 0..47 over three acts: (act−1)·16 + (y_current or 0).
 
-    `y_current` is None before an act's first Room, so the act seam pays one floor.
+    `y_current` is None before an act's first Room, so the act seam pays one floor. From A20 the
+    final act's second boss fight, at the first's map position, is one floor more: 48.
 
     Parameters
     ----------
@@ -47,7 +51,16 @@ def cumulative_floor(game_state: slai.GameState) -> int:
     int
         The run-cumulative floor.
     """
-    return (game_state.act - 1) * ACT_SPAN + (game_state.map.y_current or 0)
+    map_ = game_state.map
+    floor = (game_state.act - 1) * ACT_SPAN + (map_.y_current or 0)
+
+    # From A20 the final act's Map reads one boss fight to come until the second one starts
+    boss_fight_second = (
+        game_state.ascension >= _ASCENSION_DOUBLE_BOSS_LEVEL
+        and game_state.act == slai.GameEnv.ACT_FINAL
+        and map_.boss_fights_after == 0
+    )
+    return floor + boss_fight_second
 
 
 def _potential(health: float, health_max: float) -> float:
