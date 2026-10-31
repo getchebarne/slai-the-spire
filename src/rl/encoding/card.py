@@ -4,7 +4,6 @@ from enum import auto
 from typing import get_args
 
 import numpy as np
-from slai import CandidatePool
 from slai import Card
 from slai import CardColor
 from slai import CardCostKind
@@ -19,6 +18,7 @@ from slai import get_card_templates
 
 from src.rl.constants import MAX_CARD_REWARD_ROLL
 from src.rl.constants import MAX_COMBAT_CARD_REWARD
+from src.rl.constants import MAX_SIZE_CARD_MATCH_PAIRS
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
@@ -224,11 +224,13 @@ _REWARD_BUNDLE_OF_TOKEN_KIND = {
     token_kind: bundle for bundle, token_kind in enumerate(TOKEN_KINDS_CARD_REWARDS)
 }
 
-# The play queue and nightmare pile token kinds that have already warned about overflow
+# The token kinds that have already warned about overflow
 _WARNED_OVERFLOW: set[TokenKind] = set()
 
 
-def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
+def _capped(
+    token_kind: TokenKind, cards: list[Card], cap: int, keep_last: bool = False
+) -> list[Card]:
     """Cut `cards` to `cap`, warning once per token kind when that drops any.
 
     Parameters
@@ -239,11 +241,13 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
         The Cards to cut.
     cap : int
         The token kind's cap.
+    keep_last : bool, default False
+        Keep the last `cap` Cards rather than the first.
 
     Returns
     -------
     list[Card]
-        The first `cap` Cards.
+        The first `cap` Cards, or the last `cap` with `keep_last`.
     """
     if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
         _WARNED_OVERFLOW.add(token_kind)
@@ -251,7 +255,7 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
             f"{token_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
             "dropped"
         )
-    return cards[:cap]
+    return cards[max(0, len(cards) - cap) :] if keep_last else cards[:cap]
 
 
 def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
@@ -282,12 +286,13 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
                 return []
 
             # The top of the pile, still in engine order (bottom first)
-            card_pile_draw = combat.card_pile_draw
-            return card_pile_draw[max(0, len(card_pile_draw) - MAX_SIZE_CARD_PILE_DRAW) :]
-        case TokenKind.CARD_PILE_DISCARD:
-            return (
-                combat.card_pile_discard[:MAX_SIZE_CARD_PILE_DISCARD] if combat is not None else []
+            return _capped(
+                token_kind, combat.card_pile_draw, MAX_SIZE_CARD_PILE_DRAW, keep_last=True
             )
+        case TokenKind.CARD_PILE_DISCARD:
+            if combat is None:
+                return []
+            return _capped(token_kind, combat.card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD)
         case TokenKind.CARD_PILE_EXHAUST:
             return (
                 combat.card_pile_exhaust[:MAX_SIZE_CARD_PILE_EXHAUST] if combat is not None else []
@@ -300,7 +305,7 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             cards = [card for card in combat.card_pile_stasis if card is not None]
             return cards[:MAX_SIZE_CARD_PILE_STASIS]
         case TokenKind.CARD_PILE_DECK:
-            return game_state.card_pile_deck[:MAX_SIZE_CARD_PILE_DECK]
+            return _capped(token_kind, game_state.card_pile_deck, MAX_SIZE_CARD_PILE_DECK)
         case TokenKind.CARD_PILE_DISCOVER:
             return (
                 combat.card_pile_discover[:MAX_SIZE_CARD_PILE_DISCOVER]
@@ -327,20 +332,18 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             return shop.cards[:MAX_SIZE_SHOP_CARDS] if shop is not None else []
         case TokenKind.CARD_PILE_EVENT_ROLL:
             event = game_state.event
-            if event is None:
-                return []
-
-            # A consumed Event's offer is dead, unless a halt still selects from it (Neow's Cards)
-            if event.consumed:
-                effect_pending = game_state.effect_pending
-                pool = effect_pending.target.candidate_pool if effect_pending is not None else None
-                if pool != CandidatePool.CardPileEventRoll:
-                    return []
-            return event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
+            return (
+                event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
+                if event is not None
+                else []
+            )
         case TokenKind.CARD_MATCH_FLIPPED:
             event = game_state.event
             card = event.card_match_flipped if event is not None else None
             return [card] if card is not None else []
+        case TokenKind.CARD_MATCH_PAIRS:
+            event = game_state.event
+            return event.card_match_pairs[:MAX_SIZE_CARD_MATCH_PAIRS] if event is not None else []
         case TokenKind.CARD_PLAY_QUEUE:
             if combat is None:
                 return []

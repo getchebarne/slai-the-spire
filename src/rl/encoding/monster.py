@@ -12,7 +12,7 @@ from slai import MonsterName
 from slai import get_monster_templates
 
 from src.rl.constants import FACTOR_VULN
-from src.rl.constants import GOLD_STEAL_MAX
+from src.rl.constants import GOLD_STOLEN_MAX
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INTENT_DAMAGE_HIT_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
@@ -26,18 +26,26 @@ from src.rl.types import make_channel_allocator
 
 _MAP_MONSTER_NAME = {name: int(name) for name in MonsterName.members()}
 _MAP_INTENT_KIND = {intent_kind: int(intent_kind) for intent_kind in IntentKind.members()}
-INTENT_BLOCK_KINDS = {IntentKind.Block, IntentKind.AttackBlock, IntentKind.BlockBuff}
+INTENT_BLOCK_KINDS = {
+    IntentKind.Block,
+    IntentKind.AttackBlock,
+    IntentKind.BlockBuff,
+    IntentKind.BlockDebuff,
+}
 INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
-INTENT_DEBUFF_KINDS = {IntentKind.Debuff, IntentKind.AttackDebuff, IntentKind.DebuffPowerful}
+INTENT_DEBUFF_KINDS = {
+    IntentKind.Debuff,
+    IntentKind.AttackDebuff,
+    IntentKind.DebuffPowerful,
+    IntentKind.BlockDebuff,
+}
 
 # Normalization caps, catalog-anchored
 _DAMAGE_MAX = math.ceil(INTENT_DAMAGE_HIT_MAX * FACTOR_VULN)  # Widest hit, Vulnerable-scaled
 _DAMAGE_TOTAL_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)  # Widest turn, likewise
 _INSTANCES_MAX = INTENT_INSTANCES_MAX
-_HEALTH_MAX = HEALTH_MAX_ENTITY  # Champ 440 at A9+
+_HEALTH_MAX = HEALTH_MAX_ENTITY  # The Transient's 999
 
-# Thievery accumulation: Mug, Mug, Lunge — every attack before the Escape turn steals
-_STOLEN_GOLD_MAX = 3 * GOLD_STEAL_MAX
 _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 _DAMAGE_TOTAL_DIM = get_piecewise_dim(0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
@@ -65,6 +73,9 @@ class MonsterChannel(StrEnum):
     MOVE_CURRENT = auto()  # Index into the spawn-rolled moveset
     MOVE_PREV_1 = auto()  # One move back (move_history's last entry is the current move)
     MOVE_PREV_2 = auto()
+    REPLAY_TARGET = auto()  # A waiting replay aims at it
+    HALF_DEAD = auto()  # Health and block read 0, no Card can target it (Awakened One, Darkling)
+    ULTIMATE_USED = auto()  # Its once-per-Combat move has executed
 
 
 CHANNEL_LAYOUT_MONSTER, _alloc = make_channel_allocator()
@@ -88,6 +99,9 @@ OFF_MONSTER_INTENT_HIDDEN = _alloc(MonsterChannel.INTENT_HIDDEN)
 OFF_MONSTER_MOVE_CURRENT = _alloc(MonsterChannel.MOVE_CURRENT, MONSTER_MOVESET_MAX)
 OFF_MONSTER_MOVE_PREV_1 = _alloc(MonsterChannel.MOVE_PREV_1, MONSTER_MOVESET_MAX)
 OFF_MONSTER_MOVE_PREV_2 = _alloc(MonsterChannel.MOVE_PREV_2, MONSTER_MOVESET_MAX)
+OFF_MONSTER_REPLAY_TARGET = _alloc(MonsterChannel.REPLAY_TARGET)
+OFF_MONSTER_HALF_DEAD = _alloc(MonsterChannel.HALF_DEAD)
+OFF_MONSTER_ULTIMATE_USED = _alloc(MonsterChannel.ULTIMATE_USED)
 
 ENCODING_DIM_MONSTER = sum(w for _, w in CHANNEL_LAYOUT_MONSTER)
 
@@ -112,6 +126,9 @@ def encode_monster_into(
     out[OFF_MONSTER_NAME + _MAP_MONSTER_NAME[monster.name]] = 1.0
     out[OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
     out[OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
+    out[OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
+    out[OFF_MONSTER_HALF_DEAD] = float(monster.half_dead)
+    out[OFF_MONSTER_ULTIMATE_USED] = float(monster.ultimate_used)
 
     # Poison-is-lethal
     stacks_of_modifier_kind = {modifier.kind: modifier.stacks for modifier in monster.modifiers}
@@ -125,7 +142,7 @@ def encode_monster_into(
     )
 
     # Stolen gold
-    out[OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, _STOLEN_GOLD_MAX)
+    out[OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, GOLD_STOLEN_MAX)
 
     # Intent
     intent = monster.intent

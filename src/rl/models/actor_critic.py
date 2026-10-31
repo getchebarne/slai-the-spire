@@ -9,6 +9,7 @@ from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
 from src.rl.encoding.state import COL_START_MONSTER
+from src.rl.encoding.state import COL_START_PLAY_SOURCE
 from src.rl.encoding.state import COL_START_POTION
 from src.rl.encoding.state import COL_START_PRICE
 from src.rl.encoding.state import COL_START_RELIC
@@ -363,9 +364,9 @@ class ActorCritic(nn.Module):
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per column range, each Entity kind's then the health/block, price
-        # and slot ones, as its own layer: orthogonal over all of them would shrink each column's
-        # scale
+        # The shared first layer per column range, each Entity kind's then the health/block, price,
+        # slot and play-source ones, as its own layer: orthogonal over all of them would shrink
+        # each column's scale
         with torch.no_grad():
             for x_weight_range in torch.tensor_split(
                 self.core._entity_projector._pre_token.weight,
@@ -377,6 +378,7 @@ class ActorCritic(nn.Module):
                     COL_START_HEALTH_BLOCK,
                     COL_START_PRICE,
                     COL_START_STASIS_SLOT,
+                    COL_START_PLAY_SOURCE,
                 ),
                 dim=1,
             ):
@@ -604,12 +606,14 @@ def _policy_heads(
     x_legal = x_window.x_legal.gather(1, x_action_type[x_window.x_state].unsqueeze(1))
     x_mask_rows = x_legal.squeeze(1)[x_order]
 
+    # Monster rows' bits mark L3 targets, not L2 selections
+    num_rows_before_monster = num_cards + num_relics + num_potions
+    x_mask_rows[num_rows_before_monster : num_rows_before_monster + num_monsters] = False
+
     # Every state at once: a type that selects no token (TurnEnd...) gets its state's Character
     # row as a placeholder, so its categorical stays finite. One per state, past the earlier
     # Entity kinds' rows
-    num_rows_before_character = (
-        num_cards + num_relics + num_potions + num_monsters + num_event_options
-    )
+    num_rows_before_character = num_rows_before_monster + num_monsters + num_event_options
     x_mask_rows[num_rows_before_character + x_states] |= ~x_selects_token
 
     # Recorded selections are (token kind, rank); the pointer scores rows
@@ -643,11 +647,13 @@ def _policy_heads(
     )
 
     # The choices: each Monster row, scored against its state's selected Card/potion token and
-    # legal where its state takes a target; then each state's "no target" choice, a zero key,
-    # legal where it takes none
-    x_monster_state = x_state.narrow(0, num_cards + num_relics + num_potions, num_monsters)
+    # legal where its state takes a target its action type can name; then each state's "no
+    # target" choice, a zero key, legal where it takes none
+    x_monster_rows = x_order.narrow(0, num_rows_before_monster, num_monsters)
+    x_monster_state = x_state.narrow(0, num_rows_before_monster, num_monsters)
     x_choice_state = torch.cat([x_monster_state, x_states])
-    x_mask_l3 = torch.cat([x_has_target[x_monster_state], ~x_has_target])
+    x_target_legal = x_window.x_legal[x_monster_rows, x_action_type[x_monster_state]]
+    x_mask_l3 = torch.cat([x_has_target[x_monster_state] & x_target_legal, ~x_has_target])
 
     # A cat, not F.pad: compiled, F.pad's backward fails on an empty Monster block
     x_keys = torch.cat(
