@@ -14,6 +14,7 @@ from slai import CardRarity
 from slai import CostScope
 from slai import EffectSetCostOverride
 from slai import GameState
+from slai import PlaySource
 from slai import get_card_templates
 
 from src.rl.constants import MAX_CARD_REWARD_ROLL
@@ -43,6 +44,7 @@ _MAP_CARD_KIND = {card_kind: int(card_kind) for card_kind in CardKind.members()}
 _MAP_CARD_COLOR = {card_color: int(card_color) for card_color in CardColor.members()}
 _MAP_CARD_RARITY = {card_rarity: int(card_rarity) for card_rarity in CardRarity.members()}
 _MAP_COST_SCOPE = {scope: int(scope) for scope in CostScope.members()}
+_MAP_PLAY_SOURCE = {play_source: int(play_source) for play_source in PlaySource.members()}
 _MAP_CARD_COST_KIND = {cls: i for i, cls in enumerate(get_args(CardCostKind))}
 
 # Cost, derived: the catalog's widest base cost or override amount
@@ -89,6 +91,7 @@ class CardChannel(StrEnum):
     BOTTLED = auto()
     COST_OFFSET = auto()  # X-Cost offset
     FREE_TO_PLAY_ONCE = auto()  # Setup, Forethought: the 0 in `cost` lasts one play
+    PLAY_SOURCE = auto()  # All-zero = not in the play queue
 
 
 CHANNEL_LAYOUT_CARD, _alloc = make_channel_allocator()
@@ -112,6 +115,7 @@ OFF_CARD_COST_BASE = _alloc(CardChannel.COST_BASE)
 OFF_CARD_BOTTLED = _alloc(CardChannel.BOTTLED)
 OFF_CARD_COST_OFFSET = _alloc(CardChannel.COST_OFFSET)
 OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(CardChannel.FREE_TO_PLAY_ONCE)
+OFF_CARD_PLAY_SOURCE = _alloc(CardChannel.PLAY_SOURCE, len(_MAP_PLAY_SOURCE))
 
 ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
@@ -154,6 +158,8 @@ def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
     out[OFF_CARD_BOTTLED] = float(card.bottled)
     out[OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
     out[OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
+    if card.play_source is not None:
+        out[OFF_CARD_PLAY_SOURCE + _MAP_PLAY_SOURCE[card.play_source]] = 1.0
 
 
 def card_key(card: Card) -> tuple:
@@ -196,6 +202,7 @@ def card_key(card: Card) -> tuple:
         card.playable,
         card.bottled,
         card.free_to_play_once,
+        card.play_source,
     )
 
 

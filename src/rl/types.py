@@ -247,8 +247,7 @@ class X_Tokens:
     X_Step's regions, which have a fixed width, and in a minibatch, which keeps its rollout's K.
     Each row is its nonzero (column, value) entries in column order, then (0, 0.0) entries up
     to K; the entries index the shared column space, each Entity kind's columns from its
-    COL_START, then the health/block, price and slot columns Entity kinds share and the
-    play-queue Cards' play-source columns.
+    COL_START, then the health/block, price and slot columns Entity kinds share.
     """
 
     x_column: torch.Tensor  # (N, K) int16
