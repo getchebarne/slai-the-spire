@@ -11,6 +11,7 @@ from src.rl.constants import MAX_POTION_REWARDS
 from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SHOP_POTIONS
 from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
+from src.rl.types import Tag
 from src.rl.types import TokenKind
 from src.rl.types import make_channel_allocator
 
@@ -38,6 +39,15 @@ ENCODING_DIM_POTION = sum(w for _, w in CHANNEL_LAYOUT_POTION)
 
 # Most nonzero columns a Potion row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_POTION = len(CHANNEL_LAYOUT_POTION)
+
+# Each tagged Potion's Tags, by name: Sacred Bark's variant keeps them
+TAGS_OF_POTION_NAME: dict[PotionName, tuple[Tag, ...]] = {
+    PotionName.Cunning: (Tag.NINJA,),
+    PotionName.Duplication: (Tag.SETUP,),
+    PotionName.GamblersBrew: (Tag.DISCARD,),
+    PotionName.LiquidMemories: (Tag.SETUP,),
+    PotionName.Poison: (Tag.POISON,),
+}
 
 # Per-potion encoding cache keyed by (name, doubled): every other field is fixed by name
 _POTION_ROW_CACHE: dict[tuple[PotionName, bool], np.ndarray] = {}

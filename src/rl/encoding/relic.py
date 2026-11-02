@@ -12,6 +12,7 @@ from src.rl.constants import MAX_RELIC_REWARDS
 from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_SHOP_RELICS
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
+from src.rl.types import Tag
 from src.rl.types import TokenKind
 from src.rl.types import make_channel_allocator
 
@@ -42,6 +43,25 @@ ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
 # Most nonzero columns a Relic row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_RELIC = len(CHANNEL_LAYOUT_RELIC)
+
+# Each tagged Relic's Tags, by name
+TAGS_OF_RELIC_NAME: dict[RelicName, tuple[Tag, ...]] = {
+    RelicName.GamblingChip: (Tag.DISCARD,),
+    RelicName.HoveringKite: (Tag.DISCARD,),
+    RelicName.InkBottle: (Tag.NINJA,),
+    RelicName.Kunai: (Tag.NINJA,),
+    RelicName.NinjaScroll: (Tag.NINJA,),
+    RelicName.Nunchaku: (Tag.NINJA,),
+    RelicName.OrnamentalFan: (Tag.NINJA,),
+    RelicName.PenNib: (Tag.NINJA,),
+    RelicName.RunicPyramid: (Tag.SETUP,),
+    RelicName.Shuriken: (Tag.NINJA,),
+    RelicName.SneckoSkull: (Tag.POISON,),
+    RelicName.TheSpecimen: (Tag.POISON,),
+    RelicName.Tingsha: (Tag.DISCARD,),
+    RelicName.ToughBandages: (Tag.DISCARD,),
+    RelicName.WristBlade: (Tag.NINJA,),
+}
 
 # Per-relic encoding cache keyed by (name, used_up, counter) — the only mutable fields
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
