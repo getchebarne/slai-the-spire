@@ -24,6 +24,9 @@ _MAP_MONSTER_ENCOUNTER_BOSS = {
     MonsterEncounter.BronzeAutomaton: 3,
     MonsterEncounter.TheCollector: 4,
     MonsterEncounter.Champ: 5,
+    MonsterEncounter.AwakenedOne: 6,
+    MonsterEncounter.DonuAndDeca: 7,
+    MonsterEncounter.TimeEater: 8,
 }
 _MAP_NUM_ROOM_KINDS = len(_MAP_ROOM_KIND)
 _MAP_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.members()}
@@ -58,6 +61,7 @@ class MapMetaChannel(StrEnum):
     FLOOR_DEPTH = auto()  # y_current / MAP_HEIGHT
     ON_MAP = auto()  # y_current is not None
     BOSS = auto()  # Act-boss identity OHE
+    BOSS_FIGHTS_AFTER = auto()  # Boss fights after the boss's: 1 at A20 in Act 3 until the second
     CURRENT_ROOM_KIND = auto()
     NEXT_ROOM_KINDS = auto()  # RoomKind OHE per next-row column
     ACT = auto()  # Each act is a fresh 15-row Map; depth alone is ambiguous
@@ -75,6 +79,7 @@ CHANNEL_LAYOUT_MAP_META, _alloc = make_channel_allocator()
 OFF_MAP_FLOOR_DEPTH = _alloc(MapMetaChannel.FLOOR_DEPTH)
 OFF_MAP_ON_MAP = _alloc(MapMetaChannel.ON_MAP)
 OFF_MAP_BOSS = _alloc(MapMetaChannel.BOSS, len(_MAP_MONSTER_ENCOUNTER_BOSS))
+OFF_MAP_BOSS_FIGHTS_AFTER = _alloc(MapMetaChannel.BOSS_FIGHTS_AFTER)
 OFF_MAP_CURRENT_ROOM_KIND = _alloc(MapMetaChannel.CURRENT_ROOM_KIND, _MAP_NUM_ROOM_KINDS)
 OFF_MAP_NEXT_ROOM_KINDS = _alloc(MapMetaChannel.NEXT_ROOM_KINDS, MAP_WIDTH * _MAP_NUM_ROOM_KINDS)
 OFF_MAP_ACT = _alloc(MapMetaChannel.ACT, GameEnv.ACT_FINAL)
@@ -193,6 +198,7 @@ def _encode_map_meta_into(
     y_current: int | None,
     x_current: int | None,
     boss: MonsterEncounter,
+    boss_fights_after: int,
     act: int,
     winged: bool,
     out: np.ndarray,
@@ -208,6 +214,7 @@ def _encode_map_meta_into(
         raise ValueError(f"Unknown act boss {boss!r}; add it to _MAP_MONSTER_ENCOUNTER_BOSS")
 
     out[OFF_MAP_BOSS + idx_boss] = 1.0
+    out[OFF_MAP_BOSS_FIGHTS_AFTER] = boss_fights_after
 
     # Current `RoomKind` OHE
     if y_current is not None and y_current < MAP_HEIGHT:
@@ -281,7 +288,14 @@ def encode_batch_map(
 
         winged = _wing_boots_charged(game_state)
         _encode_map_meta_into(
-            rooms, y_current, x_current, map_.boss, game_state.act, winged, np_meta[b]
+            rooms,
+            y_current,
+            x_current,
+            map_.boss,
+            map_.boss_fights_after,
+            game_state.act,
+            winged,
+            np_meta[b],
         )
         _encode_unknown_room_into(game_state, np_meta[b])
 

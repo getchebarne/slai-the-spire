@@ -87,8 +87,10 @@ def get_potion_entities(token_kind: TokenKind, game_state: GameState) -> list:
             return shop.potions[:MAX_SHOP_POTIONS] if shop is not None else []
         case TokenKind.POTION_EVENT_ROLL:
             event = game_state.event
-            if event is not None and not event.consumed:  # Post-choice: the offer is dead
-                return event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
-            return []
+            return (
+                event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
+                if event is not None
+                else []
+            )
         case _:
             raise ValueError(f"not a potion token kind: {token_kind}")

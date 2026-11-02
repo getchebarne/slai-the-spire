@@ -138,15 +138,16 @@ class EntityProjector(nn.Module):
 
         # `x_token_kind_count`:   Number of tokens of each `TokenKind` for each state
         # `x_token_kind_index`:   Index of first token of each `TokenKind` for each state
+        # Both (B, `len(TokenKind)`)
         x_token_kind_count, x_token_kind_row = _token_kind_tables(
             x_state, x_token_kind, batch_size
         )
 
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
-        x_count_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = x_gs.focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
-        x_ordered = (x_count_pile >= 2) & torch.stack(
+        x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
+        x_draw_order_visible = x_gs.focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0 # (B,)
+        x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
 
@@ -162,14 +163,15 @@ class EntityProjector(nn.Module):
             *num_tokens_entity_kind,
         ) = torch.cat(
             [
-                x_ordered.sum(dim=1),
-                (x_ordered * x_count_window).sum(dim=1),
-                (x_ordered * x_count_pile).sum(dim=1),
+                x_ordered.sum(dim=1), # (2,)
+                (x_ordered * x_count_window).sum(dim=1), # (2,)
+                (x_ordered * x_token_kind_count_draw_pile).sum(dim=1), # (2,)
                 torch.zeros(
                     len(TOKEN_KINDS_OF_ENTITY_KIND), dtype=torch.long, device=x_entity_kind.device
                 ).index_add_(0, x_entity_kind, torch.ones_like(x_entity_kind)),
             ]
         ).tolist()
+
         x_draw_order = X_DrawOrderStates(
             x_states=torch.cat(
                 [
@@ -279,13 +281,16 @@ def _add_owned(
     mapper : nn.Sequential
         The owned row kind's MLP.
     """
-    x_count = x_owned_sparse.x_count  # (N_tok,) int16
+    # Project owned rows
+    x_rows = _project_sparse(mapper, x_owned_sparse)  # (M, D)
 
-    # Each row's owner, from the counts widened: repeat_interleave takes no int16
+    # Each owned row's owner, from the counts widened
+    x_count = x_owned_sparse.x_count  # (N_tok,) int16
     x_owner = torch.repeat_interleave(
         x_count.long(), output_size=x_owned_sparse.x_column.shape[0]
     )  # (M,)
-    x_rows = _project_sparse(mapper, x_owned_sparse)  # (M, D)
+
+    # Sum projected owned rows to their respective owners' first-layer output representations
     x_first.index_add_(0, x_owner, x_rows / x_count[x_owner].to(x_rows.dtype).sqrt().unsqueeze(1))
 
 

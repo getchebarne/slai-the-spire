@@ -11,6 +11,7 @@ from slai import EventOption
 from slai import GameState
 from slai import Modifier
 from slai import Monster
+from slai import PlaySource
 from slai import Potion
 from slai import Relic
 from slai import Room
@@ -90,9 +91,16 @@ from src.rl.types import X_Tokens
 
 ENCODING_DIM_ASCENSION = ASCENSION_LEVEL
 
-# The stasis slot columns: a one-hot over the Monsters' slots in Combat.monsters
+# Enum map, keyed by int(): the declaration-order discriminant
+_MAP_PLAY_SOURCE = {play_source: int(play_source) for play_source in PlaySource.members()}
+
+# The stasis slot columns: a one-hot over the Monsters' roster posts (Monster.slot)
 ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
 ENCODING_DIM_SPARSE_SLOT = 1
+
+# The play-source columns: a one-hot over a waiting play's PlaySource
+ENCODING_DIM_PLAY_SOURCE = len(_MAP_PLAY_SOURCE)
+ENCODING_DIM_SPARSE_PLAY_SOURCE = 1
 
 # Each Entity kind's first column in the shared space; Event Options and Rooms have no columns
 COL_START_CARD = 0
@@ -106,12 +114,18 @@ COL_START_HEALTH_BLOCK = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
 COL_START_PRICE = COL_START_HEALTH_BLOCK + ENCODING_DIM_HEALTH_BLOCK
 COL_START_STASIS_SLOT = COL_START_PRICE + ENCODING_DIM_PRICE
 
+# The range only the play-queue Cards write, outside their cached Card rows
+COL_START_PLAY_SOURCE = COL_START_STASIS_SLOT + ENCODING_DIM_STASIS_SLOT
+
 # Total token encoding dimension
-ENCODING_DIM_TOKEN = COL_START_STASIS_SLOT + ENCODING_DIM_STASIS_SLOT
+ENCODING_DIM_TOKEN = COL_START_PLAY_SOURCE + ENCODING_DIM_PLAY_SOURCE
 
 # Most nonzero columns a token row holds
 ENCODING_DIM_SPARSE_TOKEN = max(
-    ENCODING_DIM_SPARSE_CARD + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_SLOT,
+    ENCODING_DIM_SPARSE_CARD
+    + ENCODING_DIM_SPARSE_PRICE
+    + ENCODING_DIM_SPARSE_SLOT
+    + ENCODING_DIM_SPARSE_PLAY_SOURCE,
     ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE,
     ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE,
     ENCODING_DIM_SPARSE_MONSTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK + ENCODING_DIM_SPARSE_SLOT,
@@ -330,7 +344,8 @@ def _encode_tokens_into(
 
     Each token goes at its Entity kind's columns, a combatant's health/block at the health/block
     columns, a Shop token's price at the price columns, a Monster's slot and a stasis Card's
-    holder's at the slot columns and a Room's Map node into `np_node_idx`.
+    holder's at the slot columns, a play-queue Card's play source at the play-source columns and
+    a Room's Map node into `np_node_idx`.
 
     Parameters
     ----------
@@ -378,7 +393,10 @@ def _encode_tokens_into(
     np_tokens_character = np_tokens[:, COL_START_CHARACTER:COL_START_HEALTH_BLOCK]
     np_tokens_health_block = np_tokens[:, COL_START_HEALTH_BLOCK:COL_START_PRICE]
     np_tokens_price = np_tokens[:, COL_START_PRICE:COL_START_STASIS_SLOT]
-    np_tokens_stasis_slot = np_tokens[:, COL_START_STASIS_SLOT:]
+    np_tokens_stasis_slot = np_tokens[:, COL_START_STASIS_SLOT:COL_START_PLAY_SOURCE]
+
+    # The rows at the Play Source columns
+    np_tokens_play_source = np_tokens[:, COL_START_PLAY_SOURCE:]
 
     # Iterate over tokens; `start_idx` gives the offset this state starts writing from
     for row, (token_kind, entity) in enumerate(tokens, start_idx):
@@ -410,9 +428,13 @@ def _encode_tokens_into(
 
                 # Stasis slot. Shared w/ Monsters
                 if token_kind is TokenKind.CARD_PILE_STASIS and game_state.combat is not None:
-                    np_tokens_stasis_slot[
-                        row, game_state.combat.card_pile_stasis.index(entity)
-                    ] = 1.0
+                    # Its holder's: the pile is index-aligned with the Monsters
+                    holder = monsters[game_state.combat.card_pile_stasis.index(entity)]
+                    np_tokens_stasis_slot[row, holder.slot] = 1.0
+
+                # Play source, a waiting play's
+                if entity.play_source is not None:
+                    np_tokens_play_source[row, _MAP_PLAY_SOURCE[entity.play_source]] = 1.0
             case Relic():
                 encode_relic_into_w_cache(entity, np_tokens_relic[row])
 
@@ -462,7 +484,7 @@ def _encode_tokens_into(
                 encode_health_block_into(entity.health, entity.block, np_tokens_health_block[row])
 
                 # Stasis slot. Shared w/ Cards in the stasis pile
-                np_tokens_stasis_slot[row, monsters.index(entity)] = 1.0
+                np_tokens_stasis_slot[row, entity.slot] = 1.0
 
                 # Modifiers
                 modifier_rows += [(row, modifier) for modifier in entity.modifiers]

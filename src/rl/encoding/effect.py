@@ -265,13 +265,15 @@ _VOCAB_RELIC = _vocabulary(
 _VOCAB_MONSTER = _vocabulary(
     _field(slai.EffectMonsterSpawn, lambda e: e.name),
     _field(slai.EffectMonsterSplit, lambda e: e.name),
+    _field(slai.EffectMonsterSummon, lambda e: e.pool),
 )
 
 
 # Caps
 _CAP_DAMAGE = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectDamagePhysical, lambda e: e.amount),
-    _field(slai.EffectDamagePhysicalIfPoisoned, lambda e: e.amount),
+    _field(slai.EffectHeelHookProc, lambda e: e.damage),
+    _field(slai.EffectSkewerProc, lambda e: e.damage),
     _field(slai.EffectDamageFinisher, lambda e: e.damage),
     _field(slai.EffectDamageFlechettes, lambda e: e.damage),
     _field(slai.EffectDamageMindBlast, lambda e: e.damage),
@@ -291,6 +293,7 @@ _CAP_BLOCK = _LIVE_SCALE_HEADROOM * _cap(
 )
 _CAP_HEALTH = _cap(
     _field(slai.EffectHealthDelta, lambda e: e.amount),
+    _field(slai.EffectHealthSet, lambda e: e.amount),
     _field(slai.EffectMaxHealthDelta, lambda e: e.amount),
 )
 _CAP_GOLD = _cap(
@@ -392,6 +395,7 @@ class EffectChannel(StrEnum):
     COLORLESS = auto()
     ESCAPED_CHARACTER = auto()
     FREE = auto()
+    IF_POISONED = auto()
     LIFESTEAL = auto()
     LIMITED = auto()
     ON_OWNER = auto()
@@ -474,6 +478,7 @@ OFF_CHOOSE_DISCARDS = _alloc(EffectChannel.CHOOSE_DISCARDS)
 OFF_COLORLESS = _alloc(EffectChannel.COLORLESS)
 OFF_ESCAPED_CHARACTER = _alloc(EffectChannel.ESCAPED_CHARACTER)
 OFF_FREE = _alloc(EffectChannel.FREE)
+OFF_IF_POISONED = _alloc(EffectChannel.IF_POISONED)
 OFF_LIFESTEAL = _alloc(EffectChannel.LIFESTEAL)
 OFF_LIMITED = _alloc(EffectChannel.LIMITED)
 OFF_ON_OWNER = _alloc(EffectChannel.ON_OWNER)
@@ -495,7 +500,11 @@ _BUCKET_META: tuple[tuple[int, int, float], ...] = (
 ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT_EFFECT)
 
 # The channels that set several of a row's columns
-_MULTI_HOT_CHANNELS = (EffectChannel.CANDIDATE_FILTER, EffectChannel.RELIC_NAME)
+_MULTI_HOT_CHANNELS = (
+    EffectChannel.CANDIDATE_FILTER,
+    EffectChannel.RELIC_NAME,
+    EffectChannel.MONSTER_NAME,
+)
 
 # Most nonzero columns an Effect row holds: one per one-hot or scalar channel, and every column
 # of the multi-hot ones
@@ -641,6 +650,8 @@ def _encode_damage_mind_blast(row: np.ndarray, e: slai.EffectDamageMindBlast) ->
 
 def _encode_damage_physical(row: np.ndarray, e: slai.EffectDamagePhysical) -> None:
     row[OFF_DAMAGE] += e.amount
+    if e.if_poisoned:
+        row[OFF_IF_POISONED] = 1.0
     row[OFF_INSTANCES] += e.instances
     if e.lifesteal:
         row[OFF_LIFESTEAL] = 1.0
@@ -650,12 +661,6 @@ def _encode_damage_deal(row: np.ndarray, e: slai.EffectDamageDeal) -> None:
     row[OFF_DAMAGE] += e.amount
     if e.lifesteal:
         row[OFF_LIFESTEAL] = 1.0
-
-
-def _encode_damage_physical_if_poisoned(
-    row: np.ndarray, e: slai.EffectDamagePhysicalIfPoisoned
-) -> None:
-    row[OFF_DAMAGE] += e.amount
 
 
 def _encode_energy_delta(row: np.ndarray, e: slai.EffectEnergyDelta) -> None:
@@ -694,6 +699,14 @@ def _encode_health_delta(row: np.ndarray, e: slai.EffectHealthDelta) -> None:
     row[OFF_DELTA_SIGN + _INDEX_DELTA_SIGN[e.sign]] = 1.0
 
 
+def _encode_health_set(row: np.ndarray, e: slai.EffectHealthSet) -> None:
+    _write_amount(row, e.amount, OFF_HEALTH_ABSOLUTE, OFF_HEALTH_RELATIVE)
+
+
+def _encode_heel_hook_proc(row: np.ndarray, e: slai.EffectHeelHookProc) -> None:
+    row[OFF_DAMAGE] += e.damage
+
+
 def _encode_joust_bet(row: np.ndarray, e: slai.EffectJoustBet) -> None:
     if e.on_owner:
         row[OFF_ON_OWNER] = 1.0
@@ -729,6 +742,12 @@ def _encode_reward_roll_cards(row: np.ndarray, e: slai.EffectRewardRollCards) ->
 
 def _encode_monster_split(row: np.ndarray, e: slai.EffectMonsterSplit) -> None:
     row[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(e.name, 0)] = 1.0
+
+
+def _encode_monster_summon(row: np.ndarray, e: slai.EffectMonsterSummon) -> None:
+    # Each name's share of the pool
+    for name in e.pool:
+        row[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(name, 0)] += 1 / len(e.pool)
 
 
 def _encode_modifier_remove(row: np.ndarray, e: slai.EffectModifierRemove) -> None:
@@ -804,6 +823,10 @@ def _encode_set_cost_override(row: np.ndarray, e: slai.EffectSetCostOverride) ->
     row[OFF_COST_SCOPE + _INDEX_COST_SCOPE[e.scope]] = 1.0
 
 
+def _encode_skewer_proc(row: np.ndarray, e: slai.EffectSkewerProc) -> None:
+    row[OFF_DAMAGE] += e.damage
+
+
 def _encode_sneaky_strike_proc(row: np.ndarray, e: slai.EffectSneakyStrikeProc) -> None:
     row[OFF_ENERGY] += e.energy
 
@@ -836,7 +859,6 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
     slai.EffectDamageFlechettes: _encode_damage_flechettes,
     slai.EffectDamageMindBlast: _encode_damage_mind_blast,
     slai.EffectDamagePhysical: _encode_damage_physical,
-    slai.EffectDamagePhysicalIfPoisoned: _encode_damage_physical_if_poisoned,
     slai.EffectEnergyDelta: _encode_energy_delta,
     slai.EffectEscapePlanCheck: _encode_escape_plan_check,
     slai.EffectEventAdvanceState: _encode_event_advance_state,
@@ -845,12 +867,15 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
     slai.EffectGoldDelta: _encode_gold_delta,
     slai.EffectHandOfGreedProc: _encode_hand_of_greed_proc,
     slai.EffectHealthDelta: _encode_health_delta,
+    slai.EffectHealthSet: _encode_health_set,
+    slai.EffectHeelHookProc: _encode_heel_hook_proc,
     slai.EffectJoustBet: _encode_joust_bet,
     slai.EffectMaxHealthDelta: _encode_max_health_delta,
     slai.EffectModifierDelta: _encode_modifier_delta,
     slai.EffectModifierMultiply: _encode_modifier_multiply,
     slai.EffectMonsterSpawn: _encode_monster_spawn,
     slai.EffectMonsterSplit: _encode_monster_split,
+    slai.EffectMonsterSummon: _encode_monster_summon,
     slai.EffectRewardRollCards: _encode_reward_roll_cards,
     slai.EffectDamageDeal: _encode_damage_deal,
     slai.EffectModifierRemove: _encode_modifier_remove,
@@ -866,6 +891,7 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
     slai.EffectRitualDaggerProc: _encode_ritual_dagger_proc,
     slai.EffectScrapOozeReach: _encode_scrap_ooze_reach,
     slai.EffectSetCostOverride: _encode_set_cost_override,
+    slai.EffectSkewerProc: _encode_skewer_proc,
     slai.EffectSneakyStrikeProc: _encode_sneaky_strike_proc,
     slai.EffectStormOfSteelProc: _encode_storm_of_steel_proc,
     slai.EffectStrengthLoseTemp: _encode_strength_lose_temp,

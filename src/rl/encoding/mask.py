@@ -152,7 +152,8 @@ def encode_batch_masks(
     -------
     np_legal : np.ndarray
         (N, NUM_ACTION_TYPES) bool. The tokens' legal bits, per action type, deduped by Card
-        identity within each token kind.
+        identity within each token kind; a Monster token's bits mark the action types whose legal
+        actions target it.
     np_needs_target : np.ndarray
         (N,) bool. The tokens' needs-target bits: set where a legal action carries a Monster
         target.
@@ -196,12 +197,12 @@ def encode_batch_masks(
                 np_legal[row, at] = True  # Per ACTION TYPE — legality differs per type
                 legal_token_kinds.add((at, tokens[row - start][0]))
 
-                # L3: only CardPlay/PotionUse carry a Monster target as ids[1]. The
-                # engine offers every alive Monster to every targeted action, so the
-                # targets live on the Monster tokens and the selection only records that
-                # it takes one
+                # L3: only CardPlay/PotionUse carry a Monster target as ids[1]. The selection's
+                # needs-target bit records that it takes one, and the target's token gets the
+                # type's bit: a half-dead Monster gets PotionUse's but never CardPlay's
                 if len(ids) == 2:
                     np_needs_target[row] = True
+                    np_legal[row_of_id[ids[1]], at] = True
             np_legal_action_type[b, at] = True  # L1: every legal ActionType the masks can express
         if not np_legal_action_type[b].any():
             # Every legal action was dropped — unrepresentable; fail loudly not NaN

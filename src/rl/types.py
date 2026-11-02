@@ -26,6 +26,7 @@ from src.rl.constants import MAX_RELICS
 from src.rl.constants import MAX_REWARD_CARD_BUNDLES
 from src.rl.constants import MAX_SHOP_POTIONS
 from src.rl.constants import MAX_SHOP_RELICS
+from src.rl.constants import MAX_SIZE_CARD_MATCH_PAIRS
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
@@ -56,25 +57,26 @@ class TokenKind(IntEnum):
     CARD_SHOP = 8
     CARD_PILE_EVENT_ROLL = 9
     CARD_MATCH_FLIPPED = 10
-    CARD_PILE_STASIS = 11
-    CARD_PLAY_QUEUE = 12
-    CARD_PILE_NIGHTMARE = 13
-    CARD_PILE_DRAW = 14
-    CARD_PILE_DISCARD = 15
-    CARD_PILE_EXHAUST = 16
-    CARD_PILE_DECK = 17
-    RELIC_REWARD = 18
-    RELIC_SHOP = 19
-    RELIC_EVENT_ROLL = 20
-    RELIC_OWNED = 21
-    POTION_OWNED = 22
-    POTION_REWARD = 23
-    POTION_SHOP = 24
-    POTION_EVENT_ROLL = 25
-    MONSTERS = 26
-    EVENT_OPTIONS = 27
-    CHARACTER = 28
-    ROOMS = 29
+    CARD_MATCH_PAIRS = 11
+    CARD_PILE_STASIS = 12
+    CARD_PLAY_QUEUE = 13
+    CARD_PILE_NIGHTMARE = 14
+    CARD_PILE_DRAW = 15
+    CARD_PILE_DISCARD = 16
+    CARD_PILE_EXHAUST = 17
+    CARD_PILE_DECK = 18
+    RELIC_REWARD = 19
+    RELIC_SHOP = 20
+    RELIC_EVENT_ROLL = 21
+    RELIC_OWNED = 22
+    POTION_OWNED = 23
+    POTION_REWARD = 24
+    POTION_SHOP = 25
+    POTION_EVENT_ROLL = 26
+    MONSTERS = 27
+    EVENT_OPTIONS = 28
+    CHARACTER = 29
+    ROOMS = 30
 
 
 TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (card.py owns their packing)
@@ -94,6 +96,7 @@ TOKEN_KINDS_CARD = (
     TokenKind.CARD_SHOP,
     TokenKind.CARD_PILE_EVENT_ROLL,
     TokenKind.CARD_MATCH_FLIPPED,
+    TokenKind.CARD_MATCH_PAIRS,
     TokenKind.CARD_PILE_STASIS,
     TokenKind.CARD_PLAY_QUEUE,
     TokenKind.CARD_PILE_NIGHTMARE,
@@ -143,6 +146,7 @@ MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
     TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
     TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
     TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up Card
+    TokenKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
     TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
     TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
     TokenKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
@@ -243,14 +247,15 @@ class X_Tokens:
     X_Step's regions, which have a fixed width, and in a minibatch, which keeps its rollout's K.
     Each row is its nonzero (column, value) entries in column order, then (0, 0.0) entries up
     to K; the entries index the shared column space, each Entity kind's columns from its
-    COL_START, then the health/block, price and slot columns Entity kinds share.
+    COL_START, then the health/block, price and slot columns Entity kinds share and the
+    play-queue Cards' play-source columns.
     """
 
     x_column: torch.Tensor  # (N, K) int16
     x_value: torch.Tensor  # (N, K) float32
     x_token_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
 
-    # L2 selection: legal under the action type, deduped by Card identity
+    # Legal under the action type: an L2 selection, deduped by Card identity, or an L3 target
     x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
 
     # Selections whose legal actions carry a Monster target (Cards / Potions)

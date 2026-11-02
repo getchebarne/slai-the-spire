@@ -48,7 +48,7 @@ BLOCK_MAX_ENTITY = max(
     )
 )
 
-# The catalog's widest Monster HP roll (Champ 440 at Ascension 9+); the
+# The catalog's widest Monster HP roll (the Transient's 999); the
 # Character rides the same buckets far below
 HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
 
@@ -80,12 +80,16 @@ INTENT_INSTANCES_MAX = max(
 MONSTER_MOVESET_MAX = max(len(template.moves) for template in _MONSTER_TEMPLATES)
 
 # Thievery steals its stacks per landed attack (Looter/Mugger spawn Modifier)
-GOLD_STEAL_MAX = max(
+_GOLD_STEAL_MAX = max(
     spawn.stacks_max
     for template in _MONSTER_TEMPLATES
     for spawn in template.modifier_spawns
     if spawn.kind is _slai.ModifierKind.Thievery
 )
+
+# Thievery accumulation: Mug, Mug, Lunge — every attack before the Escape turn steals
+GOLD_STOLEN_MAX = 3 * _GOLD_STEAL_MAX
+
 FACTOR_VULN = _slai.GameEnv.FACTOR_VULN
 
 
@@ -94,6 +98,7 @@ MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
 MAX_SIZE_CARD_PILE_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_CARD_PILE_EVENT_ROLL
 MAX_SIZE_POTION_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_POTION_EVENT_ROLL
 MAX_SIZE_RELIC_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_RELIC_EVENT_ROLL
+MAX_SIZE_CARD_MATCH_PAIRS = _slai.GameEnv.MATCH_AND_KEEP_ATTEMPTS  # One pair per attempt at most
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
 MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
 
@@ -103,7 +108,7 @@ MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
 
 # Size ceiling for the master deck, used to normalize deck-scale counts (deck
 # size, halt selections over the deck and the Combat piles it feeds)
-MAX_SIZE_CARD_PILE_DECK = 55
+MAX_SIZE_CARD_PILE_DECK = 80
 
 # Relics offered per Reward: boss Rewards roll mutually
 # exclusive Relics (taking one discards the others).

@@ -6,6 +6,8 @@ import torch.nn.functional as F
 
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
+from src.rl.encoding.focus import OFF_FOCUS_KIND
+from src.rl.encoding.focus import Focus
 from src.rl.models import ActorCritic
 from src.rl.packed import take_states
 from src.rl.reward import RewardStream
@@ -23,6 +25,7 @@ class PPOConfig:
     coef_value: float
     coef_entropy: float
     coef_kl_uniform: float
+    coef_kl_uniform_combat: float
     is_clip: float
     max_grad_norm: float
     target_kl: float | None
@@ -316,9 +319,9 @@ def update_ppo(
         stopped = False
         for start, x_count_total in zip(starts, x_count_totals[epoch]):
             x_states = x_order[epoch, start : start + ppo.minibatch_size]
+            x_gs = take_states(batch.game_state, x_states, x_count_total)
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                take_states(batch.game_state, x_states, x_count_total),
-                batch.actions[x_states],
+                x_gs, batch.actions[x_states]
             )
             log_probs_prox = batch.log_probs_prox[x_states]
             adv = batch.advantages[x_states].squeeze(-1)
@@ -353,12 +356,18 @@ def update_ppo(
 
             # Uniform-KL barrier, summed per head like the entropy term; each head's KL falls
             # only by lifting its own tail probs. Never decay it: it keeps rare actions reachable
-            loss_kl_uniform = torch.mean(kl_uniform.sum(dim=-1))
+            x_kl_uniform_state = kl_uniform.sum(dim=-1)
+            loss_kl_uniform = torch.mean(x_kl_uniform_state)
+            x_coef_kl_uniform = torch.where(
+                x_gs.focus[:, OFF_FOCUS_KIND + Focus.COMBAT] > 0,
+                ppo.coef_kl_uniform_combat,
+                ppo.coef_kl_uniform,
+            )
             loss = (
                 loss_policy
                 + ppo.coef_value * loss_value
                 + ppo.coef_entropy * loss_entropy
-                + ppo.coef_kl_uniform * loss_kl_uniform
+                + torch.mean(x_coef_kl_uniform * x_kl_uniform_state)
             )
 
             optimizer.zero_grad()

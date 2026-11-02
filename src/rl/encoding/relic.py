@@ -43,7 +43,7 @@ ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 # Most nonzero columns a Relic row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_RELIC = len(CHANNEL_LAYOUT_RELIC)
 
-# Per-relic encoding cache keyed by (name, used_up, clamped counter) — the only mutable fields
+# Per-relic encoding cache keyed by (name, used_up, counter) — the only mutable fields
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
 _RELIC_ROW_CACHE_MAX = 100_000
 
@@ -64,7 +64,7 @@ def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
 
 
 def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
-    """Write the full Relic encoding into `out`, cached by (name, used_up, clamped counter).
+    """Write the full Relic encoding into `out`, cached by (name, used_up, counter).
 
     Parameters
     ----------
@@ -73,7 +73,7 @@ def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
     out : np.ndarray
         (ENCODING_DIM_RELIC,) float32. The Relic's row, overwritten.
     """
-    cache_key = (relic.name, relic.used_up, min(relic.counter, _COUNTER_MAX))
+    cache_key = (relic.name, relic.used_up, relic.counter)
     row = _RELIC_ROW_CACHE.get(cache_key)
     if row is None:
         row = np.zeros(ENCODING_DIM_RELIC, dtype=np.float32)
@@ -98,8 +98,6 @@ def get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list:
             return shop.relics[:MAX_SHOP_RELICS] if shop is not None else []
         case TokenKind.RELIC_EVENT_ROLL:
             event = game_state.event
-            if event is not None and not event.consumed:
-                return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
-            return []
+            return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL] if event is not None else []
         case _:
             raise ValueError(f"not a relic token kind: {token_kind}")

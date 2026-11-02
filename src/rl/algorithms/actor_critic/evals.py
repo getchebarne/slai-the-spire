@@ -13,6 +13,7 @@ import torch.multiprocessing as mp
 from src.rl.actions import action_from_actiontype
 from src.rl.algorithms.actor_critic.curriculum import env_level
 from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
+from src.rl.algorithms.actor_critic.episode import KEY_ACT3_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_WIN_RATE
@@ -32,7 +33,7 @@ from src.rl.utils import step_scripted
 
 # Greedy deterministic play can loop; cap so a hung eval can't wedge its worker. Keep it
 # well above an episode's length: a truncated run counts as a loss for the curriculum gate
-_EVAL_MAX_STEPS = 2000
+_EVAL_MAX_STEPS = 3000
 _EVAL_NUM_EPISODES = 64
 _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # Fixed test set => low-variance trend
 
@@ -42,6 +43,7 @@ EVAL_WIN_RATE = PREFIX_EVAL + KEY_WIN_RATE
 EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
 EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
 EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
+EVAL_ACT3_RATE = PREFIX_EVAL + KEY_ACT3_RATE
 
 
 def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:

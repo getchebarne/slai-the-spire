@@ -18,7 +18,10 @@ from src.rl.reward import shop_gold_spent
 # Cumulative floor of Act II's first row: reaching it ⟺ beat the Act I boss.
 _ACT2_FLOOR_MIN = ACT_SPAN
 
-# Final boss Room: reaching it splits the act-2 plateau into reach x conversion
+# Cumulative floor of Act III's first row: reaching it ⟺ beat the Act II boss.
+_ACT3_FLOOR_MIN = 2 * ACT_SPAN
+
+# Final boss Room: reaching it splits the final act's plateau into reach x conversion
 _BOSS_FLOOR_MIN = (GameEnv.ACT_FINAL - 1) * ACT_SPAN + MAP_HEIGHT
 
 
@@ -27,7 +30,8 @@ class EpisodeStats:
     stream_rewards: np.ndarray  # (K,) per-stream episode totals, undiscounted
     length: int  # Policy steps: step_scripted folds the scripted gold takes into one step
     won: bool  # Game over with health > 0
-    floor: int  # Run-CUMULATIVE floor (reward.cumulative_floor), 0..31
+    floor: int  # Run-CUMULATIVE floor (reward.cumulative_floor), 0..48
+    boss_reached: bool  # Reached the final boss fight: from A20, the second
     stream_returns: np.ndarray  # (K,) per-stream DISCOUNTED returns (γ^t·r_t sums)
     gold_gained: int  # Sum of positive gold deltas over the episode
     gold_spent: int  # Gold spent at Shops (reward.shop_gold_spent) over the episode
@@ -41,7 +45,7 @@ class EpisodeStats:
 
 
 def make_episode_stats() -> EpisodeStats:
-    """Return a zeroed tally: won, floor and deck_size are placeholders until finish_episode.
+    """Return a zeroed tally: won, floor, boss_reached and deck_size wait for finish_episode.
 
     Returns
     -------
@@ -53,6 +57,7 @@ def make_episode_stats() -> EpisodeStats:
         length=0,
         won=False,
         floor=0,
+        boss_reached=False,
         stream_returns=np.zeros(len(RewardStream)),
         gold_gained=0,
         gold_spent=0,
@@ -104,7 +109,7 @@ def finish_episode(stats: EpisodeStats, game_state: GameState, terminated: bool)
     Parameters
     ----------
     stats : EpisodeStats
-        The episode's tally; its won, floor and deck_size are set in place.
+        The episode's tally; its won, floor, boss_reached and deck_size are set in place.
     game_state : GameState
         The episode's last snapshot.
     terminated : bool
@@ -112,6 +117,9 @@ def finish_episode(stats: EpisodeStats, game_state: GameState, terminated: bool)
     """
     stats.won = bool(terminated and game_state.character.health > 0)
     stats.floor = cumulative_floor(game_state)
+
+    # From A20 the final act's Map reads one boss fight to come until the second one starts
+    stats.boss_reached = stats.floor >= _BOSS_FLOOR_MIN and game_state.map.boss_fights_after == 0
     stats.deck_size = len(game_state.card_pile_deck)
 
 
@@ -125,6 +133,7 @@ KEY_LENGTH_AVG = "length_avg"
 KEY_REWARD_AVG = "reward_avg"
 KEY_REWARD_STD = "reward_std"
 KEY_ACT2_RATE = "act2_rate"
+KEY_ACT3_RATE = "act3_rate"
 KEY_GOLD_AVG = "gold_avg"
 KEY_GOLD_SPENT_AVG = "gold_spent_avg"
 KEY_BOSS_RATE = "boss_rate"
@@ -154,11 +163,12 @@ def aggregate_episode_stats(episodes: list[EpisodeStats]) -> dict[str, float]:
         KEY_LENGTH_AVG: sum(e.length for e in episodes) / n,
         KEY_REWARD_AVG: float(np.mean(rewards)),
         KEY_REWARD_STD: float(np.std(rewards)),
-        # The Act-I-cleared rate: the progress signal while two-act wins stay rare
+        # The Act-I-cleared and Act-II-cleared rates: the progress signals while wins stay rare
         KEY_ACT2_RATE: sum(e.floor >= _ACT2_FLOOR_MIN for e in episodes) / n,
+        KEY_ACT3_RATE: sum(e.floor >= _ACT3_FLOOR_MIN for e in episodes) / n,
         KEY_GOLD_AVG: sum(e.gold_gained for e in episodes) / n,
         KEY_GOLD_SPENT_AVG: sum(e.gold_spent for e in episodes) / n,
-        KEY_BOSS_RATE: sum(e.floor >= _BOSS_FLOOR_MIN for e in episodes) / n,
+        KEY_BOSS_RATE: sum(e.boss_reached for e in episodes) / n,
         KEY_DECK_SIZE_AVG: sum(e.deck_size for e in episodes) / n,
         KEY_CARDS_ADDED_AVG: sum(e.cards_added for e in episodes) / n,
         KEY_PURGES_AVG: sum(e.purges for e in episodes) / n,
