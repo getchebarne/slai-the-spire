@@ -385,9 +385,6 @@ def _encode_tokens_into(
     modifier_rows: list[tuple[int, Modifier]] = []
     row_of_id: dict[int, int] = {}
 
-    # The waiting plays' sources, in their play-queue tokens' order
-    play_sources = iter(game_state.combat.play_sources if game_state.combat is not None else [])
-
     # The rows at each Entity kind's columns, then at the Health/Block, Price and Slot columns
     np_tokens_card = np_tokens[:, COL_START_CARD:COL_START_RELIC]
     np_tokens_relic = np_tokens[:, COL_START_RELIC:COL_START_POTION]
@@ -436,8 +433,8 @@ def _encode_tokens_into(
                     np_tokens_stasis_slot[row, holder.slot] = 1.0
 
                 # Play source, a waiting play's
-                if token_kind is TokenKind.CARD_PLAY_QUEUE:
-                    np_tokens_play_source[row, _MAP_PLAY_SOURCE[next(play_sources)]] = 1.0
+                if entity.play_source is not None:
+                    np_tokens_play_source[row, _MAP_PLAY_SOURCE[entity.play_source]] = 1.0
             case Relic():
                 encode_relic_into_w_cache(entity, np_tokens_relic[row])
 
