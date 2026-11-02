@@ -117,7 +117,7 @@ class MapGNN(nn.Module):
         x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
 
         if batch_size < _DEDUP_MIN_BATCH:
-            x_hidden, x_readout = self.message_passing(self, x_nodes)
+            x_hidden, x_readout = self._encode_maps(x_nodes)
             return x_hidden, torch.arange(batch_size, device=x_grid.device), x_readout
 
         # The game sits on one Map node for many steps, so its grid repeats across a minibatch:
@@ -132,8 +132,59 @@ class MapGNN(nn.Module):
         x_rep[x_inverse] = torch.arange(batch_size, device=x_grid.device)
 
         # Encode the unique Maps, and gather the readout back
-        x_hidden, x_readout_uniq = self.message_passing(self, x_nodes[x_rep])
+        x_hidden, x_readout_uniq = self._encode_maps(x_nodes[x_rep])
         return x_hidden, x_inverse, x_readout_uniq[x_inverse]
+
+    def _encode_maps(self, x_nodes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run the message passing over the Maps' forward Rooms, and put them back on the grid.
+
+        Parameters
+        ----------
+        x_nodes : torch.Tensor
+            (U, H * W, C) float32. The Maps.
+
+        Returns
+        -------
+        x_hidden : torch.Tensor
+            (U, H * W, hidden). Each node's features, zero off the forward Rooms.
+        x_readout : torch.Tensor
+            (U, hidden). The readout: each Map's mean over its forward Rooms, zero when it has
+            none.
+        """
+        x_valid = self._forward_valid(x_nodes)  # (U, H * W) / Forward Rooms only
+
+        # x_map, x_node: (N,) / Each of the N forward Rooms' Map and node, most children first
+        x_map, x_node = torch.nonzero(x_valid, as_tuple=True)
+        x_num_children = x_nodes[x_map, x_node][:, SLICE_MAP_EDGES].sum(-1).long()  # (N,)
+        x_order = torch.argsort(x_num_children, descending=True)
+        x_map, x_node = x_map[x_order], x_node[x_order]
+        x_rooms = x_nodes[x_map, x_node]  # (N, C)
+
+        # Each forward Room's index in `x_rooms`
+        x_room_of_node = torch.zeros(x_valid.shape, dtype=torch.long, device=x_nodes.device)
+        x_room_of_node[x_map, x_node] = torch.arange(x_map.shape[0], device=x_nodes.device)
+
+        # x_children: (E,) / Each edge's child, a forward Room too, in the Rooms' order
+        x_edge_room, x_edge = torch.nonzero(x_rooms[:, SLICE_MAP_EDGES], as_tuple=True)
+        x_child_node = self._child_idx[x_node[x_edge_room], x_edge]
+        x_children = x_room_of_node[x_map[x_edge_room], x_child_node]
+
+        # One block of Rooms per child count
+        _, num_1, num_2, num_3 = torch.bincount(x_num_children, minlength=4).tolist()
+        x_3, x_2, x_1 = x_children.split([3 * num_3, 2 * num_2, num_1])
+        x_children_by_count = (x_3.view(num_3, 3), x_2.view(num_2, 2), x_1.view(num_1, 1))
+
+        x_hidden_rooms = self.message_passing(self, x_rooms, x_children_by_count)
+        x_hidden = torch.zeros(
+            *x_valid.shape, x_hidden_rooms.shape[1], dtype=x_nodes.dtype, device=x_nodes.device
+        )
+        x_hidden[x_map, x_node] = x_hidden_rooms
+
+        # Map readout: masked mean over valid nodes
+        x_denom = x_valid.sum(1, keepdim=True).clamp(min=1).float()
+        x_readout = x_hidden.sum(1) / x_denom  # Already zero off x_valid
+
+        return x_hidden, x_readout
 
     def _forward_valid(self, x_nodes: torch.Tensor) -> torch.Tensor:
         """Compute the valid Rooms matrix (higher than current floor and not None).
@@ -164,58 +215,31 @@ class MapGNN(nn.Module):
         x_forward = self._row_of_node.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
         return x_room_exists & x_forward  # (U, H * W)
 
-    def _adjacency(self, x_nodes: torch.Tensor) -> torch.Tensor:
-        num_unique = x_nodes.shape[0]
 
-        x_edges = x_nodes[:, :, SLICE_MAP_EDGES]
-        x_adj = torch.zeros(
-            num_unique,
-            _NUM_NODES,
-            _NUM_NODES + 1,
-            device=x_nodes.device,
-            dtype=x_nodes.dtype,
-        )
-        x_adj = torch.scatter(
-            x_adj,
-            dim=2,
-            index=self._child_idx.unsqueeze(0).expand(num_unique, -1, -1),
-            src=x_edges,
-        )
-
-        # Drop the off-grid padding column, then row-normalize
-        x_adj = x_adj[:, :, :_NUM_NODES]
-        return x_adj / x_adj.sum(-1, keepdim=True).clamp(min=1.0)
-
-
-def message_passing(gnn: MapGNN, x_nodes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run `gnn` over the Maps.
+def message_passing(
+    gnn: MapGNN, x_rooms: torch.Tensor, x_children_by_count: tuple[torch.Tensor, ...]
+) -> torch.Tensor:
+    """Run `gnn` over the forward Rooms, each Room reading the mean of its children.
 
     Parameters
     ----------
     gnn : MapGNN
         The GNN to run.
-    x_nodes : torch.Tensor
-        (U, H * W, C) float32. The Maps.
+    x_rooms : torch.Tensor
+        (N, C) float32. The forward Rooms' nodes, most children first.
+    x_children_by_count : tuple[torch.Tensor, ...]
+        (Nk, k) long, one per child count k. The next Nk Rooms' children, by index in `x_rooms`.
+        The Rooms past them have no children.
 
     Returns
     -------
-    x_hidden : torch.Tensor
-        (U, H * W, hidden). Each node's features.
-    x_readout : torch.Tensor
-        (U, hidden). The readout: each Map's mean over its valid nodes, zero when it has none.
+    torch.Tensor
+        (N, hidden). Each Room's features.
     """
-    x_valid = gnn._forward_valid(x_nodes)  # (U, H * W) / Forward Rooms only
-    x_adj = gnn._adjacency(x_nodes)  # (U, H * W, H * W) / Row-normalized children
-
-    # Message passing: aggregate children per layer, masked to forward Rooms. The dense bmm
-    # beats a sparse gather-sum here: at HW=105 it is launch-bound, not FLOP-bound
-    x_hidden = gnn._in_proj(x_nodes) * x_valid.unsqueeze(-1)
+    x_hidden = gnn._in_proj(x_rooms)
     for lin, norm in zip(gnn._layers, gnn._norms):
-        x_hidden = norm(x_hidden + F.relu(lin(torch.bmm(x_adj, x_hidden))))
-        x_hidden = x_hidden * x_valid.unsqueeze(-1)
+        x_mean = torch.cat([x_hidden[x_children].mean(1) for x_children in x_children_by_count])
+        x_mean = F.pad(x_mean, (0, 0, 0, x_hidden.shape[0] - x_mean.shape[0]))  # Zero if childless
+        x_hidden = norm(x_hidden + F.relu(lin(x_mean)))
 
-    # Map readout: masked mean over valid nodes
-    x_denom = x_valid.sum(1, keepdim=True).clamp(min=1).float()
-    x_readout = x_hidden.sum(1) / x_denom  # Already zero off x_valid: masked above
-
-    return x_hidden, x_readout
+    return x_hidden
