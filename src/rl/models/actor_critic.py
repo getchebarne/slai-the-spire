@@ -9,7 +9,6 @@ from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
 from src.rl.encoding.state import COL_START_MONSTER
-from src.rl.encoding.state import COL_START_PLAY_SOURCE
 from src.rl.encoding.state import COL_START_POTION
 from src.rl.encoding.state import COL_START_PRICE
 from src.rl.encoding.state import COL_START_RELIC
@@ -364,9 +363,9 @@ class ActorCritic(nn.Module):
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per column range, each Entity kind's then the health/block, price,
-        # slot and play-source ones, as its own layer: orthogonal over all of them would shrink
-        # each column's scale
+        # The shared first layer per column range, each Entity kind's then the health/block, price
+        # and slot ones, as its own layer: orthogonal over all of them would shrink each column's
+        # scale
         with torch.no_grad():
             for x_weight_range in torch.tensor_split(
                 self.core._entity_projector._pre_token.weight,
@@ -378,7 +377,6 @@ class ActorCritic(nn.Module):
                     COL_START_HEALTH_BLOCK,
                     COL_START_PRICE,
                     COL_START_STASIS_SLOT,
-                    COL_START_PLAY_SOURCE,
                 ),
                 dim=1,
             ):
