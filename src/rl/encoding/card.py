@@ -34,6 +34,7 @@ from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.encoding.effect import catalog_effects
 from src.rl.types import TOKEN_KINDS_CARD_REWARDS
+from src.rl.types import Tag
 from src.rl.types import TokenKind
 from src.rl.types import make_channel_allocator
 
@@ -121,6 +122,57 @@ ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
 # Most nonzero columns a Card row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_CARD = len(CHANNEL_LAYOUT_CARD)
+
+# Each tagged Card's Tags, by name: an upgraded Card keeps them
+TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {
+    CardName.Accuracy: (Tag.NINJA,),
+    CardName.Acrobatics: (Tag.DISCARD,),
+    CardName.AfterImage: (Tag.NINJA,),
+    CardName.AllOutAttack: (Tag.DISCARD,),
+    CardName.AThousandCuts: (Tag.NINJA,),
+    CardName.Backstab: (Tag.NINJA,),
+    CardName.Bane: (Tag.POISON,),
+    CardName.BladeDance: (Tag.NINJA,),
+    CardName.BouncingFlask: (Tag.POISON,),
+    CardName.Burst: (Tag.SETUP,),
+    CardName.CalculatedGamble: (Tag.DISCARD,),
+    CardName.Catalyst: (Tag.POISON, Tag.SETUP),
+    CardName.Choke: (Tag.NINJA,),
+    CardName.CloakAndDagger: (Tag.NINJA,),
+    CardName.Concentrate: (Tag.DISCARD,),
+    CardName.CorpseExplosion: (Tag.POISON,),
+    CardName.CripplingPoison: (Tag.POISON,),
+    CardName.DaggerThrow: (Tag.DISCARD,),
+    CardName.DeadlyPoison: (Tag.POISON,),
+    CardName.Doppelganger: (Tag.SETUP,),
+    CardName.EndlessAgony: (Tag.NINJA,),
+    CardName.Envenom: (Tag.POISON, Tag.NINJA),
+    CardName.Eviscerate: (Tag.DISCARD,),
+    CardName.Finisher: (Tag.NINJA,),
+    CardName.FlashOfSteel: (Tag.NINJA,),
+    CardName.Forethought: (Tag.SETUP,),
+    CardName.GrandFinale: (Tag.SETUP,),
+    CardName.InfiniteBlades: (Tag.NINJA,),
+    CardName.Madness: (Tag.SETUP,),
+    CardName.Neutralize: (Tag.NINJA,),
+    CardName.Nightmare: (Tag.SETUP,),
+    CardName.NoxiousFumes: (Tag.POISON,),
+    CardName.Outmaneuver: (Tag.SETUP,),
+    CardName.Panache: (Tag.NINJA,),
+    CardName.PoisonedStab: (Tag.POISON,),
+    CardName.Prepared: (Tag.DISCARD,),
+    CardName.Reflex: (Tag.DISCARD,),
+    CardName.Setup: (Tag.SETUP,),
+    CardName.Shiv: (Tag.NINJA,),
+    CardName.SneakyStrike: (Tag.DISCARD,),
+    CardName.StormOfSteel: (Tag.NINJA,),
+    CardName.Survivor: (Tag.DISCARD,),
+    CardName.Tactician: (Tag.DISCARD,),
+    CardName.ThinkingAhead: (Tag.SETUP,),
+    CardName.ToolsOfTheTrade: (Tag.DISCARD,),
+    CardName.Unload: (Tag.DISCARD,),
+    CardName.WellLaidPlans: (Tag.SETUP,),
+}
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}

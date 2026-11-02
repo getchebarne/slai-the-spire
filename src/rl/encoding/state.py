@@ -23,6 +23,7 @@ from src.rl.constants import MAX_MODIFIERS
 from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
+from src.rl.encoding.card import TAGS_OF_CARD_NAME
 from src.rl.encoding.card import encode_card_into_w_cache
 from src.rl.encoding.card import get_card_entities
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
@@ -59,10 +60,12 @@ from src.rl.encoding.monster import moveset_effects
 from src.rl.encoding.monster import outgoing_damage
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.potion import ENCODING_DIM_SPARSE_POTION
+from src.rl.encoding.potion import TAGS_OF_POTION_NAME
 from src.rl.encoding.potion import encode_potion_into_w_cache
 from src.rl.encoding.potion import get_potion_entities
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
+from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into_w_cache
 from src.rl.encoding.relic import get_relic_entities
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
@@ -81,6 +84,7 @@ from src.rl.types import TOKEN_KINDS_POTION
 from src.rl.types import TOKEN_KINDS_RELIC
 from src.rl.types import EffectSource
 from src.rl.types import Entity
+from src.rl.types import Tag
 from src.rl.types import TokenKind
 from src.rl.types import X_EffectPending
 from src.rl.types import X_GameState
@@ -94,6 +98,10 @@ ENCODING_DIM_ASCENSION = ASCENSION_LEVEL
 ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
 ENCODING_DIM_SPARSE_SLOT = 1
 
+# The Tag columns: a multi-hot over the Tags
+ENCODING_DIM_TAG = len(Tag)
+ENCODING_DIM_SPARSE_TAG = ENCODING_DIM_TAG
+
 # Each Entity kind's first column in the shared space; Event Options and Rooms have no columns
 COL_START_CARD = 0
 COL_START_RELIC = COL_START_CARD + ENCODING_DIM_CARD
@@ -106,14 +114,20 @@ COL_START_HEALTH_BLOCK = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
 COL_START_PRICE = COL_START_HEALTH_BLOCK + ENCODING_DIM_HEALTH_BLOCK
 COL_START_STASIS_SLOT = COL_START_PRICE + ENCODING_DIM_PRICE
 
+# The range Cards, Relics and Potions share, outside their cached rows
+COL_START_TAG = COL_START_STASIS_SLOT + ENCODING_DIM_STASIS_SLOT
+
 # Total token encoding dimension
-ENCODING_DIM_TOKEN = COL_START_STASIS_SLOT + ENCODING_DIM_STASIS_SLOT
+ENCODING_DIM_TOKEN = COL_START_TAG + ENCODING_DIM_TAG
 
 # Most nonzero columns a token row holds
 ENCODING_DIM_SPARSE_TOKEN = max(
-    ENCODING_DIM_SPARSE_CARD + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_SLOT,
-    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE,
-    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE,
+    ENCODING_DIM_SPARSE_CARD
+    + ENCODING_DIM_SPARSE_PRICE
+    + ENCODING_DIM_SPARSE_SLOT
+    + ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
     ENCODING_DIM_SPARSE_MONSTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK + ENCODING_DIM_SPARSE_SLOT,
     ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
 )
@@ -330,7 +344,8 @@ def _encode_tokens_into(
 
     Each token goes at its Entity kind's columns, a combatant's health/block at the health/block
     columns, a Shop token's price at the price columns, a Monster's slot and a stasis Card's
-    holder's at the slot columns and a Room's Map node into `np_node_idx`.
+    holder's at the slot columns, a Card's, Relic's or Potion's Tags at the Tag columns and a
+    Room's Map node into `np_node_idx`.
 
     Parameters
     ----------
@@ -378,7 +393,10 @@ def _encode_tokens_into(
     np_tokens_character = np_tokens[:, COL_START_CHARACTER:COL_START_HEALTH_BLOCK]
     np_tokens_health_block = np_tokens[:, COL_START_HEALTH_BLOCK:COL_START_PRICE]
     np_tokens_price = np_tokens[:, COL_START_PRICE:COL_START_STASIS_SLOT]
-    np_tokens_stasis_slot = np_tokens[:, COL_START_STASIS_SLOT:]
+    np_tokens_stasis_slot = np_tokens[:, COL_START_STASIS_SLOT:COL_START_TAG]
+
+    # The rows at the Tag columns
+    np_tokens_tag = np_tokens[:, COL_START_TAG:]
 
     # Iterate over tokens; `start_idx` gives the offset this state starts writing from
     for row, (token_kind, entity) in enumerate(tokens, start_idx):
@@ -390,6 +408,10 @@ def _encode_tokens_into(
         match entity:
             case Card():
                 encode_card_into_w_cache(entity, energy_current, np_tokens_card[row])
+
+                # Tags. Shared w/ Relics and Potions
+                for tag in TAGS_OF_CARD_NAME.get(entity.name, ()):
+                    np_tokens_tag[row, tag] = 1.0
 
                 # Shop price
                 if entity.price is not None:
@@ -416,6 +438,10 @@ def _encode_tokens_into(
             case Relic():
                 encode_relic_into_w_cache(entity, np_tokens_relic[row])
 
+                # Tags. Shared w/ Cards and Potions
+                for tag in TAGS_OF_RELIC_NAME.get(entity.name, ()):
+                    np_tokens_tag[row, tag] = 1.0
+
                 # Shop price
                 if entity.price is not None:
                     encode_price_into(
@@ -438,6 +464,10 @@ def _encode_tokens_into(
                 ]
             case Potion():
                 encode_potion_into_w_cache(entity, np_tokens_potion[row])
+
+                # Tags. Shared w/ Cards and Relics
+                for tag in TAGS_OF_POTION_NAME.get(entity.name, ()):
+                    np_tokens_tag[row, tag] = 1.0
 
                 # Shop price
                 if entity.price is not None:
