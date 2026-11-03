@@ -290,6 +290,7 @@ class Rollout:
     x_log_probs_behavior: torch.Tensor  # (B,) under the weights that played
     x_rewards: torch.Tensor  # (T, E, K)
     x_dones: torch.Tensor  # (T, E)
+    x_num_discounts: torch.Tensor  # (T, E) long: k in each step's discount, γ^k
     state_batch_final: StateBatch  # E states
 
 

@@ -45,6 +45,7 @@ class _StepBuffer:
     # One row per game, written by the worker
     x_rewards: torch.Tensor  # (B, K)
     x_dones: torch.Tensor  # (B,)
+    x_num_discounts: torch.Tensor  # (B,) long: k in the step's discount, γ^k
 
     states: StateBatchReserved  # The encoded states, at worst-case capacity
 
@@ -174,6 +175,7 @@ def _allocate_step_buffers(num_buffers: int, buffer_size: int) -> list[_StepBuff
         x_ascensions=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
         x_rewards=torch.zeros(num_buffers, buffer_size, len(RewardStream), dtype=torch.float32),
         x_dones=torch.zeros(num_buffers, buffer_size, dtype=torch.float32),
+        x_num_discounts=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
         states=allocate_states(num_buffers, buffer_size),
     )
 
@@ -187,7 +189,7 @@ def _allocate_step_buffers(num_buffers: int, buffer_size: int) -> list[_StepBuff
 
 def step_workers(
     workers: Workers, x_actions: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor, list[EpisodeResult]]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[EpisodeResult]]:
     """Have every worker step its games and write the new states, and wait for every reply.
 
     Parameters
@@ -204,6 +206,8 @@ def step_workers(
         (E, K) float32 on the CPU. The rewards, independent of the workers' reusable storage.
     x_dones : torch.Tensor
         (E,) float32 on the CPU. The done flags, independent of the workers' reusable storage.
+    x_num_discounts : torch.Tensor
+        (E,) long on the CPU. Each step's k in γ^k, independent of the workers' reusable storage.
     episode_results : list[EpisodeResult]
         The episodes finished on this step, in queue order across workers.
     """
@@ -233,6 +237,7 @@ def step_workers(
     # Collect instant rewards and done flags
     x_rewards = torch.cat([step_buffer.x_rewards for step_buffer in step_buffers])
     x_dones = torch.cat([step_buffer.x_dones for step_buffer in step_buffers])
+    x_num_discounts = torch.cat([step_buffer.x_num_discounts for step_buffer in step_buffers])
 
     # Get `EpisodeResult`s from finished workers
     episode_results = []
@@ -244,7 +249,7 @@ def step_workers(
             except Empty:
                 _check_workers_alive(workers._handles)
 
-    return x_rewards, x_dones, episode_results
+    return x_rewards, x_dones, x_num_discounts, episode_results
 
 
 def write_ascensions(workers: Workers, ascension_current: float) -> None:
@@ -369,8 +374,8 @@ def _worker_loop(
     """Run one shard of the games until the stop flag is set.
 
     It writes their first states, then on each request steps every game with its sampled action
-    and writes the rewards, dones and new states. A game whose episode ended is replaced by a
-    new one at its current ascension.
+    and writes the rewards, dones, discount counts and new states. A game whose episode ended is
+    replaced by a new one at its current ascension.
 
     Parameters
     ----------
@@ -417,13 +422,14 @@ def _worker_loop(
             action = engine_action(idx_action_kind, idx_selection, idx_target, batch_game_state[idx_env])
 
             # Step the environment
-            game_state_next, reward, done = step_env(
+            game_state_next, reward, num_discounts, done = step_env(
                 batch_env[idx_env], batch_game_state[idx_env], episode_results[idx_env], action, gamma
             )
 
             # Write reward and done status into the shared step buffer 
             step_buffer.x_rewards[idx_env] = torch.from_numpy(reward)
             step_buffer.x_dones[idx_env] = float(done)
+            step_buffer.x_num_discounts[idx_env] = num_discounts
 
             # If done, put the episode's results into the queue and reset the environment
             if done:

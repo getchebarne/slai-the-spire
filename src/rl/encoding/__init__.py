@@ -15,6 +15,8 @@ from src.rl.encoding.map_ import OFF_MAP_POSITION
 from src.rl.encoding.map_ import OFF_MAP_SELECTABLE
 from src.rl.encoding.map_ import SLICE_MAP_EDGES
 from src.rl.encoding.map_ import SLICE_MAP_ROOM_KIND
+from src.rl.encoding.mask import potion_can_arrive
+from src.rl.encoding.mask import potion_discard_wasted
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.state import COL_START_CHARACTER
@@ -55,4 +57,6 @@ __all__ = [
     "OFF_MAP_SELECTABLE",
     "SLICE_MAP_EDGES",
     "SLICE_MAP_ROOM_KIND",
+    "potion_can_arrive",
+    "potion_discard_wasted",
 ]

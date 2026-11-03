@@ -67,7 +67,7 @@ def _run_eval_episode(
         # Game step
         idx_action_kind, idx_selection, idx_target = policy.x_actions[0].tolist()
         action = engine_action(idx_action_kind, idx_selection, idx_target, game_state)
-        game_state, _, done = step_env(env, game_state, episode_result, action, gamma)
+        game_state, _, _, done = step_env(env, game_state, episode_result, action, gamma)
     
     return episode_result
 

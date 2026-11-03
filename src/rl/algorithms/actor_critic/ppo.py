@@ -90,6 +90,7 @@ def update_ppo(
         rollout.x_rewards,
         x_value_prox,
         rollout.x_dones.unsqueeze(-1),
+        rollout.x_num_discounts.unsqueeze(-1),
         x_value_final,
         gamma,
         ppo_config.lam,
@@ -238,6 +239,7 @@ def _compute_gae(
     x_rewards: torch.Tensor,
     x_values: torch.Tensor,
     x_dones: torch.Tensor,
+    x_num_discounts: torch.Tensor,
     x_value_final: torch.Tensor,
     gamma: float,
     lam: float,
@@ -257,10 +259,13 @@ def _compute_gae(
     x_dones : torch.Tensor
         (rollout_length, num_envs, 1) float32. Whether each step ended its game's episode: 1.0 if
         so, else 0.0.
+    x_num_discounts : torch.Tensor
+        (rollout_length, num_envs, 1) long. Each step's k: it discounts by γ^k and decays the
+        trace by (γλ)^k.
     x_value_final : torch.Tensor
         (num_envs, num_reward_streams). Each game's value after the last step.
     gamma : float
-        The discount.
+        The discount, γ.
     lam : float
         GAE's λ.
 
@@ -286,8 +291,9 @@ def _compute_gae(
         x_ongoing = 1.0 - x_dones[t]
 
         # Calculate one-step TD error & GAE
-        x_delta = x_rewards[t] + gamma * x_value_next * x_ongoing - x_value
-        x_gae = x_delta + gamma * lam * x_ongoing * x_gae
+        x_discount = gamma ** x_num_discounts[t]
+        x_delta = x_rewards[t] + x_discount * x_value_next * x_ongoing - x_value
+        x_gae = x_delta + x_discount * lam ** x_num_discounts[t] * x_ongoing * x_gae
 
         # Store GAE
         x_advantages[t] = x_gae
