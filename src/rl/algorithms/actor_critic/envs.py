@@ -10,8 +10,8 @@ from src.rl.algorithms.actor_critic.episode import finish_episode
 from src.rl.algorithms.actor_critic.episode import make_episode_stats
 from src.rl.algorithms.actor_critic.episode import tally_step
 from src.rl.reward import compute_reward
+from src.rl.scripted import step_scripted
 from src.rl.utils import new_env
-from src.rl.utils import step_scripted
 
 
 @dataclass
@@ -70,7 +70,7 @@ def make_shard(settings: ShardSettings) -> Shard:
 
 def step_env(
     shard: Shard, j: int, action: slai.Action, settings: ShardSettings
-) -> tuple[np.ndarray, EpisodeStats | None]:
+) -> tuple[np.ndarray, int, EpisodeStats | None]:
     """Play `action` in game j.
 
     Parameters
@@ -89,13 +89,15 @@ def step_env(
     -------
     reward : np.ndarray
         (K,) float64. The step's reward, one per reward stream.
+    num_discounts : int
+        The step's discounts, k in γ^k.
     finished : EpisodeStats | None
         The episode's stats if the episode ended, None otherwise.
     """
     prev = shard.obs[j]
-    nxt, terminated = step_scripted(shard.envs[j], action)
-    reward = compute_reward(prev, nxt, terminated, settings.gamma, action)  # (K,)
-    tally_step(shard.stats[j], prev, nxt, action, reward, settings.gamma)
+    nxt, terminated, num_discounts = step_scripted(shard.envs[j], action)
+    reward = compute_reward(prev, nxt, terminated, settings.gamma**num_discounts, action)  # (K,)
+    tally_step(shard.stats[j], prev, nxt, action, reward, settings.gamma, num_discounts)
     finished = None
     if terminated:
         # nxt is still the pre-reset terminal snapshot here
@@ -106,4 +108,4 @@ def step_env(
         )
         shard.envs[j], nxt = _make_env(level)
     shard.obs[j] = nxt
-    return reward, finished
+    return reward, num_discounts, finished

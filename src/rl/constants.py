@@ -10,10 +10,6 @@ import slai as _slai
 # (a checkpoint shape) and every catalog fold
 ASCENSION_LEVEL = 20
 
-# Skip single-legal-action states in the engine (auto-advance), in training and eval
-# Off: a held Potion keeps PotionDiscard legal, so the extra steps it surfaces tax holding one
-FAST_MODE = False
-
 # Start runs with Neow's blessing (choice states + bonuses)
 NEOW = True
 

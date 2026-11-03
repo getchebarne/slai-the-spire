@@ -6,12 +6,8 @@ import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
 import yaml
-from slai import Action
-from slai import ActionType
 from slai import GameEnv
-from slai import GameState
 
-from src.rl.constants import FAST_MODE
 from src.rl.constants import NEOW
 
 
@@ -44,40 +40,7 @@ def init_optimizer(optimizer_name: str, model: nn.Module, **kwargs) -> torch.opt
 
 
 def new_env(ascension: int) -> GameEnv:
-    return GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
-
-
-# Dominant actions the policy never chooses: step_scripted takes them as soon as they're
-# legal. Taking a Reward's gold never hurts
-_SCRIPTED_ACTION_TYPES = frozenset({ActionType.RewardTakeGold, ActionType.RewardTakeGoldStolen})
-
-
-def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
-    """Run `env.step(action)`, then the scripted actions until none is legal.
-
-    All of them run inside this one policy step.
-
-    Parameters
-    ----------
-    env : GameEnv
-        The game to step.
-    action : Action
-        The policy's action.
-
-    Returns
-    -------
-    game_state : GameState
-        The state after the last action taken.
-    terminated : bool
-        Whether the game ended.
-    """
-    game_state, terminated = env.step(action)
-    while not terminated:
-        scripted = [a for a in env.get_legal_actions() if a.action_type in _SCRIPTED_ACTION_TYPES]
-        if not scripted:
-            break
-        game_state, terminated = env.step(scripted[0])
-    return game_state, terminated
+    return GameEnv(ascension=ascension, neow=NEOW)
 
 
 def parent_alive() -> bool:

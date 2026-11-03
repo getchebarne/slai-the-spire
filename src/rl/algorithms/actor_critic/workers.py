@@ -94,6 +94,7 @@ def start_workers(
             actions=torch.zeros(rollout_config.num_envs, 4, dtype=torch.long).share_memory_(),
             rewards=torch.zeros(rollout_config.num_envs, len(RewardStream)).share_memory_(),
             dones=torch.zeros(rollout_config.num_envs).share_memory_(),
+            num_discounts=torch.zeros(rollout_config.num_envs, dtype=torch.long).share_memory_(),
             game_state=share_memory(empty_game_state(rollout_config.num_envs)),
             num_regions=rollout_config.rollout_workers,
         ),
@@ -213,7 +214,7 @@ def _worker_loop(
     """Run one shard of the games until the stop flag is set.
 
     It writes their first states, then on each request steps every game with its sampled action
-    and writes the rewards, dones and new states.
+    and writes the rewards, dones, discount counts and new states.
 
     Parameters
     ----------
@@ -237,9 +238,10 @@ def _worker_loop(
 
         for j, (at, token_kind, rank, target) in enumerate(step.actions.tolist()):
             action = engine_action(at, token_kind, rank, target, shard.obs[j])
-            reward, finished = step_env(shard, j, action, settings)
+            reward, num_discounts, finished = step_env(shard, j, action, settings)
             step.rewards[j] = torch.from_numpy(reward)
             step.dones[j] = float(finished is not None)
+            step.num_discounts[j] = num_discounts
             if finished is not None:
                 exchange.episodes.put(finished)
         _write_states(step, shard)
@@ -270,8 +272,8 @@ def _wait_for_request(request: Semaphore, stop: torch.Tensor) -> bool:
 def _worker_region(step: X_Step, settings: ShardSettings) -> X_Step:
     """Return the worker's region of the shared step, one region of its own.
 
-    The region holds its games' actions, rewards and done flags, and their counts, per-state
-    fields and rows of every block.
+    The region holds its games' actions, rewards, done flags and discount counts, and their
+    counts, per-state fields and rows of every block.
 
     Parameters
     ----------
@@ -290,6 +292,7 @@ def _worker_region(step: X_Step, settings: ShardSettings) -> X_Step:
         actions=step.actions[games],
         rewards=step.rewards[games],
         dones=step.dones[games],
+        num_discounts=step.num_discounts[games],
         game_state=region_of_states(step.game_state, settings.first_env, settings.num_envs),
         num_regions=1,
     )

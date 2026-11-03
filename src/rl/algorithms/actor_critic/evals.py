@@ -26,9 +26,9 @@ from src.rl.algorithms.actor_critic.episode import tally_step
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
 from src.rl.reward import compute_reward
+from src.rl.scripted import step_scripted
 from src.rl.utils import new_env
 from src.rl.utils import parent_alive
-from src.rl.utils import step_scripted
 
 
 # Greedy deterministic play can loop; cap so a hung eval can't wedge its worker. Keep it
@@ -65,9 +65,9 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
         # Game step
         prev = obs
         action = action_from_actiontype(x_action, 0, obs)
-        obs, terminated = step_scripted(env, action)
-        reward = compute_reward(prev, obs, terminated, gamma, action)
-        tally_step(stats, prev, obs, action, reward, gamma)
+        obs, terminated, num_discounts = step_scripted(env, action)
+        reward = compute_reward(prev, obs, terminated, gamma**num_discounts, action)
+        tally_step(stats, prev, obs, action, reward, gamma, num_discounts)
 
     finish_episode(stats, obs, terminated)
     return stats

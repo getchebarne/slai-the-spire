@@ -70,6 +70,7 @@ def collect_rollout(
     log_probs = torch.empty(N, device=device)
     rewards = torch.empty(T, E, K, device=device)
     dones = torch.empty(T, E, device=device)
+    num_discounts = torch.empty(T, E, dtype=torch.long, device=device)
 
     # Rest-site preference: device-side counters, read once after the loop (no per-step sync)
     rest_selections = torch.zeros((), device=device)
@@ -99,6 +100,7 @@ def collect_rollout(
             step_workers(workers)
             rewards[t] = exchange.step.rewards
             dones[t] = exchange.step.dones
+            num_discounts[t] = exchange.step.num_discounts
             x, x_count_cpu = snapshot_to_device(exchange.step, device)
 
     # Set model to training mode
@@ -124,6 +126,7 @@ def collect_rollout(
             log_probs_behavior=log_probs,
             rewards=rewards,
             dones=dones,
+            num_discounts=num_discounts,
             final_game_state=x,
         ),
         drain_episodes(exchange.episodes),

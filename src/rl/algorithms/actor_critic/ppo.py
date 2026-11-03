@@ -32,6 +32,7 @@ def _compute_gae(
     rewards: torch.Tensor,
     values: torch.Tensor,
     dones: torch.Tensor,
+    num_discounts: torch.Tensor,
     bootstrap: torch.Tensor,
     gamma: float,
     lam: float,
@@ -49,10 +50,12 @@ def _compute_gae(
         (T, E, K). Each state's values.
     dones : torch.Tensor
         (T, E, 1) float32. Whether each step ended its game's episode: 1.0 if so, else 0.0.
+    num_discounts : torch.Tensor
+        (T, E, 1) long. Each step's k: it discounts by γ^k and decays the trace by (γλ)^k.
     bootstrap : torch.Tensor
         (E, K). Each game's value after the last step.
     gamma : float
-        The discount.
+        The discount, γ.
     lam : float
         GAE's λ.
 
@@ -69,8 +72,9 @@ def _compute_gae(
     for t in reversed(range(T)):
         next_value = bootstrap if t == T - 1 else values[t + 1]
         non_terminal = 1.0 - dones[t]
-        delta = rewards[t] + gamma * next_value * non_terminal - values[t]
-        gae = delta + gamma * lam * non_terminal * gae
+        discount = gamma ** num_discounts[t]
+        delta = rewards[t] + discount * next_value * non_terminal - values[t]
+        gae = delta + discount * lam ** num_discounts[t] * non_terminal * gae
         advantages[t] = gae
     return advantages + values, advantages
 
@@ -151,7 +155,13 @@ def prepare_batch(
     log_probs_prox, values, final_values = _recompute(model, rollout, ppo.minibatch_size)
 
     returns, advantages = _compute_gae(
-        rollout.rewards, values, rollout.dones.unsqueeze(-1), final_values, gamma, ppo.lam
+        rollout.rewards,
+        values,
+        rollout.dones.unsqueeze(-1),
+        rollout.num_discounts.unsqueeze(-1),
+        final_values,
+        gamma,
+        ppo.lam,
     )
 
     # Policy advantage: per-stream advantages summed (≡ single-critic GAE on the

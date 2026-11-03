@@ -1,7 +1,7 @@
 exp_name: ppo/EFFECT-IIIf
 seed: 0
 num_iterations: 1.0e+6
-# Horizon 1/(1-γ) = 1000 steps, ~1.6x a three-act episode
+# Horizon 1/(1-γ) = 1000 engine actions, ~1.6x a three-act episode
 # At 0.998 no floor weight satisfies the reward invariants
 gamma: 0.999
 
@@ -41,7 +41,7 @@ ppo:
 
 rollout:
   # N = 256 games x 32 steps per iteration: more games per step amortize the forward's launch
-  # overhead, and T = 32 still exceeds the GAE λ-horizon (~20 steps)
+  # overhead, and T = 32 still exceeds the GAE λ-horizon (~20 engine actions)
   num_envs: 256
   rollout_length: 32
   # Worker processes that step the games and encode their states and masks; num_envs must

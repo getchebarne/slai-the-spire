@@ -28,12 +28,13 @@ _BOSS_FLOOR_MIN = (GameEnv.ACT_FINAL - 1) * ACT_SPAN + MAP_HEIGHT
 @dataclass
 class EpisodeStats:
     stream_rewards: np.ndarray  # (K,) per-stream episode totals, undiscounted
-    length: int  # Policy steps: step_scripted folds the scripted gold takes into one step
+    length: int  # Policy steps: step_scripted folds its scripted actions into one step
+    num_discounts: int  # Discounts taken: each step's k in γ^k (step_scripted)
     won: bool  # Game over with health > 0
     floor: int  # Run-CUMULATIVE floor (reward.cumulative_floor), 0..48
     boss_reached: bool  # Reached the final boss fight: from A20, the second
-    stream_returns: np.ndarray  # (K,) per-stream DISCOUNTED returns (γ^t·r_t sums)
-    gold_gained: int  # Sum of positive gold deltas over the episode
+    stream_returns: np.ndarray  # (K,) per-stream DISCOUNTED returns (γ^num_discounts·r_t sums)
+    gold_gained: int  # Per step, the gold delta plus the Shop spend, floored at 0 over the episode
     gold_spent: int  # Gold spent at Shops (reward.shop_gold_spent) over the episode
     deck_size: int  # Deck size at episode end
     cards_added: int  # Deck-size increases over the episode
@@ -55,6 +56,7 @@ def make_episode_stats() -> EpisodeStats:
     return EpisodeStats(
         stream_rewards=np.zeros(len(RewardStream)),
         length=0,
+        num_discounts=0,
         won=False,
         floor=0,
         boss_reached=False,
@@ -74,6 +76,7 @@ def tally_step(
     action: Action,
     reward: np.ndarray,
     gamma: float,
+    num_discounts: int,
 ) -> None:
     """Add one policy step: `action` took game_state to game_state_next and paid `reward`.
 
@@ -91,12 +94,18 @@ def tally_step(
         (K,) float64. The step's reward, one per reward stream.
     gamma : float
         The discount, for the discounted returns.
+    num_discounts : int
+        The step's discounts, k in γ^k.
     """
     stats.stream_rewards += reward
-    stats.stream_returns += gamma**stats.length * reward
+    stats.stream_returns += gamma**stats.num_discounts * reward
     stats.length += 1
-    stats.gold_gained += max(0, game_state_next.character.gold - game_state.character.gold)
-    stats.gold_spent += shop_gold_spent(game_state, game_state_next, action)
+    stats.num_discounts += num_discounts
+    gold_spent = shop_gold_spent(game_state, action)
+    stats.gold_spent += gold_spent
+    stats.gold_gained += max(
+        0, game_state_next.character.gold - game_state.character.gold + gold_spent
+    )
     stats.cards_added += max(
         0, len(game_state_next.card_pile_deck) - len(game_state.card_pile_deck)
     )

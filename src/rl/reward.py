@@ -1,5 +1,6 @@
 from enum import StrEnum
 from enum import auto
+from typing import cast
 
 import numpy as np
 import slai
@@ -83,40 +84,43 @@ def _potential(health: float, health_max: float) -> float:
     return _WEIGHT_HEALTH * (2.0 * health - health * health / health_max)
 
 
-def shop_gold_spent(
-    game_state: slai.GameState, game_state_next: slai.GameState, action: slai.Action | None
-) -> int:
-    """Return the gold spent by a Shop action this step (0 for any other gold decrease).
+def shop_gold_spent(game_state: slai.GameState, action: slai.Action) -> int:
+    """Return the gold a Shop action pays, 0 for any other action.
+
+    It reads the price: the state after the step also holds any gold gained on the way there.
 
     Parameters
     ----------
     game_state : slai.GameState
-        The state before the step.
-    game_state_next : slai.GameState
-        The state after the step.
-    action : slai.Action | None
-        The step's action; None spends nothing.
+        The state `action` is legal in.
+    action : slai.Action
+        The step's action.
 
     Returns
     -------
     int
         The gold spent.
     """
-    if action is None or action.action_type not in _SHOP_SPEND_ACTIONS:
+    if action.action_type not in _SHOP_SPEND_ACTIONS:
         return 0
-    return max(0, game_state.character.gold - game_state_next.character.gold)
+    shop = cast(slai.Shop, game_state.shop)
+    if action.action_type == slai.ActionType.ShopPurge:
+        return shop.purge_cost
+    stock: list[slai.Card | slai.Relic | slai.Potion] = [*shop.cards, *shop.relics, *shop.potions]
+    return cast(int, next(entity.price for entity in stock if entity.id == action.ids[0]))
 
 
 def compute_reward(
     game_state: slai.GameState,
     game_state_next: slai.GameState,
     game_over_flag: bool,
-    gamma: float,
-    action: slai.Action | None = None,
+    discount: float,
+    action: slai.Action,
 ) -> np.ndarray:
     """Compute the per-stream reward, index-aligned with RewardStream.
 
-    The total reward is the sum over streams.
+    The total reward is the sum over streams. Floor pay and a game's end aren't discounted by their
+    position inside the step.
 
     Parameters
     ----------
@@ -126,9 +130,9 @@ def compute_reward(
         The state after the step.
     game_over_flag : bool
         Whether the game ended this step.
-    gamma : float
-        The trainer's discount, γ.
-    action : slai.Action | None, default None
+    discount : float
+        The step's discount, γ^k: γ is the trainer's discount, k comes from `step_scripted`.
+    action : slai.Action
         The step's action, for the gold spent at a Shop.
 
     Returns
@@ -137,15 +141,15 @@ def compute_reward(
         (len(RewardStream),) float64. Each stream's reward.
     """
 
-    # Potential-based, γ·Φ(s') − Φ(s): the episode sum telescopes to its endpoints. γ must
+    # Potential-based, γ^k·Φ(s') − Φ(s): the episode sum telescopes to its endpoints. γ must
     # be the trainer's discount. Φ stays on at a win on purpose: it prices the HP left
-    hp = gamma * _potential(
+    hp = discount * _potential(
         game_state_next.character.health, game_state_next.character.health_max
     ) - _potential(game_state.character.health, game_state.character.health_max)
 
-    # A (1 − γ) time cost per step makes a death total ≈ −1 at any length. Only game_over
+    # A (1 − γ^k) time cost per step makes a death total ≈ −1 at any length. Only game_over
     # ends the run: health alone never does (Fairy Potion and Lizard Tail revive)
-    outcome = -(1.0 - gamma)
+    outcome = -(1.0 - discount)
     if game_over_flag:
         outcome += -1.0 if game_state_next.character.health <= 0 else _WEIGHT_WIN
 
@@ -153,6 +157,6 @@ def compute_reward(
     floor = _WEIGHT_FLOOR * float(cumulative_floor(game_state_next) - cumulative_floor(game_state))
 
     # Shop spending only: gold gains pay nothing
-    gold = _WEIGHT_GOLD_SPENT * float(shop_gold_spent(game_state, game_state_next, action))
+    gold = _WEIGHT_GOLD_SPENT * float(shop_gold_spent(game_state, action))
 
     return np.array([outcome, hp, floor, gold])

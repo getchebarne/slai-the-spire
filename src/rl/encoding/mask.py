@@ -5,6 +5,8 @@ import numpy as np
 import slai
 from slai import ActionType
 from slai import Card
+from slai import CardName
+from slai import EventName
 from slai import PotionName
 from slai import RelicName
 
@@ -83,11 +85,46 @@ def _pile_ids(
     return _card_identity_ids(cast(list[Card], entities))
 
 
-def _wasted_potion_discard(game_state: slai.GameState, action: slai.Action) -> bool:
+def potion_can_arrive(game_state: slai.GameState) -> bool:
+    """Return whether a free belt slot could take a Potion from this state.
+
+    A Potion comes from a Reward, a Shop the Character can pay, an Alchemize in hand or The Knowing
+    Skull, and from none of them under Sozu.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state to read.
+
+    Returns
+    -------
+    bool
+        Whether a Potion can arrive.
+    """
+    if any(relic.name == RelicName.Sozu for relic in game_state.relics):
+        return False
+    reward = game_state.reward
+    if reward is not None and reward.potions:
+        return True
+    shop = game_state.shop
+    if shop is not None and any(
+        cast(int, potion.price) <= game_state.character.gold for potion in shop.potions
+    ):
+        return True
+    combat = game_state.combat
+    if combat is not None and any(
+        card.name == CardName.Alchemize for card in combat.card_pile_hand
+    ):
+        return True
+    event = game_state.event
+    return event is not None and event.name == EventName.KnowingSkull and not event.consumed
+
+
+def potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
     """Return whether `action` discards a Potion while nothing needs the room.
 
-    No Potion can arrive under Sozu, and with a free belt slot the discard only pays as a reroll
-    before drinking an Entropic Brew held in another slot.
+    No Potion can arrive under Sozu. An Entropic Brew held in another slot makes the discard pay as
+    a reroll. Otherwise the room only pays on a full belt, where a Potion can arrive.
 
     Parameters
     ----------
@@ -99,17 +136,19 @@ def _wasted_potion_discard(game_state: slai.GameState, action: slai.Action) -> b
     Returns
     -------
     bool
-        True for a Potion discard under Sozu, or with a free belt slot and no Entropic Brew in
-        another slot.
+        True for a Potion discard under Sozu, or with no Entropic Brew in another slot and either a
+        free belt slot or no Potion that can arrive.
     """
     if action.action_type is not ActionType.PotionDiscard:
         return False
     if any(relic.name == RelicName.Sozu for relic in game_state.relics):
         return True
     potions = game_state.potions
-    return len(potions) < game_state.potion_slots_max and not any(
+    if any(
         potion.name == PotionName.EntropicBrew for potion in potions if potion.id != action.ids[0]
-    )
+    ):
+        return False
+    return len(potions) < game_state.potion_slots_max or not potion_can_arrive(game_state)
 
 
 # Action types already warned about dropped selections — truncation is never silent
@@ -179,7 +218,7 @@ def encode_batch_masks(
         legal_token_kinds: set[tuple[int, TokenKind]] = set()
 
         for action in batch_legal_actions[b]:
-            if _wasted_potion_discard(game_state, action):
+            if potion_discard_wasted(game_state, action):
                 continue
 
             at = int(action.action_type)

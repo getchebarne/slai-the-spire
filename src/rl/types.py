@@ -385,15 +385,16 @@ class X_Action:
 class X_Step:
     """One step of every game, shared by the step loop and its workers.
 
-    The action the step loop sampled, then the reward, done flag and state, masks included, the
-    worker wrote back. Every field is `num_regions` equal regions, a worker's each: its games'
-    entries, and in every block rows for all its games at every cap, which it fills from the
-    region's start.
+    The action the step loop sampled, then the reward, done flag, discount count and state, masks
+    included, the worker wrote back. Every field is `num_regions` equal regions, a worker's each:
+    its games' entries, and in every block rows for all its games at every cap, which it fills
+    from the region's start.
     """
 
     actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
     rewards: torch.Tensor  # (E, K)
     dones: torch.Tensor  # (E,)
+    num_discounts: torch.Tensor  # (E,) long: k in the step's discount, γ^k
     game_state: X_GameState  # E games; a region's rows past its games' counts are stale
     num_regions: int
 
@@ -415,6 +416,7 @@ class X_Rollout:
     log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     rewards: torch.Tensor  # (T, E, K)
     dones: torch.Tensor  # (T, E)
+    num_discounts: torch.Tensor  # (T, E) long: k in each step's discount, γ^k
     final_game_state: X_GameState  # E states
 
 
