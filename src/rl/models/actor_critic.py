@@ -17,6 +17,7 @@ from src.rl.reward import RewardStream
 from src.rl.types import CoreOutput
 from src.rl.types import EntityKind
 from src.rl.types import Live
+from src.rl.types import MapOutput
 from src.rl.types import PolicyOutput
 from src.rl.types import States
 from src.rl.types import TokenKind
@@ -106,6 +107,7 @@ class ActorCritic(nn.Module):
         states: States[Live],
         greedy: bool = False,
         generator: torch.Generator | None = None,
+        map_output: MapOutput | None = None,
     ) -> PolicyOutput:
         """Select each state's action.
 
@@ -119,6 +121,8 @@ class ActorCritic(nn.Module):
             Whether each level takes its argmax rather than a sample.
         generator : torch.Generator | None, default None
             The generator samples draw from, or None for the global one.
+        map_output : MapOutput | None, default None
+            The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
 
         Returns
         -------
@@ -126,7 +130,7 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
-        core_output = self.core(states)
+        core_output = self.core(states, map_output=map_output)
         tokens_refined = core_output.tokens
         batch_size = tokens_refined.x_count.shape[0]
 

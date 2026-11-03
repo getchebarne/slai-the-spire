@@ -269,6 +269,20 @@ class PolicyOutput:
     x_kl_uniform: torch.Tensor  # (B, 3) float, KL-Uniform over legal actions, 0 where N/A
 
 
+@final
+@dataclass
+class MapOutput:
+    """The Map GNN's outputs for every game of a rollout, whose weights don't change.
+
+    The GNN reruns only the games whose Map changed since `x_node`, and writes their rows in
+    place; the others keep theirs. Empty until the rollout's first step.
+    """
+
+    x_node: torch.Tensor | None = None     # (E, H * W, NUM_FEATURE_CHANNELS) uint8
+    x_hidden: torch.Tensor | None = None   # (E, H * W, hidden)
+    x_readout: torch.Tensor | None = None  # (E, hidden)
+
+
 @dataclass
 class Rollout:
     """What the Actor collected, before GAE.
