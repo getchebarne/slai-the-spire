@@ -2,35 +2,34 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from slai import Action
-from slai import ActionType
 from slai import GameEnv
 from slai import GameState
 
-from src.rl.constants import FAST_MODE
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import NEOW
 from src.rl.reward import RewardStream
 from src.rl.reward import compute_reward
 from src.rl.reward import game_won
 from src.rl.reward import shop_gold_spent
+from src.rl.scripted import step_scripted
 
 
 _MAX_STEPS_EPISODE = 3000
-_SCRIPTED_ACTION_TYPES = frozenset({ActionType.RewardTakeGold, ActionType.RewardTakeGoldStolen})
 
 
 @dataclass
 class EpisodeResult:
     """An episode's tally, zeroed by default; step_env fills the fields it settles at its end."""
 
-    length: int = 0  # Policy steps: step_scripted folds the scripted gold takes into one step
+    length: int = 0  # Policy steps: step_scripted folds its scripted actions into one step
+    num_discounts: int = 0  # Discounts taken: each step's k in γ^k (step_scripted)
     won: bool = False  # Beat the Heart (reward.game_won)
     floor: int = 0  # GameState.floor at the end, 0..56
     act: int = 0  # The last act reached
     boss_reached: bool = False  # Reached the Heart's Room
 
     reward_stream_rets: np.ndarray = field(default_factory=lambda: np.zeros(len(RewardStream)))
-    gold_gained: int = 0  # Sum of positive gold deltas over the episode
+    gold_gained: int = 0  # Per step, the gold delta plus the Shop spend, floored at 0
     gold_spent: int = 0  # Gold spent at Shops (reward.shop_gold_spent) over the episode
     deck_size: int = 0  # Deck size at episode end
     truncated: bool = False  # Cut at _MAX_STEPS_EPISODE while the game still ran
@@ -55,17 +54,17 @@ def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
     Returns
     -------
     env : GameEnv
-        The game, with the run's `FAST_MODE` and `NEOW` settings.
+        The game, with the run's `NEOW` setting.
     game_state : GameState
         Its first state.
     """
-    env = GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
+    env = GameEnv(ascension=ascension, neow=NEOW)
     return env, env.reset(seed=seed)
 
 
 def step_env(
     env: GameEnv, game_state: GameState, episode_result: EpisodeResult, action: Action, gamma: float
-) -> tuple[GameState, np.ndarray, bool]:
+) -> tuple[GameState, np.ndarray, int, bool]:
     """Play `action` in a game and tally it into its episode's `EpisodeResult`.
 
     Parameters
@@ -88,51 +87,37 @@ def step_env(
         The game's state after the action.
     reward : np.ndarray
         (K,) float64. The step's reward, one per reward stream.
+    num_discounts : int
+        The step's discounts, k in γ^k.
     done : bool
         Whether the episode ended, terminated or truncated.
     """
-    game_state_next, terminated = _step_scripted(env, action)
+    game_state_next, terminated, num_discounts = step_scripted(env, action)
 
     # A game at the step limit ends there, truncated, as a death
     truncated = not terminated and episode_result.length + 1 >= _MAX_STEPS_EPISODE
     done = terminated or truncated
 
     # Compute transition reward
-    reward = compute_reward(game_state, game_state_next, done, gamma, action)  # (K,)
+    reward = compute_reward(
+        game_state, game_state_next, done, gamma**num_discounts, action
+    )  # (K,)
 
     # Compute `EpisodeResult`
-    _tally_step(episode_result, game_state, game_state_next, action, reward, gamma, done, truncated)
+    _tally_step(
+        episode_result,
+        game_state,
+        game_state_next,
+        action,
+        reward,
+        gamma,
+        num_discounts,
+        done,
+        truncated,
+    )
 
     # Return next state, transition reward and done flag
-    return game_state_next, reward, done
-
-
-def _step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
-    """Run `env.step(action)`, then the scripted actions until none is legal.
-
-    All of them run inside this one policy step.
-
-    Parameters
-    ----------
-    env : GameEnv
-        The game to step.
-    action : Action
-        The policy's action.
-
-    Returns
-    -------
-    game_state : GameState
-        The state after the last action taken.
-    terminated : bool
-        Whether the game ended.
-    """
-    game_state, terminated = env.step(action)
-    while not terminated:
-        actions_scriptable = [a for a in env.get_legal_actions() if a.action_type in _SCRIPTED_ACTION_TYPES]
-        if not actions_scriptable:
-            break
-        game_state, terminated = env.step(actions_scriptable[0])
-    return game_state, terminated
+    return game_state_next, reward, num_discounts, done
 
 
 def _tally_step(
@@ -142,6 +127,7 @@ def _tally_step(
     action: Action,
     reward: np.ndarray,
     gamma: float,
+    num_discounts: int,
     done: bool,
     truncated: bool,
 ) -> None:
@@ -164,15 +150,21 @@ def _tally_step(
         (K,) float64. The step's reward, one per reward stream.
     gamma : float
         The discount, for the discounted returns.
+    num_discounts : int
+        The step's discounts, k in γ^k.
     done : bool
         Whether the episode ended this step.
     truncated : bool
         Whether the step cut the episode at the step limit while the game still ran.
     """
-    stats.reward_stream_rets += gamma**stats.length * reward
+    stats.reward_stream_rets += gamma**stats.num_discounts * reward
     stats.length += 1
-    stats.gold_gained += max(0, game_state_next.character.gold - game_state.character.gold)
-    stats.gold_spent += shop_gold_spent(game_state, game_state_next, action)
+    stats.num_discounts += num_discounts
+    gold_spent = shop_gold_spent(game_state, action)
+    stats.gold_spent += gold_spent
+    stats.gold_gained += max(
+        0, game_state_next.character.gold - game_state.character.gold + gold_spent
+    )
 
     # The last step fills the fields an episode settles at its end, from its last snapshot
     if done:

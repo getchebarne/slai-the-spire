@@ -401,6 +401,7 @@ def _collect_rollout(
     x_log_prob_batches: list[torch.Tensor] = []  # Per step, (E,) on the device
     x_reward_batches: list[torch.Tensor] = []  # Per step, (E, K) on the CPU
     x_done_batches: list[torch.Tensor] = []  # Per step, (E,) on the CPU
+    x_num_discount_batches: list[torch.Tensor] = []  # Per step, (E,) long on the CPU
     episode_results: list[EpisodeResult] = []
 
     # Turn off gradient computation
@@ -412,8 +413,8 @@ def _collect_rollout(
             x_step_actions = policy_output.x_actions
 
             # Step the worker's environments
-            x_step_rewards, x_step_dones, step_episode_results = step_workers(
-                workers, x_step_actions
+            x_step_rewards, x_step_dones, x_step_num_discounts, step_episode_results = (
+                step_workers(workers, x_step_actions)
             )
 
             # Append the step's data
@@ -422,6 +423,7 @@ def _collect_rollout(
             x_log_prob_batches.append(policy_output.x_log_prob.sum(-1))
             x_reward_batches.append(x_step_rewards)
             x_done_batches.append(x_step_dones)
+            x_num_discount_batches.append(x_step_num_discounts)
             episode_results.extend(step_episode_results)
 
             # Snapshot new state and its counts for the next step
@@ -434,6 +436,7 @@ def _collect_rollout(
             x_log_probs_behavior=torch.cat(x_log_prob_batches),
             x_rewards=torch.stack(x_reward_batches).to(device),
             x_dones=torch.stack(x_done_batches).to(device),
+            x_num_discounts=torch.stack(x_num_discount_batches).to(device),
             state_batch_final=state_batch,
         ),
         episode_results,
