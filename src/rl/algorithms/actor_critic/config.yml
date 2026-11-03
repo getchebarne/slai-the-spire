@@ -1,9 +1,7 @@
 exp_name: ppo/EFFECT-IIIf
 seed: 0
 num_iterations: 1.0e+6
-# Horizon 1/(1-γ) = 1000 steps, about a four-act episode
-# At 0.998 no floor weight satisfies the reward invariants
-gamma: 0.999
+gamma: 0.999  # Horizon 1 / (1 - γ) ~= 1000 steps
 
 cadence:
   log_every: 10
@@ -11,44 +9,31 @@ cadence:
   eval_every: 100
   archive_every: 1000
 
-# Soft ascension curriculum: envs graduate to the frontier level in curriculum_step
-# fractions when the greedy eval battery, played at the envs' levels, sustains promote_win_rate.
+# Soft ascension curriculum
 curriculum:
   ascension_start: 0.0
-  ascension_max: 20
-  promote_win_rate: 0.5     # advance c when eval/win_rate >= this...
-                            # (a win clears all four acts and beats the Heart: expect a long
-                            # c=0 plateau)
-  promote_streak: 2         # ...for this many consecutive batteries at the current c
-  curriculum_step: 0.25     # fraction of envs graduated per qualifying eval
+  ascension_max: 20.0
+  promote_win_rate: 0.5 
+  promote_streak: 2
+  curriculum_step: 0.25
 
 ppo:
-  lam: 0.95
+  lam: 0.95 # GAE
   num_epochs: 4
-  # Activation memory grows with the states' token counts, so a size that fits early in a run
-  # can OOM later; scripts/probe_memory.py measures the peak at deep-run token counts
   minibatch_size: 4096
   clip_eps: 0.20
   clip_value_loss: false
   coef_value: 0.500
-  coef_entropy: 0.010  # no decay: a decayed bonus could never reopen a head
-  # Uniform-KL log-barrier per head: floors legal-action probs at ~coef/(n·|A|). No decay:
-  # entropy's restoring force vanishes on a dying action, the barrier's doesn't
+  coef_entropy: 0.010
   coef_kl_uniform: 0.020
-  is_clip: 2.0  # cap on the off-policy weight π_prox / π_behavior
+  is_clip: 2.0
   max_grad_norm: 0.500
-  target_kl: 0.03  # the update stops after an epoch past 1.5x this or a minibatch past 3x,
-                   # and train.py's adaptive lr steers the KL toward it
+  target_kl: 0.03
 
 rollout:
-  # N = 256 games x 32 steps per iteration: more games per step amortize the forward's launch
-  # overhead, and T = 32 still exceeds the GAE λ-horizon (~20 steps)
   num_envs: 256
   rollout_length: 32
-  # Worker processes that step the games and encode their states and masks; num_envs must
-  # divide evenly across them
-  # On a pod, launch.sh can replace this count with --rollout-workers
-  rollout_workers: 16
+  rollout_workers: 16 # Must divide evenly across `num_envs`
 
 model:
   # Core encoder
@@ -57,22 +42,19 @@ model:
   transformer_dim_ff: 512
   transformer_num_heads: 4
   transformer_num_blocks: 3  # AlphaStar's depth
-  gnn_num_layers: 15  # map GNN depth = MAP_HEIGHT → full downstream lookahead per room
-  map_encoder_dim: 256  # GNN internal width (lifted to dim_entity in entity_projector)
+
+  # Map encoder
+  gnn_num_layers: 15  # Equals `MAP_HEIGHT`; Full downstream lookahead per room
+  map_encoder_dim: 256  # GNN internal width (lifted to `dim_entity` in entity_projector)
 
   # Head dimensions
   dim_ff_primary: 1024
   dim_ff_value: 1024
-  dim_op: 256  # ActionType-embedding dim (conditions the L2 query)
-  dim_key: 256  # pointer key/query dim (AlphaStar's is 64)
+  dim_op: 256  # `ActionType`-embedding dim
+  dim_key: 256  # Pointer key/query dim
 
 optimizer:
   name: Adam
   kwargs:
-    # The base lr: train.py's adaptive-KL controller scales it by 1/64 to 1. A higher one drives
-    # approx_kl past target; update/approx_kl and update/epochs_run are the guardrail telemetry
-    # Sized with ppo.minibatch_size: an update takes one optimizer step per minibatch
     lr: 7.5e-5
-
-    # One kernel per optimizer step; a resumed run keeps the setting of the checkpoint it loads
-    fused: true
+    fused: true # One kernel per optimizer step
