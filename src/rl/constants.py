@@ -32,7 +32,7 @@ _MONSTER_MOVES = [move for template in _MONSTER_TEMPLATES for move in template.m
 # engine ceiling); also the scale Hexaghost's Divider is bridged from
 CHARACTER_HEALTH_CAP = 200
 
-# The catalog's widest single block source (Spheric Guardian's opener); Character
+# The catalog's widest single block source (the Spire Shield's A18 block); Character
 # block accumulation clamps to the same scale
 BLOCK_MAX_ENTITY = max(
     value
@@ -89,6 +89,19 @@ _GOLD_STEAL_MAX = max(
 
 # Thievery accumulation: Mug, Mug, Lunge — every attack before the Escape turn steals
 GOLD_STOLEN_MAX = 3 * _GOLD_STEAL_MAX
+
+# Invincible caps the HP lost per turn at its stacks (the Corrupt Heart's spawn Modifier), which
+# refill ahead of their holder's Poison tick
+INVINCIBLE_STACKS_OF_ASCENSION = {
+    ascension: max(
+        spawn.stacks_max
+        for template in _slai.get_monster_templates(ascension)
+        for spawn in template.modifier_spawns
+        if spawn.kind is _slai.ModifierKind.Invincible
+    )
+    for ascension in range(ASCENSION_LEVEL + 1)
+}
+INVINCIBLE_STACKS_MAX = max(INVINCIBLE_STACKS_OF_ASCENSION.values())
 
 FACTOR_VULN = _slai.GameEnv.FACTOR_VULN
 

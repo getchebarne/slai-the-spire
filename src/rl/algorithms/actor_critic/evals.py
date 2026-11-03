@@ -14,9 +14,11 @@ from src.rl.actions import action_from_actiontype
 from src.rl.algorithms.actor_critic.curriculum import env_level
 from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_ACT3_RATE
+from src.rl.algorithms.actor_critic.episode import KEY_ACT4_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
 from src.rl.algorithms.actor_critic.episode import KEY_WIN_RATE
+from src.rl.algorithms.actor_critic.episode import MAX_STEPS_EPISODE
 from src.rl.algorithms.actor_critic.episode import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.episode import aggregate_episode_stats
@@ -31,9 +33,6 @@ from src.rl.utils import parent_alive
 from src.rl.utils import step_scripted
 
 
-# Greedy deterministic play can loop; cap so a hung eval can't wedge its worker. Keep it
-# well above an episode's length: a truncated run counts as a loss for the curriculum gate
-_EVAL_MAX_STEPS = 3000
 _EVAL_NUM_EPISODES = 64
 _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # Fixed test set => low-variance trend
 
@@ -44,14 +43,15 @@ EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
 EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
 EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
 EVAL_ACT3_RATE = PREFIX_EVAL + KEY_ACT3_RATE
+EVAL_ACT4_RATE = PREFIX_EVAL + KEY_ACT4_RATE
 
 
 def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:
     env = new_env(ascension)
     obs = env.reset(seed=seed)
     stats = make_episode_stats()
-    terminated = False
-    while not terminated and stats.length < _EVAL_MAX_STEPS:
+    terminated = truncated = False
+    while not (terminated or truncated):
         legal = env.get_legal_actions()
         if not legal:
             raise RuntimeError(
@@ -66,7 +66,10 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
         prev = obs
         action = action_from_actiontype(x_action, 0, obs)
         obs, terminated = step_scripted(env, action)
-        reward = compute_reward(prev, obs, terminated, gamma, action)
+
+        # As in training, the step that reaches the step limit ends the game as a death
+        truncated = not terminated and stats.length + 1 >= MAX_STEPS_EPISODE
+        reward = compute_reward(prev, obs, terminated, gamma, action, truncated)
         tally_step(stats, prev, obs, action, reward, gamma)
 
     finish_episode(stats, obs, terminated)

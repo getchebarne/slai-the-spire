@@ -1,7 +1,7 @@
 exp_name: ppo/EFFECT-IIIf
 seed: 0
 num_iterations: 1.0e+6
-# Horizon 1/(1-γ) = 1000 steps, ~1.6x a three-act episode
+# Horizon 1/(1-γ) = 1000 steps, about a four-act episode
 # At 0.998 no floor weight satisfies the reward invariants
 gamma: 0.999
 
@@ -16,8 +16,9 @@ cadence:
 curriculum:
   ascension_start: 0.0
   ascension_max: 20
-  promote_win_rate: 0.75    # advance c when eval/win_rate >= this...
-                            # (a win clears all three acts: expect a long c=0 plateau)
+  promote_win_rate: 0.5     # advance c when eval/win_rate >= this...
+                            # (a win clears all four acts and beats the Heart: expect a long
+                            # c=0 plateau)
   promote_streak: 2         # ...for this many consecutive batteries at the current c
   curriculum_step: 0.25     # fraction of envs graduated per qualifying eval
 

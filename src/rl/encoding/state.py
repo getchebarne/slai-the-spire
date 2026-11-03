@@ -65,6 +65,7 @@ from src.rl.encoding.potion import encode_potion_into_w_cache
 from src.rl.encoding.potion import get_potion_entities
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
+from src.rl.encoding.relic import OFF_RELIC_LINKED
 from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into_w_cache
 from src.rl.encoding.relic import get_relic_entities
@@ -381,6 +382,7 @@ def _encode_tokens_into(
     energy_current = (
         game_state.combat.energy.energy_current if game_state.combat is not None else 0
     )
+    relic_linked = game_state.reward.relic_linked if game_state.reward is not None else None
     effect_rows: list[tuple[int, Effect, EffectSource]] = []
     modifier_rows: list[tuple[int, Modifier]] = []
     row_of_id: dict[int, int] = {}
@@ -438,6 +440,14 @@ def _encode_tokens_into(
             case Relic():
                 encode_relic_into_w_cache(entity, np_tokens_relic[row])
 
+                # The Sapphire Key's link. Outside the cached row
+                if (
+                    token_kind is TokenKind.RELIC_REWARD
+                    and relic_linked is not None
+                    and entity.id == relic_linked.id
+                ):
+                    np_tokens_relic[row, OFF_RELIC_LINKED] = 1.0
+
                 # Tags. Shared w/ Cards and Potions
                 for tag in TAGS_OF_RELIC_NAME.get(entity.name, ()):
                     np_tokens_tag[row, tag] = 1.0
@@ -485,6 +495,7 @@ def _encode_tokens_into(
                     game_state.character.health,
                     game_state.character.block,
                     damage,
+                    game_state.ascension,
                     np_tokens_monster[row],
                 )
 

@@ -29,6 +29,7 @@ class RelicChannel(StrEnum):
     COUNTER = auto()
     COUNTER_PROGRESS = auto()  # Counter / counter_reset for firing counters, else 0
     COUNTER_REMAINING = auto()  # Triggers left until it fires, bucket 0 the next one
+    LINKED = auto()  # The Relic the Sapphire Key is linked to
 
 
 CHANNEL_LAYOUT_RELIC, _alloc = make_channel_allocator()
@@ -38,6 +39,7 @@ OFF_RELIC_USED_UP = _alloc(RelicChannel.USED_UP)
 OFF_RELIC_COUNTER = _alloc(RelicChannel.COUNTER)
 OFF_RELIC_COUNTER_PROGRESS = _alloc(RelicChannel.COUNTER_PROGRESS)
 OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MAX)
+OFF_RELIC_LINKED = _alloc(RelicChannel.LINKED)
 
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 
@@ -84,7 +86,7 @@ def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
 
 
 def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
-    """Write the full Relic encoding into `out`, cached by (name, used_up, counter).
+    """Write the Relic encoding, all but LINKED, into `out`, cached by (name, used_up, counter).
 
     Parameters
     ----------

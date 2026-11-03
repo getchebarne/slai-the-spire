@@ -17,6 +17,7 @@ from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INTENT_DAMAGE_HIT_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import INTENT_INSTANCES_MAX
+from src.rl.constants import INVINCIBLE_STACKS_OF_ASCENSION
 from src.rl.constants import MONSTER_MOVESET_MAX
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
@@ -121,6 +122,7 @@ def encode_monster_into(
     char_health: int,
     char_block: int,
     outgoing_damage: int | None,
+    ascension: int,
     out: np.ndarray,
 ) -> None:
     out[OFF_MONSTER_NAME + _MAP_MONSTER_NAME[monster.name]] = 1.0
@@ -137,6 +139,8 @@ def encode_monster_into(
         poison_health_loss = 0
     elif ModifierKind.Intangible in stacks_of_modifier_kind:
         poison_health_loss = min(poison_health_loss, 1)
+    elif ModifierKind.Invincible in stacks_of_modifier_kind:
+        poison_health_loss = min(poison_health_loss, INVINCIBLE_STACKS_OF_ASCENSION[ascension])
     out[OFF_MONSTER_POISON_IS_LETHAL] = float(
         poison_health_loss > 0 and poison_health_loss >= monster.health
     )
@@ -196,8 +200,8 @@ def outgoing_damage(monsters: list[Monster]) -> int | None:
     return sum(_intent_total_damage(monster) for monster in monsters)
 
 
-# Whole-moveset Effects per (ascension, MonsterName), collected once (the
-# spawn-rolled variants are flattened)
+# Whole-moveset Effects per (ascension, MonsterName), collected once (one entry
+# per distinct move)
 _MOVESET_EFFECTS: dict[int, dict[MonsterName, tuple[Effect, ...]]] = {}
 
 
@@ -207,7 +211,7 @@ def moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
         by_name = {
             template.name: tuple(
                 effect
-                for move in {move.name: move for move in template.moves}.values()
+                for move in dict.fromkeys(template.moves)
                 for effect in move.effects
             )
             for template in get_monster_templates(ascension)

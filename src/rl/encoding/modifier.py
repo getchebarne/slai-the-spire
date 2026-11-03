@@ -7,6 +7,7 @@ from slai import Modifier
 from slai import ModifierKind
 
 from src.rl.constants import HEALTH_MAX_ENTITY
+from src.rl.constants import INVINCIBLE_STACKS_MAX
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.types import make_channel_allocator
 
@@ -17,7 +18,10 @@ _MODIFIER_KIND_TO_IDX = {
 _STACKS_MAX = 99
 
 # Poison past the widest Monster HP kills on its next tick
-_STACKS_MAX_OF_MODIFIER_KIND = {ModifierKind.Poison: HEALTH_MAX_ENTITY}
+_STACKS_MAX_OF_MODIFIER_KIND = {
+    ModifierKind.Poison: HEALTH_MAX_ENTITY,
+    ModifierKind.Invincible: INVINCIBLE_STACKS_MAX,  # The HP left to lose before its next turn
+}
 _STACKS_BUCKET_DIM = int(math.sqrt(max(_STACKS_MAX, *_STACKS_MAX_OF_MODIFIER_KIND.values()))) + 1
 
 
