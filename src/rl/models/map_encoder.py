@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.constants import DEDUP_MIN_BATCH
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.encoding import EDGE_DELTAS
@@ -12,13 +13,10 @@ from src.rl.encoding import OFF_MAP_POSITION
 from src.rl.encoding import OFF_MAP_SELECTABLE
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
+from src.rl.types import MapOutput
 
 
 _NUM_NODES = MAP_HEIGHT * MAP_WIDTH
-
-# Dedup pays only on batches that repeat Maps (update minibatches, not rollout batches), and
-# is exact either way; 512 sits between the largest rollout batch and the smallest minibatch
-_DEDUP_MIN_BATCH = 512
 
 # The dedup's packed rows: the grid's 0/1 cells 63 to an int64 word
 _GRID_BITS = _NUM_NODES * NUM_FEATURE_CHANNELS
@@ -95,7 +93,9 @@ class MapGNN(nn.Module):
         # its compiled version on the Learner's model
         self.message_passing = message_passing
 
-    def forward(self, x_grid: torch.Tensor, num_rooms: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x_grid: torch.Tensor, num_rooms: int, map_output: MapOutput | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the message passing over `x_grid`'s Maps.
 
         Parameters
@@ -104,6 +104,8 @@ class MapGNN(nn.Module):
             (B, H, W, C) uint8. Each state's Map.
         num_rooms : int
             The number of selectable Rooms over the batch, N_rooms.
+        map_output : MapOutput | None, default None
+            The outputs of this rollout's last step, to reuse and update, or None to run them all.
 
         Returns
         -------
@@ -111,14 +113,15 @@ class MapGNN(nn.Module):
             (N_rooms, hidden). The selectable Rooms' node features, state after state and each
             state's in node order: the Room tokens' order.
         x_map_readout : torch.Tensor
-            (B, hidden). Each state's readout.
+            (B, hidden). Each state's readout. With `map_output`, this is its tensor, which the
+            next call overwrites.
         """
         batch_size = x_grid.shape[0]
 
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
         x_node = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
         x_hidden_map, x_map_of_state, x_map_readout = self._encode_maps(
-            x_node[:, :, :NUM_FEATURE_CHANNELS]
+            x_node[:, :, :NUM_FEATURE_CHANNELS], map_output
         )
 
         # The selectable Rooms' nodes, state after state and each state's in node order
@@ -129,7 +132,7 @@ class MapGNN(nn.Module):
         return x_hidden_map[x_map_of_state[x_room_state], x_room_node], x_map_readout
 
     def _encode_maps(
-        self, x_node: torch.Tensor
+        self, x_node: torch.Tensor, map_output: MapOutput | None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run the message passing over the Maps, each distinct one once on a large batch.
 
@@ -137,20 +140,38 @@ class MapGNN(nn.Module):
         ----------
         x_node : torch.Tensor
             (B, H * W, NUM_FEATURE_CHANNELS) uint8. Each state's Map, flattened to nodes.
+        map_output : MapOutput | None
+            The outputs of this rollout's last step, to reuse and update, or None to run them all.
 
         Returns
         -------
         x_hidden_map : torch.Tensor
             (U, H * W, hidden). The node features of each Map the GNN ran on: the unique Maps
-            on a batch of _DEDUP_MIN_BATCH states or more, every state's on a smaller one.
+            on a batch of DEDUP_MIN_BATCH states or more, every state's on a smaller one or with
+            `map_output`. With it, this is its tensor, which the next call overwrites.
         x_map_of_state : torch.Tensor
             (B,) long. Each state's Map, its index in `x_hidden_map`.
         x_map_readout : torch.Tensor
-            (B, hidden). Each state's readout.
+            (B, hidden). Each state's readout. With `map_output`, this is its tensor too.
         """
         batch_size = x_node.shape[0]
 
-        if batch_size < _DEDUP_MIN_BATCH:
+        if map_output is not None:
+            x_hidden, x_readout = map_output.x_hidden, map_output.x_readout
+            if map_output.x_node is None or x_hidden is None or x_readout is None:
+                x_hidden, x_readout = self._encode_forward_rooms(x_node)
+                map_output.x_hidden, map_output.x_readout = x_hidden, x_readout
+            else:
+                x_changed = (x_node != map_output.x_node).flatten(1).any(1)  # (B,)
+                x_idx_state = torch.nonzero(x_changed).squeeze(1)
+                if x_idx_state.shape[0] > 0:
+                    x_hidden[x_idx_state], x_readout[x_idx_state] = self._encode_forward_rooms(
+                        x_node[x_idx_state]
+                    )
+            map_output.x_node = x_node
+            return x_hidden, torch.arange(batch_size, device=x_node.device), x_readout
+
+        if batch_size < DEDUP_MIN_BATCH:
             x_hidden, x_readout = self._encode_forward_rooms(x_node)
             return x_hidden, torch.arange(batch_size, device=x_node.device), x_readout
 
@@ -187,12 +208,20 @@ class MapGNN(nn.Module):
         """
         x_node = x_node.float()
         x_valid = self._forward_valid(x_node)  # (U, H * W) / Forward Rooms only
+        x_num_children = x_node[:, :, SLICE_MAP_EDGES].sum(-1).long()  # (U, H * W)
+
+        # The forward Rooms of each child count, in the one read: 0 counts the other nodes
+        x_key = ((x_num_children + 1) * x_valid).flatten()
+        x_count = torch.zeros(NUM_EDGE_CHANNELS + 2, dtype=torch.long, device=x_node.device)
+        _, num_0, num_1, num_2, num_3 = x_count.index_add_(
+            0, x_key, torch.ones_like(x_key)
+        ).tolist()
 
         # x_room_map, x_room_node: (N,) / Each of the N forward Rooms' Map and node, most
         # children first
-        x_room_map, x_room_node = torch.nonzero(x_valid, as_tuple=True)
-        x_num_children = x_node[x_room_map, x_room_node][:, SLICE_MAP_EDGES].sum(-1).long()  # (N,)
-        x_order = torch.argsort(x_num_children, descending=True)
+        x_room_map_node = torch.nonzero_static(x_valid, size=num_0 + num_1 + num_2 + num_3)
+        x_room_map, x_room_node = x_room_map_node.unbind(1)
+        x_order = torch.argsort(x_num_children[x_room_map, x_room_node], descending=True)
         x_room_map, x_room_node = x_room_map[x_order], x_room_node[x_order]
         x_room = x_node[x_room_map, x_room_node]  # (N, C)
 
@@ -203,12 +232,13 @@ class MapGNN(nn.Module):
         )
 
         # x_child: (E,) / Each edge's child, a forward Room too, in the Rooms' order
-        x_edge_room, x_idx_edge = torch.nonzero(x_room[:, SLICE_MAP_EDGES], as_tuple=True)
+        x_edge_room, x_idx_edge = torch.nonzero_static(
+            x_room[:, SLICE_MAP_EDGES], size=num_1 + 2 * num_2 + 3 * num_3
+        ).unbind(1)
         x_child_node = self._x_idx_child[x_room_node[x_edge_room], x_idx_edge]
         x_child = x_room_of_node[x_room_map[x_edge_room], x_child_node]
 
         # One block of Rooms per child count
-        _, num_1, num_2, num_3 = torch.bincount(x_num_children, minlength=4).tolist()
         x_3, x_2, x_1 = x_child.split([3 * num_3, 2 * num_2, num_1])
         x_children_by_count = (x_3.view(num_3, 3), x_2.view(num_2, 2), x_1.view(num_1, 1))
 
