@@ -26,6 +26,7 @@ from src.rl.types import TokenKind
 from src.rl.types import X_Action
 from src.rl.types import X_CoreOutput
 from src.rl.types import X_GameState
+from src.rl.types import X_MapOutput
 from src.rl.types import X_Window
 
 
@@ -436,6 +437,7 @@ class ActorCritic(nn.Module):
         x_gs: X_GameState,
         greedy: bool = False,
         generator: torch.Generator | None = None,
+        x_map_output: X_MapOutput | None = None,
     ) -> X_Action:
         """Select each state's action.
 
@@ -450,6 +452,8 @@ class ActorCritic(nn.Module):
             Whether each level takes its argmax rather than a sample.
         generator : torch.Generator | None, default None
             The generator samples draw from, or None for the global one.
+        x_map_output : X_MapOutput | None, default None
+            The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
 
         Returns
         -------
@@ -457,7 +461,7 @@ class ActorCritic(nn.Module):
             The X_Action, each level's argmax under `greedy` and sampled from `generator`
             otherwise.
         """
-        x_core_out = self.core(x_gs, with_value=False)
+        x_core_out = self.core(x_gs, with_value=False, x_map_output=x_map_output)
 
         # Sampling actions runs eager
         return self._select_actions(_policy_heads, x_gs, x_core_out, greedy, generator)

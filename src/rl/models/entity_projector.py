@@ -4,20 +4,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.constants import DEDUP_MIN_BATCH
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
+from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
+from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.encoding.state import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.encoding.state import ENCODING_DIM_TOKEN
 from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.types import TokenKind
 from src.rl.types import X_DrawOrderStates
-from src.rl.types import X_EffectPending
 from src.rl.types import X_GameState
 from src.rl.types import X_OwnedSparse
 from src.rl.types import X_Tokens
 from src.rl.types import X_Window
 
+
+# The most entries in a row of any block the hash reads
+_HASH_MAX_ENTRIES = max(
+    ENCODING_DIM_SPARSE_TOKEN, ENCODING_DIM_SPARSE_EFFECT, ENCODING_DIM_SPARSE_MODIFIER
+)
 
 # Each token kind's Entity kind: its index in `TOKEN_KINDS_OF_ENTITY_KIND`
 _MAP_TOKEN_KIND_TO_ENTITY_KIND = {
@@ -44,8 +52,10 @@ class EntityProjector(nn.Module):
         The width of the Map GNN's node features.
     """
 
-    # The buffer `__init__` registers, typed for mypy
+    # The buffers `__init__` registers, typed for mypy
     _entity_kind_of_token_kind: torch.Tensor
+    _hash_weights_entry: torch.Tensor
+    _hash_weights_field: torch.Tensor
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
@@ -90,6 +100,19 @@ class EntityProjector(nn.Module):
             persistent=False,
         )
 
+        # The dedup hash's odd weights, from a generator of their own; excluded from checkpoints
+        generator = torch.Generator().manual_seed(0)
+        self.register_buffer(
+            "_hash_weights_entry",
+            torch.randint(1 << 62, (2, _HASH_MAX_ENTRIES), generator=generator) | 1,
+            persistent=False,
+        )
+        self.register_buffer(
+            "_hash_weights_field",
+            torch.randint(1 << 62, (6,), generator=generator) | 1,
+            persistent=False,
+        )
+
     def forward(
         self, x_gs: X_GameState, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
     ) -> tuple[torch.Tensor, X_Window, X_DrawOrderStates, torch.Tensor]:
@@ -128,11 +151,6 @@ class EntityProjector(nn.Module):
         # Handy alias
         x_count_window = x_gs.tokens.x_count  # (B,)
 
-        # First layer: the shared columns' projection, then each token's Entity kind bias
-        x_first = _project_sparse(self._pre_token, x_gs.tokens) + SpreadEmbedding.apply(
-            self._bias_entity_kind, x_entity_kind
-        )
-
         # State identifier for each token in the batch
         x_state = torch.repeat_interleave(x_count_window, output_size=num_tokens)  # (N_tok,)
 
@@ -150,8 +168,8 @@ class EntityProjector(nn.Module):
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
 
-        # The layer's sizes and each Entity kind's tokens in one read: the CPU waits for the GPU
-        # here, and nowhere else; every other size is a shape
+        # The layer's sizes and each Entity kind's tokens in one read: below the dedup's gate the
+        # CPU waits for the GPU here, and nowhere else; every other size is a shape
         (
             num_states_visible,
             num_states_hidden,
@@ -184,27 +202,52 @@ class EntityProjector(nn.Module):
             num_pile=num_pile_visible + num_pile_hidden,
         )
 
-        # Rooms: each Room token's node in its state's Map, through _pre_room in place of the first
-        # layer (no entries, no Entity kind bias)
+        # Rooms: each Room token's node in its state's Map
         num_rooms = num_tokens_entity_kind[_MAP_TOKEN_KIND_TO_ENTITY_KIND[TokenKind.ROOMS]]
         x_room_row = torch.nonzero_static(x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
-        x_node_hidden = x_hidden_map[
-            x_map_of_state[x_state[x_room_row]], x_gs.tokens.x_node_idx[x_room_row].long()
-        ]  # (N_rooms, dim_map)
-        x_first[x_room_row] = self._pre_room(x_node_hidden)
+        x_map_room = x_map_of_state[x_state[x_room_row]]  # (N_rooms,)
+        x_node_room = x_gs.tokens.x_node_idx[x_room_row].long()  # (N_rooms,)
 
-        # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
-        # ReLU/LayerNorm
-        _add_owned(x_first, x_gs.tokens.effect_rows, self._effects_mlp)
-        _add_owned(x_first, x_gs.tokens.modifier_rows, self._modifiers_mlp)
+        if batch_size < DEDUP_MIN_BATCH:
+            x_hidden = self._embed_tokens(
+                x_gs.tokens.x_column,
+                x_gs.tokens.x_value,
+                x_gs.tokens.effect_rows,
+                x_gs.tokens.modifier_rows,
+                x_entity_kind,
+                x_room_row,
+                x_hidden_map[x_map_room, x_node_room],
+            )  # (N_tok, D)
+        else:
+            # Each unique token runs once and gathers back, up to a hash collision and rounding
+            x_rep, x_is_rep, x_inverse = self._unique_tokens(
+                x_gs.tokens, x_entity_kind, x_room_row, x_map_room, x_node_room
+            )
+            x_room_rep = torch.nonzero(x_token_kind[x_rep] == TokenKind.ROOMS).squeeze(1)
+            x_room_row = x_rep[x_room_rep]
+            x_node_hidden = x_hidden_map[
+                x_map_of_state[x_state[x_room_row]], x_gs.tokens.x_node_idx[x_room_row].long()
+            ]
+            x_hidden = self._embed_tokens(
+                x_gs.tokens.x_column[x_rep],
+                x_gs.tokens.x_value[x_rep],
+                _take_owned(x_gs.tokens.effect_rows, x_rep, x_is_rep),
+                _take_owned(x_gs.tokens.modifier_rows, x_rep, x_is_rep),
+                x_entity_kind[x_rep],
+                x_room_rep,
+                x_node_hidden,
+            )
+            x_hidden = x_hidden.index_select(0, x_inverse)  # (N_tok, D)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
         x_effect_pending = x_gs.effect_pending
         x_pending_state = torch.repeat_interleave(
             x_effect_pending.x_count, output_size=x_effect_pending.x_column.shape[0]
         )  # (P,)
-        x_pending_valid = _project_sparse(self._effects_mlp, x_effect_pending)  # (P, D)
+        x_pending_valid = _project_sparse(
+            self._effects_mlp, x_effect_pending.x_column, x_effect_pending.x_value
+        )  # (P, D)
         x_pending = torch.zeros(
             batch_size,
             self._dim_entity,
@@ -212,9 +255,6 @@ class EntityProjector(nn.Module):
             device=x_pending_valid.device,
         )
         x_pending = x_pending.index_copy(0, x_pending_state, x_pending_valid)  # (B, D)
-
-        # Shared second layer + norm on the rows
-        x_hidden = self._layer_norm(self._post_shared(F.relu(x_first)))  # (N_tok, D)
 
         x_window = X_Window(
             x_token_kind=x_token_kind,
@@ -234,11 +274,221 @@ class EntityProjector(nn.Module):
             x_pending,
         )
 
+    def _embed_tokens(
+        self,
+        x_column: torch.Tensor,
+        x_value: torch.Tensor,
+        x_effect_rows: X_OwnedSparse,
+        x_modifier_rows: X_OwnedSparse,
+        x_entity_kind: torch.Tensor,
+        x_room_row: torch.Tensor,
+        x_node_hidden: torch.Tensor,
+    ) -> torch.Tensor:
+        """Embed the tokens: all of what the projector does per token.
+
+        Parameters
+        ----------
+        x_column : torch.Tensor
+            (N, K) int16. The tokens' entries' columns.
+        x_value : torch.Tensor
+            (N, K) float32. The tokens' entries' values.
+        x_effect_rows : X_OwnedSparse
+            The Effect rows the tokens own.
+        x_modifier_rows : X_OwnedSparse
+            The Modifier rows the tokens own.
+        x_entity_kind : torch.Tensor
+            (N,) long. Each token's Entity kind.
+        x_room_row : torch.Tensor
+            (N_rooms,) long. The Room tokens' rows.
+        x_node_hidden : torch.Tensor
+            (N_rooms, dim_map). Each Room token's node features.
+
+        Returns
+        -------
+        torch.Tensor
+            (N, D). Each token's embedding.
+        """
+        # First layer: the shared columns' projection, then each token's Entity kind bias
+        x_first = _project_sparse(self._pre_token, x_column, x_value) + SpreadEmbedding.apply(
+            self._bias_entity_kind, x_entity_kind
+        )
+
+        # Rooms: each Room token's node in its state's Map, through _pre_room in place of the first
+        # layer (no entries, no Entity kind bias)
+        x_first[x_room_row] = self._pre_room(x_node_hidden)
+
+        # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
+        # ReLU/LayerNorm
+        _add_owned(x_first, x_effect_rows, self._effects_mlp)
+        _add_owned(x_first, x_modifier_rows, self._modifiers_mlp)
+
+        # Shared second layer + norm on the rows
+        return self._layer_norm(self._post_shared(F.relu(x_first)))
+
+    def _unique_tokens(
+        self,
+        x_tokens: X_Tokens,
+        x_entity_kind: torch.Tensor,
+        x_room_row: torch.Tensor,
+        x_map_room: torch.Tensor,
+        x_node_room: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Find the unique tokens, by a 64-bit hash of everything `_embed_tokens` reads per token.
+
+        Parameters
+        ----------
+        x_tokens : X_Tokens
+            The tokens, N of them.
+        x_entity_kind : torch.Tensor
+            (N,) long. Each token's Entity kind.
+        x_room_row : torch.Tensor
+            (N_rooms,) long. The Room tokens' rows.
+        x_map_room : torch.Tensor
+            (N_rooms,) long. Each Room token's Map, among those the Map GNN ran on.
+        x_node_room : torch.Tensor
+            (N_rooms,) long. Each Room token's node in its Map.
+
+        Returns
+        -------
+        x_rep : torch.Tensor
+            (U,) long. One row per unique token among the N, in rising order.
+        x_is_rep : torch.Tensor
+            (N,) bool. Whether each row is in `x_rep`.
+        x_inverse : torch.Tensor
+            (N,) long. Each token's unique token, its index in `x_rep`.
+        """
+        num_tokens = x_entity_kind.shape[0]
+        device = x_entity_kind.device
+        x_weight_entry = self._hash_weights_entry
+        (
+            x_weight_entity_kind,
+            x_weight_effects,
+            x_weight_modifiers,
+            x_weight_map,
+            x_weight_node,
+            x_weight_mix,
+        ) = self._hash_weights_field.unbind()
+        x_hash_effects = _hash_owned(x_tokens.effect_rows, x_weight_entry, x_weight_mix)
+        x_hash_modifiers = _hash_owned(x_tokens.modifier_rows, x_weight_entry, x_weight_mix)
+        x_hash = (
+            _hash_rows(x_tokens, x_weight_entry)
+            + x_entity_kind * x_weight_entity_kind
+            + x_hash_effects * x_weight_effects
+            + x_hash_modifiers * x_weight_modifiers
+        )  # (N,)
+        x_hash[x_room_row] += x_map_room * x_weight_map + x_node_room * x_weight_node
+        x_uniq, x_inverse = torch.unique(x_hash, return_inverse=True)  # (U,), (N,)
+
+        # One token per unique hash, in rising order so the owned rows stay in their owners' order
+        x_any = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=device)
+        x_any[x_inverse] = torch.arange(num_tokens, device=device)
+        x_is_rep = torch.zeros(num_tokens, dtype=torch.bool, device=device)
+        x_is_rep[x_any] = True
+        x_rep = torch.nonzero_static(x_is_rep, size=x_uniq.shape[0]).squeeze(1)
+        return x_rep, x_is_rep, (x_is_rep.cumsum(0) - 1)[x_any[x_inverse]]
+
+
+def _owners(x_owned_sparse: X_OwnedSparse) -> torch.Tensor:
+    """Find the token that owns each row.
+
+    Parameters
+    ----------
+    x_owned_sparse : X_OwnedSparse
+        The owned row kind's rows, M of them.
+
+    Returns
+    -------
+    torch.Tensor
+        (M,) long. Each row's token.
+    """
+    # Each owned row's owner, from the counts widened
+    return torch.repeat_interleave(
+        x_owned_sparse.x_count.long(), output_size=x_owned_sparse.x_column.shape[0]
+    )
+
+
+def _take_owned(
+    x_owned_sparse: X_OwnedSparse, x_rep: torch.Tensor, x_is_rep: torch.Tensor
+) -> X_OwnedSparse:
+    """Keep only the rows the unique tokens own.
+
+    Parameters
+    ----------
+    x_owned_sparse : X_OwnedSparse
+        The owned row kind's rows, for all N tokens.
+    x_rep : torch.Tensor
+        (U,) long. The unique tokens' rows among the N, in rising order.
+    x_is_rep : torch.Tensor
+        (N,) bool. Whether each row is in `x_rep`.
+
+    Returns
+    -------
+    X_OwnedSparse
+        The rows of the U tokens, in their order.
+    """
+    x_row = torch.nonzero(x_is_rep[_owners(x_owned_sparse)]).squeeze(1)
+    return X_OwnedSparse(
+        x_column=x_owned_sparse.x_column[x_row],
+        x_value=x_owned_sparse.x_value[x_row],
+        x_count=x_owned_sparse.x_count[x_rep],
+    )
+
+
+def _hash_rows(x_block: X_Tokens | X_OwnedSparse, x_weight_entry: torch.Tensor) -> torch.Tensor:
+    """Hash each of a block's rows: its entries' columns and their values' bits.
+
+    Parameters
+    ----------
+    x_block : X_Tokens | X_OwnedSparse
+        The block, its rows held sparse: (N, K) entries.
+    x_weight_entry : torch.Tensor
+        (2, _HASH_MAX_ENTRIES) long. The weights of a row's entries: columns, then values.
+
+    Returns
+    -------
+    torch.Tensor
+        (N,) long. Each row's hash.
+    """
+    num_entries = x_block.x_column.shape[1]
+    x_bits = x_block.x_value.view(torch.int32).long()
+    return ((x_block.x_column.long() + 1) * x_weight_entry[0, :num_entries]).sum(1) + (
+        x_bits * x_weight_entry[1, :num_entries]
+    ).sum(1)
+
+
+def _hash_owned(
+    x_owned_sparse: X_OwnedSparse, x_weight_entry: torch.Tensor, x_weight_mix: torch.Tensor
+) -> torch.Tensor:
+    """Hash each token's owned rows: the sum of their mixed hashes, as `_add_owned` sums them.
+
+    Parameters
+    ----------
+    x_owned_sparse : X_OwnedSparse
+        The owned row kind's rows, held sparse.
+    x_weight_entry : torch.Tensor
+        (2, _HASH_MAX_ENTRIES) long. The weights of a row's entries: columns, then values.
+    x_weight_mix : torch.Tensor
+        () long. The mix's multiplier.
+
+    Returns
+    -------
+    torch.Tensor
+        (N,) long. Each token's hash, 0 if it owns no rows.
+    """
+    # Mix first: a sum of linear hashes would tie two Modifiers that swap their stacks
+    x_hash_row = _hash_rows(x_owned_sparse, x_weight_entry)  # (M,)
+    x_hash_row = (x_hash_row ^ (x_hash_row >> 32)) * x_weight_mix
+    x_hash_row = x_hash_row ^ (x_hash_row >> 32)
+    x_hash = torch.zeros(
+        x_owned_sparse.x_count.shape[0], dtype=torch.long, device=x_hash_row.device
+    )
+    return x_hash.index_add_(0, _owners(x_owned_sparse), x_hash_row)
+
 
 def _project_sparse(
-    mapper: nn.Linear | nn.Sequential, x_block: X_Tokens | X_OwnedSparse | X_EffectPending
+    mapper: nn.Linear | nn.Sequential, x_column: torch.Tensor, x_value: torch.Tensor
 ) -> torch.Tensor:
-    """Run `mapper` on the dense rows that `x_block`'s (N, K) entries stand for.
+    """Run `mapper` on the dense rows that the (N, K) entries stand for.
 
     Its first linear layer (the mapper, or a Sequential's first layer) sums its weight's columns
     at the entries' columns, scaled by their values, plus its bias; a Sequential's other layers
@@ -248,8 +498,10 @@ def _project_sparse(
     ----------
     mapper : nn.Linear | nn.Sequential
         A linear layer, or a Sequential whose first layer is linear.
-    x_block : X_Tokens | X_OwnedSparse | X_EffectPending
-        The block, its rows held sparse.
+    x_column : torch.Tensor
+        (N, K) int16. The entries' columns.
+    x_value : torch.Tensor
+        (N, K) float32. The entries' values.
 
     Returns
     -------
@@ -257,7 +509,7 @@ def _project_sparse(
         (N, D). `mapper`'s output on each row.
     """
     linear = mapper if isinstance(mapper, nn.Linear) else mapper[0]
-    x_rows = _SumSparseDenseBackward.apply(x_block.x_column, x_block.x_value, linear.weight)
+    x_rows = _SumSparseDenseBackward.apply(x_column, x_value, linear.weight)
     if linear.bias is not None:
         x_rows = x_rows + linear.bias
     return x_rows if isinstance(mapper, nn.Linear) else mapper[1:](x_rows)
@@ -281,11 +533,8 @@ def _add_owned(
     """
     x_count = x_owned_sparse.x_count  # (N_tok,) int16
 
-    # Each row's owner, from the counts widened: repeat_interleave takes no int16
-    x_owner = torch.repeat_interleave(
-        x_count.long(), output_size=x_owned_sparse.x_column.shape[0]
-    )  # (M,)
-    x_rows = _project_sparse(mapper, x_owned_sparse)  # (M, D)
+    x_owner = _owners(x_owned_sparse)  # (M,)
+    x_rows = _project_sparse(mapper, x_owned_sparse.x_column, x_owned_sparse.x_value)  # (M, D)
     x_first.index_add_(0, x_owner, x_rows / x_count[x_owner].to(x_rows.dtype).sqrt().unsqueeze(1))
 
 

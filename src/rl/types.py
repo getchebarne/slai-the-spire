@@ -376,6 +376,20 @@ class X_Action:
     kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
+@final
+@dataclass
+class X_MapOutput:
+    """The Map GNN's outputs for every game of a rollout, whose weights don't change.
+
+    The GNN reruns only the games whose grid changed since `x_grid`, and writes their rows in
+    place; the others keep theirs. Empty until the rollout's first step.
+    """
+
+    x_grid: torch.Tensor | None = None  # (E, H, W, C) float32
+    x_hidden: torch.Tensor | None = None  # (E, H * W, hidden)
+    x_readout: torch.Tensor | None = None  # (E, hidden)
+
+
 @dataclass
 class X_Step:
     """One step of every game, shared by the step loop and its workers.

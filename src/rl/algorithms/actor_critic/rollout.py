@@ -11,6 +11,7 @@ from src.rl.models import ActorCritic
 from src.rl.packed import cat_states
 from src.rl.reward import RewardStream
 from src.rl.types import X_GameState
+from src.rl.types import X_MapOutput
 from src.rl.types import X_Rollout
 
 
@@ -75,12 +76,15 @@ def collect_rollout(
     rest_selections = torch.zeros((), device=device)
     upgrade_selections = torch.zeros((), device=device)
 
+    # A game's Map outputs last until its grid changes: the weights change between rollouts
+    x_map_output = X_MapOutput()
+
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
         x, x_count_cpu = snapshot_to_device(exchange.step, device)
         for t in range(T):
-            out = model.act(x, generator=generator)
+            out = model.act(x, generator=generator, x_map_output=x_map_output)
             chunks_x.append(x)
             chunks_count.append(x_count_cpu)
             step_rows = slice(t * E, (t + 1) * E)

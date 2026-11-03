@@ -155,3 +155,6 @@ SHOP_PRICE_CAP = max(
     _slai.SHOP_PRICE_CARD_MAX, _slai.SHOP_PRICE_RELIC_MAX, _slai.SHOP_PRICE_POTION_MAX
 )
 EVENT_STAGE_CAP = 10
+
+# Batches repeat Maps and tokens from here up: above any rollout batch, below any minibatch
+DEDUP_MIN_BATCH = 1024

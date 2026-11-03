@@ -18,6 +18,7 @@ from src.rl.types import TOKEN_KINDS_CARD_REWARDS
 from src.rl.types import TokenKind
 from src.rl.types import X_CoreOutput
 from src.rl.types import X_GameState
+from src.rl.types import X_MapOutput
 
 
 # Count features: one per token kind except the Character singleton (a constant 1.0), each
@@ -110,7 +111,12 @@ class Core(nn.Module):
             persistent=False,
         )
 
-    def forward(self, x_gs: X_GameState, with_value: bool = True) -> X_CoreOutput:
+    def forward(
+        self,
+        x_gs: X_GameState,
+        with_value: bool = True,
+        x_map_output: X_MapOutput | None = None,
+    ) -> X_CoreOutput:
         """Compute the core's output.
 
         Parameters
@@ -120,6 +126,8 @@ class Core(nn.Module):
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
             need no value, and leaves `global_value` the policy's.
+        x_map_output : X_MapOutput | None, default None
+            The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
 
         Returns
         -------
@@ -129,7 +137,7 @@ class Core(nn.Module):
         """
 
         # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
-        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_gs.map_grid)
+        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_gs.map_grid, x_map_output)
 
         # The window packed (its tokens and their X_Window), the draw-order layer's states, and
         # the embedded pending halt
