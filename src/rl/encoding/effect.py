@@ -390,6 +390,7 @@ class EffectChannel(StrEnum):
 
     # Boolean flags, named for the engine field
     ADVANCE_ON_MISS = auto()
+    BLOCK_FROM_HIT = auto()
     BOTTOM = auto()
     CHOOSE_DISCARDS = auto()
     COLORLESS = auto()
@@ -473,6 +474,7 @@ OFF_TURNS = _alloc(EffectChannel.TURNS)
 
 # Boolean flags
 OFF_ADVANCE_ON_MISS = _alloc(EffectChannel.ADVANCE_ON_MISS)
+OFF_BLOCK_FROM_HIT = _alloc(EffectChannel.BLOCK_FROM_HIT)
 OFF_BOTTOM = _alloc(EffectChannel.BOTTOM)
 OFF_CHOOSE_DISCARDS = _alloc(EffectChannel.CHOOSE_DISCARDS)
 OFF_COLORLESS = _alloc(EffectChannel.COLORLESS)
@@ -650,6 +652,8 @@ def _encode_damage_mind_blast(row: np.ndarray, e: slai.EffectDamageMindBlast) ->
 
 def _encode_damage_physical(row: np.ndarray, e: slai.EffectDamagePhysical) -> None:
     row[OFF_DAMAGE] += e.amount
+    if e.block_from_hit:
+        row[OFF_BLOCK_FROM_HIT] = 1.0
     if e.if_poisoned:
         row[OFF_IF_POISONED] = 1.0
     row[OFF_INSTANCES] += e.instances

@@ -69,7 +69,7 @@ class Core(nn.Module):
             + ENCODING_DIM_ENERGY  # Energy (raw)
             + ENCODING_DIM_FOCUS  # Focus row
             + ENCODING_DIM_ASCENSION  # Ascension thermometer (curriculum level)
-            + ENCODING_DIM_MAP_META  # Floor, act, boss, Room kinds, "?"-room odds and Event pools
+            + ENCODING_DIM_MAP_META  # Floor, act, boss, keys, Room kinds, "?" odds and Event pools
             + ENCODING_DIM_REWARD_META
             + ENCODING_DIM_SHOP_META  # Shop purge price triple + purged flag
             + ENCODING_DIM_EVENT_META

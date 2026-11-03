@@ -5,6 +5,7 @@ import numpy as np
 import slai
 
 from src.rl.algorithms.actor_critic.curriculum import env_level
+from src.rl.algorithms.actor_critic.episode import MAX_STEPS_EPISODE
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.episode import finish_episode
 from src.rl.algorithms.actor_critic.episode import make_episode_stats
@@ -77,7 +78,8 @@ def step_env(
     ----------
     shard : Shard
         The worker's games. Game j's state and tally are updated in place, and a game whose
-        episode ended is replaced by a new one at its curriculum level.
+        episode ended or reached MAX_STEPS_EPISODE steps is replaced by a new one at its
+        curriculum level.
     j : int
         The game's index in the shard.
     action : slai.Action
@@ -94,11 +96,14 @@ def step_env(
     """
     prev = shard.obs[j]
     nxt, terminated = step_scripted(shard.envs[j], action)
-    reward = compute_reward(prev, nxt, terminated, settings.gamma, action)  # (K,)
+
+    # A game at the step limit ends there, truncated, as a death
+    truncated = not terminated and shard.stats[j].length + 1 >= MAX_STEPS_EPISODE
+    reward = compute_reward(prev, nxt, terminated, settings.gamma, action, truncated)  # (K,)
     tally_step(shard.stats[j], prev, nxt, action, reward, settings.gamma)
     finished = None
-    if terminated:
-        # nxt is still the pre-reset terminal snapshot here
+    if terminated or truncated:
+        # nxt is still the pre-reset snapshot here
         finish_episode(shard.stats[j], nxt, terminated)
         finished, shard.stats[j] = shard.stats[j], make_episode_stats()
         level = env_level(

@@ -57,7 +57,8 @@ def collect_rollout(
     completed : list[EpisodeStats]
         The finished episodes, drained from the workers' queue.
     info : dict[str, float]
-        The rollout's scalars: its terminations, boundary truncations and Rest Site upgrade rate.
+        The rollout's scalars: its terminations (step-limit cuts included), boundary truncations and
+        Rest Site upgrade rate.
     """
     E = len(exchange.step.actions)
     T = rollout_length

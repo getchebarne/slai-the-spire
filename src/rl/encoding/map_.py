@@ -27,6 +27,7 @@ _MAP_MONSTER_ENCOUNTER_BOSS = {
     MonsterEncounter.AwakenedOne: 6,
     MonsterEncounter.DonuAndDeca: 7,
     MonsterEncounter.TimeEater: 8,
+    MonsterEncounter.CorruptHeart: 9,
 }
 _MAP_NUM_ROOM_KINDS = len(_MAP_ROOM_KIND)
 _MAP_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.members()}
@@ -39,6 +40,7 @@ NUM_EDGE_CHANNELS = len(EDGE_DELTAS)
 class MapGridChannel(StrEnum):
     ROOM_KIND = auto()
     EDGES = auto()
+    BURNING = auto()
     POSITION = auto()
 
 
@@ -46,6 +48,7 @@ class MapGridChannel(StrEnum):
 CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
 OFF_MAP_ROOM_KIND = _alloc(MapGridChannel.ROOM_KIND, _MAP_NUM_ROOM_KINDS)
 OFF_MAP_EDGES = _alloc(MapGridChannel.EDGES, NUM_EDGE_CHANNELS)
+OFF_MAP_BURNING = _alloc(MapGridChannel.BURNING)
 OFF_MAP_POSITION = _alloc(MapGridChannel.POSITION)
 
 NUM_CHANNELS = sum(w for _, w in CHANNEL_LAYOUT_MAP_GRID)
@@ -65,6 +68,7 @@ class MapMetaChannel(StrEnum):
     CURRENT_ROOM_KIND = auto()
     NEXT_ROOM_KINDS = auto()  # RoomKind OHE per next-row column
     ACT = auto()  # Each act is a fresh 15-row Map; depth alone is ambiguous
+    KEYS = auto()  # The keys held: Emerald, Ruby, Sapphire
 
     # "?" Rooms
     UNKNOWN_CHANCE_MONSTER = auto()  # The Event chance is what the three odds leave
@@ -83,6 +87,7 @@ OFF_MAP_BOSS_FIGHTS_AFTER = _alloc(MapMetaChannel.BOSS_FIGHTS_AFTER)
 OFF_MAP_CURRENT_ROOM_KIND = _alloc(MapMetaChannel.CURRENT_ROOM_KIND, _MAP_NUM_ROOM_KINDS)
 OFF_MAP_NEXT_ROOM_KINDS = _alloc(MapMetaChannel.NEXT_ROOM_KINDS, MAP_WIDTH * _MAP_NUM_ROOM_KINDS)
 OFF_MAP_ACT = _alloc(MapMetaChannel.ACT, GameEnv.ACT_FINAL)
+OFF_MAP_KEYS = _alloc(MapMetaChannel.KEYS, 3)
 OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc(MapMetaChannel.UNKNOWN_CHANCE_MONSTER)
 OFF_MAP_UNKNOWN_CHANCE_SHOP = _alloc(MapMetaChannel.UNKNOWN_CHANCE_SHOP)
 OFF_MAP_UNKNOWN_CHANCE_TREASURE = _alloc(MapMetaChannel.UNKNOWN_CHANCE_TREASURE)
@@ -92,7 +97,7 @@ OFF_MAP_POOL_EVENT_SPECIAL = _alloc(MapMetaChannel.POOL_EVENT_SPECIAL, len(_MAP_
 
 ENCODING_DIM_MAP_META = sum(w for _, w in CHANNEL_LAYOUT_MAP_META)
 
-# Static Map-grid cache keyed by map.identity_hash: Room kinds + edges are fixed per Map
+# Static Map-grid cache keyed by map.identity_hash: Room kinds + edges + burning are fixed per Map
 _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
 _MAP_GRID_CACHE_MAX = 100_000
 
@@ -116,6 +121,9 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
                 delta = x_next - x  # -1, 0, or 1
                 if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
                     grid[y, x, OFF_MAP_EDGES + EDGE_DELTAS.index(delta)] = 1.0
+
+            if room.burning:
+                grid[y, x, OFF_MAP_BURNING] = 1.0
 
     # Store in the cache. Guard the master copy against future writes
     grid.flags.writeable = False
@@ -232,6 +240,11 @@ def _encode_map_meta_into(
     out[OFF_MAP_ACT + (act - 1)] = 1.0
 
 
+def _encode_keys_into(game_state: GameState, out: np.ndarray) -> None:
+    keys = (game_state.key_emerald, game_state.key_ruby, game_state.key_sapphire)
+    out[OFF_MAP_KEYS : OFF_MAP_KEYS + len(keys)] = keys
+
+
 def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
     # The chances drift up by their base until rolled, and the roll caps them at 1
     out[OFF_MAP_UNKNOWN_CHANCE_MONSTER] = min(game_state.unknown_chance_monster, 1.0)
@@ -265,7 +278,7 @@ def encode_batch_map(
     -------
     x_map_grid : torch.Tensor
         (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32. Each state's Map grid: each cell's Room
-        kind and edges, and the Character's position.
+        kind, edges and burning mark, and the Character's position.
     x_map_meta : torch.Tensor
         (B, ENCODING_DIM_MAP_META) float32. Each state's Map meta.
     """
@@ -279,7 +292,7 @@ def encode_batch_map(
         y_current = map_.y_current
         x_current = map_.x_current
 
-        # Grid: copy the cached static (Room+edge) grid, then set the live position bit
+        # Grid: copy the cached static (Room+edge+burning) grid, then set the live position bit
         np_grid[b] = _get_static_grid(map_.identity_hash, rooms)
 
         # Stamp current position. Do it outside the cache to maximize cache hits
@@ -297,6 +310,7 @@ def encode_batch_map(
             winged,
             np_meta[b],
         )
+        _encode_keys_into(game_state, np_meta[b])
         _encode_unknown_room_into(game_state, np_meta[b])
 
     return (
