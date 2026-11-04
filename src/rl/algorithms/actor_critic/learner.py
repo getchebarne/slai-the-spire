@@ -124,7 +124,6 @@ def train(
             model_config=model_config,
             rollout_config=rollout_config,
             device=rank_info.device,
-            version_first=iteration_start,
             gamma=gamma,
         )
 

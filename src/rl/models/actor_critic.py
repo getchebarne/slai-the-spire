@@ -391,7 +391,7 @@ class ActorCritic(nn.Module):
     def _select_actions(
         self,
         heads: Callable[..., tuple[torch.Tensor, ...]],
-        x_gs: X_GameState,
+        x_game_state: X_GameState,
         x_core_out: X_CoreOutput,
         greedy: bool,
         generator: torch.Generator | None = None,
@@ -399,11 +399,11 @@ class ActorCritic(nn.Module):
     ) -> X_Action:
         x_action_type, x_token_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
             self,
-            x_focus=x_gs.x_focus,
+            x_focus=x_game_state.x_focus,
             x_global=x_core_out.x_global,
             x_refined=x_core_out.x_refined,
             x_window=x_core_out.x_window,
-            x_legal_action_type=x_gs.x_legal_action_type,
+            x_legal_action_type=x_game_state.x_legal_action_type,
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
@@ -418,12 +418,12 @@ class ActorCritic(nn.Module):
             x_kl_uniform=x_kl_uniform,
         )
 
-    def forward(self, x_gs: X_GameState) -> torch.Tensor:
+    def forward(self, x_game_state: X_GameState) -> torch.Tensor:
         """Compute the values.
 
         Parameters
         ----------
-        x_gs : X_GameState
+        x_game_state : X_GameState
             The game states.
 
         Returns
@@ -431,11 +431,11 @@ class ActorCritic(nn.Module):
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(x_gs).x_global_value)
+        return self._head_value(self.core(x_game_state).x_global_value)
 
     def act(
         self,
-        x_gs: X_GameState,
+        x_game_state: X_GameState,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> X_Action:
@@ -446,7 +446,7 @@ class ActorCritic(nn.Module):
 
         Parameters
         ----------
-        x_gs : X_GameState
+        x_game_state : X_GameState
             The game states.
         greedy : bool, default False
             Whether each level takes its argmax rather than a sample.
@@ -459,19 +459,19 @@ class ActorCritic(nn.Module):
             The X_Action, each level's argmax under `greedy` and sampled from `generator`
             otherwise.
         """
-        x_core_out = self.core(x_gs, with_value=False)
+        x_core_out = self.core(x_game_state, with_value=False)
 
         # Sampling actions runs eager
-        return self._select_actions(_policy_heads, x_gs, x_core_out, greedy, generator)
+        return self._select_actions(_policy_heads, x_game_state, x_core_out, greedy, generator)
 
     def evaluate_actions(
-        self, x_gs: X_GameState, x_recorded_actions: torch.Tensor
+        self, x_game_state: X_GameState, x_recorded_actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
         Parameters
         ----------
-        x_gs : X_GameState
+        x_game_state : X_GameState
             The game states.
         x_recorded_actions : torch.Tensor
             (B, 4) long. Each state's recorded action: action type, token kind, rank, target, -1
@@ -488,13 +488,13 @@ class ActorCritic(nn.Module):
         x_values : torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        x_core_out = self.core(x_gs)
+        x_core_out = self.core(x_game_state)
         x_values = self._head_value(x_core_out.x_global_value)
 
         # Recorded actions run the attribute, compiled on the Learner
         x_action = self._select_actions(
             self.policy_heads_recorded,
-            x_gs,
+            x_game_state,
             x_core_out,
             greedy=True,
             x_recorded_actions=x_recorded_actions,
