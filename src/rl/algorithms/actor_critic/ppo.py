@@ -113,7 +113,7 @@ def _recompute(
         for start, x_count_total in zip(starts, x_count_totals):
             x_states = x_order[start : start + minibatch_size]
             x_log_probs, _, _, x_values = model.evaluate_actions(
-                take_states(x_rollout.x_gs, x_states, x_count_total),
+                take_states(x_rollout.x_game_state, x_states, x_count_total),
                 x_rollout.x_actions[x_states],
             )
             log_probs.append(x_log_probs)
@@ -121,7 +121,7 @@ def _recompute(
 
         # Bootstrap value V(s_T) per env (a fresh env's value if it reset on the last step;
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
-        x_values_final = model(x_rollout.x_gs_final)
+        x_values_final = model(x_rollout.x_game_state_final)
     return torch.cat(log_probs), torch.cat(values).reshape(T, E, K), x_values_final
 
 
@@ -168,7 +168,7 @@ def prepare_batch(
     # Normalize advantages over the batch
     x_advantages = (x_advantages - x_advantages.mean()) / (x_advantages.std() + 1e-8)
     return X_TrainingBatch(
-        x_gs=x_rollout.x_gs,
+        x_game_state=x_rollout.x_game_state,
         x_count_cpu=x_rollout.x_count_cpu,
         x_actions=x_rollout.x_actions,
         x_log_probs_behavior=x_rollout.x_log_probs_behavior,
@@ -326,7 +326,7 @@ def update_ppo(
         for start, x_count_total in zip(starts, x_count_totals[epoch]):
             x_states = x_order[epoch, start : start + ppo_config.minibatch_size]
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                take_states(batch.x_gs, x_states, x_count_total),
+                take_states(batch.x_game_state, x_states, x_count_total),
                 batch.x_actions[x_states],
             )
             log_probs_prox = batch.x_log_probs_prox[x_states]

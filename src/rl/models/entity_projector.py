@@ -91,13 +91,13 @@ class EntityProjector(nn.Module):
         )
 
     def forward(
-        self, x_gs: X_GameState, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
+        self, x_game_state: X_GameState, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
     ) -> tuple[torch.Tensor, X_Window, X_DrawOrderStates, torch.Tensor]:
-        """Embed `x_gs`'s window.
+        """Embed `x_game_state`'s window.
 
         Parameters
         ----------
-        x_gs : X_GameState
+        x_game_state : X_GameState
             The game states.
         x_hidden_map : torch.Tensor
             (U, H * W, dim_map). The Map GNN's per-node features of each Map it ran on (see
@@ -118,18 +118,18 @@ class EntityProjector(nn.Module):
         """
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
-        batch_size = x_gs.x_tokens.x_count.shape[0]
-        num_tokens = x_gs.x_tokens.x_token_kind.shape[0]
+        batch_size = x_game_state.x_tokens.x_count.shape[0]
+        num_tokens = x_game_state.x_tokens.x_token_kind.shape[0]
 
         # Each token's token kind, Entity kind and state, and each state's tokens
-        x_token_kind = x_gs.x_tokens.x_token_kind.long()  # (N_tok,)
+        x_token_kind = x_game_state.x_tokens.x_token_kind.long()  # (N_tok,)
         x_entity_kind = self._x_entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
 
         # Handy alias
-        x_count_window = x_gs.x_tokens.x_count  # (B,)
+        x_count_window = x_game_state.x_tokens.x_count  # (B,)
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
-        x_first = _project_sparse(self._pre_token, x_gs.x_tokens) + SpreadEmbedding.apply(
+        x_first = _project_sparse(self._pre_token, x_game_state.x_tokens) + SpreadEmbedding.apply(
             self._x_bias_entity_kind, x_entity_kind
         )
 
@@ -146,7 +146,7 @@ class EntityProjector(nn.Module):
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
         x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = x_gs.x_focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0 # (B,)
+        x_draw_order_visible = x_game_state.x_focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0 # (B,)
         x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
@@ -192,17 +192,18 @@ class EntityProjector(nn.Module):
         x_room_row = torch.nonzero_static(x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
         x_node_hidden = x_hidden_map[
-            x_map_of_state[x_state[x_room_row]], x_gs.x_tokens.x_node_idx[x_room_row].long()
+            x_map_of_state[x_state[x_room_row]],
+            x_game_state.x_tokens.x_node_idx[x_room_row].long(),
         ]  # (N_rooms, dim_map)
         x_first[x_room_row] = self._pre_room(x_node_hidden)
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
         # ReLU/LayerNorm
-        _add_owned(x_first, x_gs.x_tokens.x_effect_rows, self._effects_mlp)
-        _add_owned(x_first, x_gs.x_tokens.x_modifier_rows, self._modifiers_mlp)
+        _add_owned(x_first, x_game_state.x_tokens.x_effect_rows, self._effects_mlp)
+        _add_owned(x_first, x_game_state.x_tokens.x_modifier_rows, self._modifiers_mlp)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
-        x_effect_pending = x_gs.x_effect_pending
+        x_effect_pending = x_game_state.x_effect_pending
         x_pending_state = torch.repeat_interleave(
             x_effect_pending.x_count, output_size=x_effect_pending.x_column.shape[0]
         )  # (P,)
@@ -221,8 +222,8 @@ class EntityProjector(nn.Module):
         x_window = X_Window(
             x_token_kind=x_token_kind,
             x_entity_kind=x_entity_kind,
-            x_legal=x_gs.x_tokens.x_legal,
-            x_needs_target=x_gs.x_tokens.x_needs_target,
+            x_legal=x_game_state.x_tokens.x_legal,
+            x_needs_target=x_game_state.x_tokens.x_needs_target,
             x_state=x_state,
             x_count=x_count_window,
             x_token_kind_row=x_token_kind_row,

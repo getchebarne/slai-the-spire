@@ -53,8 +53,8 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        x_gs = encode_batch_game_state([game_state], [legal_actions], torch.device("cpu"))
-        x_action = model.act(x_gs, greedy=True)
+        x_game_state = encode_batch_game_state([game_state], [legal_actions], torch.device("cpu"))
+        x_action = model.act(x_game_state, greedy=True)
 
         # Game step
         action = action_from_actiontype(x_action, 0, game_state)

@@ -8,6 +8,7 @@ import os
 import random
 import signal
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
@@ -20,8 +21,8 @@ import torch.multiprocessing as mp
 
 from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.stats import EpisodeStats
-from src.rl.algorithms.actor_critic.workers import Exchange
-from src.rl.algorithms.actor_critic.workers import Worker
+from src.rl.algorithms.actor_critic.workers import StepBuffer
+from src.rl.algorithms.actor_critic.workers import WorkerHandle
 from src.rl.algorithms.actor_critic.workers import drain_episodes
 from src.rl.algorithms.actor_critic.workers import snapshot_to_device
 from src.rl.algorithms.actor_critic.workers import start_workers
@@ -74,7 +75,7 @@ class WeightBuffer:
 
     # Two suffice: the Learner overwrites the older slot only after taking rollouts played on it
     weight_slots: list[WeightSlot]  # Last two weights published by the Learner
-    new_version: Semaphore  # Released once by each publish; the Actor acquires once per version
+    sph_new_version: Semaphore  # Released once per publish; the Actor acquires once per version
 
 
 @dataclass
@@ -93,7 +94,6 @@ class ActorConfig:
     model_config: dict[str, Any]
     rollout_config: RolloutConfig
     device: torch.device
-    version_first: int
     gamma: float
 
     # The Learner process's state, which a spawned process doesn't inherit
@@ -130,7 +130,7 @@ def make_weight_buffer(model: ActorCritic) -> WeightBuffer:
             )
             for _ in range(2)
         ],
-        new_version=mp.get_context(_SPAWN).Semaphore(0),
+        sph_new_version=mp.get_context(_SPAWN).Semaphore(0),
     )
 
 
@@ -139,7 +139,6 @@ def start_actor(
     model_config: dict[str, Any],
     rollout_config: RolloutConfig,
     device: torch.device,
-    version_first: int,
     gamma: float,
 ) -> ActorHandle:
     """Start the Actor process, playing the weights the Learner publishes into `weight_buffer`.
@@ -157,8 +156,6 @@ def start_actor(
         The games, worker processes and steps a rollout plays.
     device : torch.device
         The device the Actor process plays on.
-    version_first : int
-        The first version the Actor plays.
     gamma : float
         The discount the games' rewards and discounted returns use.
 
@@ -172,7 +169,6 @@ def start_actor(
         model_config=model_config,
         rollout_config=rollout_config,
         device=device,
-        version_first=version_first,
         gamma=gamma,
         seed=random.randint(0, 2**31 - 1),
         x_rng=torch.cuda.get_rng_state(device) if device.type == "cuda" else torch.get_rng_state(),
@@ -216,12 +212,12 @@ def publish(
     ascension_current : float
         The curriculum position the Actor should play them at.
     """
-    older = min(weight_buffer.weight_slots, key=lambda slot: int(slot.x_version))
+    older = min(weight_buffer.weight_slots, key=lambda ws: int(ws.x_version))
     for name, x in model.state_dict().items():
         older.x_weights[name].copy_(x)  # A copy to the CPU's pageable memory returns once done
     older.x_ascension_current.fill_(ascension_current)
     older.x_version.fill_(version)
-    weight_buffer.new_version.release()
+    weight_buffer.sph_new_version.release()
 
 
 def receive_rollout(actor_handle: ActorHandle) -> tuple[Delivery, float]:
@@ -308,9 +304,7 @@ def _actor_loop(
     actor_config : ActorConfig
         The Actor process's config, fixed for the run.
     """
-
-    # A group of its own, which its workers join: the run's Ctrl-C or SIGTERM reaches only the
-    # Learner, which stops this process after its checkpoint, and stop_actor can kill them all
+    # A group of its own, which its workers join
     os.setpgid(0, 0)
 
     # The processes this one starts mustn't hold the pipe open, or a dead Actor wouldn't end it
@@ -326,50 +320,60 @@ def _actor_loop(
     torch.set_num_threads(actor_config.num_threads)
     torch.use_deterministic_algorithms(actor_config.deterministic)
     torch.fx.experimental._config.use_duck_shape = actor_config.use_duck_shape
-    model = ActorCritic(**actor_config.model_config).to(device)  # Weights come with each publish
+
+    # Instance model
+    model = ActorCritic(**actor_config.model_config).to(device)
 
     # Its sampling continues the Learner's global stream, which the run seeds per rank and resume
     generator = torch.Generator(device)
     generator.set_state(actor_config.x_rng)
 
-    # The first version's slot sets the position the workers' first games start at
-    if not _wait_for_version(weight_buffer.new_version, x_stop):
+    # Get first weight versions
+    if not _wait_for_version(weight_buffer.sph_new_version, x_stop):
         return
-    first = next(
-        slot
-        for slot in weight_buffer.weight_slots
-        if int(slot.x_version) == actor_config.version_first
-    )
-    exchange, workers = start_workers(
-        actor_config.rollout_config.num_envs,
-        actor_config.rollout_config.rollout_workers,
-        float(first.x_ascension_current),
-        actor_config.gamma,
-        actor_config.seed,
-    )
-    try:
-        played, t_idle = actor_config.version_first, time.perf_counter()  # Already waited for
-        for i in itertools.count(actor_config.version_first):
-            version = max(i - 1, actor_config.version_first)
+    
+    weight_slot_first = max(weight_buffer.weight_slots, key=lambda slot: int(slot.x_version))
+    version_first = int(weight_slot_first.x_version)
+
+    with ExitStack() as stack:
+        
+        # Start Workers
+        step_buffer, worker_handles = start_workers(
+            actor_config.rollout_config.num_envs,
+            actor_config.rollout_config.rollout_workers,
+            float(weight_slot_first.x_ascension_current),
+            actor_config.gamma,
+            actor_config.seed,
+        )
+        stack.callback(stop_workers, worker_handles)
+
+        # Loop
+        version_rolled, t_idle = version_first, time.perf_counter()  # Already waited for
+        for rollout in itertools.count(version_first):
+            version = max(rollout - 1, version_first)
 
             # A version not played yet is waited for: its publish's release orders the reads below
             if bool(x_stop) or (
-                version != played and not _wait_for_version(weight_buffer.new_version, x_stop)
+                version != version_rolled
+                and not _wait_for_version(weight_buffer.sph_new_version, x_stop)
             ):
                 return
-            played = version
-            current = next(
+
+            # Get the version's weights and load them into the `ActorCritic` model
+            weight_slot = next(
                 slot for slot in weight_buffer.weight_slots if int(slot.x_version) == version
             )
-            model.load_state_dict(current.x_weights)
+            model.load_state_dict(weight_slot.x_weights)
+
+            # Collect the rollout using the version's weights
             t_collect = time.perf_counter()
             x_rollout, episodes, metrics = _collect_rollout(
                 model,
-                exchange,
-                workers,
-                actor_config.rollout_config.rollout_length,
+                step_buffer,
+                worker_handles,
+                actor_config.rollout_config,
                 device,
-                float(current.x_ascension_current),
+                float(weight_slot.x_ascension_current),
                 generator,
             )
             if device.type == "cuda":
@@ -383,24 +387,30 @@ def _actor_loop(
                 seconds_wait=t_collect - t_idle,
             )
             t_idle = time.perf_counter()
+
+            # Send the collected rollout over to the Actor
             try:
-                conn_write.send(delivery)  # Past the pipe's buffer, waits for the Learner to read
-            except BrokenPipeError:  # The Learner stopped reading: it's stopping, or gone
+                conn_write.send(delivery)
+
+            except BrokenPipeError:
+                # The Learner stopped reading: it's stopping, or gone
                 return
-    finally:
-        stop_workers(exchange, workers)
+
+            # Update played version
+            version_rolled = version
+            
 
 
 def _collect_rollout(
     model: ActorCritic,
-    exchange: Exchange,
-    workers: list[Worker],
-    rollout_length: int,
+    step_buffer: StepBuffer,
+    worker_handles: list[WorkerHandle],
+    rollout_config: RolloutConfig,
     device: torch.device,
     ascension_current: float,
     generator: torch.Generator,
 ) -> tuple[X_Rollout, list[EpisodeStats], dict[str, float]]:
-    """Play `rollout_length` lockstep steps of every game with `model`, sampling from `generator`.
+    """Play a rollout's T lockstep steps of its E games with `model`, sampling from `generator`.
 
     Each step runs one forward over all games, then the workers step them. GAE is the Learner's.
 
@@ -408,12 +418,12 @@ def _collect_rollout(
     ----------
     model : ActorCritic
         The Actor's model, in eval mode during the rollout and back in training mode after it.
-    exchange : Exchange
-        What the step loop and its workers share; its step holds the E games.
-    workers : list[Worker]
+    step_buffer : StepBuffer
+        What the Actor and its workers exchange; its step holds the E games.
+    worker_handles : list[WorkerHandle]
         The worker processes that step the games.
-    rollout_length : int
-        The steps to play, T.
+    rollout_config : RolloutConfig
+        The rollout's games, E, and steps, T.
     device : torch.device
         The model's device.
     ascension_current : float
@@ -431,17 +441,21 @@ def _collect_rollout(
         The rollout's scalars: its terminations (step-limit cuts included), boundary truncations and
         Rest Site upgrade rate.
     """
-    E = len(exchange.x_step.x_actions)
-    T = rollout_length
-    N = T * E
-    K = len(RewardStream)
-    exchange.x_ascensions.copy_(torch.tensor(ascensions(ascension_current, E)))
-    x_gss: list[X_GameState] = []  # Per step, in state order
+    step_buffer.x_ascensions.copy_(
+        torch.tensor(ascensions(ascension_current, rollout_config.num_envs))
+    )
+    x_game_states: list[X_GameState] = []  # Per step, in state order
     x_count_cpus: list[torch.Tensor] = []  # Their counts, on the CPU
-    x_actions = torch.empty(N, 4, dtype=torch.long, device=device)
-    x_log_probs_behavior = torch.empty(N, device=device)
-    x_rewards = torch.empty(T, E, K, device=device)
-    x_dones = torch.empty(T, E, device=device)
+    x_actions = torch.empty(
+        rollout_config.rollout_length * rollout_config.num_envs, 4, dtype=torch.long, device=device
+    )
+    x_log_probs_behavior = torch.empty(
+        rollout_config.rollout_length * rollout_config.num_envs, device=device
+    )
+    x_rewards = torch.empty(
+        rollout_config.rollout_length, rollout_config.num_envs, len(RewardStream), device=device
+    )
+    x_dones = torch.empty(rollout_config.rollout_length, rollout_config.num_envs, device=device)
 
     # Rest-site preference: device-side counters, read once after the loop (no per-step sync)
     x_rest_selections = torch.zeros((), device=device)
@@ -450,12 +464,12 @@ def _collect_rollout(
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
-        x_gs, x_count_cpu = snapshot_to_device(exchange.x_step, device)
-        for t in range(T):
-            x_action = model.act(x_gs, generator=generator)
-            x_gss.append(x_gs)
+        x_game_state, x_count_cpu = snapshot_to_device(step_buffer, device)
+        for t in range(rollout_config.rollout_length):
+            x_action = model.act(x_game_state, generator=generator)
+            x_game_states.append(x_game_state)
             x_count_cpus.append(x_count_cpu)
-            step_rows = slice(t * E, (t + 1) * E)
+            step_rows = slice(t * rollout_config.num_envs, (t + 1) * rollout_config.num_envs)
             x_actions[step_rows] = torch.stack(
                 [
                     x_action.x_action_type,
@@ -469,19 +483,19 @@ def _collect_rollout(
 
             # Campfire decision: both Rest and RestSmith legal — which was chosen?
             x_both = (
-                x_gs.x_legal_action_type[:, _ACTION_TYPE_REST]
-                & x_gs.x_legal_action_type[:, _ACTION_TYPE_SMITH]
+                x_game_state.x_legal_action_type[:, _ACTION_TYPE_REST]
+                & x_game_state.x_legal_action_type[:, _ACTION_TYPE_SMITH]
             )
             x_rest_selections.add_((x_both & (x_action.x_action_type == _ACTION_TYPE_REST)).sum())
             x_upgrade_selections.add_(
                 (x_both & (x_action.x_action_type == _ACTION_TYPE_SMITH)).sum()
             )
 
-            exchange.x_step.x_actions.copy_(x_actions[step_rows])
-            step_workers(workers)
-            x_rewards[t] = exchange.x_step.x_rewards
-            x_dones[t] = exchange.x_step.x_dones
-            x_gs, x_count_cpu = snapshot_to_device(exchange.x_step, device)
+            step_buffer.x_actions.copy_(x_actions[step_rows])
+            step_workers(worker_handles)
+            x_rewards[t] = step_buffer.x_rewards
+            x_dones[t] = step_buffer.x_dones
+            x_game_state, x_count_cpu = snapshot_to_device(step_buffer, device)
 
     # Set model to training mode
     model.train()
@@ -491,7 +505,7 @@ def _collect_rollout(
     n_campfire_selections = (x_rest_selections + x_upgrade_selections).item()
     metrics = {
         "rollout/terminations": x_dones.sum().item(),
-        "rollout/boundary_truncations": float(E) - x_dones[T - 1].sum().item(),
+        "rollout/boundary_truncations": float(rollout_config.num_envs) - x_dones[-1].sum().item(),
         # 0.0 also when no campfire was seen this rollout
         "rollout/rest_upgrade_rate": x_upgrade_selections.item() / n_campfire_selections
         if n_campfire_selections
@@ -500,25 +514,25 @@ def _collect_rollout(
 
     return (
         X_Rollout(
-            x_gs=cat_states(x_gss),
+            x_game_state=cat_states(x_game_states),
             x_count_cpu=torch.cat(x_count_cpus),
             x_actions=x_actions,
             x_log_probs_behavior=x_log_probs_behavior,
             x_rewards=x_rewards,
             x_dones=x_dones,
-            x_gs_final=x_gs,
+            x_game_state_final=x_game_state,
         ),
-        drain_episodes(exchange.episodes),
+        drain_episodes(step_buffer.episodes),
         metrics,
     )
 
 
-def _wait_for_version(new_version: Semaphore, x_stop: torch.Tensor) -> bool:
+def _wait_for_version(sph_new_version: Semaphore, x_stop: torch.Tensor) -> bool:
     """Wait for the Learner's next publish.
 
     Parameters
     ----------
-    new_version : Semaphore
+    sph_new_version : Semaphore
         The semaphore each publish releases once.
     x_stop : torch.Tensor
         () bool. The stop flag, in shared memory.
@@ -528,9 +542,13 @@ def _wait_for_version(new_version: Semaphore, x_stop: torch.Tensor) -> bool:
     bool
         False once stopped, or if the Learner is gone; True otherwise.
     """
-    while not new_version.acquire(timeout=1.0):
-        if bool(x_stop):  # Stopped while it waits: stop_actor doesn't wake it
+    while not sph_new_version.acquire(timeout=1.0):
+        if bool(x_stop):
+            # Stopped while it waits: stop_actor doesn't wake it  
             return False
-        if not parent_alive():  # The Learner died without stopping this Actor
+        
+        if not parent_alive():
+            # The Learner died without stopping this Actor  
             return False
+        
     return not x_stop

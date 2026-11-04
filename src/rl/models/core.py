@@ -110,12 +110,12 @@ class Core(nn.Module):
             persistent=False,
         )
 
-    def forward(self, x_gs: X_GameState, with_value: bool = True) -> X_CoreOutput:
+    def forward(self, x_game_state: X_GameState, with_value: bool = True) -> X_CoreOutput:
         """Compute the core's output.
 
         Parameters
         ----------
-        x_gs : X_GameState
+        x_game_state : X_GameState
             The game states.
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
@@ -129,12 +129,12 @@ class Core(nn.Module):
         """
 
         # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
-        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_gs.x_map_grid)
+        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_game_state.x_map_grid)
 
         # The window packed (its tokens and their X_Window), the draw-order layer's states, and
         # the embedded pending halt
         x_projected, x_window, x_draw_order, x_pending = self._entity_projector(
-            x_gs, x_hidden_map, x_map_of_state
+            x_game_state, x_hidden_map, x_map_of_state
         )
 
         # One transformer pass over every state, without the draw depths
@@ -148,13 +148,13 @@ class Core(nn.Module):
             [
                 x_map_readout,
                 self._get_token_counts(x_window.x_token_kind_count),
-                x_gs.x_energy,
-                x_gs.x_focus,
-                x_gs.x_ascension,
-                x_gs.x_map_meta,
-                x_gs.x_reward_meta,
-                x_gs.x_shop_meta,
-                x_gs.x_event_meta,
+                x_game_state.x_energy,
+                x_game_state.x_focus,
+                x_game_state.x_ascension,
+                x_game_state.x_map_meta,
+                x_game_state.x_reward_meta,
+                x_game_state.x_shop_meta,
+                x_game_state.x_event_meta,
                 x_pending,
             ],
             dim=1,

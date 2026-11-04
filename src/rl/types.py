@@ -253,11 +253,11 @@ class X_Tokens:
     """Every Entity token as a row, every state's in window order, state after state.
 
     `x_count` says how many each state has. K is the rows' most nonzero columns, except in
-    X_Step's regions, which have a fixed width, and in a minibatch, which keeps its rollout's K.
-    Each row is its nonzero (column, value) entries in column order, then (0, 0.0) entries up
-    to K; the entries index the shared column space, each Entity kind's columns from its
-    COL_START, then the health/block, price and slot columns Entity kinds share and the Tag
-    columns Cards, Relics and Potions share.
+    the step buffer's regions, which have a fixed width, and in a minibatch, which keeps its
+    rollout's K. Each row is its nonzero (column, value) entries in column order, then (0, 0.0)
+    entries up to K; the entries index the shared column space, each Entity kind's columns
+    from its COL_START, then the health/block, price and slot columns Entity kinds share and
+    the Tag columns Cards, Relics and Potions share.
     """
 
     x_column: torch.Tensor  # (N, K) int16
@@ -391,40 +391,23 @@ class X_Action:
 
 
 @dataclass
-class X_Step:
-    """One step of every game, shared by the step loop and its workers.
-
-    The action the step loop sampled, then the reward, done flag and state, masks included, the
-    worker wrote back. Every field is `num_regions` equal regions, a worker's each: its games'
-    entries, and in every block rows for all its games at every cap, which it fills from the
-    region's start.
-    """
-
-    x_actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
-    x_rewards: torch.Tensor  # (E, K)
-    x_dones: torch.Tensor  # (E,)
-    x_gs: X_GameState  # E games; a region's rows past its games' counts are stale
-    num_regions: int
-
-
-@dataclass
 class X_Rollout:
     """What the Actor collected, before GAE.
 
-    T steps of E games, state t * E + e of the N = T * E states. The `x_gs_final` field is each
-    game's state after the last step, for the bootstrap value.
+    T steps of E games, state t * E + e of the N = T * E states. The `x_game_state_final`
+    field is each game's state after the last step, for the bootstrap value.
     """
 
-    x_gs: X_GameState  # N states
+    x_game_state: X_GameState  # N states
 
-    # x_gs's counts on the CPU, where minibatches sum their sizes
+    # x_game_state's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
 
     x_actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
     x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     x_rewards: torch.Tensor  # (T, E, K)
     x_dones: torch.Tensor  # (T, E)
-    x_gs_final: X_GameState  # E states
+    x_game_state_final: X_GameState  # E states
 
 
 @dataclass
@@ -437,9 +420,9 @@ class X_TrainingBatch:
     normalized.
     """
 
-    x_gs: X_GameState  # N states — taken per minibatch (take_states)
+    x_game_state: X_GameState  # N states — taken per minibatch (take_states)
 
-    # x_gs's counts on the CPU, where minibatches sum their sizes
+    # x_game_state's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
 
     x_actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
