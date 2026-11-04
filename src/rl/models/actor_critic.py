@@ -91,7 +91,7 @@ def _categorical_step(
     return x_idx, dist.log_prob(x_idx), dist.entropy(), x_kl_uniform
 
 
-def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> torch.Tensor:
+def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
     """Sum each state's rows' `x`.
 
     Parameters
@@ -100,7 +100,7 @@ def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> to
         (R,). Each row's value.
     x_state : torch.Tensor
         (R,) long. Each row's state.
-    num_states : int
+    batch_size : int
         The number of states, S.
 
     Returns
@@ -108,10 +108,10 @@ def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> to
     torch.Tensor
         (S,). Each state's sum of its rows' `x`.
     """
-    return torch.zeros(num_states, dtype=x.dtype, device=x.device).index_add_(0, x_state, x)
+    return torch.zeros(batch_size, dtype=x.dtype, device=x.device).index_add_(0, x_state, x)
 
 
-def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> torch.Tensor:
+def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
     """Find each state's max of its rows' `x`.
 
     Parameters
@@ -120,7 +120,7 @@ def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> to
         (R,). Each row's value.
     x_state : torch.Tensor
         (R,) long. Each row's state.
-    num_states : int
+    batch_size : int
         The number of states, S.
 
     Returns
@@ -129,11 +129,11 @@ def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> to
         (S,). Each state's max of its rows' `x`.
     """
     return torch.full(
-        (num_states,), float("-inf"), dtype=x.dtype, device=x.device
+        (batch_size,), float("-inf"), dtype=x.dtype, device=x.device
     ).scatter_reduce_(0, x_state, x, reduce="amax")
 
 
-def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) -> torch.Tensor:
+def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
     """Find each state's row of its highest `x`, the first of a tie.
 
     Parameters
@@ -142,7 +142,7 @@ def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) ->
         (R,). Each row's value.
     x_state : torch.Tensor
         (R,) long. Each row's state.
-    num_states : int
+    batch_size : int
         The number of states, S.
 
     Returns
@@ -152,8 +152,8 @@ def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, num_states: int) ->
     """
     num_rows = x.shape[0]
     x_row = torch.arange(num_rows, device=x.device)
-    x_is_max = x == _max_by_state(x, x_state, num_states)[x_state]
-    return torch.full((num_states,), num_rows, dtype=torch.long, device=x.device).scatter_reduce_(
+    x_is_max = x == _max_by_state(x, x_state, batch_size)[x_state]
+    return torch.full((batch_size,), num_rows, dtype=torch.long, device=x.device).scatter_reduce_(
         0, x_state, x_row.masked_fill(~x_is_max, num_rows), reduce="amin"
     )
 
@@ -162,7 +162,7 @@ def _categorical_rows(
     x_logits: torch.Tensor,
     x_mask: torch.Tensor,
     x_state: torch.Tensor,
-    num_states: int,
+    batch_size: int,
     x_recorded_row: torch.Tensor | None,
     greedy: bool,
     generator: torch.Generator | None,
@@ -180,7 +180,7 @@ def _categorical_rows(
         (R,) bool. The KL's legal set.
     x_state : torch.Tensor
         (R,) long. Each row's state.
-    num_states : int
+    batch_size : int
         The number of states, S.
     x_recorded_row : torch.Tensor | None
         (S,) long. The recorded selected rows to score (PPO recompute), or None to select.
@@ -202,8 +202,8 @@ def _categorical_rows(
     """
     # Each row's log-prob within its state; the max keeps the exponentials finite, and takes no
     # gradient, as in logsumexp
-    x_shifted = x_logits - _max_by_state(x_logits.detach(), x_state, num_states)[x_state]
-    x_log_prob = x_shifted - _sum_by_state(x_shifted.exp(), x_state, num_states).log()[x_state]
+    x_shifted = x_logits - _max_by_state(x_logits.detach(), x_state, batch_size)[x_state]
+    x_log_prob = x_shifted - _sum_by_state(x_shifted.exp(), x_state, batch_size).log()[x_state]
 
     # Determine which row to select
     if x_recorded_row is not None:
@@ -211,22 +211,22 @@ def _categorical_rows(
         x_row = x_recorded_row
     elif greedy:
         # Highest logit
-        x_row = _argmax_by_state(x_logits, x_state, num_states)
+        x_row = _argmax_by_state(x_logits, x_state, batch_size)
     else:
         # Sample: Gumbel noise per row, masked after it is added, then each state's highest
         x_gumbel = -torch.empty_like(x_logits).exponential_(generator=generator).log()
         x_score = (x_logits + x_gumbel).masked_fill(~x_mask, float("-inf"))
-        x_row = _argmax_by_state(x_score, x_state, num_states)
+        x_row = _argmax_by_state(x_score, x_state, batch_size)
 
     # The entropy over the legal set; a masked row's log-prob is -inf, so it sits out as 0
     x_log_prob_legal = x_log_prob.masked_fill(~x_mask, 0.0)
-    x_entropy = -_sum_by_state(x_log_prob_legal.exp() * x_log_prob_legal, x_state, num_states)
+    x_entropy = -_sum_by_state(x_log_prob_legal.exp() * x_log_prob_legal, x_state, batch_size)
 
     # KL(uniform‖π) over the legal set, −log p clamped at the floor, as in `_categorical_step`;
     # min=1: empty/singleton states → KL 0
-    x_n_legal = _sum_by_state(x_mask.to(x_logits.dtype), x_state, num_states).clamp(min=1)
+    x_n_legal = _sum_by_state(x_mask.to(x_logits.dtype), x_state, batch_size).clamp(min=1)
     x_log_prob_floor = x_log_prob.clamp(min=_KL_UNIFORM_LOG_P_FLOOR).masked_fill(~x_mask, 0.0)
-    x_log_prob_sum = _sum_by_state(x_log_prob_floor, x_state, num_states)
+    x_log_prob_sum = _sum_by_state(x_log_prob_floor, x_state, batch_size)
     x_kl_uniform = -x_log_prob_sum / x_n_legal - x_n_legal.log()
     return x_row, x_log_prob[x_row], x_entropy, x_kl_uniform
 
@@ -348,7 +348,7 @@ class ActorCritic(nn.Module):
         )
 
         # The policy heads' computation as a plain function, which compile_hot_paths swaps for
-        # its compiled version on the learner's model
+        # its compiled version on the Learner's model
         self.policy_heads_recorded = _policy_heads
 
         self._init_weights()
@@ -491,7 +491,7 @@ class ActorCritic(nn.Module):
         x_core_out = self.core(x_gs)
         x_values = self._head_value(x_core_out.x_global_value)
 
-        # Recorded actions run the attribute, compiled on the learner
+        # Recorded actions run the attribute, compiled on the Learner
         x_action = self._select_actions(
             self.policy_heads_recorded,
             x_gs,
@@ -559,8 +559,8 @@ def _policy_heads(
     )
 
     # Compute the `Action`'s selections from the chosen `ActionType`
-    num_states = x_action_type.shape[0]
-    x_states = torch.arange(num_states, device=x_action_type.device)
+    batch_size = x_action_type.shape[0]
+    x_states = torch.arange(batch_size, device=x_action_type.device)
 
     # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's state
     # after state: what the key nets split and the scoring runs on. Selections map back to the
@@ -630,7 +630,7 @@ def _policy_heads(
         x_keys, x_global, model._action_type_embedding(x_action_type), x_state, x_mask_rows
     )
     x_row_selected, x_log_prob_l2, x_entropy_l2, x_kl_uniform_l2 = _categorical_rows(
-        x_logits, x_mask_rows, x_state, num_states, x_recorded_row, greedy, generator
+        x_logits, x_mask_rows, x_state, batch_size, x_recorded_row, greedy, generator
     )
 
     # The selected rows back in the window
@@ -660,7 +660,7 @@ def _policy_heads(
         [
             model._pointer_key_monster(x_monster_tokens),
             torch.zeros(
-                num_states,
+                batch_size,
                 model._dim_key,
                 dtype=x_monster_tokens.dtype,
                 device=x_monster_tokens.device,
@@ -682,7 +682,7 @@ def _policy_heads(
         x_keys, x_global, x_refined[x_token_selected], x_choice_state, x_mask_l3
     )
     x_choice, x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _categorical_rows(
-        x_logits, x_mask_l3, x_choice_state, num_states, x_recorded_choice, greedy, generator
+        x_logits, x_mask_l3, x_choice_state, batch_size, x_recorded_choice, greedy, generator
     )
     x_target = x_choice - x_first_monster
 

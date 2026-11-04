@@ -18,7 +18,7 @@ _FLEX_BLOCK = 128
 # block sizes
 _FLEX_KERNEL_OPTIONS = {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}
 
-# On the GPU even the eager actor calls FlexAttention compiled: eager, it scores every query row
+# On the GPU even the eager Actor calls FlexAttention compiled: eager, it scores every query row
 # against every key row. One graph, or a loud failure rather than a fall back to eager
 _flex_attention_compiled = torch.compile(flex_attention, dynamic=True, fullgraph=True)
 
@@ -283,7 +283,7 @@ class EntityTransformer(nn.Module):
             (B, D). The global tokens.
         """
         num_rows, dim = x_projected.shape
-        num_states = x_window.x_count.shape[0]
+        batch_size = x_window.x_count.shape[0]
 
         # The sequence: each state's rows, then its global token, state after state. Each state's
         # first place in it, then the end; each row's place, past one global token per state before
@@ -294,7 +294,7 @@ class EntityTransformer(nn.Module):
 
         # On the GPU, a tail of zero rows pads it to FlexAttention's block. Zeros, not empty: a
         # key's NaN would reach every query through its zero attention weight (0 * NaN = NaN)
-        num_places = _padded(num_rows + num_states, x_projected.device)
+        num_places = _padded(num_rows + batch_size, x_projected.device)
         x_sequence = torch.zeros(
             num_places, dim, dtype=x_projected.dtype, device=x_projected.device
         )
@@ -446,7 +446,7 @@ class DrawOrderLayer(nn.Module):
         x_global_token_layer : torch.Tensor
             (S, D). The states' global tokens.
         """
-        num_states = x_states.shape[0]
+        batch_size = x_states.shape[0]
 
         # The states' rows, state after state: each state's first among them, then the end. Each
         # is its state's first row in the window plus its rank
@@ -468,14 +468,14 @@ class DrawOrderLayer(nn.Module):
         # query
         num_places = _padded(num_rows, x_refined.device)
         num_places_pile = _padded(num_pile, x_refined.device)
-        num_places_global = _padded(num_states, x_refined.device)
-        x_offsets_global = torch.arange(num_states + 1, device=x_states.device)
+        num_places_global = _padded(batch_size, x_refined.device)
+        x_offsets_global = torch.arange(batch_size + 1, device=x_states.device)
         x_out, x_out_global = self._draw_order_block(
             F.pad(x_refined[x_rows], (0, 0, 0, num_places - num_rows)),
             F.pad(x_refined[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
             F.pad(x_depth, (0, num_places_pile - num_pile)),
-            F.pad(x_global_token[x_states], (0, 0, 0, num_places_global - num_states)),
+            F.pad(x_global_token[x_states], (0, 0, 0, num_places_global - batch_size)),
             _same_state_mask(x_offsets, x_offsets_pile, num_places, num_places_pile),
             _same_state_mask(x_offsets_global, x_offsets, num_places_global, num_places),
         )
-        return x_rows, x_out[:num_rows], x_out_global[:num_states]
+        return x_rows, x_out[:num_rows], x_out_global[:batch_size]

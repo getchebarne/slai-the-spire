@@ -44,8 +44,8 @@ def encode_batch_rewards(batch_game_state: list[GameState], device: torch.device
     torch.Tensor
         (B, ENCODING_DIM_REWARD_META) float32. Each state's Reward meta; 0 outside Rewards.
     """
-    num_states = len(batch_game_state)
-    np_meta = np.zeros((num_states, ENCODING_DIM_REWARD_META), dtype=np.float32)
+    batch_size = len(batch_game_state)
+    np_meta = np.zeros((batch_size, ENCODING_DIM_REWARD_META), dtype=np.float32)
 
     for b, game_state in enumerate(batch_game_state):
         reward = game_state.reward

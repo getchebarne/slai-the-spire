@@ -7,6 +7,8 @@ battery's wins at those same levels.
 import math
 from dataclasses import dataclass
 
+from src.rl.algorithms.actor_critic.checkpoint import RunState
+
 
 @dataclass
 class AscensionCurriculum:
@@ -44,12 +46,11 @@ def ascensions(ascension_current: float, num_envs: int) -> list[int]:
 
 
 def step_curriculum(
-    ascension_current: float,
-    streak: int,
+    run_state: RunState,
     win_rate_eval: float,
     ascension_current_eval: float,
     curriculum: AscensionCurriculum,
-) -> tuple[float, int]:
+) -> None:
     """Advance the soft-curriculum position on sustained eval wins at it.
 
     Batteries played at an earlier position are skipped entirely (neither count nor reset the
@@ -59,29 +60,24 @@ def step_curriculum(
 
     Parameters
     ----------
-    ascension_current : float
-        The soft-curriculum position.
-    streak : int
-        The consecutive passes at ascension_current so far.
+    run_state : RunState
+        The run's progress; its ascension_current and streak are updated in place.
     win_rate_eval : float
         The battery's win rate.
     ascension_current_eval : float
         The position the battery played at.
     curriculum : AscensionCurriculum
         The win rate a pass needs, the streak that promotes, the step and the highest level.
-
-    Returns
-    -------
-    ascension_current : float
-        The new soft-curriculum position.
-    streak : int
-        The new streak.
     """
-    if ascension_current_eval != ascension_current:
-        return ascension_current, streak
+    if ascension_current_eval != run_state.ascension_current:
+        return
     if win_rate_eval < curriculum.promote_win_rate:
-        return ascension_current, 0
-    streak += 1
-    if streak < curriculum.promote_streak:
-        return ascension_current, streak
-    return min(ascension_current + curriculum.curriculum_step, float(curriculum.ascension_max)), 0
+        run_state.streak = 0
+        return
+    run_state.streak += 1
+    if run_state.streak < curriculum.promote_streak:
+        return
+    run_state.ascension_current = min(
+        run_state.ascension_current + curriculum.curriculum_step, float(curriculum.ascension_max)
+    )
+    run_state.streak = 0

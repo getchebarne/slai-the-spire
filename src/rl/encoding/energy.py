@@ -34,10 +34,10 @@ def _encode_energy_into(energy: Energy, out: np.ndarray) -> None:
 
 
 def encode_batch_energy(batch_game_state: list[GameState], device: torch.device) -> torch.Tensor:
-    num_states = len(batch_game_state)
+    batch_size = len(batch_game_state)
 
     # Pre-allocate NumPy array
-    np_out = np.zeros((num_states, ENCODING_DIM_ENERGY), dtype=np.float32)
+    np_out = np.zeros((batch_size, ENCODING_DIM_ENERGY), dtype=np.float32)
 
     for b, game_state in enumerate(batch_game_state):
         combat = game_state.combat
