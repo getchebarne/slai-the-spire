@@ -99,10 +99,9 @@ def game_won(game_state: slai.GameState) -> bool:
 def compute_reward(
     game_state: slai.GameState,
     game_state_next: slai.GameState,
-    terminated: bool,
+    done: bool,
     gamma: float,
     action: slai.Action | None = None,
-    truncated: bool = False,
 ) -> np.ndarray:
     """Compute the per-stream reward, index-aligned with RewardStream.
 
@@ -114,14 +113,13 @@ def compute_reward(
         The state before the step.
     game_state_next : slai.GameState
         The state after the step.
-    terminated : bool
-        Whether the game ended this step.
+    done : bool
+        Whether the episode ended this step: the game ended, or the step cut it at the episode
+        step limit.
     gamma : float
         The trainer's discount, γ.
     action : slai.Action | None, default None
         The step's action, for the gold spent at a Shop.
-    truncated : bool, default False
-        Whether the step cut the game at the episode step limit, which ends it as a death.
 
     Returns
     -------
@@ -132,7 +130,7 @@ def compute_reward(
     won = game_won(game_state_next)
 
     # Any end but a win pays a death: a death, a cut at the step limit, a door-shut kill
-    death = (terminated or truncated) and not won
+    death = done and not won
     health_next = 0 if death else game_state_next.character.health
 
     # Potential-based, γ·Φ(s') − Φ(s): the episode sum telescopes to its endpoints. γ must

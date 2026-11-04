@@ -12,25 +12,20 @@ import torch.multiprocessing as mp
 
 from src.rl.actions import action_from_actiontype
 from src.rl.algorithms.actor_critic.curriculum import ascensions
-from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
-from src.rl.algorithms.actor_critic.episode import KEY_ACT3_RATE
-from src.rl.algorithms.actor_critic.episode import KEY_ACT4_RATE
-from src.rl.algorithms.actor_critic.episode import KEY_FLOOR_AVG
-from src.rl.algorithms.actor_critic.episode import KEY_REWARD_AVG
-from src.rl.algorithms.actor_critic.episode import KEY_WIN_RATE
-from src.rl.algorithms.actor_critic.episode import MAX_STEPS_EPISODE
-from src.rl.algorithms.actor_critic.episode import PREFIX_EVAL
-from src.rl.algorithms.actor_critic.episode import EpisodeStats
-from src.rl.algorithms.actor_critic.episode import aggregate_episode_stats
-from src.rl.algorithms.actor_critic.episode import finish_episode
-from src.rl.algorithms.actor_critic.episode import make_episode_stats
-from src.rl.algorithms.actor_critic.episode import tally_step
+from src.rl.algorithms.actor_critic.envs import new_env
+from src.rl.algorithms.actor_critic.envs import step_env
+from src.rl.algorithms.actor_critic.stats import KEY_ACT2_RATE
+from src.rl.algorithms.actor_critic.stats import KEY_ACT3_RATE
+from src.rl.algorithms.actor_critic.stats import KEY_ACT4_RATE
+from src.rl.algorithms.actor_critic.stats import KEY_FLOOR_AVG
+from src.rl.algorithms.actor_critic.stats import KEY_RETURN_AVG
+from src.rl.algorithms.actor_critic.stats import KEY_WIN_RATE
+from src.rl.algorithms.actor_critic.stats import PREFIX_EVAL
+from src.rl.algorithms.actor_critic.stats import EpisodeStats
+from src.rl.algorithms.actor_critic.stats import aggregate_episode_stats
 from src.rl.encoding.state import encode_batch_game_state
 from src.rl.models import ActorCritic
-from src.rl.reward import compute_reward
-from src.rl.utils import new_env
 from src.rl.utils import parent_alive
-from src.rl.utils import step_scripted
 
 
 _EVAL_NUM_EPISODES = 64
@@ -40,18 +35,17 @@ _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # Fixed test set => low-variance
 # train()'s eval print.
 EVAL_WIN_RATE = PREFIX_EVAL + KEY_WIN_RATE
 EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
-EVAL_REWARD_AVG = PREFIX_EVAL + KEY_REWARD_AVG
+EVAL_RETURN_AVG = PREFIX_EVAL + KEY_RETURN_AVG
 EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
 EVAL_ACT3_RATE = PREFIX_EVAL + KEY_ACT3_RATE
 EVAL_ACT4_RATE = PREFIX_EVAL + KEY_ACT4_RATE
 
 
 def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:
-    env = new_env(ascension)
-    game_state = env.reset(seed=seed)
-    stats = make_episode_stats()
-    terminated = truncated = False
-    while not (terminated or truncated):
+    env, game_state = new_env(ascension, seed)
+    stats = EpisodeStats()
+    done = False
+    while not done:
         legal_actions = env.get_legal_actions()
         if not legal_actions:
             raise RuntimeError(
@@ -64,15 +58,7 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
 
         # Game step
         action = action_from_actiontype(x_action, 0, game_state)
-        game_state_next, terminated = step_scripted(env, action)
-
-        # As in training, the step that reaches the step limit ends the game as a death
-        truncated = not terminated and stats.length + 1 >= MAX_STEPS_EPISODE
-        reward = compute_reward(game_state, game_state_next, terminated, gamma, action, truncated)
-        tally_step(stats, game_state, game_state_next, action, reward, gamma)
-        game_state = game_state_next
-
-    finish_episode(stats, game_state, terminated)
+        game_state, _, done = step_env(env, game_state, stats, action, gamma)
     return stats
 
 
@@ -187,7 +173,7 @@ def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | Non
     return evaluator.conn.recv()
 
 
-def stop_eval(evaluator: Evaluator) -> None:
+def stop_evaluator(evaluator: Evaluator) -> None:
     evaluator.process.kill()  # It ignores SIGTERM, and an eval in progress has nothing to save
     evaluator.process.join()
 
@@ -231,7 +217,7 @@ def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    # A learner killed outright can't stop this process
+    # A Learner killed outright can't stop this process
     threading.Thread(target=_exit_when_orphaned, daemon=True).start()
     torch.set_num_threads(1)  # Keeps the eval on the spare core, off the training critical path
     model = ActorCritic(**model_config)
@@ -239,18 +225,18 @@ def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> 
     while True:
         try:
             state_dict, iteration, ascension_current = conn.recv()
-        except (EOFError, OSError):  # The learner is gone
+        except (EOFError, OSError):  # The Learner is gone
             return
         model.load_state_dict(state_dict)
         metrics = run_eval_battery(model, gamma, ascension_current)
         try:
             conn.send((iteration, ascension_current, metrics))
-        except BrokenPipeError:  # The learner is gone
+        except BrokenPipeError:  # The Learner is gone
             return
 
 
 def _exit_when_orphaned() -> None:
-    """End this process, even mid-battery, once the learner is gone."""
+    """End this process, even mid-battery, once the Learner is gone."""
     while parent_alive():
         time.sleep(1.0)
     os._exit(0)

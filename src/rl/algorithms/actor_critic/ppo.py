@@ -78,14 +78,14 @@ def _compute_gae(
 def _recompute(
     model: ActorCritic, x_rollout: X_Rollout, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Recompute the rollout's log-probs and values under the learner's current weights.
+    """Recompute the rollout's log-probs and values under the Learner's current weights.
 
     The model runs a minibatch of states at a time.
 
     Parameters
     ----------
     model : ActorCritic
-        The learner's model.
+        The Learner's model.
     x_rollout : X_Rollout
         The rollout: T steps of E games.
     minibatch_size : int
@@ -126,19 +126,19 @@ def _recompute(
 
 
 def prepare_batch(
-    model: ActorCritic, x_rollout: X_Rollout, gamma: float, ppo: PPOConfig
+    model: ActorCritic, x_rollout: X_Rollout, gamma: float, ppo_config: PPOConfig
 ) -> X_TrainingBatch:
     """Prepare the update's batch: GAE, and the anchor π_prox the clip and the KL measure from.
 
     Parameters
     ----------
     model : ActorCritic
-        The learner's model; its current weights give π_prox and the values.
+        The Learner's model; its current weights give π_prox and the values.
     x_rollout : X_Rollout
         The collected rollout.
     gamma : float
         The discount.
-    ppo : PPOConfig
+    ppo_config : PPOConfig
         The PPO settings, for GAE's λ and the minibatch size.
 
     Returns
@@ -149,7 +149,7 @@ def prepare_batch(
     """
     T, E, K = x_rollout.x_rewards.shape
     x_log_probs_prox, x_values_prox, x_values_final = _recompute(
-        model, x_rollout, ppo.minibatch_size
+        model, x_rollout, ppo_config.minibatch_size
     )
 
     x_returns, x_advantages = _compute_gae(
@@ -158,7 +158,7 @@ def prepare_batch(
         x_rollout.x_dones.unsqueeze(-1),
         x_values_final,
         gamma,
-        ppo.lam,
+        ppo_config.lam,
     )
 
     # Policy advantage: per-stream advantages summed (≡ single-critic GAE on the
@@ -254,7 +254,7 @@ def update_ppo(
     model: ActorCritic,
     batch: X_TrainingBatch,
     optimizer: torch.optim.Optimizer,
-    ppo: PPOConfig,
+    ppo_config: PPOConfig,
     device: torch.device,
     generator: torch.Generator,
 ) -> dict[str, float]:
@@ -263,15 +263,15 @@ def update_ppo(
     Parameters
     ----------
     model : ActorCritic
-        The learner's model, updated in place.
+        The Learner's model, updated in place.
     batch : X_TrainingBatch
         The update's batch.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
-    ppo : PPOConfig
+    ppo_config : PPOConfig
         The PPO settings.
     device : torch.device
-        The learner's device.
+        The Learner's device.
     generator : torch.Generator
         The CPU generator the epochs' shuffles draw from.
 
@@ -284,7 +284,7 @@ def update_ppo(
     """
     records: list[dict[str, float]] = []
 
-    # Per-stream explained variance of the values the learner recomputed before the update:
+    # Per-stream explained variance of the values the Learner recomputed before the update:
     # which return stream the critic predicts (EV → 1) and which carries the residual noise
     ev = 1.0 - (batch.x_returns - batch.x_values_prox).var(dim=0) / (
         batch.x_returns.var(dim=0) + 1e-8
@@ -295,22 +295,22 @@ def update_ppo(
     log_weight = batch.x_log_probs_prox - batch.x_log_probs_behavior
     weight = log_weight.exp()
     offpolicy = {
-        "offpolicy/is_weight_mean": weight.clamp(max=ppo.is_clip).mean().item(),
-        "offpolicy/is_weight_truncated": (weight > ppo.is_clip).float().mean().item(),
+        "offpolicy/is_weight_mean": weight.clamp(max=ppo_config.is_clip).mean().item(),
+        "offpolicy/is_weight_truncated": (weight > ppo_config.is_clip).float().mean().item(),
         "offpolicy/kl_behavior_prox": (weight - 1 - log_weight).mean().item(),
     }
 
     # Every epoch's shuffle, planned before the first minibatch runs: the minibatches' states, sent
     # to the device in one copy, and their rows in each block, summed on the CPU. No CPU work then
     # sits between a minibatch's KL read and the next minibatch's launch
-    num_states = len(batch.x_actions)
-    starts = range(0, num_states, ppo.minibatch_size)
+    batch_size = len(batch.x_actions)
+    starts = range(0, batch_size, ppo_config.minibatch_size)
     x_order = torch.stack(
-        [torch.randperm(num_states, generator=generator) for _ in range(ppo.num_epochs)]
+        [torch.randperm(batch_size, generator=generator) for _ in range(ppo_config.num_epochs)]
     )
     x_count_totals = [
         [
-            batch.x_count_cpu[x_order_epoch[start : start + ppo.minibatch_size]].sum(0)
+            batch.x_count_cpu[x_order_epoch[start : start + ppo_config.minibatch_size]].sum(0)
             for start in starts
         ]
         for x_order_epoch in x_order
@@ -320,11 +320,11 @@ def update_ppo(
     )
 
     epochs_run = 0.0
-    for epoch in range(ppo.num_epochs):
+    for epoch in range(ppo_config.num_epochs):
         epoch_start = len(records)
         stopped = False
         for start, x_count_total in zip(starts, x_count_totals[epoch]):
-            x_states = x_order[epoch, start : start + ppo.minibatch_size]
+            x_states = x_order[epoch, start : start + ppo_config.minibatch_size]
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
                 take_states(batch.x_gs, x_states, x_count_total),
                 batch.x_actions[x_states],
@@ -338,17 +338,17 @@ def update_ppo(
             # sample by π_prox / π_behavior, capped, for the weights that played
             ratio = torch.exp(log_probs_new - log_probs_prox)
             weight = torch.exp(log_probs_prox - batch.x_log_probs_behavior[x_states]).clamp(
-                max=ppo.is_clip
+                max=ppo_config.is_clip
             )
             surr1 = ratio * adv
-            surr2 = torch.clamp(ratio, 1 - ppo.clip_eps, 1 + ppo.clip_eps) * adv
+            surr2 = torch.clamp(ratio, 1 - ppo_config.clip_eps, 1 + ppo_config.clip_eps) * adv
             loss_policy = -torch.mean(weight * torch.min(surr1, surr2))
 
             # Value loss: summed over streams, mean over the batch, so each stream's gradient
             # keeps the single-critic scale (a mean over K would divide coef_value by K)
-            if ppo.clip_value_loss:
+            if ppo_config.clip_value_loss:
                 values_clipped = values_prox + torch.clamp(
-                    values_new - values_prox, -ppo.clip_eps, ppo.clip_eps
+                    values_new - values_prox, -ppo_config.clip_eps, ppo_config.clip_eps
                 )
                 lv_unclipped = torch.pow(values_new - returns, 2)
                 lv_clipped = torch.pow(values_clipped - returns, 2)
@@ -365,15 +365,15 @@ def update_ppo(
             loss_kl_uniform = torch.mean(kl_uniform.sum(dim=-1))
             loss = (
                 loss_policy
-                + ppo.coef_value * loss_value
-                + ppo.coef_entropy * loss_entropy
-                + ppo.coef_kl_uniform * loss_kl_uniform
+                + ppo_config.coef_value * loss_value
+                + ppo_config.coef_entropy * loss_entropy
+                + ppo_config.coef_kl_uniform * loss_kl_uniform
             )
 
             optimizer.zero_grad()
             loss.backward()
             average_gradients(model)
-            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo.max_grad_norm)
+            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo_config.max_grad_norm)
             optimizer.step()
 
             records.append(
@@ -388,7 +388,7 @@ def update_ppo(
                     log_probs_new,
                     log_probs_prox,
                     grad_norm,
-                    ppo.clip_eps,
+                    ppo_config.clip_eps,
                 )
             )
 
@@ -399,21 +399,24 @@ def update_ppo(
 
             # Minibatch trust region: an epoch is many unchecked optimizer steps. 3x, not the
             # epoch stop's 1.5x: a single minibatch's KL estimate is noisy
-            if ppo.target_kl is not None and records[-1]["update/approx_kl"] > 3.0 * ppo.target_kl:
+            if (
+                ppo_config.target_kl is not None
+                and records[-1]["update/approx_kl"] > 3.0 * ppo_config.target_kl
+            ):
                 stopped = True
                 break
-        mb_total = (num_states + ppo.minibatch_size - 1) // ppo.minibatch_size
+        mb_total = (batch_size + ppo_config.minibatch_size - 1) // ppo_config.minibatch_size
         epochs_run += (len(records) - epoch_start) / mb_total
         if stopped:
             break
 
         # Target-KL early stop: the clip bounds each sample's incentive, not the drift
         # across epochs on a frozen log_probs_prox, so stop once it leaves the trust region
-        if ppo.target_kl is not None:
+        if ppo_config.target_kl is not None:
             epoch_kl = sum(r["update/approx_kl"] for r in records[epoch_start:]) / max(
                 1, len(records) - epoch_start
             )
-            if epoch_kl > 1.5 * ppo.target_kl:
+            if epoch_kl > 1.5 * ppo_config.target_kl:
                 break
     metrics = {key: sum(r[key] for r in records) / len(records) for key in records[0]}
     metrics["update/epochs_run"] = float(epochs_run)

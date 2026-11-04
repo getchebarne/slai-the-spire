@@ -1,6 +1,6 @@
 """Data parallelism over GPU ranks launched by torchrun.
 
-Every rank runs its own actor and learner on its own games; the learners average gradients each
+Every rank runs its own Actor and Learner on its own games; the Learners average gradients each
 step, so their weights stay identical. Without torchrun every function is a no-op on rank 0 of 1.
 """
 
@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
-from src.rl.algorithms.actor_critic.episode import EpisodeStats
+from src.rl.algorithms.actor_critic.stats import EpisodeStats
 
 
 @dataclass

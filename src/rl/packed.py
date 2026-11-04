@@ -156,8 +156,8 @@ def share_memory(x_gs: X_GameState) -> X_GameState:
     return _map_fields(x_gs, torch.Tensor.share_memory_)
 
 
-def region_of_states(x_gs: X_GameState, first_state: int, num_states: int) -> X_GameState:
-    """Return the region of the states [first_state, first_state + num_states) in `x_gs`.
+def region_of_states(x_gs: X_GameState, first_state: int, batch_size: int) -> X_GameState:
+    """Return the region of the states [first_state, first_state + batch_size) in `x_gs`.
 
     Parameters
     ----------
@@ -165,7 +165,7 @@ def region_of_states(x_gs: X_GameState, first_state: int, num_states: int) -> X_
         A shared step's game state, whose every field holds the same rows per state.
     first_state : int
         The region's first state.
-    num_states : int
+    batch_size : int
         The region's number of states.
 
     Returns
@@ -178,7 +178,7 @@ def region_of_states(x_gs: X_GameState, first_state: int, num_states: int) -> X_
 
     def region(x_field: torch.Tensor) -> torch.Tensor:
         num_rows_state = len(x_field) // num_states_step
-        return x_field[first_state * num_rows_state : (first_state + num_states) * num_rows_state]
+        return x_field[first_state * num_rows_state : (first_state + batch_size) * num_rows_state]
 
     return _map_fields(x_gs, region)
 

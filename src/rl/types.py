@@ -409,7 +409,7 @@ class X_Step:
 
 @dataclass
 class X_Rollout:
-    """What the actor collected, before GAE.
+    """What the Actor collected, before GAE.
 
     T steps of E games, state t * E + e of the N = T * E states. The `x_gs_final` field is each
     game's state after the last step, for the bootstrap value.

@@ -1,100 +1,92 @@
-import random
-from dataclasses import dataclass
-
 import numpy as np
-import slai
+from slai import Action
+from slai import ActionType
+from slai import GameEnv
+from slai import GameState
 
-from src.rl.algorithms.actor_critic.episode import MAX_STEPS_EPISODE
-from src.rl.algorithms.actor_critic.episode import EpisodeStats
-from src.rl.algorithms.actor_critic.episode import finish_episode
-from src.rl.algorithms.actor_critic.episode import make_episode_stats
-from src.rl.algorithms.actor_critic.episode import tally_step
+from src.rl.algorithms.actor_critic.stats import EpisodeStats
+from src.rl.algorithms.actor_critic.stats import tally_step
+from src.rl.constants import FAST_MODE
+from src.rl.constants import NEOW
 from src.rl.reward import compute_reward
-from src.rl.utils import new_env
-from src.rl.utils import step_scripted
 
 
-@dataclass
-class ShardSettings:
-    """The games one worker plays, and its seed, fixed for the run."""
-
-    # Their indices among the run's games, whose ascensions spread over all of them, so the level
-    # mix doesn't depend on the sharding
-    games: range
-    seed: int
+_MAX_STEPS_EPISODE = 3000
+_SCRIPTED_ACTION_TYPES = frozenset({ActionType.RewardTakeGold, ActionType.RewardTakeGoldStolen})
 
 
-@dataclass
-class Shard:
-    """One worker's games, each with its episode's running tally."""
-
-    batch_env: list[slai.GameEnv]
-    batch_game_state: list[slai.GameState]
-    batch_stats: list[EpisodeStats]
-
-
-def _make_env(ascension: int) -> tuple[slai.GameEnv, slai.GameState]:
-    env = new_env(ascension)
-    game_state = env.reset(seed=random.randint(0, 2**31 - 1))
-    return env, game_state
-
-
-def make_shard(batch_ascension: list[int]) -> Shard:
-    # Each game's tally lives in the shard's `batch_stats`, not per rollout, so an episode that
-    # spans rollouts reports its true totals
-    batch_env, batch_game_state = [], []
-    for ascension in batch_ascension:
-        env, game_state = _make_env(ascension)
-        batch_env.append(env)
-        batch_game_state.append(game_state)
-    return Shard(
-        batch_env=batch_env,
-        batch_game_state=batch_game_state,
-        batch_stats=[make_episode_stats() for _ in batch_ascension],
-    )
+def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
+    env = GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
+    return env, env.reset(seed=seed)
 
 
 def step_env(
-    shard: Shard, j: int, action: slai.Action, gamma: float, ascension: int
-) -> tuple[np.ndarray, EpisodeStats | None]:
-    """Play `action` in game j.
+    env: GameEnv, game_state: GameState, stats: EpisodeStats, action: Action, gamma: float
+) -> tuple[GameState, np.ndarray, bool]:
+    """Play `action` in a game and tally it into its episode's stats.
 
     Parameters
     ----------
-    shard : Shard
-        The worker's games. Game j's state and tally are updated in place, and a game whose
-        episode ended or reached MAX_STEPS_EPISODE steps is replaced by a new one at
-        `ascension`.
-    j : int
-        The game's index in the shard.
-    action : slai.Action
+    env : GameEnv
+        The game.
+    game_state : GameState
+        The game's state before the action.
+    stats : EpisodeStats
+        The episode's running tally, updated in place, and finished once the episode ends or
+        reaches _MAX_STEPS_EPISODE steps.
+    action : Action
         The action to play.
     gamma : float
         The reward's discount.
-    ascension : int
-        The ascension a replacing game starts at.
 
     Returns
     -------
+    game_state_next : GameState
+        The game's state after the action.
     reward : np.ndarray
         (K,) float64. The step's reward, one per reward stream.
-    episode : EpisodeStats | None
-        The episode's stats if the episode ended, None otherwise.
+    done : bool
+        Whether the episode ended, terminated or truncated.
     """
-    game_state = shard.batch_game_state[j]
-    game_state_next, terminated = step_scripted(shard.batch_env[j], action)
+    game_state_next, terminated = _step_scripted(env, action)
 
     # A game at the step limit ends there, truncated, as a death
-    truncated = not terminated and shard.batch_stats[j].length + 1 >= MAX_STEPS_EPISODE
-    reward = compute_reward(
-        game_state, game_state_next, terminated, gamma, action, truncated
-    )  # (K,)
-    tally_step(shard.batch_stats[j], game_state, game_state_next, action, reward, gamma)
-    episode = None
-    if terminated or truncated:
-        # game_state_next is still the pre-reset snapshot here
-        finish_episode(shard.batch_stats[j], game_state_next, terminated)
-        episode, shard.batch_stats[j] = shard.batch_stats[j], make_episode_stats()
-        shard.batch_env[j], game_state_next = _make_env(ascension)
-    shard.batch_game_state[j] = game_state_next
-    return reward, episode
+    truncated = not terminated and stats.length + 1 >= _MAX_STEPS_EPISODE
+    done = terminated or truncated
+
+    # Compute transition reward
+    reward = compute_reward(game_state, game_state_next, done, gamma, action)  # (K,)
+
+    # Compute stats
+    tally_step(stats, game_state, game_state_next, action, reward, gamma, done, truncated)
+
+    # Return next state, transition reward and done flag
+    return game_state_next, reward, done
+
+
+def _step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool]:
+    """Run `env.step(action)`, then the scripted actions until none is legal.
+
+    All of them run inside this one policy step.
+
+    Parameters
+    ----------
+    env : GameEnv
+        The game to step.
+    action : Action
+        The policy's action.
+
+    Returns
+    -------
+    game_state : GameState
+        The state after the last action taken.
+    terminated : bool
+        Whether the game ended.
+    """
+    game_state, terminated = env.step(action)
+    while not terminated:
+        actions_scriptable = [a for a in env.get_legal_actions() if a.action_type in _SCRIPTED_ACTION_TYPES]
+        if not actions_scriptable:
+            break
+        game_state, terminated = env.step(actions_scriptable[0])
+    return game_state, terminated

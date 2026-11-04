@@ -282,9 +282,9 @@ def encode_batch_map(
     x_map_meta : torch.Tensor
         (B, ENCODING_DIM_MAP_META) float32. Each state's Map meta.
     """
-    num_states = len(batch_game_state)
-    np_grid = np.zeros((num_states, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
-    np_meta = np.zeros((num_states, ENCODING_DIM_MAP_META), dtype=np.float32)
+    batch_size = len(batch_game_state)
+    np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
+    np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
 
     for b, game_state in enumerate(batch_game_state):
         map_ = game_state.map

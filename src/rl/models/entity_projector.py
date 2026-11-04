@@ -118,7 +118,7 @@ class EntityProjector(nn.Module):
         """
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
-        num_states = x_gs.x_tokens.x_count.shape[0]
+        batch_size = x_gs.x_tokens.x_count.shape[0]
         num_tokens = x_gs.x_tokens.x_token_kind.shape[0]
 
         # Each token's token kind, Entity kind and state, and each state's tokens
@@ -140,7 +140,7 @@ class EntityProjector(nn.Module):
         # `x_token_kind_index`:   Index of first token of each `TokenKind` for each state
         # Both (B, `len(TokenKind)`)
         x_token_kind_count, x_token_kind_row = _token_kind_tables(
-            x_state, x_token_kind, num_states
+            x_state, x_token_kind, batch_size
         )
 
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
@@ -208,7 +208,7 @@ class EntityProjector(nn.Module):
         )  # (P,)
         x_pending_valid = _project_sparse(self._effects_mlp, x_effect_pending)  # (P, D)
         x_pending = torch.zeros(
-            num_states,
+            batch_size,
             self._dim_entity,
             dtype=x_pending_valid.dtype,
             device=x_pending_valid.device,
@@ -295,7 +295,7 @@ def _add_owned(
 
 
 def _token_kind_tables(
-    x_state: torch.Tensor, x_token_kind: torch.Tensor, num_states: int
+    x_state: torch.Tensor, x_token_kind: torch.Tensor, batch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Count each state's tokens of each token kind and find each token kind's first row.
 
@@ -307,7 +307,7 @@ def _token_kind_tables(
         (N_tok,) long. Each row's state.
     x_token_kind : torch.Tensor
         (N_tok,) long. Each row's token kind.
-    num_states : int
+    batch_size : int
         The number of states, B.
 
     Returns
@@ -324,10 +324,10 @@ def _token_kind_tables(
     #     1. Store the amount of tokens for each kind in each state
     #     2. Store the index of the first token for each token kind in each state
     x_token_kind_count = torch.zeros(
-        (num_states * len(TokenKind),), dtype=torch.long, device=x_state.device
+        (batch_size * len(TokenKind),), dtype=torch.long, device=x_state.device
     )
     x_token_kind_row = torch.full(
-        (num_states * len(TokenKind),), num_tokens, dtype=torch.long, device=x_state.device
+        (batch_size * len(TokenKind),), num_tokens, dtype=torch.long, device=x_state.device
     )
 
     # Calculate the key: each token's state and token kind
@@ -348,7 +348,7 @@ def _token_kind_tables(
     )
 
     # Return as (B, len(TokenKind)) pair
-    return x_token_kind_count.view(num_states, -1), x_token_kind_row.view(num_states, -1)
+    return x_token_kind_count.view(batch_size, -1), x_token_kind_row.view(batch_size, -1)
 
 
 class _SumSparseDenseBackward(torch.autograd.Function):

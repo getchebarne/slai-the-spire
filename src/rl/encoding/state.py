@@ -586,15 +586,15 @@ def _encode_batch_ascension(
     return torch.from_numpy(np_out).to(device)
 
 
-def empty_game_state(num_states: int) -> X_GameState:
-    """Return `num_states` game states with nothing in them.
+def empty_game_state(batch_size: int) -> X_GameState:
+    """Return `batch_size` game states with nothing in them.
 
     Every block has rows for all of them at every cap: the shared step's, which each worker fills
     from its region's start.
 
     Parameters
     ----------
-    num_states : int
+    batch_size : int
         The number of game states, B.
 
     Returns
@@ -602,7 +602,7 @@ def empty_game_state(num_states: int) -> X_GameState:
     X_GameState
         The game states, every tensor zero.
     """
-    num_tokens = num_states * CAP_TOKENS
+    num_tokens = batch_size * CAP_TOKENS
     return X_GameState(
         x_tokens=X_Tokens(
             x_column=torch.zeros(num_tokens, ENCODING_DIM_SPARSE_TOKEN, dtype=torch.int16),
@@ -611,33 +611,33 @@ def empty_game_state(num_states: int) -> X_GameState:
             x_legal=torch.zeros(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
             x_needs_target=torch.zeros(num_tokens, dtype=torch.bool),
             x_node_idx=torch.zeros(num_tokens, dtype=torch.int16),
-            x_effect_rows=_empty_owned(num_states, MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT),
-            x_modifier_rows=_empty_owned(num_states, MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER),
-            x_count=torch.zeros(num_states, dtype=torch.long),
+            x_effect_rows=_empty_owned(batch_size, MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT),
+            x_modifier_rows=_empty_owned(batch_size, MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER),
+            x_count=torch.zeros(batch_size, dtype=torch.long),
         ),
         x_effect_pending=X_EffectPending(
-            x_column=torch.zeros(num_states, ENCODING_DIM_SPARSE_EFFECT, dtype=torch.int16),
-            x_value=torch.zeros(num_states, ENCODING_DIM_SPARSE_EFFECT),
-            x_count=torch.zeros(num_states, dtype=torch.long),
+            x_column=torch.zeros(batch_size, ENCODING_DIM_SPARSE_EFFECT, dtype=torch.int16),
+            x_value=torch.zeros(batch_size, ENCODING_DIM_SPARSE_EFFECT),
+            x_count=torch.zeros(batch_size, dtype=torch.long),
         ),
-        x_energy=torch.zeros(num_states, ENCODING_DIM_ENERGY),
-        x_map_grid=torch.zeros(num_states, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
-        x_map_meta=torch.zeros(num_states, ENCODING_DIM_MAP_META),
-        x_focus=torch.zeros(num_states, ENCODING_DIM_FOCUS),
-        x_ascension=torch.zeros(num_states, ENCODING_DIM_ASCENSION),
-        x_reward_meta=torch.zeros(num_states, ENCODING_DIM_REWARD_META),
-        x_shop_meta=torch.zeros(num_states, ENCODING_DIM_SHOP_META),
-        x_event_meta=torch.zeros(num_states, ENCODING_DIM_EVENT_META),
-        x_legal_action_type=torch.zeros(num_states, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_energy=torch.zeros(batch_size, ENCODING_DIM_ENERGY),
+        x_map_grid=torch.zeros(batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
+        x_map_meta=torch.zeros(batch_size, ENCODING_DIM_MAP_META),
+        x_focus=torch.zeros(batch_size, ENCODING_DIM_FOCUS),
+        x_ascension=torch.zeros(batch_size, ENCODING_DIM_ASCENSION),
+        x_reward_meta=torch.zeros(batch_size, ENCODING_DIM_REWARD_META),
+        x_shop_meta=torch.zeros(batch_size, ENCODING_DIM_SHOP_META),
+        x_event_meta=torch.zeros(batch_size, ENCODING_DIM_EVENT_META),
+        x_legal_action_type=torch.zeros(batch_size, NUM_ACTION_TYPES, dtype=torch.bool),
     )
 
 
-def _empty_owned(num_states: int, cap: int, num_sparse: int) -> X_OwnedSparse:
-    num_rows = num_states * cap
+def _empty_owned(batch_size: int, cap: int, num_sparse: int) -> X_OwnedSparse:
+    num_rows = batch_size * cap
     return X_OwnedSparse(
         x_column=torch.zeros(num_rows, num_sparse, dtype=torch.int16),
         x_value=torch.zeros(num_rows, num_sparse),
-        x_count=torch.zeros(num_states * CAP_TOKENS, dtype=torch.int16),
+        x_count=torch.zeros(batch_size * CAP_TOKENS, dtype=torch.int16),
     )
 
 

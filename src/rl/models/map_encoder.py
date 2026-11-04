@@ -51,10 +51,10 @@ def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
     torch.Tensor
         (B, words) long. Each grid's 0/1 cells, 63 to a word.
     """
-    num_states, device = x_nodes.shape[0], x_nodes.device
+    batch_size, device = x_nodes.shape[0], x_nodes.device
     x_bit_shifts = torch.arange(62, -1, -1, device=device)
-    x_bits = F.pad(x_nodes.reshape(num_states, -1).long(), (0, -_GRID_BITS % 63))
-    return (x_bits.view(num_states, -1, 63) << x_bit_shifts).sum(-1)  # (B, words)
+    x_bits = F.pad(x_nodes.reshape(batch_size, -1).long(), (0, -_GRID_BITS % 63))
+    return (x_bits.view(batch_size, -1, 63) << x_bit_shifts).sum(-1)  # (B, words)
 
 
 class MapGNN(nn.Module):
@@ -90,7 +90,7 @@ class MapGNN(nn.Module):
         )
 
         # The GNN's computation as a plain function, which actor_critic.compile_hot_paths swaps for
-        # its compiled version on the learner's model
+        # its compiled version on the Learner's model
         self.message_passing = message_passing
 
     def forward(self, x_grid: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -111,14 +111,14 @@ class MapGNN(nn.Module):
         x_map_readout : torch.Tensor
             (B, hidden). Each state's readout.
         """
-        num_states = x_grid.shape[0]
+        batch_size = x_grid.shape[0]
 
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
-        x_nodes = x_grid.reshape(num_states, _NUM_NODES, NUM_CHANNELS)
+        x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
 
-        if num_states < _DEDUP_MIN_BATCH:
+        if batch_size < _DEDUP_MIN_BATCH:
             x_hidden, x_readout = self.message_passing(self, x_nodes)
-            return x_hidden, torch.arange(num_states, device=x_grid.device), x_readout
+            return x_hidden, torch.arange(batch_size, device=x_grid.device), x_readout
 
         # The game sits on one Map node for many steps, so its grid repeats across a minibatch:
         # run the GNN on unique grids once and gather back (exact)
@@ -129,7 +129,7 @@ class MapGNN(nn.Module):
         x_uniq, x_inverse = torch.unique(x_packed, dim=0, return_inverse=True)
 
         x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_grid.device)
-        x_rep[x_inverse] = torch.arange(num_states, device=x_grid.device)
+        x_rep[x_inverse] = torch.arange(batch_size, device=x_grid.device)
 
         # Encode the unique Maps, and gather the readout back
         x_hidden, x_readout_uniq = self.message_passing(self, x_nodes[x_rep])

@@ -1,240 +1,20 @@
+"""The training run's entrypoint."""
+
 import argparse
-import random
 import signal
 import threading
-import time
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 from src.rl.algorithms.actor_critic import distributed
-from src.rl.algorithms.actor_critic.checkpoint import archive_path
-from src.rl.algorithms.actor_critic.checkpoint import checkpoint_path
-from src.rl.algorithms.actor_critic.checkpoint import experiment_dir
-from src.rl.algorithms.actor_critic.checkpoint import load_checkpoint
+from src.rl.algorithms.actor_critic.actor import RolloutConfig
 from src.rl.algorithms.actor_critic.checkpoint import make_experiment_dir
-from src.rl.algorithms.actor_critic.checkpoint import save_checkpoint
 from src.rl.algorithms.actor_critic.curriculum import AscensionCurriculum
-from src.rl.algorithms.actor_critic.curriculum import step_curriculum
-from src.rl.algorithms.actor_critic.distributed import RankInfo
-from src.rl.algorithms.actor_critic.episode import episode_scalars
-from src.rl.algorithms.actor_critic.evals import EVAL_ACT2_RATE
-from src.rl.algorithms.actor_critic.evals import EVAL_ACT3_RATE
-from src.rl.algorithms.actor_critic.evals import EVAL_ACT4_RATE
-from src.rl.algorithms.actor_critic.evals import EVAL_FLOOR_AVG
-from src.rl.algorithms.actor_critic.evals import EVAL_REWARD_AVG
-from src.rl.algorithms.actor_critic.evals import EVAL_WIN_RATE
-from src.rl.algorithms.actor_critic.evals import poll_eval
-from src.rl.algorithms.actor_critic.evals import start_eval
-from src.rl.algorithms.actor_critic.evals import stop_eval
-from src.rl.algorithms.actor_critic.evals import submit_eval
+from src.rl.algorithms.actor_critic.learner import CadenceConfig
+from src.rl.algorithms.actor_critic.learner import train
 from src.rl.algorithms.actor_critic.ppo import PPOConfig
-from src.rl.algorithms.actor_critic.ppo import adapt_lr_scale
-from src.rl.algorithms.actor_critic.ppo import prepare_batch
-from src.rl.algorithms.actor_critic.ppo import update_ppo
-from src.rl.algorithms.actor_critic.runtime import ActorSettings
-from src.rl.algorithms.actor_critic.runtime import publish
-from src.rl.algorithms.actor_critic.runtime import start_actor
-from src.rl.algorithms.actor_critic.runtime import stop_actor
-from src.rl.algorithms.actor_critic.runtime import take
-from src.rl.algorithms.actor_critic.workers import RolloutConfig
-from src.rl.models import ActorCritic
-from src.rl.models.actor_critic import compile_hot_paths
-from src.rl.utils import init_optimizer
 from src.rl.utils import load_config
-from src.rl.utils import set_rng_seeds
-
-
-@dataclass
-class CadenceConfig:
-    """The run's cadences, in iterations.
-
-    Every how many iterations the run logs, checkpoints, starts an eval and archives a copy of
-    its checkpoint.
-    """
-
-    log_every: int
-    save_every: int
-    eval_every: int
-    archive_every: int
-
-
-def train(
-    exp_name: str,
-    num_iterations: int,
-    cadence: CadenceConfig,
-    model: ActorCritic,
-    model_config: dict,
-    optimizer: torch.optim.Optimizer,
-    gamma: float,
-    curriculum: AscensionCurriculum,
-    ppo: PPOConfig,
-    rollout_config: RolloutConfig,
-    rank_info: RankInfo,
-    stop: threading.Event,
-    iteration_start: int,
-    total_steps: int,
-    ascension_current: float,
-    lr_scale: float,
-) -> None:
-    # Rank 0 alone evaluates, logs and checkpoints
-    writer = SummaryWriter(experiment_dir(exp_name)) if rank_info.rank == 0 else None
-    distributed.broadcast_from_rank0(model)
-    ckpt_path = checkpoint_path(exp_name)
-    streak = 0
-
-    # Eval runs a fixed-seed greedy battery in a persistent side process
-    evaluator = start_eval(model_config, gamma) if rank_info.rank == 0 else None
-
-    # Adaptive-KL lr: base recovered from the (possibly resumed-scaled) group lr
-    base_lr = optimizer.param_groups[0]["lr"] / lr_scale
-
-    # From here on a failure must still stop the actor: this process's exit would wait for it
-    handoff = None
-    try:
-        # The actor process plays one update behind; the learner's own RNG keeps runs reproducible
-        handoff, actor = start_actor(
-            model,
-            ActorSettings(
-                model_config=model_config,
-                rollout_config=rollout_config,
-                device=rank_info.device,
-                version_first=iteration_start,
-                ascension_current=ascension_current,
-                gamma=gamma,
-                seed=random.randint(0, 2**31 - 1),
-                x_rng=(
-                    torch.cuda.get_rng_state(rank_info.device)
-                    if rank_info.device.type == "cuda"
-                    else torch.get_rng_state()
-                ),
-                matmul_precision=torch.get_float32_matmul_precision(),
-                num_threads=torch.get_num_threads(),
-                deterministic=torch.are_deterministic_algorithms_enabled(),
-                use_duck_shape=torch.fx.experimental._config.use_duck_shape,
-            ),
-        )
-
-        # The learner's model only, on the GPU: the actor process builds an eager model of its
-        # own, and the CPU parity runs stay bit-identical
-        if rank_info.device.type == "cuda":
-            compile_hot_paths(model)
-        generator = torch.Generator().manual_seed(random.randint(0, 2**31 - 1))
-        steps_per_iteration = (
-            rank_info.world_size * rollout_config.rollout_length * rollout_config.num_envs
-        )
-        t_iteration = time.perf_counter()
-        for iteration in range(iteration_start, num_iterations):
-            delivery, seconds_learner_wait = take(actor)
-            t_update = time.perf_counter()
-            total_steps += steps_per_iteration
-            batch = prepare_batch(model, delivery.x_rollout, gamma, ppo)
-            metrics = update_ppo(model, batch, optimizer, ppo, rank_info.device, generator)
-            seconds_update = time.perf_counter() - t_update
-
-            # Adaptive-KL lr: the early stops bound epochs, not the first epoch's step size
-            if ppo.target_kl is not None:
-                lr_scale = adapt_lr_scale(lr_scale, metrics["update/approx_kl"], ppo.target_kl)
-                for group in optimizer.param_groups:
-                    group["lr"] = base_lr * lr_scale
-                metrics["update/lr_scale"] = lr_scale
-
-            # Eval battery (persistent worker): drain a finished one and, on the eval
-            # cadence when idle, launch a new one - both non-blocking. Logged at iteration_eval.
-            battery = poll_eval(evaluator) if evaluator is not None else None
-            if battery is not None:
-                iteration_eval, ascension_current_eval, metrics_eval = battery
-                assert writer is not None
-                for key, value in metrics_eval.items():
-                    writer.add_scalar(key, value, iteration_eval)
-                writer.add_scalar("eval/ascension", ascension_current_eval, iteration_eval)
-                print(
-                    f"  eval@{iteration_eval} c={ascension_current_eval:.2f}: "
-                    f"win_rate={metrics_eval[EVAL_WIN_RATE]:.3f} "
-                    f"floor={metrics_eval[EVAL_FLOOR_AVG]:.2f} "
-                    f"act2={metrics_eval[EVAL_ACT2_RATE]:.2f} "
-                    f"act3={metrics_eval[EVAL_ACT3_RATE]:.2f} "
-                    f"act4={metrics_eval[EVAL_ACT4_RATE]:.2f} "
-                    f"reward={metrics_eval[EVAL_REWARD_AVG]:.4f}"
-                )
-                ascension_current, streak = step_curriculum(
-                    ascension_current,
-                    streak,
-                    metrics_eval[EVAL_WIN_RATE],
-                    ascension_current_eval,
-                    curriculum,
-                )
-            ascension_current = distributed.broadcast_float(ascension_current, rank_info.device)
-            publish(handoff, model, iteration + 1, ascension_current)
-            t_now = time.perf_counter()
-            samples_per_s = steps_per_iteration / (t_now - t_iteration)
-            t_iteration = t_now
-
-            if evaluator is not None and iteration % cadence.eval_every == 0:
-                submit_eval(evaluator, model, iteration, ascension_current)
-            if iteration % cadence.log_every == 0:
-                episodes = distributed.gather_episodes(delivery.episodes)
-                if writer is not None:
-                    print(
-                        f"Iter {iteration} | steps={total_steps} | "
-                        f"policy={metrics['loss/policy']:.4f} "
-                        f"value={metrics['loss/value']:.4f} | episodes={len(episodes)}"
-                    )
-                    scalars = {
-                        **metrics,
-                        "train/ascension": ascension_current,
-                        "Steps/total": total_steps,
-                        "Time/rollout": delivery.seconds_collect,
-                        "Time/update": seconds_update,
-                        "pipeline/actor_wait": delivery.seconds_wait,
-                        "pipeline/learner_wait": seconds_learner_wait,
-                        "pipeline/samples_per_s": samples_per_s,
-                        **delivery.metrics,
-                        **episode_scalars(episodes),
-                    }
-                    if rank_info.device.type == "cuda":
-                        peak = torch.cuda.max_memory_reserved(rank_info.device)
-                        scalars["memory/learner_gb"] = peak / 2**30
-                    for key, value in scalars.items():
-                        writer.add_scalar(key, value, iteration)
-            if rank_info.rank == 0 and iteration % cadence.save_every == 0:
-                save_checkpoint(
-                    ckpt_path,
-                    model,
-                    optimizer,
-                    iteration,
-                    total_steps,
-                    ascension_current,
-                    lr_scale,
-                )
-            if rank_info.rank == 0 and iteration > 0 and iteration % cadence.archive_every == 0:
-                path = archive_path(exp_name, iteration)
-                save_checkpoint(
-                    path, model, optimizer, iteration, total_steps, ascension_current, lr_scale
-                )
-
-            # A stop request on any rank stops every rank here, between collectives
-            if distributed.any_rank(stop.is_set(), rank_info.device):
-                if rank_info.rank == 0:
-                    print("\nTraining interrupted. Saving checkpoint...")
-                    save_checkpoint(
-                        ckpt_path,
-                        model,
-                        optimizer,
-                        iteration,
-                        total_steps,
-                        ascension_current,
-                        lr_scale,
-                    )
-                break
-    finally:
-        if handoff is not None:
-            stop_actor(handoff, actor)
-        if evaluator is not None:
-            stop_eval(evaluator)
-        if writer is not None:
-            writer.close()
 
 
 if __name__ == "__main__":
@@ -261,60 +41,23 @@ if __name__ == "__main__":
     # recompile each time those sizes part
     torch.fx.experimental._config.use_duck_shape = False
 
-    # Set seeds
-    seed = config["seed"]
-    set_rng_seeds(seed)
-
-    # Instance `ActorCritic` model and optimizer
-    model = ActorCritic(**config["model"]).to(rank_info.device)
-    optimizer = init_optimizer(config["optimizer"]["name"], model, **config["optimizer"]["kwargs"])
     if rank_info.rank == 0:
         make_experiment_dir(config["exp_name"], args.config_path)
-
-    # Load checkpoint
-    ckpt_path = checkpoint_path(config["exp_name"])
-    iteration_start, total_steps, ascension_current, lr_scale = load_checkpoint(
-        ckpt_path, model, optimizer
-    )
-
-    # Offset the stream seeds so a resume doesn't replay the run's env-seed sequence
-    # Every rank plays its own games; rank 0 keeps the single-GPU seeds
-    if iteration_start > 0 or rank_info.rank > 0:
-        set_rng_seeds(seed + iteration_start + 7919 * rank_info.rank)
-
-    curriculum = AscensionCurriculum(**config["curriculum"])
-    if ascension_current is None:
-        ascension_current = curriculum.ascension_start
     rollout_config = RolloutConfig(**config["rollout"])
     if args.rollout_workers is not None:
         rollout_config = replace(rollout_config, rollout_workers=args.rollout_workers)
-    if rank_info.rank == 0:
-        if iteration_start > 0:
-            print(f"Resuming from {ckpt_path}: iteration {iteration_start}, {total_steps} steps")
-        print(f"Starting training: {config['exp_name']} on {rank_info.world_size} rank(s)")
-        n_params = sum(p.numel() for p in model.parameters())
-        print(f"  params={n_params:,} ({n_params / 1e6:.2f}M)")
-        print(
-            f"  num_envs={rollout_config.num_envs}, "
-            f"rollout_length={rollout_config.rollout_length}, "
-            f"rollout_workers={rollout_config.rollout_workers}"
-        )
     train(
         exp_name=config["exp_name"],
         num_iterations=config["num_iterations"],
-        cadence=CadenceConfig(**config["cadence"]),
-        model=model,
+        seed=config["seed"],
+        cadence_config=CadenceConfig(**config["cadence"]),
         model_config=config["model"],
-        optimizer=optimizer,
+        optimizer_config=config["optimizer"],
         gamma=config["gamma"],
-        curriculum=curriculum,
-        ppo=PPOConfig(**config["ppo"]),
+        curriculum=AscensionCurriculum(**config["curriculum"]),
+        ppo_config=PPOConfig(**config["ppo"]),
         rollout_config=rollout_config,
         rank_info=rank_info,
         stop=stop,
-        iteration_start=iteration_start,
-        total_steps=total_steps,
-        ascension_current=ascension_current,
-        lr_scale=lr_scale,
     )
     distributed.close()
