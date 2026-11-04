@@ -29,10 +29,10 @@ class PPOConfig:
 
 
 def _compute_gae(
-    rewards: torch.Tensor,
-    values: torch.Tensor,
-    dones: torch.Tensor,
-    bootstrap: torch.Tensor,
+    x_rewards: torch.Tensor,
+    x_values: torch.Tensor,
+    x_dones: torch.Tensor,
+    x_values_final: torch.Tensor,
     gamma: float,
     lam: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -43,13 +43,13 @@ def _compute_gae(
 
     Parameters
     ----------
-    rewards : torch.Tensor
+    x_rewards : torch.Tensor
         (T, E, K) float32. Each step's rewards, one per reward stream.
-    values : torch.Tensor
+    x_values : torch.Tensor
         (T, E, K). Each state's values.
-    dones : torch.Tensor
+    x_dones : torch.Tensor
         (T, E, 1) float32. Whether each step ended its game's episode: 1.0 if so, else 0.0.
-    bootstrap : torch.Tensor
+    x_values_final : torch.Tensor
         (E, K). Each game's value after the last step.
     gamma : float
         The discount.
@@ -58,25 +58,25 @@ def _compute_gae(
 
     Returns
     -------
-    returns : torch.Tensor
+    x_returns : torch.Tensor
         (T, E, K). Each step's advantages plus its values.
-    advantages : torch.Tensor
+    x_advantages : torch.Tensor
         (T, E, K). Each step's advantages.
     """
-    T = rewards.shape[0]
-    advantages = torch.zeros_like(rewards)
-    gae = torch.zeros_like(bootstrap)
+    T = x_rewards.shape[0]
+    x_advantages = torch.zeros_like(x_rewards)
+    x_gae = torch.zeros_like(x_values_final)
     for t in reversed(range(T)):
-        next_value = bootstrap if t == T - 1 else values[t + 1]
-        non_terminal = 1.0 - dones[t]
-        delta = rewards[t] + gamma * next_value * non_terminal - values[t]
-        gae = delta + gamma * lam * non_terminal * gae
-        advantages[t] = gae
-    return advantages + values, advantages
+        x_value_next = x_values_final if t == T - 1 else x_values[t + 1]
+        x_non_terminal = 1.0 - x_dones[t]
+        x_delta = x_rewards[t] + gamma * x_value_next * x_non_terminal - x_values[t]
+        x_gae = x_delta + gamma * lam * x_non_terminal * x_gae
+        x_advantages[t] = x_gae
+    return x_advantages + x_values, x_advantages
 
 
 def _recompute(
-    model: ActorCritic, rollout: X_Rollout, minibatch_size: int
+    model: ActorCritic, x_rollout: X_Rollout, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the learner's current weights.
 
@@ -86,47 +86,47 @@ def _recompute(
     ----------
     model : ActorCritic
         The learner's model.
-    rollout : X_Rollout
+    x_rollout : X_Rollout
         The rollout: T steps of E games.
     minibatch_size : int
         The most states per forward.
 
     Returns
     -------
-    log_probs : torch.Tensor
+    x_log_probs_prox : torch.Tensor
         (N,). Each state's recorded action's log-prob, summed over the levels.
-    values : torch.Tensor
+    x_values_prox : torch.Tensor
         (T, E, K). Each state's values.
-    final_values : torch.Tensor
+    x_values_final : torch.Tensor
         (E, K). Each game's final value.
     """
-    T, E, K = rollout.rewards.shape
+    T, E, K = x_rollout.x_rewards.shape
     log_probs, values = [], []
-    x_order = torch.arange(T * E, device=rollout.actions.device)
+    x_order = torch.arange(T * E, device=x_rollout.x_actions.device)
     starts = range(0, T * E, minibatch_size)
 
     # Each minibatch's rows in each block, summed on the CPU before the first one runs
     x_count_totals = [
-        rollout.x_count_cpu[start : start + minibatch_size].sum(0) for start in starts
+        x_rollout.x_count_cpu[start : start + minibatch_size].sum(0) for start in starts
     ]
     with torch.no_grad():
         for start, x_count_total in zip(starts, x_count_totals):
             x_states = x_order[start : start + minibatch_size]
             x_log_probs, _, _, x_values = model.evaluate_actions(
-                take_states(rollout.game_state, x_states, x_count_total),
-                rollout.actions[x_states],
+                take_states(x_rollout.x_gs, x_states, x_count_total),
+                x_rollout.x_actions[x_states],
             )
             log_probs.append(x_log_probs)
             values.append(x_values)
 
         # Bootstrap value V(s_T) per env (a fresh env's value if it reset on the last step;
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
-        final_values = model(rollout.final_game_state)
-    return torch.cat(log_probs), torch.cat(values).reshape(T, E, K), final_values
+        x_values_final = model(x_rollout.x_gs_final)
+    return torch.cat(log_probs), torch.cat(values).reshape(T, E, K), x_values_final
 
 
 def prepare_batch(
-    model: ActorCritic, rollout: X_Rollout, gamma: float, ppo: PPOConfig
+    model: ActorCritic, x_rollout: X_Rollout, gamma: float, ppo: PPOConfig
 ) -> X_TrainingBatch:
     """Prepare the update's batch: GAE, and the anchor π_prox the clip and the KL measure from.
 
@@ -134,7 +134,7 @@ def prepare_batch(
     ----------
     model : ActorCritic
         The learner's model; its current weights give π_prox and the values.
-    rollout : X_Rollout
+    x_rollout : X_Rollout
         The collected rollout.
     gamma : float
         The discount.
@@ -147,28 +147,35 @@ def prepare_batch(
         The rollout's states, actions and behavior log-probs, with π_prox's log-probs and
         values, the returns and the normalized advantages.
     """
-    T, E, K = rollout.rewards.shape
-    log_probs_prox, values, final_values = _recompute(model, rollout, ppo.minibatch_size)
+    T, E, K = x_rollout.x_rewards.shape
+    x_log_probs_prox, x_values_prox, x_values_final = _recompute(
+        model, x_rollout, ppo.minibatch_size
+    )
 
-    returns, advantages = _compute_gae(
-        rollout.rewards, values, rollout.dones.unsqueeze(-1), final_values, gamma, ppo.lam
+    x_returns, x_advantages = _compute_gae(
+        x_rollout.x_rewards,
+        x_values_prox,
+        x_rollout.x_dones.unsqueeze(-1),
+        x_values_final,
+        gamma,
+        ppo.lam,
     )
 
     # Policy advantage: per-stream advantages summed (≡ single-critic GAE on the
     # summed reward, by linearity)
-    advantages = advantages.sum(-1)
+    x_advantages = x_advantages.sum(-1)
 
     # Normalize advantages over the batch
-    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    x_advantages = (x_advantages - x_advantages.mean()) / (x_advantages.std() + 1e-8)
     return X_TrainingBatch(
-        game_state=rollout.game_state,
-        x_count_cpu=rollout.x_count_cpu,
-        actions=rollout.actions,
-        log_probs_behavior=rollout.log_probs_behavior,
-        log_probs_prox=log_probs_prox,
-        values_prox=values.reshape(-1, K),
-        returns=returns.reshape(-1, K),
-        advantages=advantages.reshape(-1, 1),
+        x_gs=x_rollout.x_gs,
+        x_count_cpu=x_rollout.x_count_cpu,
+        x_actions=x_rollout.x_actions,
+        x_log_probs_behavior=x_rollout.x_log_probs_behavior,
+        x_log_probs_prox=x_log_probs_prox,
+        x_values_prox=x_values_prox.reshape(-1, K),
+        x_returns=x_returns.reshape(-1, K),
+        x_advantages=x_advantages.reshape(-1, 1),
     )
 
 
@@ -279,11 +286,13 @@ def update_ppo(
 
     # Per-stream explained variance of the values the learner recomputed before the update:
     # which return stream the critic predicts (EV → 1) and which carries the residual noise
-    ev = 1.0 - (batch.returns - batch.values_prox).var(dim=0) / (batch.returns.var(dim=0) + 1e-8)
+    ev = 1.0 - (batch.x_returns - batch.x_values_prox).var(dim=0) / (
+        batch.x_returns.var(dim=0) + 1e-8
+    )
 
     # How far the anchor sits from the weights that played: the off-policy weight
     # π_prox / π_behavior, its truncation rate, and KL(π_behavior ‖ π_prox)
-    log_weight = batch.log_probs_prox - batch.log_probs_behavior
+    log_weight = batch.x_log_probs_prox - batch.x_log_probs_behavior
     weight = log_weight.exp()
     offpolicy = {
         "offpolicy/is_weight_mean": weight.clamp(max=ppo.is_clip).mean().item(),
@@ -294,7 +303,7 @@ def update_ppo(
     # Every epoch's shuffle, planned before the first minibatch runs: the minibatches' states, sent
     # to the device in one copy, and their rows in each block, summed on the CPU. No CPU work then
     # sits between a minibatch's KL read and the next minibatch's launch
-    num_states = len(batch.actions)
+    num_states = len(batch.x_actions)
     starts = range(0, num_states, ppo.minibatch_size)
     x_order = torch.stack(
         [torch.randperm(num_states, generator=generator) for _ in range(ppo.num_epochs)]
@@ -317,18 +326,18 @@ def update_ppo(
         for start, x_count_total in zip(starts, x_count_totals[epoch]):
             x_states = x_order[epoch, start : start + ppo.minibatch_size]
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                take_states(batch.game_state, x_states, x_count_total),
-                batch.actions[x_states],
+                take_states(batch.x_gs, x_states, x_count_total),
+                batch.x_actions[x_states],
             )
-            log_probs_prox = batch.log_probs_prox[x_states]
-            adv = batch.advantages[x_states].squeeze(-1)
-            returns = batch.returns[x_states]
-            values_prox = batch.values_prox[x_states]
+            log_probs_prox = batch.x_log_probs_prox[x_states]
+            adv = batch.x_advantages[x_states].squeeze(-1)
+            returns = batch.x_returns[x_states]
+            values_prox = batch.x_values_prox[x_states]
 
             # Decoupled PPO (Hilton et al. 2021): clip against π_prox, and weight each
             # sample by π_prox / π_behavior, capped, for the weights that played
             ratio = torch.exp(log_probs_new - log_probs_prox)
-            weight = torch.exp(log_probs_prox - batch.log_probs_behavior[x_states]).clamp(
+            weight = torch.exp(log_probs_prox - batch.x_log_probs_behavior[x_states]).clamp(
                 max=ppo.is_clip
             )
             surr1 = ratio * adv

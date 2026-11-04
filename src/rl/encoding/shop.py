@@ -36,12 +36,14 @@ def encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
     out[OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
 
 
-def encode_batch_shop_meta(game_states: list[GameState], device: torch.device) -> torch.Tensor:
+def encode_batch_shop_meta(
+    batch_game_state: list[GameState], device: torch.device
+) -> torch.Tensor:
     """Encode each state's Shop meta: the purge service's price row + the purged flag.
 
     Parameters
     ----------
-    game_states : list[GameState]
+    batch_game_state : list[GameState]
         The states to encode, B of them.
     device : torch.device
         The device of the returned tensor.
@@ -51,8 +53,8 @@ def encode_batch_shop_meta(game_states: list[GameState], device: torch.device) -
     torch.Tensor
         (B, ENCODING_DIM_SHOP_META) float32. Each state's Shop meta; 0 outside Shops.
     """
-    np_meta = np.zeros((len(game_states), ENCODING_DIM_SHOP_META), dtype=np.float32)
-    for b, game_state in enumerate(game_states):
+    np_meta = np.zeros((len(batch_game_state), ENCODING_DIM_SHOP_META), dtype=np.float32)
+    for b, game_state in enumerate(batch_game_state):
         shop = game_state.shop
         if shop is None:
             continue

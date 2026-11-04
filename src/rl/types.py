@@ -273,8 +273,8 @@ class X_Tokens:
     x_node_idx: torch.Tensor  # (N,) int16: a Room token's Map node; 0 on every other token
 
     # The rows the tokens own
-    effect_rows: X_OwnedSparse  # Any number per token
-    modifier_rows: X_OwnedSparse  # Any number per Character / Monster
+    x_effect_rows: X_OwnedSparse  # Any number per token
+    x_modifier_rows: X_OwnedSparse  # Any number per Character / Monster
 
     # Number of tokens per state
     x_count: torch.Tensor  # (B,) long
@@ -305,16 +305,16 @@ class X_GameState:
     `src/rl/packed.py` chooses its states and joins them.
     """
 
-    tokens: X_Tokens
-    effect_pending: X_EffectPending
-    energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
-    map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
-    map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
-    focus: torch.Tensor  # (B, ENCODING_DIM_FOCUS) float32
-    ascension: torch.Tensor  # (B, ENCODING_DIM_ASCENSION) thermometer, bit i = level > i
-    reward_meta: torch.Tensor  # (B, ENCODING_DIM_REWARD_META) float32
-    shop_meta: torch.Tensor  # (B, ENCODING_DIM_SHOP_META) float32
-    event_meta: torch.Tensor  # (B, ENCODING_DIM_EVENT_META) float32
+    x_tokens: X_Tokens
+    x_effect_pending: X_EffectPending
+    x_energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
+    x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
+    x_map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
+    x_focus: torch.Tensor  # (B, ENCODING_DIM_FOCUS) float32
+    x_ascension: torch.Tensor  # (B, ENCODING_DIM_ASCENSION) thermometer, bit i = level > i
+    x_reward_meta: torch.Tensor  # (B, ENCODING_DIM_REWARD_META) float32
+    x_shop_meta: torch.Tensor  # (B, ENCODING_DIM_SHOP_META) float32
+    x_event_meta: torch.Tensor  # (B, ENCODING_DIM_EVENT_META) float32
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
 
 
@@ -360,34 +360,34 @@ class X_DrawOrderStates:
 class X_CoreOutput:
     """The core's output.
 
-    `global_` and `x_tokens` are the policy heads': the transformer's, but the draw-order layer's
-    on the states under Frozen Eye whose draw pile shows an order. `global_value` is the value
-    head's: the layer's on every state whose draw pile shows an order, the transformer's
-    elsewhere. `window` is the packed window's X_Window.
+    `x_global` and `x_refined` are the policy heads': the transformer's, but the draw-order
+    layer's on the states under Frozen Eye whose draw pile shows an order. `x_global_value` is the
+    value head's: the layer's on every state whose draw pile shows an order, the transformer's
+    elsewhere. `x_window` is the packed window's X_Window.
     """
 
-    global_: torch.Tensor  # (B, dim_global)
-    global_value: torch.Tensor  # (B, dim_global)
-    x_tokens: torch.Tensor  # (N, dim_entity) the refined rows
-    window: X_Window
+    x_global: torch.Tensor  # (B, dim_global)
+    x_global_value: torch.Tensor  # (B, dim_global)
+    x_refined: torch.Tensor  # (N, dim_entity) the refined rows
+    x_window: X_Window
 
 
 @dataclass
 class X_Action:
     """The sampled hierarchy per row, engine-facing.
 
-    `token_kind` and `rank` name the L2 selection as the rank-th token of its token kind, `target`
-    the L3 selection as the target-th Monster token, and `actions.engine_action` names their
-    Entities by id. A level that didn't apply holds -1.
+    `x_token_kind` and `x_rank` name the L2 selection as the rank-th token of its token kind,
+    `x_target` the L3 selection as the target-th Monster token, and `actions.engine_action` names
+    their Entities by id. A level that didn't apply holds -1.
     """
 
-    action_type: torch.Tensor  # (B,) long
-    token_kind: torch.Tensor  # (B,) long — TokenKind of the L2 selection
-    rank: torch.Tensor  # (B,) long
-    target: torch.Tensor  # (B,) long
-    log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
-    entropy: torch.Tensor  # (B, 3) float, 0 where N/A
-    kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
+    x_action_type: torch.Tensor  # (B,) long
+    x_token_kind: torch.Tensor  # (B,) long — TokenKind of the L2 selection
+    x_rank: torch.Tensor  # (B,) long
+    x_target: torch.Tensor  # (B,) long
+    x_log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
+    x_entropy: torch.Tensor  # (B, 3) float, 0 where N/A
+    x_kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
 @dataclass
@@ -400,10 +400,10 @@ class X_Step:
     region's start.
     """
 
-    actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
-    rewards: torch.Tensor  # (E, K)
-    dones: torch.Tensor  # (E,)
-    game_state: X_GameState  # E games; a region's rows past its games' counts are stale
+    x_actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
+    x_rewards: torch.Tensor  # (E, K)
+    x_dones: torch.Tensor  # (E,)
+    x_gs: X_GameState  # E games; a region's rows past its games' counts are stale
     num_regions: int
 
 
@@ -411,20 +411,20 @@ class X_Step:
 class X_Rollout:
     """What the actor collected, before GAE.
 
-    T steps of E games, state t * E + e of the N = T * E states. The `final_` field is each game's
-    state after the last step, for the bootstrap value.
+    T steps of E games, state t * E + e of the N = T * E states. The `x_gs_final` field is each
+    game's state after the last step, for the bootstrap value.
     """
 
-    game_state: X_GameState  # N states
+    x_gs: X_GameState  # N states
 
-    # game_state's counts on the CPU, where minibatches sum their sizes
+    # x_gs's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
 
-    actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
-    log_probs_behavior: torch.Tensor  # (N,) under the weights that played
-    rewards: torch.Tensor  # (T, E, K)
-    dones: torch.Tensor  # (T, E)
-    final_game_state: X_GameState  # E states
+    x_actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
+    x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    x_rewards: torch.Tensor  # (T, E, K)
+    x_dones: torch.Tensor  # (T, E)
+    x_gs_final: X_GameState  # E states
 
 
 @dataclass
@@ -437,17 +437,17 @@ class X_TrainingBatch:
     normalized.
     """
 
-    game_state: X_GameState  # N states — taken per minibatch (take_states)
+    x_gs: X_GameState  # N states — taken per minibatch (take_states)
 
-    # game_state's counts on the CPU, where minibatches sum their sizes
+    # x_gs's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
 
-    actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
-    log_probs_behavior: torch.Tensor  # (N,) under the weights that played
-    log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
-    values_prox: torch.Tensor  # (N, K) the values that go with π_prox
-    returns: torch.Tensor  # (N, K)
-    advantages: torch.Tensor  # (N, 1), summed over streams, normalized
+    x_actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
+    x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    x_log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
+    x_values_prox: torch.Tensor  # (N, K) the values that go with π_prox
+    x_returns: torch.Tensor  # (N, K)
+    x_advantages: torch.Tensor  # (N, 1), summed over streams, normalized
 
 
 # members() is declaration order == int() order, which is what masks and heads index by

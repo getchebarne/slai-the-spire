@@ -29,9 +29,9 @@ _COUNT_TOKEN_KINDS = tuple(
 
 class Core(nn.Module):
     # The buffers __init__ registers, typed for mypy
-    _count_token_kinds: torch.Tensor
-    _count_norm: torch.Tensor
-    _is_reward: torch.Tensor
+    _x_count_token_kinds: torch.Tensor
+    _x_count_norm: torch.Tensor
+    _x_is_reward: torch.Tensor
 
     def __init__(
         self,
@@ -88,10 +88,10 @@ class Core(nn.Module):
         # Count features: token kinds to count and each token kind's cap; derived, so excluded
         # from checkpoints
         self.register_buffer(
-            "_count_token_kinds", torch.tensor(_COUNT_TOKEN_KINDS), persistent=False
+            "_x_count_token_kinds", torch.tensor(_COUNT_TOKEN_KINDS), persistent=False
         )
         self.register_buffer(
-            "_count_norm",
+            "_x_count_norm",
             torch.tensor(
                 [float(MAP_TOKEN_KIND_CAP[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
             ).view(1, -1),
@@ -100,12 +100,12 @@ class Core(nn.Module):
 
         # The per-bundle token kinds carry their own type rows; this shared vector
         # is the global CARD_REWARD identity summed on top of all of them
-        self._reward_identity = nn.Parameter(torch.empty(dim_entity))
-        nn.init.normal_(self._reward_identity)  # N(0, 1), as the type rows
+        self._x_reward_identity = nn.Parameter(torch.empty(dim_entity))
+        nn.init.normal_(self._x_reward_identity)  # N(0, 1), as the type rows
 
         # Per token kind, whether it is a Reward bundle's; derived, so excluded from checkpoints
         self.register_buffer(
-            "_is_reward",
+            "_x_is_reward",
             torch.tensor([token_kind in TOKEN_KINDS_CARD_REWARDS for token_kind in TokenKind]),
             persistent=False,
         )
@@ -119,7 +119,7 @@ class Core(nn.Module):
             The game states.
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
-            need no value, and leaves `global_value` the policy's.
+            need no value, and leaves `x_global_value` the policy's.
 
         Returns
         -------
@@ -129,17 +129,17 @@ class Core(nn.Module):
         """
 
         # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
-        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_gs.map_grid)
+        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_gs.x_map_grid)
 
         # The window packed (its tokens and their X_Window), the draw-order layer's states, and
         # the embedded pending halt
-        x_tokens, x_window, x_draw_order, x_pending = self._entity_projector(
+        x_projected, x_window, x_draw_order, x_pending = self._entity_projector(
             x_gs, x_hidden_map, x_map_of_state
         )
 
         # One transformer pass over every state, without the draw depths
         x_refined, x_global_token = self._entity_transformer(
-            self._embed_identity(x_tokens, x_window.x_token_kind), x_window
+            self._embed_identity(x_projected, x_window.x_token_kind), x_window
         )
 
         # Per-state inputs to the global context: the same for the transformer and the layer, so
@@ -148,13 +148,13 @@ class Core(nn.Module):
             [
                 x_map_readout,
                 self._get_token_counts(x_window.x_token_kind_count),
-                x_gs.energy,
-                x_gs.focus,
-                x_gs.ascension,
-                x_gs.map_meta,
-                x_gs.reward_meta,
-                x_gs.shop_meta,
-                x_gs.event_meta,
+                x_gs.x_energy,
+                x_gs.x_focus,
+                x_gs.x_ascension,
+                x_gs.x_map_meta,
+                x_gs.x_reward_meta,
+                x_gs.x_shop_meta,
+                x_gs.x_event_meta,
                 x_pending,
             ],
             dim=1,
@@ -173,10 +173,10 @@ class Core(nn.Module):
             num_rows, num_pile = x_draw_order.num_rows_visible, x_draw_order.num_pile_visible
         if x_states.shape[0] == 0:
             return X_CoreOutput(
-                global_=x_global,
-                global_value=x_global,
-                x_tokens=x_refined,
-                window=x_window,
+                x_global=x_global,
+                x_global_value=x_global,
+                x_refined=x_refined,
+                x_window=x_window,
             )
 
         # The value head reads the layer on every one of its states
@@ -206,10 +206,10 @@ class Core(nn.Module):
                 0, x_rows[:num_rows_visible], x_refined_layer[:num_rows_visible]
             )
         return X_CoreOutput(
-            global_=x_global,
-            global_value=x_global_value,
-            x_tokens=x_refined,
-            window=x_window,
+            x_global=x_global,
+            x_global_value=x_global_value,
+            x_refined=x_refined,
+            x_window=x_window,
         )
 
     def _global_context(
@@ -235,12 +235,14 @@ class Core(nn.Module):
             torch.cat([x_global_token, x_character, x_state_inputs], dim=1)
         )
 
-    def _embed_identity(self, x_tokens: torch.Tensor, x_token_kind: torch.Tensor) -> torch.Tensor:
+    def _embed_identity(
+        self, x_projected: torch.Tensor, x_token_kind: torch.Tensor
+    ) -> torch.Tensor:
         # Every token's identity comes from its token kind: the token kind's type row, plus the
         # shared CARD_REWARD identity on the Reward token kinds
-        x_is_reward = self._is_reward[x_token_kind]
+        x_is_reward = self._x_is_reward[x_token_kind]
         x_type = SpreadEmbedding.apply(self._type_emb.weight, x_token_kind)
-        return x_tokens + x_type + x_is_reward.unsqueeze(1) * self._reward_identity
+        return x_projected + x_type + x_is_reward.unsqueeze(1) * self._x_reward_identity
 
     def _get_token_counts(self, x_token_kind_count: torch.Tensor) -> torch.Tensor:
         """Compute the per-token-kind token counts, sqrt-normalized by the token kind's cap.
@@ -258,5 +260,5 @@ class Core(nn.Module):
             (B, len(_COUNT_TOKEN_KINDS)) float32. Each state's normalized counts, one per token
             kind except the Character.
         """
-        x_count = x_token_kind_count[:, self._count_token_kinds].float()
-        return (x_count / self._count_norm).sqrt()
+        x_count = x_token_kind_count[:, self._x_count_token_kinds].float()
+        return (x_count / self._x_count_norm).sqrt()

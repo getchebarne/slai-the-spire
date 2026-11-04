@@ -45,17 +45,16 @@ def take_states(
         The taken states, in `x_states`' order, packed on their own.
     """
     num_tokens, *num_rows_owned, num_effect_pending = x_count_total.tolist()
-    x = x_gs
-    x_count = x.tokens.x_count
+    x_count = x_gs.x_tokens.x_count
     fns_owned = [
         _taken(_count_state(x_owned.x_count, x_count), x_states, num_rows)
-        for x_owned, num_rows in zip(_owned(x.tokens), num_rows_owned)
+        for x_owned, num_rows in zip(_owned(x_gs.x_tokens), num_rows_owned)
     ]
     return _map_rows(
-        x,
+        x_gs,
         _taken(x_count, x_states, num_tokens),
         fns_owned,
-        _taken(x.effect_pending.x_count, x_states, num_effect_pending),
+        _taken(x_gs.x_effect_pending.x_count, x_states, num_effect_pending),
         lambda x_field: x_field[x_states],
     )
 
@@ -75,12 +74,14 @@ def count_blocks(x_gs: X_GameState) -> torch.Tensor:
     torch.Tensor
         (B, number of blocks) long. Each state's rows in each block.
     """
-    x = x_gs
     return torch.stack(
         [
-            x.tokens.x_count,
-            *(_count_state(x_owned.x_count, x.tokens.x_count) for x_owned in _owned(x.tokens)),
-            x.effect_pending.x_count,
+            x_gs.x_tokens.x_count,
+            *(
+                _count_state(x_owned.x_count, x_gs.x_tokens.x_count)
+                for x_owned in _owned(x_gs.x_tokens)
+            ),
+            x_gs.x_effect_pending.x_count,
         ],
         dim=1,
     )
@@ -173,7 +174,7 @@ def region_of_states(x_gs: X_GameState, first_state: int, num_states: int) -> X_
         The region: the states' counts and per-state fields, and their share of every block's
         rows, views all.
     """
-    num_states_step = len(x_gs.tokens.x_count)
+    num_states_step = len(x_gs.x_tokens.x_count)
 
     def region(x_field: torch.Tensor) -> torch.Tensor:
         num_rows_state = len(x_field) // num_states_step
@@ -215,22 +216,21 @@ def join_regions(x_gs: X_GameState, num_regions: int) -> X_GameState:
         sparse entries cut to the most a row uses; the states' counts and the per-state fields as
         they are.
     """
-    x = x_gs
-    x_count = x.tokens.x_count
-    fn_token = _joined(x_count, len(x.tokens.x_token_kind), num_regions)
+    x_count = x_gs.x_tokens.x_count
+    fn_token = _joined(x_count, len(x_gs.x_tokens.x_token_kind), num_regions)
 
     # An owned row kind's states hold the rows their joined tokens' counts say
     fns_owned = [
         _joined(
             _count_state(fn_token(x_owned.x_count), x_count), len(x_owned.x_column), num_regions
         )
-        for x_owned in _owned(x.tokens)
+        for x_owned in _owned(x_gs.x_tokens)
     ]
     x_joined = _map_rows(
-        x,
+        x_gs,
         fn_token,
         fns_owned,
-        _joined(x.effect_pending.x_count, len(x.effect_pending.x_column), num_regions),
+        _joined(x_gs.x_effect_pending.x_count, len(x_gs.x_effect_pending.x_column), num_regions),
         lambda x_field: x_field,
     )
     for block in _blocks(x_joined):
@@ -385,36 +385,36 @@ def _widened(x_gss: list[X_GameState]) -> list[X_GameState]:
     num_entries_block = [
         max(block.x_value.shape[1] for block in blocks) for blocks in zip(*map(_blocks, x_gss))
     ]
-    xs = [_map_fields(x, lambda x_field: x_field) for x in x_gss]
-    for x in xs:
-        for block, num_entries in zip(_blocks(x), num_entries_block):
+    x_gss_widened = [_map_fields(x_gs, lambda x_field: x_field) for x_gs in x_gss]
+    for x_gs in x_gss_widened:
+        for block, num_entries in zip(_blocks(x_gs), num_entries_block):
             block.x_column = F.pad(block.x_column, (0, num_entries - block.x_column.shape[1]))
             block.x_value = F.pad(block.x_value, (0, num_entries - block.x_value.shape[1]))
-    return xs
+    return x_gss_widened
 
 
-def _owned(x: X_Tokens) -> list[X_OwnedSparse]:
+def _owned(x_tokens: X_Tokens) -> list[X_OwnedSparse]:
     """Return the tokens' owned row kinds, in X_Tokens' order.
 
     Parameters
     ----------
-    x : X_Tokens
+    x_tokens : X_Tokens
         The tokens.
 
     Returns
     -------
     list[X_OwnedSparse]
-        The owned row kinds: `effect_rows`, then `modifier_rows`.
+        The owned row kinds: `x_effect_rows`, then `x_modifier_rows`.
     """
-    return [x.effect_rows, x.modifier_rows]
+    return [x_tokens.x_effect_rows, x_tokens.x_modifier_rows]
 
 
-def _blocks(x: X_GameState) -> list[_Block]:
-    """Return every block of `x`: the tokens, their owned row kinds and the pending Effects.
+def _blocks(x_gs: X_GameState) -> list[_Block]:
+    """Return every block of `x_gs`: the tokens, their owned row kinds and the pending Effects.
 
     Parameters
     ----------
-    x : X_GameState
+    x_gs : X_GameState
         The game state.
 
     Returns
@@ -422,15 +422,15 @@ def _blocks(x: X_GameState) -> list[_Block]:
     list[_Block]
         The blocks, in that order.
     """
-    return [x.tokens, *_owned(x.tokens), x.effect_pending]
+    return [x_gs.x_tokens, *_owned(x_gs.x_tokens), x_gs.x_effect_pending]
 
 
-def _fields(x: X_GameState) -> list[torch.Tensor]:
-    """Return every field of `x`, in the order `_map_rows` maps them, without rebuilding a block.
+def _fields(x_gs: X_GameState) -> list[torch.Tensor]:
+    """Return every field of `x_gs`, in the order `_map_rows` maps them, without rebuilding a block.
 
     Parameters
     ----------
-    x : X_GameState
+    x_gs : X_GameState
         The game state.
 
     Returns
@@ -438,7 +438,7 @@ def _fields(x: X_GameState) -> list[torch.Tensor]:
     list[torch.Tensor]
         The fields.
     """
-    x_tokens, x_effect_pending = x.tokens, x.effect_pending
+    x_tokens, x_effect_pending = x_gs.x_tokens, x_gs.x_effect_pending
     return [
         x_tokens.x_column,
         x_tokens.x_value,
@@ -455,24 +455,24 @@ def _fields(x: X_GameState) -> list[torch.Tensor]:
         x_effect_pending.x_column,
         x_effect_pending.x_value,
         x_effect_pending.x_count,
-        x.energy,
-        x.map_grid,
-        x.map_meta,
-        x.focus,
-        x.ascension,
-        x.reward_meta,
-        x.shop_meta,
-        x.event_meta,
-        x.x_legal_action_type,
+        x_gs.x_energy,
+        x_gs.x_map_grid,
+        x_gs.x_map_meta,
+        x_gs.x_focus,
+        x_gs.x_ascension,
+        x_gs.x_reward_meta,
+        x_gs.x_shop_meta,
+        x_gs.x_event_meta,
+        x_gs.x_legal_action_type,
     ]
 
 
-def _map_fields(x: X_GameState, fn: _FieldFn) -> X_GameState:
-    """Apply `fn` to every field of `x`, in `_fields`' order.
+def _map_fields(x_gs: X_GameState, fn: _FieldFn) -> X_GameState:
+    """Apply `fn` to every field of `x_gs`, in `_fields`' order.
 
     Parameters
     ----------
-    x : X_GameState
+    x_gs : X_GameState
         The game state.
     fn : _FieldFn
         The function on every field.
@@ -480,23 +480,23 @@ def _map_fields(x: X_GameState, fn: _FieldFn) -> X_GameState:
     Returns
     -------
     X_GameState
-        `x` with every field through `fn`.
+        `x_gs` with every field through `fn`.
     """
-    return _map_rows(x, fn, [fn for _ in _owned(x.tokens)], fn, fn)
+    return _map_rows(x_gs, fn, [fn for _ in _owned(x_gs.x_tokens)], fn, fn)
 
 
 def _map_rows(
-    x: X_GameState,
+    x_gs: X_GameState,
     fn_token: _FieldFn,
     fns_owned: list[_FieldFn],
     fn_effect_pending: _FieldFn,
     fn_state: _FieldFn,
 ) -> X_GameState:
-    """Map every field of `x` through the function of its rows, in `_fields`' order.
+    """Map every field of `x_gs` through the function of its rows, in `_fields`' order.
 
     Parameters
     ----------
-    x : X_GameState
+    x_gs : X_GameState
         The game state.
     fn_token : _FieldFn
         The function on the token rows' fields, the owned row kinds' counts among them.
@@ -511,45 +511,45 @@ def _map_rows(
     Returns
     -------
     X_GameState
-        `x` with every field through the function of its rows.
+        `x_gs` with every field through the function of its rows.
     """
-    x_tokens, x_effect_pending = x.tokens, x.effect_pending
+    x_tokens, x_effect_pending = x_gs.x_tokens, x_gs.x_effect_pending
     fn_effect_rows, fn_modifier_rows = fns_owned
     return X_GameState(
-        tokens=X_Tokens(
+        x_tokens=X_Tokens(
             x_column=fn_token(x_tokens.x_column),
             x_value=fn_token(x_tokens.x_value),
             x_token_kind=fn_token(x_tokens.x_token_kind),
             x_legal=fn_token(x_tokens.x_legal),
             x_needs_target=fn_token(x_tokens.x_needs_target),
             x_node_idx=fn_token(x_tokens.x_node_idx),
-            effect_rows=_map_owned(x_tokens.effect_rows, fn_effect_rows, fn_token),
-            modifier_rows=_map_owned(x_tokens.modifier_rows, fn_modifier_rows, fn_token),
+            x_effect_rows=_map_owned(x_tokens.x_effect_rows, fn_effect_rows, fn_token),
+            x_modifier_rows=_map_owned(x_tokens.x_modifier_rows, fn_modifier_rows, fn_token),
             x_count=fn_state(x_tokens.x_count),
         ),
-        effect_pending=X_EffectPending(
+        x_effect_pending=X_EffectPending(
             x_column=fn_effect_pending(x_effect_pending.x_column),
             x_value=fn_effect_pending(x_effect_pending.x_value),
             x_count=fn_state(x_effect_pending.x_count),
         ),
-        energy=fn_state(x.energy),
-        map_grid=fn_state(x.map_grid),
-        map_meta=fn_state(x.map_meta),
-        focus=fn_state(x.focus),
-        ascension=fn_state(x.ascension),
-        reward_meta=fn_state(x.reward_meta),
-        shop_meta=fn_state(x.shop_meta),
-        event_meta=fn_state(x.event_meta),
-        x_legal_action_type=fn_state(x.x_legal_action_type),
+        x_energy=fn_state(x_gs.x_energy),
+        x_map_grid=fn_state(x_gs.x_map_grid),
+        x_map_meta=fn_state(x_gs.x_map_meta),
+        x_focus=fn_state(x_gs.x_focus),
+        x_ascension=fn_state(x_gs.x_ascension),
+        x_reward_meta=fn_state(x_gs.x_reward_meta),
+        x_shop_meta=fn_state(x_gs.x_shop_meta),
+        x_event_meta=fn_state(x_gs.x_event_meta),
+        x_legal_action_type=fn_state(x_gs.x_legal_action_type),
     )
 
 
-def _map_owned(x: X_OwnedSparse, fn_rows: _FieldFn, fn_token: _FieldFn) -> X_OwnedSparse:
+def _map_owned(x_owned: X_OwnedSparse, fn_rows: _FieldFn, fn_token: _FieldFn) -> X_OwnedSparse:
     """Map an owned row kind's rows through `fn_rows` and its counts through `fn_token`.
 
     Parameters
     ----------
-    x : X_OwnedSparse
+    x_owned : X_OwnedSparse
         The owned row kind.
     fn_rows : _FieldFn
         The function on its rows.
@@ -563,7 +563,9 @@ def _map_owned(x: X_OwnedSparse, fn_rows: _FieldFn, fn_token: _FieldFn) -> X_Own
         rows' `fn_token`.
     """
     return X_OwnedSparse(
-        x_column=fn_rows(x.x_column), x_value=fn_rows(x.x_value), x_count=fn_token(x.x_count)
+        x_column=fn_rows(x_owned.x_column),
+        x_value=fn_rows(x_owned.x_value),
+        x_count=fn_token(x_owned.x_count),
     )
 
 

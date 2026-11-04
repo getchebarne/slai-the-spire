@@ -51,10 +51,10 @@ def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
     torch.Tensor
         (B, words) long. Each grid's 0/1 cells, 63 to a word.
     """
-    batch_size, device = x_nodes.shape[0], x_nodes.device
+    num_states, device = x_nodes.shape[0], x_nodes.device
     x_bit_shifts = torch.arange(62, -1, -1, device=device)
-    x_bits = F.pad(x_nodes.reshape(batch_size, -1).long(), (0, -_GRID_BITS % 63))
-    return (x_bits.view(batch_size, -1, 63) << x_bit_shifts).sum(-1)  # (B, words)
+    x_bits = F.pad(x_nodes.reshape(num_states, -1).long(), (0, -_GRID_BITS % 63))
+    return (x_bits.view(num_states, -1, 63) << x_bit_shifts).sum(-1)  # (B, words)
 
 
 class MapGNN(nn.Module):
@@ -84,9 +84,9 @@ class MapGNN(nn.Module):
         self._layers = nn.ModuleList(nn.Linear(hidden, hidden) for _ in range(num_layers))
         self._norms = nn.ModuleList(nn.LayerNorm(hidden) for _ in range(num_layers))
 
-        self.register_buffer("_child_idx", _build_child_idx(), persistent=False)
+        self.register_buffer("_x_child_idx", _build_child_idx(), persistent=False)
         self.register_buffer(
-            "_row_of_node", (torch.arange(_NUM_NODES) // MAP_WIDTH).float(), persistent=False
+            "_x_row_of_node", (torch.arange(_NUM_NODES) // MAP_WIDTH).float(), persistent=False
         )
 
         # The GNN's computation as a plain function, which actor_critic.compile_hot_paths swaps for
@@ -111,14 +111,14 @@ class MapGNN(nn.Module):
         x_map_readout : torch.Tensor
             (B, hidden). Each state's readout.
         """
-        batch_size = x_grid.shape[0]
+        num_states = x_grid.shape[0]
 
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
-        x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
+        x_nodes = x_grid.reshape(num_states, _NUM_NODES, NUM_CHANNELS)
 
-        if batch_size < _DEDUP_MIN_BATCH:
+        if num_states < _DEDUP_MIN_BATCH:
             x_hidden, x_readout = self.message_passing(self, x_nodes)
-            return x_hidden, torch.arange(batch_size, device=x_grid.device), x_readout
+            return x_hidden, torch.arange(num_states, device=x_grid.device), x_readout
 
         # The game sits on one Map node for many steps, so its grid repeats across a minibatch:
         # run the GNN on unique grids once and gather back (exact)
@@ -129,7 +129,7 @@ class MapGNN(nn.Module):
         x_uniq, x_inverse = torch.unique(x_packed, dim=0, return_inverse=True)
 
         x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_grid.device)
-        x_rep[x_inverse] = torch.arange(batch_size, device=x_grid.device)
+        x_rep[x_inverse] = torch.arange(num_states, device=x_grid.device)
 
         # Encode the unique Maps, and gather the readout back
         x_hidden, x_readout_uniq = self.message_passing(self, x_nodes[x_rep])
@@ -153,7 +153,9 @@ class MapGNN(nn.Module):
         # position bit, on the current Room
         x_room_exists = x_nodes[:, :, SLICE_MAP_ROOM_KIND].sum(-1) > 0  # (U, H * W)
         x_position = x_nodes[:, :, OFF_MAP_POSITION]  # Current-position bit: (U, H * W)
-        x_row_current = (x_position * self._row_of_node).sum(-1)  # (U,) / Current floor, 0 if none
+        x_row_current = (x_position * self._x_row_of_node).sum(
+            -1
+        )  # (U,) / Current floor, 0 if none
         x_row_current = torch.where(
             condition=x_position.sum(-1) > 0,  # (U,)
             input=x_row_current,  # (U,)
@@ -161,7 +163,7 @@ class MapGNN(nn.Module):
                 (), -1.0, dtype=x_row_current.dtype, device=x_row_current.device
             ),  # (U,)
         )
-        x_forward = self._row_of_node.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
+        x_forward = self._x_row_of_node.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
         return x_room_exists & x_forward  # (U, H * W)
 
     def _adjacency(self, x_nodes: torch.Tensor) -> torch.Tensor:
@@ -178,7 +180,7 @@ class MapGNN(nn.Module):
         x_adj = torch.scatter(
             x_adj,
             dim=2,
-            index=self._child_idx.unsqueeze(0).expand(num_unique, -1, -1),
+            index=self._x_child_idx.unsqueeze(0).expand(num_unique, -1, -1),
             src=x_edges,
         )
 

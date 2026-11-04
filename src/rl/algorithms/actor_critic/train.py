@@ -16,7 +16,6 @@ from src.rl.algorithms.actor_critic.checkpoint import load_checkpoint
 from src.rl.algorithms.actor_critic.checkpoint import make_experiment_dir
 from src.rl.algorithms.actor_critic.checkpoint import save_checkpoint
 from src.rl.algorithms.actor_critic.curriculum import AscensionCurriculum
-from src.rl.algorithms.actor_critic.curriculum import frontier_level
 from src.rl.algorithms.actor_critic.curriculum import step_curriculum
 from src.rl.algorithms.actor_critic.distributed import RankInfo
 from src.rl.algorithms.actor_critic.episode import episode_scalars
@@ -74,21 +73,19 @@ def train(
     rollout_config: RolloutConfig,
     rank_info: RankInfo,
     stop: threading.Event,
-    start_iteration: int,
+    iteration_start: int,
     total_steps: int,
+    ascension_current: float,
     lr_scale: float,
 ) -> None:
     # Rank 0 alone evaluates, logs and checkpoints
     writer = SummaryWriter(experiment_dir(exp_name)) if rank_info.rank == 0 else None
     distributed.broadcast_from_rank0(model)
     ckpt_path = checkpoint_path(exp_name)
-    c = curriculum.ascension_start  # Soft-curriculum position (see step_curriculum)
     streak = 0
 
     # Eval runs a fixed-seed greedy battery in a persistent side process
-    evaluator = (
-        start_eval(model_config, gamma, curriculum.ascension_max) if rank_info.rank == 0 else None
-    )
+    evaluator = start_eval(model_config, gamma) if rank_info.rank == 0 else None
 
     # Adaptive-KL lr: base recovered from the (possibly resumed-scaled) group lr
     base_lr = optimizer.param_groups[0]["lr"] / lr_scale
@@ -103,11 +100,11 @@ def train(
                 model_config=model_config,
                 rollout_config=rollout_config,
                 device=rank_info.device,
-                first_version=start_iteration,
-                curriculum=curriculum,
+                version_first=iteration_start,
+                ascension_current=ascension_current,
                 gamma=gamma,
                 seed=random.randint(0, 2**31 - 1),
-                rng=(
+                x_rng=(
                     torch.cuda.get_rng_state(rank_info.device)
                     if rank_info.device.type == "cuda"
                     else torch.get_rng_state()
@@ -128,11 +125,11 @@ def train(
             rank_info.world_size * rollout_config.rollout_length * rollout_config.num_envs
         )
         t_iteration = time.perf_counter()
-        for iteration in range(start_iteration, num_iterations):
+        for iteration in range(iteration_start, num_iterations):
             delivery, seconds_learner_wait = take(actor)
             t_update = time.perf_counter()
             total_steps += steps_per_iteration
-            batch = prepare_batch(model, delivery.rollout, gamma, ppo)
+            batch = prepare_batch(model, delivery.x_rollout, gamma, ppo)
             metrics = update_ppo(model, batch, optimizer, ppo, rank_info.device, generator)
             seconds_update = time.perf_counter() - t_update
 
@@ -144,57 +141,57 @@ def train(
                 metrics["update/lr_scale"] = lr_scale
 
             # Eval battery (persistent worker): drain a finished one and, on the eval
-            # cadence when idle, launch a new one - both non-blocking. Logged at eval_iter.
-            finished = poll_eval(evaluator) if evaluator is not None else None
-            if finished is not None:
-                eval_iter, eval_c, eval_metrics = finished
+            # cadence when idle, launch a new one - both non-blocking. Logged at iteration_eval.
+            battery = poll_eval(evaluator) if evaluator is not None else None
+            if battery is not None:
+                iteration_eval, ascension_current_eval, metrics_eval = battery
                 assert writer is not None
-                for key, value in eval_metrics.items():
-                    writer.add_scalar(key, value, eval_iter)
-                writer.add_scalar("eval/ascension", eval_c, eval_iter)
+                for key, value in metrics_eval.items():
+                    writer.add_scalar(key, value, iteration_eval)
+                writer.add_scalar("eval/ascension", ascension_current_eval, iteration_eval)
                 print(
-                    f"  eval@{eval_iter} c={eval_c:.2f}: "
-                    f"win_rate={eval_metrics[EVAL_WIN_RATE]:.3f} "
-                    f"floor={eval_metrics[EVAL_FLOOR_AVG]:.2f} "
-                    f"act2={eval_metrics[EVAL_ACT2_RATE]:.2f} "
-                    f"act3={eval_metrics[EVAL_ACT3_RATE]:.2f} "
-                    f"act4={eval_metrics[EVAL_ACT4_RATE]:.2f} "
-                    f"reward={eval_metrics[EVAL_REWARD_AVG]:.4f}"
+                    f"  eval@{iteration_eval} c={ascension_current_eval:.2f}: "
+                    f"win_rate={metrics_eval[EVAL_WIN_RATE]:.3f} "
+                    f"floor={metrics_eval[EVAL_FLOOR_AVG]:.2f} "
+                    f"act2={metrics_eval[EVAL_ACT2_RATE]:.2f} "
+                    f"act3={metrics_eval[EVAL_ACT3_RATE]:.2f} "
+                    f"act4={metrics_eval[EVAL_ACT4_RATE]:.2f} "
+                    f"reward={metrics_eval[EVAL_REWARD_AVG]:.4f}"
                 )
-                c_prev = c
-                c, streak = step_curriculum(
-                    c, streak, eval_metrics[EVAL_WIN_RATE], eval_c, curriculum
+                ascension_current, streak = step_curriculum(
+                    ascension_current,
+                    streak,
+                    metrics_eval[EVAL_WIN_RATE],
+                    ascension_current_eval,
+                    curriculum,
                 )
-                if c != c_prev:
-                    frontier = frontier_level(c, curriculum.ascension_max)
-                    print(f"  curriculum: c={c:.2f}, frontier A{frontier}")
-            c = distributed.broadcast_float(c, rank_info.device)
-            publish(handoff, model, iteration + 1, c)
+            ascension_current = distributed.broadcast_float(ascension_current, rank_info.device)
+            publish(handoff, model, iteration + 1, ascension_current)
             t_now = time.perf_counter()
             samples_per_s = steps_per_iteration / (t_now - t_iteration)
             t_iteration = t_now
 
             if evaluator is not None and iteration % cadence.eval_every == 0:
-                submit_eval(evaluator, model, iteration, c)
+                submit_eval(evaluator, model, iteration, ascension_current)
             if iteration % cadence.log_every == 0:
-                completed = distributed.gather_episodes(delivery.completed)
+                episodes = distributed.gather_episodes(delivery.episodes)
                 if writer is not None:
                     print(
                         f"Iter {iteration} | steps={total_steps} | "
                         f"policy={metrics['loss/policy']:.4f} "
-                        f"value={metrics['loss/value']:.4f} | episodes={len(completed)}"
+                        f"value={metrics['loss/value']:.4f} | episodes={len(episodes)}"
                     )
                     scalars = {
                         **metrics,
-                        "train/ascension": c,
+                        "train/ascension": ascension_current,
                         "Steps/total": total_steps,
                         "Time/rollout": delivery.seconds_collect,
                         "Time/update": seconds_update,
                         "pipeline/actor_wait": delivery.seconds_wait,
                         "pipeline/learner_wait": seconds_learner_wait,
                         "pipeline/samples_per_s": samples_per_s,
-                        **delivery.info,
-                        **episode_scalars(completed),
+                        **delivery.metrics,
+                        **episode_scalars(episodes),
                     }
                     if rank_info.device.type == "cuda":
                         peak = torch.cuda.max_memory_reserved(rank_info.device)
@@ -202,17 +199,33 @@ def train(
                     for key, value in scalars.items():
                         writer.add_scalar(key, value, iteration)
             if rank_info.rank == 0 and iteration % cadence.save_every == 0:
-                save_checkpoint(ckpt_path, model, optimizer, iteration, total_steps, c, lr_scale)
+                save_checkpoint(
+                    ckpt_path,
+                    model,
+                    optimizer,
+                    iteration,
+                    total_steps,
+                    ascension_current,
+                    lr_scale,
+                )
             if rank_info.rank == 0 and iteration > 0 and iteration % cadence.archive_every == 0:
                 path = archive_path(exp_name, iteration)
-                save_checkpoint(path, model, optimizer, iteration, total_steps, c, lr_scale)
+                save_checkpoint(
+                    path, model, optimizer, iteration, total_steps, ascension_current, lr_scale
+                )
 
             # A stop request on any rank stops every rank here, between collectives
             if distributed.any_rank(stop.is_set(), rank_info.device):
                 if rank_info.rank == 0:
                     print("\nTraining interrupted. Saving checkpoint...")
                     save_checkpoint(
-                        ckpt_path, model, optimizer, iteration, total_steps, c, lr_scale
+                        ckpt_path,
+                        model,
+                        optimizer,
+                        iteration,
+                        total_steps,
+                        ascension_current,
+                        lr_scale,
                     )
                 break
     finally:
@@ -260,24 +273,24 @@ if __name__ == "__main__":
 
     # Load checkpoint
     ckpt_path = checkpoint_path(config["exp_name"])
-    start_iteration, total_steps, curriculum_c, lr_scale = load_checkpoint(
+    iteration_start, total_steps, ascension_current, lr_scale = load_checkpoint(
         ckpt_path, model, optimizer
     )
 
     # Offset the stream seeds so a resume doesn't replay the run's env-seed sequence
     # Every rank plays its own games; rank 0 keeps the single-GPU seeds
-    if start_iteration > 0 or rank_info.rank > 0:
-        set_rng_seeds(seed + start_iteration + 7919 * rank_info.rank)
+    if iteration_start > 0 or rank_info.rank > 0:
+        set_rng_seeds(seed + iteration_start + 7919 * rank_info.rank)
 
     curriculum = AscensionCurriculum(**config["curriculum"])
-    if curriculum_c is not None:
-        curriculum = replace(curriculum, ascension_start=curriculum_c)
+    if ascension_current is None:
+        ascension_current = curriculum.ascension_start
     rollout_config = RolloutConfig(**config["rollout"])
     if args.rollout_workers is not None:
         rollout_config = replace(rollout_config, rollout_workers=args.rollout_workers)
     if rank_info.rank == 0:
-        if start_iteration > 0:
-            print(f"Resuming from {ckpt_path}: iteration {start_iteration}, {total_steps} steps")
+        if iteration_start > 0:
+            print(f"Resuming from {ckpt_path}: iteration {iteration_start}, {total_steps} steps")
         print(f"Starting training: {config['exp_name']} on {rank_info.world_size} rank(s)")
         n_params = sum(p.numel() for p in model.parameters())
         print(f"  params={n_params:,} ({n_params / 1e6:.2f}M)")
@@ -299,8 +312,9 @@ if __name__ == "__main__":
         rollout_config=rollout_config,
         rank_info=rank_info,
         stop=stop,
-        start_iteration=start_iteration,
+        iteration_start=iteration_start,
         total_steps=total_steps,
+        ascension_current=ascension_current,
         lr_scale=lr_scale,
     )
     distributed.close()

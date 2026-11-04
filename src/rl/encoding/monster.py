@@ -119,8 +119,8 @@ def _intent_total_damage(monster: Monster) -> int:
 
 def encode_monster_into(
     monster: Monster,
-    char_health: int,
-    char_block: int,
+    character_health: int,
+    character_block: int,
     outgoing_damage: int | None,
     ascension: int,
     out: np.ndarray,
@@ -172,8 +172,10 @@ def encode_monster_into(
         out[OFF_MONSTER_INTENT_HAS_BLOCK] = float(intent.kind in INTENT_BLOCK_KINDS)
         out[OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in INTENT_BUFF_KINDS)
         out[OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in INTENT_DEBUFF_KINDS)
-        out[OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= char_block)
-        out[OFF_MONSTER_HIT_IS_LETHAL] = float(outgoing_damage >= char_health + char_block)
+        out[OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
+        out[OFF_MONSTER_HIT_IS_LETHAL] = float(
+            outgoing_damage >= character_health + character_block
+        )
 
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
         out[OFF_MONSTER_INTENT_KIND + _MAP_INTENT_KIND[intent.kind]] = 1.0

@@ -45,7 +45,7 @@ class EntityProjector(nn.Module):
     """
 
     # The buffer `__init__` registers, typed for mypy
-    _entity_kind_of_token_kind: torch.Tensor
+    _x_entity_kind_of_token_kind: torch.Tensor
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
@@ -56,7 +56,7 @@ class EntityProjector(nn.Module):
         self._pre_token = nn.Linear(ENCODING_DIM_TOKEN, dim_entity, bias=False)
 
         # Per-Entity kind bias
-        self._bias_entity_kind = nn.Parameter(
+        self._x_bias_entity_kind = nn.Parameter(
             torch.zeros(len(TOKEN_KINDS_OF_ENTITY_KIND), dim_entity)
         )
 
@@ -85,7 +85,7 @@ class EntityProjector(nn.Module):
 
         # Each token kind's Entity kind; derived, so excluded from checkpoints
         self.register_buffer(
-            "_entity_kind_of_token_kind",
+            "_x_entity_kind_of_token_kind",
             torch.tensor([_MAP_TOKEN_KIND_TO_ENTITY_KIND[token_kind] for token_kind in TokenKind]),
             persistent=False,
         )
@@ -107,7 +107,7 @@ class EntityProjector(nn.Module):
 
         Returns
         -------
-        x_tokens : torch.Tensor
+        x_projected : torch.Tensor
             (N_tok, D). The window's tokens, every state's in window order, state after state.
         x_window : X_Window
             The tokens' X_Window.
@@ -118,19 +118,19 @@ class EntityProjector(nn.Module):
         """
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
-        batch_size = x_gs.tokens.x_count.shape[0]
-        num_tokens = x_gs.tokens.x_token_kind.shape[0]
+        num_states = x_gs.x_tokens.x_count.shape[0]
+        num_tokens = x_gs.x_tokens.x_token_kind.shape[0]
 
         # Each token's token kind, Entity kind and state, and each state's tokens
-        x_token_kind = x_gs.tokens.x_token_kind.long()  # (N_tok,)
-        x_entity_kind = self._entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
+        x_token_kind = x_gs.x_tokens.x_token_kind.long()  # (N_tok,)
+        x_entity_kind = self._x_entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
 
         # Handy alias
-        x_count_window = x_gs.tokens.x_count  # (B,)
+        x_count_window = x_gs.x_tokens.x_count  # (B,)
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
-        x_first = _project_sparse(self._pre_token, x_gs.tokens) + SpreadEmbedding.apply(
-            self._bias_entity_kind, x_entity_kind
+        x_first = _project_sparse(self._pre_token, x_gs.x_tokens) + SpreadEmbedding.apply(
+            self._x_bias_entity_kind, x_entity_kind
         )
 
         # State identifier for each token in the batch
@@ -140,13 +140,13 @@ class EntityProjector(nn.Module):
         # `x_token_kind_index`:   Index of first token of each `TokenKind` for each state
         # Both (B, `len(TokenKind)`)
         x_token_kind_count, x_token_kind_row = _token_kind_tables(
-            x_state, x_token_kind, batch_size
+            x_state, x_token_kind, num_states
         )
 
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
         x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = x_gs.focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0 # (B,)
+        x_draw_order_visible = x_gs.x_focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0 # (B,)
         x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
@@ -192,23 +192,23 @@ class EntityProjector(nn.Module):
         x_room_row = torch.nonzero_static(x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
         x_node_hidden = x_hidden_map[
-            x_map_of_state[x_state[x_room_row]], x_gs.tokens.x_node_idx[x_room_row].long()
+            x_map_of_state[x_state[x_room_row]], x_gs.x_tokens.x_node_idx[x_room_row].long()
         ]  # (N_rooms, dim_map)
         x_first[x_room_row] = self._pre_room(x_node_hidden)
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
         # ReLU/LayerNorm
-        _add_owned(x_first, x_gs.tokens.effect_rows, self._effects_mlp)
-        _add_owned(x_first, x_gs.tokens.modifier_rows, self._modifiers_mlp)
+        _add_owned(x_first, x_gs.x_tokens.x_effect_rows, self._effects_mlp)
+        _add_owned(x_first, x_gs.x_tokens.x_modifier_rows, self._modifiers_mlp)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
-        x_effect_pending = x_gs.effect_pending
+        x_effect_pending = x_gs.x_effect_pending
         x_pending_state = torch.repeat_interleave(
             x_effect_pending.x_count, output_size=x_effect_pending.x_column.shape[0]
         )  # (P,)
         x_pending_valid = _project_sparse(self._effects_mlp, x_effect_pending)  # (P, D)
         x_pending = torch.zeros(
-            batch_size,
+            num_states,
             self._dim_entity,
             dtype=x_pending_valid.dtype,
             device=x_pending_valid.device,
@@ -221,8 +221,8 @@ class EntityProjector(nn.Module):
         x_window = X_Window(
             x_token_kind=x_token_kind,
             x_entity_kind=x_entity_kind,
-            x_legal=x_gs.tokens.x_legal,
-            x_needs_target=x_gs.tokens.x_needs_target,
+            x_legal=x_gs.x_tokens.x_legal,
+            x_needs_target=x_gs.x_tokens.x_needs_target,
             x_state=x_state,
             x_count=x_count_window,
             x_token_kind_row=x_token_kind_row,
@@ -295,7 +295,7 @@ def _add_owned(
 
 
 def _token_kind_tables(
-    x_state: torch.Tensor, x_token_kind: torch.Tensor, batch_size: int
+    x_state: torch.Tensor, x_token_kind: torch.Tensor, num_states: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Count each state's tokens of each token kind and find each token kind's first row.
 
@@ -307,7 +307,7 @@ def _token_kind_tables(
         (N_tok,) long. Each row's state.
     x_token_kind : torch.Tensor
         (N_tok,) long. Each row's token kind.
-    batch_size : int
+    num_states : int
         The number of states, B.
 
     Returns
@@ -324,10 +324,10 @@ def _token_kind_tables(
     #     1. Store the amount of tokens for each kind in each state
     #     2. Store the index of the first token for each token kind in each state
     x_token_kind_count = torch.zeros(
-        (batch_size * len(TokenKind),), dtype=torch.long, device=x_state.device
+        (num_states * len(TokenKind),), dtype=torch.long, device=x_state.device
     )
     x_token_kind_row = torch.full(
-        (batch_size * len(TokenKind),), num_tokens, dtype=torch.long, device=x_state.device
+        (num_states * len(TokenKind),), num_tokens, dtype=torch.long, device=x_state.device
     )
 
     # Calculate the key: each token's state and token kind
@@ -348,7 +348,7 @@ def _token_kind_tables(
     )
 
     # Return as (B, len(TokenKind)) pair
-    return x_token_kind_count.view(batch_size, -1), x_token_kind_row.view(batch_size, -1)
+    return x_token_kind_count.view(num_states, -1), x_token_kind_row.view(num_states, -1)
 
 
 class _SumSparseDenseBackward(torch.autograd.Function):

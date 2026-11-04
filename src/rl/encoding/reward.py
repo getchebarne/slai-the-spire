@@ -26,7 +26,7 @@ def _encode_reward_meta_into(reward: Reward, out: np.ndarray) -> None:
     out[OFF_REWARD_CARDS_FORCED] = float(reward.cards_forced)
 
 
-def encode_batch_rewards(game_states: list[GameState], device: torch.device) -> torch.Tensor:
+def encode_batch_rewards(batch_game_state: list[GameState], device: torch.device) -> torch.Tensor:
     """Encode each state's Reward meta only.
 
     The offered Card/Relic/Potion Entities are encoded by their Entity-class encoders (the
@@ -34,7 +34,7 @@ def encode_batch_rewards(game_states: list[GameState], device: torch.device) -> 
 
     Parameters
     ----------
-    game_states : list[GameState]
+    batch_game_state : list[GameState]
         The states to encode, B of them.
     device : torch.device
         The device of the returned tensor.
@@ -44,10 +44,10 @@ def encode_batch_rewards(game_states: list[GameState], device: torch.device) -> 
     torch.Tensor
         (B, ENCODING_DIM_REWARD_META) float32. Each state's Reward meta; 0 outside Rewards.
     """
-    batch_size = len(game_states)
-    np_meta = np.zeros((batch_size, ENCODING_DIM_REWARD_META), dtype=np.float32)
+    num_states = len(batch_game_state)
+    np_meta = np.zeros((num_states, ENCODING_DIM_REWARD_META), dtype=np.float32)
 
-    for b, game_state in enumerate(game_states):
+    for b, game_state in enumerate(batch_game_state):
         reward = game_state.reward
         if reward is None:
             continue

@@ -282,8 +282,8 @@ def _token_kind_rank(x_window: X_Window, x_row: torch.Tensor) -> tuple[torch.Ten
 
 class ActorCritic(nn.Module):
     # The buffers __init__ registers, typed for mypy
-    _selects_token: torch.Tensor
-    _is_targeted: torch.Tensor
+    _x_selects_token: torch.Tensor
+    _x_is_targeted: torch.Tensor
 
     def __init__(
         self,
@@ -337,14 +337,14 @@ class ActorCritic(nn.Module):
 
         # Per policy action type, by its engine arity: whether it makes an L2 selection, and
         # whether that selection can take an L3 target; derived, so excluded from checkpoints
-        arities = [ACTION_SPEC_REGISTRY[at].arity for at in ACTION_TYPE_BY_INT]
+        arities = [ACTION_SPEC_REGISTRY[action_type].arity for action_type in ACTION_TYPE_BY_INT]
         self.register_buffer(
-            "_selects_token",
+            "_x_selects_token",
             torch.tensor([arity != (0, 0) for arity in arities]),
             persistent=False,
         )
         self.register_buffer(
-            "_is_targeted", torch.tensor([arity[1] == 2 for arity in arities]), persistent=False
+            "_x_is_targeted", torch.tensor([arity[1] == 2 for arity in arities]), persistent=False
         )
 
         # The policy heads' computation as a plain function, which compile_hot_paths swaps for
@@ -399,23 +399,23 @@ class ActorCritic(nn.Module):
     ) -> X_Action:
         x_action_type, x_token_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
             self,
-            x_focus=x_gs.focus,
-            x_global=x_core_out.global_,
-            x_tokens=x_core_out.x_tokens,
-            x_window=x_core_out.window,
+            x_focus=x_gs.x_focus,
+            x_global=x_core_out.x_global,
+            x_refined=x_core_out.x_refined,
+            x_window=x_core_out.x_window,
             x_legal_action_type=x_gs.x_legal_action_type,
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
         )
         return X_Action(
-            action_type=x_action_type,
-            token_kind=x_token_kind,
-            rank=x_rank,
-            target=x_target,
-            log_prob=x_log_prob,
-            entropy=x_entropy,
-            kl_uniform=x_kl_uniform,
+            x_action_type=x_action_type,
+            x_token_kind=x_token_kind,
+            x_rank=x_rank,
+            x_target=x_target,
+            x_log_prob=x_log_prob,
+            x_entropy=x_entropy,
+            x_kl_uniform=x_kl_uniform,
         )
 
     def forward(self, x_gs: X_GameState) -> torch.Tensor:
@@ -431,7 +431,7 @@ class ActorCritic(nn.Module):
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(x_gs).global_value)
+        return self._head_value(self.core(x_gs).x_global_value)
 
     def act(
         self,
@@ -489,7 +489,7 @@ class ActorCritic(nn.Module):
             (B, len(RewardStream)). The values.
         """
         x_core_out = self.core(x_gs)
-        x_values = self._head_value(x_core_out.global_value)
+        x_values = self._head_value(x_core_out.x_global_value)
 
         # Recorded actions run the attribute, compiled on the learner
         x_action = self._select_actions(
@@ -499,14 +499,14 @@ class ActorCritic(nn.Module):
             greedy=True,
             x_recorded_actions=x_recorded_actions,
         )
-        return x_action.log_prob.sum(-1), x_action.entropy, x_action.kl_uniform, x_values
+        return x_action.x_log_prob.sum(-1), x_action.x_entropy, x_action.x_kl_uniform, x_values
 
 
 def _policy_heads(
     model: ActorCritic,
     x_focus: torch.Tensor,
     x_global: torch.Tensor,
-    x_tokens: torch.Tensor,
+    x_refined: torch.Tensor,
     x_window: X_Window,
     x_legal_action_type: torch.Tensor,
     greedy: bool,
@@ -526,7 +526,7 @@ def _policy_heads(
         (B, ENCODING_DIM_FOCUS) float32. Each state's focus row, the L1 head's context.
     x_global : torch.Tensor
         (B, dim_global). The core's global vector of each state.
-    x_tokens : torch.Tensor
+    x_refined : torch.Tensor
         (N, dim_entity). The core's refined rows of the packed window.
     x_window : X_Window
         The packed window's X_Window.
@@ -559,8 +559,8 @@ def _policy_heads(
     )
 
     # Compute the `Action`'s selections from the chosen `ActionType`
-    batch_size = x_action_type.shape[0]
-    x_states = torch.arange(batch_size, device=x_action_type.device)
+    num_states = x_action_type.shape[0]
+    x_states = torch.arange(num_states, device=x_action_type.device)
 
     # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's state
     # after state: what the key nets split and the scoring runs on. Selections map back to the
@@ -578,7 +578,7 @@ def _policy_heads(
     ) = x_window.num_tokens_entity_kind
 
     # The split hands each class its rows
-    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_tokens[
+    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_refined[
         x_order
     ].split(x_window.num_tokens_entity_kind)
 
@@ -590,11 +590,11 @@ def _policy_heads(
             model._pointer_key_relic(x_relics),
             model._pointer_key_potion(x_potions),
             torch.zeros(
-                num_monsters, model._dim_key, dtype=x_tokens.dtype, device=x_tokens.device
+                num_monsters, model._dim_key, dtype=x_refined.dtype, device=x_refined.device
             ),
             model._pointer_key_event(x_event_options),
             torch.zeros(
-                num_character, model._dim_key, dtype=x_tokens.dtype, device=x_tokens.device
+                num_character, model._dim_key, dtype=x_refined.dtype, device=x_refined.device
             ),
             model._pointer_key_room(x_rooms),
         ]
@@ -602,7 +602,7 @@ def _policy_heads(
 
     # L2: score every row against its state's query, conditioned on the `ActionType` embedding;
     # the mask keeps exactly the type's legal tokens
-    x_selects_token = model._selects_token[x_action_type]
+    x_selects_token = model._x_selects_token[x_action_type]
     x_legal = x_window.x_legal.gather(1, x_action_type[x_window.x_state].unsqueeze(1))
     x_mask_rows = x_legal.squeeze(1)[x_order]
 
@@ -630,7 +630,7 @@ def _policy_heads(
         x_keys, x_global, model._action_type_embedding(x_action_type), x_state, x_mask_rows
     )
     x_row_selected, x_log_prob_l2, x_entropy_l2, x_kl_uniform_l2 = _categorical_rows(
-        x_logits, x_mask_rows, x_state, batch_size, x_recorded_row, greedy, generator
+        x_logits, x_mask_rows, x_state, num_states, x_recorded_row, greedy, generator
     )
 
     # The selected rows back in the window
@@ -643,7 +643,7 @@ def _policy_heads(
     x_has_target = (
         x_recorded_target >= 0
         if x_recorded_target is not None
-        else model._is_targeted[x_action_type] & x_window.x_needs_target[x_token_selected]
+        else model._x_is_targeted[x_action_type] & x_window.x_needs_target[x_token_selected]
     )
 
     # The choices: each Monster row, scored against its state's selected Card/potion token and
@@ -660,7 +660,7 @@ def _policy_heads(
         [
             model._pointer_key_monster(x_monster_tokens),
             torch.zeros(
-                batch_size,
+                num_states,
                 model._dim_key,
                 dtype=x_monster_tokens.dtype,
                 device=x_monster_tokens.device,
@@ -679,10 +679,10 @@ def _policy_heads(
 
     # Calculate the choices' logits & select from each state's
     x_logits = model._head_level_3(
-        x_keys, x_global, x_tokens[x_token_selected], x_choice_state, x_mask_l3
+        x_keys, x_global, x_refined[x_token_selected], x_choice_state, x_mask_l3
     )
     x_choice, x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _categorical_rows(
-        x_logits, x_mask_l3, x_choice_state, batch_size, x_recorded_choice, greedy, generator
+        x_logits, x_mask_l3, x_choice_state, num_states, x_recorded_choice, greedy, generator
     )
     x_target = x_choice - x_first_monster
 
