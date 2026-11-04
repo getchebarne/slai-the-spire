@@ -7,7 +7,7 @@ import torch
 import torch.multiprocessing as mp
 
 from src.rl.actions import engine_action
-from src.rl.algorithms.actor_critic.curriculum import AscensionCurriculum
+from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.envs import Shard
 from src.rl.algorithms.actor_critic.envs import ShardSettings
 from src.rl.algorithms.actor_critic.envs import make_shard
@@ -38,9 +38,9 @@ from src.rl.utils import set_rng_seeds
 class Exchange:
     """What the step loop and its workers share."""
 
-    step: X_Step
-    curriculum_c: torch.Tensor  # Live curriculum position
-    stop: torch.Tensor  # A lock-free flag: a worker killed holding an Event's lock would hang it
+    x_step: X_Step
+    x_ascensions: torch.Tensor  # (E,) long. Each game's ascension under the live position
+    x_stop: torch.Tensor  # A lock-free flag: a worker killed holding an Event's lock would hang it
     episodes: Queue[EpisodeStats]
 
 
@@ -61,7 +61,7 @@ class RolloutConfig:
 
 
 def start_workers(
-    rollout_config: RolloutConfig, curriculum: AscensionCurriculum, gamma: float, seed: int
+    rollout_config: RolloutConfig, ascension_current: float, gamma: float, seed: int
 ) -> tuple[Exchange, list[Worker]]:
     """Start `rollout_workers` processes, each stepping an equal share of the `num_envs` games.
 
@@ -71,8 +71,8 @@ def start_workers(
     ----------
     rollout_config : RolloutConfig
         The number of games and of workers; the games must divide evenly across the workers.
-    curriculum : AscensionCurriculum
-        The curriculum, for the games' starting position and highest level.
+    ascension_current : float
+        The soft-curriculum position the games start at.
     gamma : float
         The discount the games' rewards and discounted returns use.
     seed : int
@@ -90,35 +90,29 @@ def start_workers(
     ), "num_envs must divide evenly across workers"
     ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
     exchange = Exchange(
-        step=X_Step(
-            actions=torch.zeros(rollout_config.num_envs, 4, dtype=torch.long).share_memory_(),
-            rewards=torch.zeros(rollout_config.num_envs, len(RewardStream)).share_memory_(),
-            dones=torch.zeros(rollout_config.num_envs).share_memory_(),
-            game_state=share_memory(empty_game_state(rollout_config.num_envs)),
+        x_step=X_Step(
+            x_actions=torch.zeros(rollout_config.num_envs, 4, dtype=torch.long).share_memory_(),
+            x_rewards=torch.zeros(rollout_config.num_envs, len(RewardStream)).share_memory_(),
+            x_dones=torch.zeros(rollout_config.num_envs).share_memory_(),
+            x_gs=share_memory(empty_game_state(rollout_config.num_envs)),
             num_regions=rollout_config.rollout_workers,
         ),
-        curriculum_c=torch.tensor(curriculum.ascension_start, dtype=torch.float64).share_memory_(),
-        stop=torch.tensor(False).share_memory_(),
+        x_ascensions=torch.tensor(
+            ascensions(ascension_current, rollout_config.num_envs), dtype=torch.long
+        ).share_memory_(),
+        x_stop=torch.tensor(False).share_memory_(),
         episodes=ctx.Queue(),
     )
     per = rollout_config.num_envs // rollout_config.rollout_workers
     workers: list[Worker] = []
     try:
         for w in range(rollout_config.rollout_workers):
-            settings = ShardSettings(
-                num_envs=per,
-                first_env=w * per,
-                total_envs=rollout_config.num_envs,
-                gamma=gamma,
-                ascension_start=curriculum.ascension_start,
-                ascension_max=curriculum.ascension_max,
-                seed=seed * 7919 + w,
-            )
+            settings = ShardSettings(games=range(w * per, (w + 1) * per), seed=seed * 7919 + w)
 
             # Semaphores: an Event.set() blocks until its sleepers wake; a killed worker hangs it
             request, reply = ctx.Semaphore(0), ctx.Semaphore(0)
             process = ctx.Process(
-                target=_worker_loop, args=(exchange, request, reply, settings), daemon=True
+                target=_worker_loop, args=(exchange, request, reply, settings, gamma), daemon=True
             )
             process.start()
             workers.append(Worker(process, request, reply))
@@ -156,7 +150,7 @@ def _wait_for_replies(workers: list[Worker]) -> None:
                 raise RuntimeError(f"the learner died while rollout worker {w} stepped")
 
 
-def snapshot_to_device(step: X_Step, device: torch.device) -> tuple[X_GameState, torch.Tensor]:
+def snapshot_to_device(x_step: X_Step, device: torch.device) -> tuple[X_GameState, torch.Tensor]:
     """Copy every game's state out of the shared step onto the device.
 
     The workers' rows are joined on the CPU and copied onto the device in one copy, with the
@@ -165,27 +159,27 @@ def snapshot_to_device(step: X_Step, device: torch.device) -> tuple[X_GameState,
 
     Parameters
     ----------
-    step : X_Step
+    x_step : X_Step
         The shared step, as the workers wrote it.
     device : torch.device
         The device to copy onto.
 
     Returns
     -------
-    x : X_GameState
+    x_gs : X_GameState
         Every game's state, on the device.
     x_count_cpu : torch.Tensor
         (E, number of blocks) long. Each of the E games' rows in each block, on the CPU.
     """
-    x = join_regions(step.game_state, step.num_regions)
-    return to_device(x, device), count_blocks(x)
+    x_gs = join_regions(x_step.x_gs, x_step.num_regions)
+    return to_device(x_gs, device), count_blocks(x_gs)
 
 
-def drain_episodes(episodes: Queue[EpisodeStats]) -> list[EpisodeStats]:
-    completed = []
-    while not episodes.empty():
-        completed.append(episodes.get())
-    return completed
+def drain_episodes(queue: Queue[EpisodeStats]) -> list[EpisodeStats]:
+    episodes = []
+    while not queue.empty():
+        episodes.append(queue.get())
+    return episodes
 
 
 def stop_workers(exchange: Exchange, workers: list[Worker]) -> None:
@@ -198,7 +192,7 @@ def stop_workers(exchange: Exchange, workers: list[Worker]) -> None:
     workers : list[Worker]
         The worker processes and their semaphores.
     """
-    exchange.stop.fill_(True)
+    exchange.x_stop.fill_(True)
     for worker in workers:
         worker.request.release()
     for worker in workers:
@@ -208,7 +202,7 @@ def stop_workers(exchange: Exchange, workers: list[Worker]) -> None:
 
 
 def _worker_loop(
-    exchange: Exchange, request: Semaphore, reply: Semaphore, settings: ShardSettings
+    exchange: Exchange, request: Semaphore, reply: Semaphore, settings: ShardSettings, gamma: float
 ) -> None:
     """Run one shard of the games until the stop flag is set.
 
@@ -225,35 +219,40 @@ def _worker_loop(
         The worker's reply, released once its games' states are written.
     settings : ShardSettings
         The shard's settings, fixed for the run.
+    gamma : float
+        The discount the games' rewards and discounted returns use.
     """
     set_rng_seeds(settings.seed)
     torch.set_num_threads(1)  # Workers are the parallelism; don't oversubscribe
-    step = _worker_region(exchange.step, settings)
-    shard = make_shard(settings)
-    _write_states(step, shard)
+    x_step = _worker_region(exchange.x_step, settings)
+    x_ascensions = exchange.x_ascensions[settings.games.start : settings.games.stop]
+    shard = make_shard(x_ascensions.tolist())
+    _write_states(x_step, shard)
     reply.release()
-    while _wait_for_request(request, exchange.stop):
-        shard.ascension_c = float(exchange.curriculum_c)  # Promotions apply on reset
+    while _wait_for_request(request, exchange.x_stop):
+        batch_ascension = x_ascensions.tolist()  # Promotions apply on reset
 
-        for j, (at, token_kind, rank, target) in enumerate(step.actions.tolist()):
-            action = engine_action(at, token_kind, rank, target, shard.obs[j])
-            reward, finished = step_env(shard, j, action, settings)
-            step.rewards[j] = torch.from_numpy(reward)
-            step.dones[j] = float(finished is not None)
-            if finished is not None:
-                exchange.episodes.put(finished)
-        _write_states(step, shard)
+        for j, (action_type, token_kind, rank, target) in enumerate(x_step.x_actions.tolist()):
+            action = engine_action(
+                action_type, token_kind, rank, target, shard.batch_game_state[j]
+            )
+            reward, episode = step_env(shard, j, action, gamma, batch_ascension[j])
+            x_step.x_rewards[j] = torch.from_numpy(reward)
+            x_step.x_dones[j] = float(episode is not None)
+            if episode is not None:
+                exchange.episodes.put(episode)
+        _write_states(x_step, shard)
         reply.release()
 
 
-def _wait_for_request(request: Semaphore, stop: torch.Tensor) -> bool:
+def _wait_for_request(request: Semaphore, x_stop: torch.Tensor) -> bool:
     """Wait for the step loop's next request.
 
     Parameters
     ----------
     request : Semaphore
         The step loop's request, released once per step.
-    stop : torch.Tensor
+    x_stop : torch.Tensor
         () bool. The stop flag, in shared memory.
 
     Returns
@@ -264,10 +263,10 @@ def _wait_for_request(request: Semaphore, stop: torch.Tensor) -> bool:
     while not request.acquire(timeout=1.0):
         if not parent_alive():  # The actor died without stopping this worker
             return False
-    return not stop
+    return not x_stop
 
 
-def _worker_region(step: X_Step, settings: ShardSettings) -> X_Step:
+def _worker_region(x_step: X_Step, settings: ShardSettings) -> X_Step:
     """Return the worker's region of the shared step, one region of its own.
 
     The region holds its games' actions, rewards and done flags, and their counts, per-state
@@ -275,7 +274,7 @@ def _worker_region(step: X_Step, settings: ShardSettings) -> X_Step:
 
     Parameters
     ----------
-    step : X_Step
+    x_step : X_Step
         The shared step.
     settings : ShardSettings
         The shard's settings, which name the worker's games.
@@ -285,27 +284,27 @@ def _worker_region(step: X_Step, settings: ShardSettings) -> X_Step:
     X_Step
         The worker's region, views of the shared step's tensors.
     """
-    games = slice(settings.first_env, settings.first_env + settings.num_envs)
+    games = slice(settings.games.start, settings.games.stop)
     return X_Step(
-        actions=step.actions[games],
-        rewards=step.rewards[games],
-        dones=step.dones[games],
-        game_state=region_of_states(step.game_state, settings.first_env, settings.num_envs),
+        x_actions=x_step.x_actions[games],
+        x_rewards=x_step.x_rewards[games],
+        x_dones=x_step.x_dones[games],
+        x_gs=region_of_states(x_step.x_gs, settings.games.start, len(settings.games)),
         num_regions=1,
     )
 
 
-def _write_states(step: X_Step, shard: Shard) -> None:
+def _write_states(x_step: X_Step, shard: Shard) -> None:
     """Encode the shard's games and their masks into its region of the step.
 
     Parameters
     ----------
-    step : X_Step
+    x_step : X_Step
         The worker's region of the shared step.
     shard : Shard
         The worker's games.
     """
     cpu = torch.device("cpu")
-    legal = [env.get_legal_actions() for env in shard.envs]
-    x = encode_batch_game_state(shard.obs, legal, cpu)
-    write_rows(step.game_state, x)
+    batch_legal_actions = [env.get_legal_actions() for env in shard.batch_env]
+    x_gs = encode_batch_game_state(shard.batch_game_state, batch_legal_actions, cpu)
+    write_rows(x_step.x_gs, x_gs)

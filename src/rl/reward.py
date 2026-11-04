@@ -99,7 +99,7 @@ def game_won(game_state: slai.GameState) -> bool:
 def compute_reward(
     game_state: slai.GameState,
     game_state_next: slai.GameState,
-    game_over_flag: bool,
+    terminated: bool,
     gamma: float,
     action: slai.Action | None = None,
     truncated: bool = False,
@@ -114,7 +114,7 @@ def compute_reward(
         The state before the step.
     game_state_next : slai.GameState
         The state after the step.
-    game_over_flag : bool
+    terminated : bool
         Whether the game ended this step.
     gamma : float
         The trainer's discount, γ.
@@ -132,7 +132,7 @@ def compute_reward(
     won = game_won(game_state_next)
 
     # Any end but a win pays a death: a death, a cut at the step limit, a door-shut kill
-    death = (game_over_flag or truncated) and not won
+    death = (terminated or truncated) and not won
     health_next = 0 if death else game_state_next.character.health
 
     # Potential-based, γ·Φ(s') − Φ(s): the episode sum telescopes to its endpoints. γ must

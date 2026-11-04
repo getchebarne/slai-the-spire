@@ -11,7 +11,7 @@ import torch
 import torch.multiprocessing as mp
 
 from src.rl.actions import action_from_actiontype
-from src.rl.algorithms.actor_critic.curriculum import env_level
+from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.episode import KEY_ACT2_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_ACT3_RATE
 from src.rl.algorithms.actor_critic.episode import KEY_ACT4_RATE
@@ -48,41 +48,42 @@ EVAL_ACT4_RATE = PREFIX_EVAL + KEY_ACT4_RATE
 
 def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:
     env = new_env(ascension)
-    obs = env.reset(seed=seed)
+    game_state = env.reset(seed=seed)
     stats = make_episode_stats()
     terminated = truncated = False
     while not (terminated or truncated):
-        legal = env.get_legal_actions()
-        if not legal:
+        legal_actions = env.get_legal_actions()
+        if not legal_actions:
             raise RuntimeError(
                 f"non-terminal state has no legal action (seed={seed}, step={stats.length})"
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        x_gs = encode_batch_game_state([obs], [legal], torch.device("cpu"))
+        x_gs = encode_batch_game_state([game_state], [legal_actions], torch.device("cpu"))
         x_action = model.act(x_gs, greedy=True)
 
         # Game step
-        prev = obs
-        action = action_from_actiontype(x_action, 0, obs)
-        obs, terminated = step_scripted(env, action)
+        action = action_from_actiontype(x_action, 0, game_state)
+        game_state_next, terminated = step_scripted(env, action)
 
         # As in training, the step that reaches the step limit ends the game as a death
         truncated = not terminated and stats.length + 1 >= MAX_STEPS_EPISODE
-        reward = compute_reward(prev, obs, terminated, gamma, action, truncated)
-        tally_step(stats, prev, obs, action, reward, gamma)
+        reward = compute_reward(game_state, game_state_next, terminated, gamma, action, truncated)
+        tally_step(stats, game_state, game_state_next, action, reward, gamma)
+        game_state = game_state_next
 
-    finish_episode(stats, obs, terminated)
+    finish_episode(stats, game_state, terminated)
     return stats
 
 
 def run_eval_battery(
-    model: ActorCritic, gamma: float, c: float, ascension_max: int
+    model: ActorCritic, gamma: float, ascension_current: float
 ) -> dict[str, float]:
-    """Run the battery at curriculum position c, `model` on the CPU.
+    """Run the battery at curriculum position ascension_current, `model` on the CPU.
 
-    The games play training's mix of levels at c: the first round(frac(c)*games) play the
-    frontier level ceil(c), the rest floor(c).
+    The games play training's mix of levels at ascension_current: the first
+    round(frac(ascension_current)*games) play the frontier level ceil(ascension_current), the rest
+    floor(ascension_current).
 
     Parameters
     ----------
@@ -90,10 +91,8 @@ def run_eval_battery(
         The model to evaluate; it plays greedily.
     gamma : float
         The discount the rewards and discounted returns use.
-    c : float
+    ascension_current : float
         The curriculum position.
-    ascension_max : int
-        The highest level, which caps every game's.
 
     Returns
     -------
@@ -102,8 +101,10 @@ def run_eval_battery(
     """
     with torch.no_grad():
         episodes = [
-            _run_eval_episode(model, gamma, env_level(c, i, len(_EVAL_SEEDS), ascension_max), seed)
-            for i, seed in enumerate(_EVAL_SEEDS)
+            _run_eval_episode(model, gamma, ascension, seed)
+            for ascension, seed in zip(
+                ascensions(ascension_current, len(_EVAL_SEEDS)), _EVAL_SEEDS
+            )
         ]
 
     return {PREFIX_EVAL + key: value for key, value in aggregate_episode_stats(episodes).items()}
@@ -118,7 +119,7 @@ class Evaluator:
     busy: bool
 
 
-def start_eval(model_config: dict[str, Any], gamma: float, ascension_max: int) -> Evaluator:
+def start_eval(model_config: dict[str, Any], gamma: float) -> Evaluator:
     """Start the eval process, idle until its first weights arrive.
 
     Parameters
@@ -127,8 +128,6 @@ def start_eval(model_config: dict[str, Any], gamma: float, ascension_max: int) -
         ActorCritic's keyword arguments, for the eval process's own model.
     gamma : float
         The discount the batteries' rewards and discounted returns use.
-    ascension_max : int
-        The highest level, which caps every game's.
 
     Returns
     -------
@@ -137,16 +136,16 @@ def start_eval(model_config: dict[str, Any], gamma: float, ascension_max: int) -
     """
     ctx = mp.get_context("spawn")
     conn, child = ctx.Pipe()
-    process = ctx.Process(
-        target=_eval_loop, args=(child, model_config, gamma, ascension_max), daemon=True
-    )
+    process = ctx.Process(target=_eval_loop, args=(child, model_config, gamma), daemon=True)
     process.start()
     child.close()  # The eval process holds its own copy
     return Evaluator(process, conn, busy=False)
 
 
-def submit_eval(evaluator: Evaluator, model: ActorCritic, iteration: int, c: float) -> None:
-    """Hand the eval process the model's CPU weights for a battery at curriculum position `c`.
+def submit_eval(
+    evaluator: Evaluator, model: ActorCritic, iteration: int, ascension_current: float
+) -> None:
+    """Hand the eval process the model's CPU weights for a battery at `ascension_current`.
 
     It does nothing while a battery is running.
 
@@ -158,17 +157,17 @@ def submit_eval(evaluator: Evaluator, model: ActorCritic, iteration: int, c: flo
         The model whose weights the battery plays.
     iteration : int
         The iteration the weights are from, which the battery's result carries back.
-    c : float
+    ascension_current : float
         The curriculum position the battery plays at.
     """
     _check_alive(evaluator)
     if not evaluator.busy:
-        evaluator.conn.send((_cpu_state_dict(model), iteration, c))
+        evaluator.conn.send((_cpu_state_dict(model), iteration, ascension_current))
         evaluator.busy = True
 
 
 def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | None:
-    """Return a finished battery's (iteration, c, metrics), or None.
+    """Return a finished battery's (iteration, ascension_current, metrics), or None.
 
     Parameters
     ----------
@@ -226,9 +225,7 @@ def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
     return {k: v.cpu() for k, v in model.state_dict().items()}
 
 
-def _eval_loop(
-    conn: Connection, model_config: dict[str, Any], gamma: float, ascension_max: int
-) -> None:
+def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> None:
     # A Ctrl-C or torchrun's SIGTERM reaches the whole process group: ignore them, so the
     # training loop can finish its iteration and checkpoint before it stops this process
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -241,13 +238,13 @@ def _eval_loop(
     model.eval()
     while True:
         try:
-            state_dict, iteration, c = conn.recv()
+            state_dict, iteration, ascension_current = conn.recv()
         except (EOFError, OSError):  # The learner is gone
             return
         model.load_state_dict(state_dict)
-        metrics = run_eval_battery(model, gamma, c, ascension_max)
+        metrics = run_eval_battery(model, gamma, ascension_current)
         try:
-            conn.send((iteration, c, metrics))
+            conn.send((iteration, ascension_current, metrics))
         except BrokenPipeError:  # The learner is gone
             return
 

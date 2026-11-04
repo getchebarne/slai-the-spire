@@ -12,7 +12,7 @@ cadence:
 # Soft ascension curriculum
 curriculum:
   ascension_start: 0.0
-  ascension_max: 20.0
+  ascension_max: 20
   promote_win_rate: 0.5 
   promote_streak: 2
   curriculum_step: 0.25

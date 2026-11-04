@@ -258,11 +258,11 @@ class EntityTransformer(nn.Module):
 
         # Learned global token, refined with the Entities (replaces pooling). It
         # has no token kind, so it joins the sequence here and leaves it here
-        self._entity_global = nn.Parameter(torch.empty(dim_entity))
-        nn.init.normal_(self._entity_global, std=0.02)
+        self._x_entity_global = nn.Parameter(torch.empty(dim_entity))
+        nn.init.normal_(self._x_entity_global, std=0.02)
 
     def forward(
-        self, x_tokens: torch.Tensor, x_window: X_Window
+        self, x_projected: torch.Tensor, x_window: X_Window
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Refine the packed window's rows together with each state's global token.
 
@@ -270,7 +270,7 @@ class EntityTransformer(nn.Module):
 
         Parameters
         ----------
-        x_tokens : torch.Tensor
+        x_projected : torch.Tensor
             (N, D). The packed window's rows, every state's after the previous state's.
         x_window : X_Window
             The packed window's X_Window.
@@ -282,22 +282,24 @@ class EntityTransformer(nn.Module):
         x_global_token : torch.Tensor
             (B, D). The global tokens.
         """
-        num_rows, dim = x_tokens.shape
-        batch_size = x_window.x_count.shape[0]
+        num_rows, dim = x_projected.shape
+        num_states = x_window.x_count.shape[0]
 
         # The sequence: each state's rows, then its global token, state after state. Each state's
         # first place in it, then the end; each row's place, past one global token per state before
         # its own, and each global token's
         x_offsets = F.pad((x_window.x_count + 1).cumsum(0), (1, 0))  # (B + 1,)
-        x_place_row = torch.arange(num_rows, device=x_tokens.device) + x_window.x_state  # (N,)
+        x_place_row = torch.arange(num_rows, device=x_projected.device) + x_window.x_state  # (N,)
         x_place_global = x_offsets[1:] - 1  # (B,)
 
         # On the GPU, a tail of zero rows pads it to FlexAttention's block. Zeros, not empty: a
         # key's NaN would reach every query through its zero attention weight (0 * NaN = NaN)
-        num_places = _padded(num_rows + batch_size, x_tokens.device)
-        x_sequence = torch.zeros(num_places, dim, dtype=x_tokens.dtype, device=x_tokens.device)
-        x_sequence[x_place_row] = x_tokens
-        x_sequence[x_place_global] = self._entity_global
+        num_places = _padded(num_rows + num_states, x_projected.device)
+        x_sequence = torch.zeros(
+            num_places, dim, dtype=x_projected.dtype, device=x_projected.device
+        )
+        x_sequence[x_place_row] = x_projected
+        x_sequence[x_place_global] = self._x_entity_global
         x_refined = self._refine(
             x_sequence, _same_state_mask(x_offsets, x_offsets, num_places, num_places)
         )
@@ -410,7 +412,7 @@ class DrawOrderLayer(nn.Module):
 
     def forward(
         self,
-        x_tokens: torch.Tensor,
+        x_refined: torch.Tensor,
         x_global_token: torch.Tensor,
         x_window: X_Window,
         x_states: torch.Tensor,
@@ -421,7 +423,7 @@ class DrawOrderLayer(nn.Module):
 
         Parameters
         ----------
-        x_tokens : torch.Tensor
+        x_refined : torch.Tensor
             (N, D). The transformer's refined rows, in the window's order.
         x_global_token : torch.Tensor
             (B, D). The transformer's global tokens.
@@ -464,13 +466,13 @@ class DrawOrderLayer(nn.Module):
 
         # On the GPU, each side padded to FlexAttention's block; a global token is its state's one
         # query
-        num_places = _padded(num_rows, x_tokens.device)
-        num_places_pile = _padded(num_pile, x_tokens.device)
-        num_places_global = _padded(num_states, x_tokens.device)
+        num_places = _padded(num_rows, x_refined.device)
+        num_places_pile = _padded(num_pile, x_refined.device)
+        num_places_global = _padded(num_states, x_refined.device)
         x_offsets_global = torch.arange(num_states + 1, device=x_states.device)
         x_out, x_out_global = self._draw_order_block(
-            F.pad(x_tokens[x_rows], (0, 0, 0, num_places - num_rows)),
-            F.pad(x_tokens[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
+            F.pad(x_refined[x_rows], (0, 0, 0, num_places - num_rows)),
+            F.pad(x_refined[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
             F.pad(x_depth, (0, num_places_pile - num_pile)),
             F.pad(x_global_token[x_states], (0, 0, 0, num_places_global - num_states)),
             _same_state_mask(x_offsets, x_offsets_pile, num_places, num_places_pile),

@@ -175,13 +175,13 @@ def _encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
     out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(game_state))
 
 
-def encode_batch_focus(game_states: list[GameState], device: torch.device) -> torch.Tensor:
-    batch_size = len(game_states)
+def encode_batch_focus(batch_game_state: list[GameState], device: torch.device) -> torch.Tensor:
+    num_states = len(batch_game_state)
 
     # Pre-allocate NumPy array
-    np_out = np.zeros((batch_size, ENCODING_DIM_FOCUS), dtype=np.float32)
+    np_out = np.zeros((num_states, ENCODING_DIM_FOCUS), dtype=np.float32)
 
-    for b, game_state in enumerate(game_states):
+    for b, game_state in enumerate(batch_game_state):
         _encode_focus_into(game_state, np_out[b])
 
     return torch.from_numpy(np_out).to(device)

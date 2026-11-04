@@ -40,7 +40,7 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     iteration: int,
     total_steps: int,
-    curriculum_c: float,
+    ascension_current: float,
     lr_scale: float,
 ) -> None:
     torch.save(
@@ -49,7 +49,7 @@ def save_checkpoint(
             "optimizer": optimizer.state_dict(),
             "iteration": iteration,
             "total_steps": total_steps,
-            "curriculum_c": curriculum_c,
+            "ascension_current": ascension_current,
             "lr_scale": lr_scale,
         },
         path,
@@ -75,11 +75,11 @@ def load_checkpoint(
 
     Returns
     -------
-    start_iteration : int
+    iteration_start : int
         The iteration after the checkpoint's, or 0 for a fresh run.
     total_steps : int
         The steps played so far, every rank's games counted, or 0 for a fresh run.
-    curriculum_c : float | None
+    ascension_current : float | None
         The checkpoint's soft-curriculum position, or None for a fresh run.
     lr_scale : float
         The checkpoint's adaptive-KL lr scale, or 1.0 for a fresh run.
@@ -91,6 +91,6 @@ def load_checkpoint(
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
-    start_iteration = ckpt["iteration"] + 1
+    iteration_start = ckpt["iteration"] + 1
     total_steps = ckpt["total_steps"]
-    return start_iteration, total_steps, ckpt["curriculum_c"], ckpt["lr_scale"]
+    return iteration_start, total_steps, ckpt["ascension_current"], ckpt["lr_scale"]

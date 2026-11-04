@@ -8,7 +8,7 @@ from src.rl.types import X_Action
 
 
 def engine_action(
-    at_int: int, token_kind: int, rank: int, target: int, game_state: slai.GameState
+    action_type: int, token_kind: int, rank: int, target: int, game_state: slai.GameState
 ) -> slai.Action:
     """Build a `slai.Action` from the sampled hierarchy [ActionType, token kind, rank, target].
 
@@ -17,7 +17,7 @@ def engine_action(
 
     Parameters
     ----------
-    at_int : int
+    action_type : int
         The ActionType, as its int.
     token_kind : int
         The token's token kind, as its int; -1 when the type takes no id.
@@ -33,14 +33,13 @@ def engine_action(
     slai.Action
         The engine's action.
     """
-    action_type = ACTION_TYPE_BY_INT[at_int]
-    if ACTION_SPEC_REGISTRY[action_type].arity == (0, 0):
-        return slai.Action(action_type, [])
+    if ACTION_SPEC_REGISTRY[ACTION_TYPE_BY_INT[action_type]].arity == (0, 0):
+        return slai.Action(ACTION_TYPE_BY_INT[action_type], [])
 
     ids = [get_entities_for_token_kind(TokenKind(token_kind), game_state)[rank].id]
     if target >= 0:  # CardPlay / PotionUse with a Monster target
         ids.append(get_entities_for_token_kind(TokenKind.MONSTERS, game_state)[target].id)
-    return slai.Action(action_type, ids)
+    return slai.Action(ACTION_TYPE_BY_INT[action_type], ids)
 
 
 def action_from_actiontype(x_action: X_Action, i: int, game_state: slai.GameState) -> slai.Action:
@@ -61,9 +60,9 @@ def action_from_actiontype(x_action: X_Action, i: int, game_state: slai.GameStat
         The engine's action.
     """
     return engine_action(
-        int(x_action.action_type[i]),
-        int(x_action.token_kind[i]),
-        int(x_action.rank[i]),
-        int(x_action.target[i]),
+        int(x_action.x_action_type[i]),
+        int(x_action.x_token_kind[i]),
+        int(x_action.x_rank[i]),
+        int(x_action.x_target[i]),
         game_state,
     )

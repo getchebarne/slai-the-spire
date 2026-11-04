@@ -56,8 +56,8 @@ def compile_sparse_tokens(
         x_legal=torch.from_numpy(np_legal).to(device),
         x_needs_target=torch.from_numpy(np_needs_target).to(device),
         x_node_idx=torch.from_numpy(np_node_idx).to(device),
-        effect_rows=x_effect_rows,
-        modifier_rows=x_modifier_rows,
+        x_effect_rows=x_effect_rows,
+        x_modifier_rows=x_modifier_rows,
         x_count=torch.from_numpy(np_count).to(device),
     )
 

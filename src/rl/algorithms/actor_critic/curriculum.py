@@ -1,7 +1,7 @@
 """The soft ascension curriculum.
 
-Games play at the levels around a position c, which advances on the eval battery's wins at those
-same levels.
+Games play at the levels around a position ascension_current, which advances on the eval
+battery's wins at those same levels.
 """
 
 import math
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 @dataclass
 class AscensionCurriculum:
-    """Where c starts, where it stops, and what it takes to advance it."""
+    """Where ascension_current starts, where it stops, and what it takes to advance it."""
 
     ascension_start: float
     ascension_max: int
@@ -19,88 +19,69 @@ class AscensionCurriculum:
     curriculum_step: float
 
 
-def env_level(c: float, env_idx: int, num_envs: int, ascension_max: int) -> int:
-    """Map an env to its ascension under soft-curriculum position c.
+def ascensions(ascension_current: float, num_envs: int) -> list[int]:
+    """Return the ascension of each of `num_envs` games under ascension_current.
 
-    The first round(frac(c)*num_envs) envs run the frontier level ceil(c), the rest floor(c).
+    The first round(frac(ascension_current)*num_envs) games play the frontier level
+    ceil(ascension_current), the rest floor(ascension_current). step_curriculum caps
+    ascension_current at ascension_max, so no game passes it.
 
     Parameters
     ----------
-    c : float
+    ascension_current : float
         The soft-curriculum position.
-    env_idx : int
-        The env's index among the `num_envs` envs.
     num_envs : int
-        The number of envs the levels spread over.
-    ascension_max : int
-        The highest level, which caps the env's.
+        The number of games the levels spread over.
 
     Returns
     -------
-    int
-        The env's ascension level.
+    list[int]
+        Each game's ascension.
     """
-    base = math.floor(c)
-    n_frontier = round((c - base) * num_envs)
-    return min(base + 1 if env_idx < n_frontier else base, ascension_max)
-
-
-def frontier_level(c: float, ascension_max: int) -> int:
-    """Return the highest level played under c: ceil(c) (== c at integers).
-
-    Parameters
-    ----------
-    c : float
-        The soft-curriculum position.
-    ascension_max : int
-        The highest level, which caps the result.
-
-    Returns
-    -------
-    int
-        The frontier level.
-    """
-    return min(math.ceil(c), ascension_max)
+    base = math.floor(ascension_current)
+    n_frontier = round((ascension_current - base) * num_envs)
+    return [base + 1] * n_frontier + [base] * (num_envs - n_frontier)
 
 
 def step_curriculum(
-    c: float,
+    ascension_current: float,
     streak: int,
-    eval_win_rate: float,
-    eval_c: float,
+    win_rate_eval: float,
+    ascension_current_eval: float,
     curriculum: AscensionCurriculum,
 ) -> tuple[float, int]:
     """Advance the soft-curriculum position on sustained eval wins at it.
 
     Batteries played at an earlier position are skipped entirely (neither count nor reset the
     streak); a below-threshold result resets it; `promote_streak` consecutive passes graduate
-    another `curriculum_step` fraction of envs. The position c is capped at ascension_max.
+    another `curriculum_step` fraction of envs. The position ascension_current is capped at
+    ascension_max.
 
     Parameters
     ----------
-    c : float
+    ascension_current : float
         The soft-curriculum position.
     streak : int
-        The consecutive passes at c so far.
-    eval_win_rate : float
+        The consecutive passes at ascension_current so far.
+    win_rate_eval : float
         The battery's win rate.
-    eval_c : float
+    ascension_current_eval : float
         The position the battery played at.
     curriculum : AscensionCurriculum
         The win rate a pass needs, the streak that promotes, the step and the highest level.
 
     Returns
     -------
-    c : float
+    ascension_current : float
         The new soft-curriculum position.
     streak : int
         The new streak.
     """
-    if eval_c != c:
-        return c, streak
-    if eval_win_rate < curriculum.promote_win_rate:
-        return c, 0
+    if ascension_current_eval != ascension_current:
+        return ascension_current, streak
+    if win_rate_eval < curriculum.promote_win_rate:
+        return ascension_current, 0
     streak += 1
     if streak < curriculum.promote_streak:
-        return c, streak
-    return min(c + curriculum.curriculum_step, float(curriculum.ascension_max)), 0
+        return ascension_current, streak
+    return min(ascension_current + curriculum.curriculum_step, float(curriculum.ascension_max)), 0

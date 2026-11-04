@@ -263,13 +263,13 @@ def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
 
 
 def encode_batch_map(
-    game_states: list[GameState], device: torch.device
+    batch_game_state: list[GameState], device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Encode each state's Map grid and Map meta.
 
     Parameters
     ----------
-    game_states : list[GameState]
+    batch_game_state : list[GameState]
         The states to encode, B of them.
     device : torch.device
         The device of the returned tensors.
@@ -282,11 +282,11 @@ def encode_batch_map(
     x_map_meta : torch.Tensor
         (B, ENCODING_DIM_MAP_META) float32. Each state's Map meta.
     """
-    batch_size = len(game_states)
-    np_grid = np.zeros((batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
-    np_meta = np.zeros((batch_size, ENCODING_DIM_MAP_META), dtype=np.float32)
+    num_states = len(batch_game_state)
+    np_grid = np.zeros((num_states, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
+    np_meta = np.zeros((num_states, ENCODING_DIM_MAP_META), dtype=np.float32)
 
-    for b, game_state in enumerate(game_states):
+    for b, game_state in enumerate(batch_game_state):
         map_ = game_state.map
         rooms = map_.rooms
         y_current = map_.y_current

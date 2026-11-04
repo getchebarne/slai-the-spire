@@ -16,7 +16,6 @@ from typing import Any
 import torch
 import torch.multiprocessing as mp
 
-from src.rl.algorithms.actor_critic.curriculum import AscensionCurriculum
 from src.rl.algorithms.actor_critic.episode import EpisodeStats
 from src.rl.algorithms.actor_critic.rollout import collect_rollout
 from src.rl.algorithms.actor_critic.workers import RolloutConfig
@@ -31,9 +30,9 @@ from src.rl.utils import parent_alive
 class _Delivery:
     """One collected rollout and how it was made."""
 
-    rollout: X_Rollout
-    completed: list[EpisodeStats]
-    info: dict[str, float]
+    x_rollout: X_Rollout
+    episodes: list[EpisodeStats]
+    metrics: dict[str, float]
     seconds_collect: float
     seconds_wait: float  # The actor's idle time before it: waiting for weights or the learner
 
@@ -42,11 +41,11 @@ class _Delivery:
 class _Published:
     """One published weight set and the curriculum position to play it at."""
 
-    version: torch.Tensor  # () int64, in shared memory
+    x_version: torch.Tensor  # () int64, in shared memory
 
     # In shared CPU memory: containers block sharing the GPU memory of the learner's allocator
-    weights: dict[str, torch.Tensor]
-    curriculum_c: torch.Tensor  # () float64, in shared memory
+    x_weights: dict[str, torch.Tensor]
+    x_ascension_current: torch.Tensor  # () float64, in shared memory
 
 
 @dataclass
@@ -56,7 +55,7 @@ class Handoff:
     # Two suffice: the learner overwrites the older set only after taking the rollouts played on it
     published: list[_Published]  # Last two weights published by the Learner
     new_version: Semaphore  # Released once by each publish; the actor acquires once per version
-    stop: torch.Tensor  # () bool in shared memory, lock-free like the workers' stop flag
+    x_stop: torch.Tensor  # () bool in shared memory, lock-free like the workers' stop flag
 
 
 @dataclass
@@ -74,13 +73,13 @@ class ActorSettings:
     model_config: dict[str, Any]
     rollout_config: RolloutConfig
     device: torch.device
-    first_version: int
-    curriculum: AscensionCurriculum
+    version_first: int
+    ascension_current: float  # The first version's; later ones come with their publish
     gamma: float
     seed: int
 
     # The learner's random-generator state and torch settings, which the actor process starts from
-    rng: torch.Tensor  # The global generator's state on the device
+    x_rng: torch.Tensor  # The global generator's state on the device
     matmul_precision: str
     num_threads: int
     deterministic: bool
@@ -88,7 +87,7 @@ class ActorSettings:
 
 
 def start_actor(model: ActorCritic, settings: ActorSettings) -> tuple[Handoff, Actor]:
-    """Publish `model` as `settings.first_version` and start the actor process.
+    """Publish `model` as `settings.version_first` and start the actor process.
 
     The actor process starts its workers and collects on a model of its own.
 
@@ -110,19 +109,19 @@ def start_actor(model: ActorCritic, settings: ActorSettings) -> tuple[Handoff, A
     handoff = Handoff(
         published=[
             _Published(
-                version=torch.tensor(-1).share_memory_(),
-                weights={
+                x_version=torch.tensor(-1).share_memory_(),
+                x_weights={
                     n: torch.empty_like(x, device="cpu").share_memory_()
                     for n, x in model.state_dict().items()
                 },
-                curriculum_c=torch.tensor(0.0, dtype=torch.float64).share_memory_(),
+                x_ascension_current=torch.tensor(0.0, dtype=torch.float64).share_memory_(),
             )
             for _ in range(2)
         ],
         new_version=ctx.Semaphore(0),
-        stop=torch.tensor(False).share_memory_(),
+        x_stop=torch.tensor(False).share_memory_(),
     )
-    publish(handoff, model, settings.first_version, settings.curriculum.ascension_start)
+    publish(handoff, model, settings.version_first, settings.ascension_current)
     conn, child = ctx.Pipe(duplex=False)
 
     # Not a daemon: a daemon process can't start the workers
@@ -132,7 +131,7 @@ def start_actor(model: ActorCritic, settings: ActorSettings) -> tuple[Handoff, A
     return handoff, Actor(process, conn)
 
 
-def publish(handoff: Handoff, model: ActorCritic, version: int, curriculum_c: float) -> None:
+def publish(handoff: Handoff, model: ActorCritic, version: int, ascension_current: float) -> None:
     """Make the learner's current weights version `version`.
 
     Parameters
@@ -143,14 +142,14 @@ def publish(handoff: Handoff, model: ActorCritic, version: int, curriculum_c: fl
         The learner's model.
     version : int
         The weights' version: the number of updates they have had.
-    curriculum_c : float
+    ascension_current : float
         The curriculum position the actor should play them at.
     """
-    older = min(handoff.published, key=lambda p: int(p.version))
+    older = min(handoff.published, key=lambda p: int(p.x_version))
     for name, x in model.state_dict().items():
-        older.weights[name].copy_(x)  # A copy to the CPU's pageable memory returns once done
-    older.curriculum_c.fill_(curriculum_c)
-    older.version.fill_(version)
+        older.x_weights[name].copy_(x)  # A copy to the CPU's pageable memory returns once done
+    older.x_ascension_current.fill_(ascension_current)
+    older.x_version.fill_(version)
     handoff.new_version.release()
 
 
@@ -196,7 +195,7 @@ def stop_actor(handoff: Handoff, actor: Actor) -> None:
         The actor process and the learner's end of the pipe its deliveries come through, which
         is closed.
     """
-    handoff.stop.fill_(True)
+    handoff.x_stop.fill_(True)
     handoff.new_version.release()  # Wakes it if it waits for a version
     actor.conn.close()  # Ends a delivery it may be sending
     actor.process.join(timeout=60.0)
@@ -249,40 +248,40 @@ def _actor_loop(handoff: Handoff, conn: Connection, settings: ActorSettings) -> 
 
     # Its sampling continues the learner's global stream, which the run seeds per rank and resume
     generator = torch.Generator(device)
-    generator.set_state(settings.rng)
+    generator.set_state(settings.x_rng)
     exchange, workers = start_workers(
-        settings.rollout_config, settings.curriculum, settings.gamma, settings.seed
+        settings.rollout_config, settings.ascension_current, settings.gamma, settings.seed
     )
     try:
         played, t_idle = None, time.perf_counter()
-        for i in itertools.count(settings.first_version):
-            version = max(i - 1, settings.first_version)
+        for i in itertools.count(settings.version_first):
+            version = max(i - 1, settings.version_first)
 
             # A version not played yet is waited for: its publish's release orders the reads below
-            if bool(handoff.stop) or (
-                version != played and not _wait_for_version(handoff.new_version, handoff.stop)
+            if bool(handoff.x_stop) or (
+                version != played and not _wait_for_version(handoff.new_version, handoff.x_stop)
             ):
                 return
             played = version
-            published = next(p for p in handoff.published if int(p.version) == version)
-            model.load_state_dict(published.weights)
+            published = next(p for p in handoff.published if int(p.x_version) == version)
+            model.load_state_dict(published.x_weights)
             t_collect = time.perf_counter()
-            x_rollout, completed, info = collect_rollout(
+            x_rollout, episodes, metrics = collect_rollout(
                 model,
                 exchange,
                 workers,
                 settings.rollout_config.rollout_length,
                 device,
-                float(published.curriculum_c),
+                float(published.x_ascension_current),
                 generator,
             )
             if device.type == "cuda":
                 torch.cuda.synchronize(device)  # The learner reads the rollout in another process
-                info["memory/actor_gb"] = torch.cuda.max_memory_reserved(device) / 2**30
+                metrics["memory/actor_gb"] = torch.cuda.max_memory_reserved(device) / 2**30
             delivery = _Delivery(
                 x_rollout,
-                completed,
-                info,
+                episodes,
+                metrics,
                 seconds_collect=time.perf_counter() - t_collect,
                 seconds_wait=t_collect - t_idle,
             )
@@ -295,14 +294,14 @@ def _actor_loop(handoff: Handoff, conn: Connection, settings: ActorSettings) -> 
         stop_workers(exchange, workers)
 
 
-def _wait_for_version(new_version: Semaphore, stop: torch.Tensor) -> bool:
+def _wait_for_version(new_version: Semaphore, x_stop: torch.Tensor) -> bool:
     """Wait for the learner's next publish.
 
     Parameters
     ----------
     new_version : Semaphore
         The semaphore each publish releases once.
-    stop : torch.Tensor
+    x_stop : torch.Tensor
         () bool. The stop flag, in shared memory.
 
     Returns
@@ -313,4 +312,4 @@ def _wait_for_version(new_version: Semaphore, stop: torch.Tensor) -> bool:
     while not new_version.acquire(timeout=1.0):
         if not parent_alive():  # The learner died without stopping this actor
             return False
-    return not stop
+    return not x_stop

@@ -195,27 +195,31 @@ def aggregate_episode_stats(episodes: list[EpisodeStats]) -> dict[str, float]:
         there.
     """
     n = len(episodes)
-    rewards = [e.total_reward for e in episodes]
-    keys_at_act3 = [e.keys_at_act3 for e in episodes if e.keys_at_act3 is not None]
-    heart_damage = [e.heart_damage for e in episodes if e.heart_damage is not None]
+    rewards = [episode.total_reward for episode in episodes]
+    keys_at_act3 = [
+        episode.keys_at_act3 for episode in episodes if episode.keys_at_act3 is not None
+    ]
+    heart_damage = [
+        episode.heart_damage for episode in episodes if episode.heart_damage is not None
+    ]
     metrics = {
-        KEY_WIN_RATE: sum(e.won for e in episodes) / n,
-        KEY_FLOOR_AVG: sum(e.floor for e in episodes) / n,
-        KEY_LENGTH_AVG: sum(e.length for e in episodes) / n,
+        KEY_WIN_RATE: sum(episode.won for episode in episodes) / n,
+        KEY_FLOOR_AVG: sum(episode.floor for episode in episodes) / n,
+        KEY_LENGTH_AVG: sum(episode.length for episode in episodes) / n,
         KEY_REWARD_AVG: float(np.mean(rewards)),
         KEY_REWARD_STD: float(np.std(rewards)),
         # The Act-I-cleared, Act-II-cleared and door-passed rates: the progress signals while wins
         # stay rare
-        KEY_ACT2_RATE: sum(e.act >= 2 for e in episodes) / n,
-        KEY_ACT3_RATE: sum(e.act >= 3 for e in episodes) / n,
-        KEY_ACT4_RATE: sum(e.act >= 4 for e in episodes) / n,
-        KEY_GOLD_AVG: sum(e.gold_gained for e in episodes) / n,
-        KEY_GOLD_SPENT_AVG: sum(e.gold_spent for e in episodes) / n,
-        KEY_BOSS_RATE: sum(e.boss_reached for e in episodes) / n,
-        KEY_DECK_SIZE_AVG: sum(e.deck_size for e in episodes) / n,
-        KEY_CARDS_ADDED_AVG: sum(e.cards_added for e in episodes) / n,
-        KEY_PURGES_AVG: sum(e.purges for e in episodes) / n,
-        KEY_TRUNCATED_RATE: sum(e.truncated for e in episodes) / n,
+        KEY_ACT2_RATE: sum(episode.act >= 2 for episode in episodes) / n,
+        KEY_ACT3_RATE: sum(episode.act >= 3 for episode in episodes) / n,
+        KEY_ACT4_RATE: sum(episode.act >= 4 for episode in episodes) / n,
+        KEY_GOLD_AVG: sum(episode.gold_gained for episode in episodes) / n,
+        KEY_GOLD_SPENT_AVG: sum(episode.gold_spent for episode in episodes) / n,
+        KEY_BOSS_RATE: sum(episode.boss_reached for episode in episodes) / n,
+        KEY_DECK_SIZE_AVG: sum(episode.deck_size for episode in episodes) / n,
+        KEY_CARDS_ADDED_AVG: sum(episode.cards_added for episode in episodes) / n,
+        KEY_PURGES_AVG: sum(episode.purges for episode in episodes) / n,
+        KEY_TRUNCATED_RATE: sum(episode.truncated for episode in episodes) / n,
     }
 
     # Over the games that got there
@@ -226,12 +230,12 @@ def aggregate_episode_stats(episodes: list[EpisodeStats]) -> dict[str, float]:
     return metrics
 
 
-def episode_scalars(completed: list[EpisodeStats]) -> dict[str, float]:
+def episode_scalars(episodes: list[EpisodeStats]) -> dict[str, float]:
     """Return the train/* scalars of the episodes an iteration's rollouts finished.
 
     Parameters
     ----------
-    completed : list[EpisodeStats]
+    episodes : list[EpisodeStats]
         The finished episodes, possibly none.
 
     Returns
@@ -240,16 +244,16 @@ def episode_scalars(completed: list[EpisodeStats]) -> dict[str, float]:
         The outcome metrics, the episode count, and each reward stream's average reward and
         discounted return, keyed by their train/* names; none without an episode.
     """
-    if not completed:
+    if not episodes:
         return {}
-    n = len(completed)
-    scalars = aggregate_episode_stats(completed)
+    n = len(episodes)
+    scalars = aggregate_episode_stats(episodes)
     scalars["completed_count"] = n
     for k, name in enumerate(RewardStream):
-        scalars[f"reward_avg_{name}"] = sum(e.stream_rewards[k] for e in completed) / n
+        scalars[f"reward_avg_{name}"] = sum(episode.stream_rewards[k] for episode in episodes) / n
 
         # Discounted per-stream returns, the optimizer's actual objective:
         # undiscounted sums shift with episode length
-        scalars[f"reward_ret_{name}"] = sum(e.stream_returns[k] for e in completed) / n
+        scalars[f"reward_ret_{name}"] = sum(episode.stream_returns[k] for episode in episodes) / n
 
     return {PREFIX_TRAIN + key: value for key, value in scalars.items()}

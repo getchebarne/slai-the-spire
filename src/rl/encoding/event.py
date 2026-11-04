@@ -117,12 +117,14 @@ def get_event_option_entities(game_state: GameState) -> list[EventOption]:
     return event.options[:MAX_EVENT_OPTIONS] if event is not None else []
 
 
-def encode_batch_event_meta(game_states: list[GameState], device: torch.device) -> torch.Tensor:
+def encode_batch_event_meta(
+    batch_game_state: list[GameState], device: torch.device
+) -> torch.Tensor:
     """Encode each state's Event meta.
 
     Parameters
     ----------
-    game_states : list[GameState]
+    batch_game_state : list[GameState]
         The states to encode, B of them.
     device : torch.device
         The device of the returned tensor.
@@ -132,8 +134,8 @@ def encode_batch_event_meta(game_states: list[GameState], device: torch.device) 
     torch.Tensor
         (B, ENCODING_DIM_EVENT_META) float32. Each state's Event meta; 0 outside Events.
     """
-    np_meta = np.zeros((len(game_states), ENCODING_DIM_EVENT_META), dtype=np.float32)
-    for b, game_state in enumerate(game_states):
+    np_meta = np.zeros((len(batch_game_state), ENCODING_DIM_EVENT_META), dtype=np.float32)
+    for b, game_state in enumerate(batch_game_state):
         event = game_state.event
         if event is None:
             continue
