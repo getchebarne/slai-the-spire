@@ -65,12 +65,12 @@ TAGS_OF_RELIC_NAME: dict[RelicName, tuple[Tag, ...]] = {
     RelicName.WristBlade: (Tag.NINJA,),
 }
 
-# Per-relic encoding cache keyed by (name, used_up, counter) — the only mutable fields
+# Per-relic encoding cache keyed by (name, used_up, counter, linked) — mutable fields and the link
 _RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
 _RELIC_ROW_CACHE_MAX = 100_000
 
 
-def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
+def encode_relic_into(relic: Relic, linked: bool, out: np.ndarray) -> None:
     out[OFF_RELIC_NAME + _RELIC_NAME_TO_IDX[relic.name]] = 1.0
     out[OFF_RELIC_TIER + _RELIC_TIER_TO_IDX[relic.tier]] = 1.0
     out[OFF_RELIC_USED_UP] = float(relic.used_up)
@@ -84,22 +84,27 @@ def encode_relic_into(relic: Relic, out: np.ndarray) -> None:
         if 0 <= relic.counter < counter_reset:
             out[OFF_RELIC_COUNTER_REMAINING + counter_reset - relic.counter - 1] = 1.0
 
+    out[OFF_RELIC_LINKED] = float(linked)
 
-def encode_relic_into_w_cache(relic: Relic, out: np.ndarray) -> None:
-    """Write the Relic encoding, all but LINKED, into `out`, cached by (name, used_up, counter).
+
+def encode_relic_into_w_cache(relic: Relic, relic_linked: Relic | None, out: np.ndarray) -> None:
+    """Write the Relic encoding into `out`, cached by (name, used_up, counter, linked).
 
     Parameters
     ----------
     relic : Relic
         The Relic to encode.
+    relic_linked : Relic | None
+        The Relic the Sapphire Key is linked to, None without the key on offer.
     out : np.ndarray
         (ENCODING_DIM_RELIC,) float32. The Relic's row, overwritten.
     """
-    cache_key = (relic.name, relic.used_up, relic.counter)
+    linked = relic_linked is not None and relic.id == relic_linked.id
+    cache_key = (relic.name, relic.used_up, relic.counter, linked)
     row = _RELIC_ROW_CACHE.get(cache_key)
     if row is None:
         row = np.zeros(ENCODING_DIM_RELIC, dtype=np.float32)
-        encode_relic_into(relic, row)
+        encode_relic_into(relic, linked, row)
         row.flags.writeable = False
         if len(_RELIC_ROW_CACHE) >= _RELIC_ROW_CACHE_MAX:
             _RELIC_ROW_CACHE.clear()
