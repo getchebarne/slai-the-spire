@@ -10,12 +10,11 @@ from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.state import ENCODING_DIM_TOKEN
 from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import TOKEN_KINDS_OF_ENTITY_KIND
+from src.rl.types import Jagged
 from src.rl.types import TokenKind
 from src.rl.types import X_DrawOrderStates
-from src.rl.types import X_EffectPending
 from src.rl.types import X_GameState
-from src.rl.types import X_OwnedSparse
-from src.rl.types import X_Tokens
+from src.rl.types import X_SparseRows
 from src.rl.types import X_Window
 
 
@@ -118,18 +117,19 @@ class EntityProjector(nn.Module):
         """
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
-        batch_size = x_game_state.x_tokens.x_count.shape[0]
-        num_tokens = x_game_state.x_tokens.x_token_kind.shape[0]
+        x_tokens = x_game_state.x_tokens.rows
+        batch_size = x_game_state.x_tokens.lengths.shape[0]
+        num_tokens = x_tokens.x_token_kind.shape[0]
 
         # Each token's token kind, Entity kind and state, and each state's tokens
-        x_token_kind = x_game_state.x_tokens.x_token_kind.long()  # (N_tok,)
+        x_token_kind = x_tokens.x_token_kind.long()  # (N_tok,)
         x_entity_kind = self._x_entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
 
         # Handy alias
-        x_count_window = x_game_state.x_tokens.x_count  # (B,)
+        x_count_window = x_game_state.x_tokens.lengths  # (B,)
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
-        x_first = _project_sparse(self._pre_token, x_game_state.x_tokens) + SpreadEmbedding.apply(
+        x_first = _project_sparse(self._pre_token, x_tokens.x_features) + SpreadEmbedding.apply(
             self._x_bias_entity_kind, x_entity_kind
         )
 
@@ -146,7 +146,7 @@ class EntityProjector(nn.Module):
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
         x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = x_game_state.x_focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0 # (B,)
+        x_draw_order_visible = x_game_state.x_focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0  # (B,)
         x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
@@ -163,9 +163,9 @@ class EntityProjector(nn.Module):
             *num_tokens_entity_kind,
         ) = torch.cat(
             [
-                x_ordered.sum(dim=1), # (2,)
-                (x_ordered * x_count_window).sum(dim=1), # (2,)
-                (x_ordered * x_token_kind_count_draw_pile).sum(dim=1), # (2,)
+                x_ordered.sum(dim=1),  # (2,)
+                (x_ordered * x_count_window).sum(dim=1),  # (2,)
+                (x_ordered * x_token_kind_count_draw_pile).sum(dim=1),  # (2,)
                 torch.zeros(
                     len(TOKEN_KINDS_OF_ENTITY_KIND), dtype=torch.long, device=x_entity_kind.device
                 ).index_add_(0, x_entity_kind, torch.ones_like(x_entity_kind)),
@@ -193,21 +193,21 @@ class EntityProjector(nn.Module):
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
         x_node_hidden = x_hidden_map[
             x_map_of_state[x_state[x_room_row]],
-            x_game_state.x_tokens.x_node_idx[x_room_row].long(),
+            x_tokens.x_node_idx[x_room_row].long(),
         ]  # (N_rooms, dim_map)
         x_first[x_room_row] = self._pre_room(x_node_hidden)
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
         # ReLU/LayerNorm
-        _add_owned(x_first, x_game_state.x_tokens.x_effect_rows, self._effects_mlp)
-        _add_owned(x_first, x_game_state.x_tokens.x_modifier_rows, self._modifiers_mlp)
+        _add_owned(x_first, x_tokens.x_effect_rows, self._effects_mlp)
+        _add_owned(x_first, x_tokens.x_modifier_rows, self._modifiers_mlp)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
         x_effect_pending = x_game_state.x_effect_pending
         x_pending_state = torch.repeat_interleave(
-            x_effect_pending.x_count, output_size=x_effect_pending.x_column.shape[0]
+            x_effect_pending.lengths, output_size=x_effect_pending.rows.lengths.shape[0]
         )  # (P,)
-        x_pending_valid = _project_sparse(self._effects_mlp, x_effect_pending)  # (P, D)
+        x_pending_valid = _project_sparse(self._effects_mlp, x_effect_pending.rows)  # (P, D)
         x_pending = torch.zeros(
             batch_size,
             self._dim_entity,
@@ -222,8 +222,8 @@ class EntityProjector(nn.Module):
         x_window = X_Window(
             x_token_kind=x_token_kind,
             x_entity_kind=x_entity_kind,
-            x_legal=x_game_state.x_tokens.x_legal,
-            x_needs_target=x_game_state.x_tokens.x_needs_target,
+            x_legal=x_tokens.x_legal,
+            x_needs_target=x_tokens.x_needs_target,
             x_state=x_state,
             x_count=x_count_window,
             x_token_kind_row=x_token_kind_row,
@@ -238,10 +238,8 @@ class EntityProjector(nn.Module):
         )
 
 
-def _project_sparse(
-    mapper: nn.Linear | nn.Sequential, x_block: X_Tokens | X_OwnedSparse | X_EffectPending
-) -> torch.Tensor:
-    """Run `mapper` on the dense rows that `x_block`'s (N, K) entries stand for.
+def _project_sparse(mapper: nn.Linear | nn.Sequential, x_block: X_SparseRows) -> torch.Tensor:
+    """Run `mapper` on the dense rows represented by `x_block`'s jagged entries.
 
     Its first linear layer (the mapper, or a Sequential's first layer) sums its weight's columns
     at the entries' columns, scaled by their values, plus its bias; a Sequential's other layers
@@ -251,7 +249,7 @@ def _project_sparse(
     ----------
     mapper : nn.Linear | nn.Sequential
         A linear layer, or a Sequential whose first layer is linear.
-    x_block : X_Tokens | X_OwnedSparse | X_EffectPending
+    x_block : X_SparseRows
         The block, its rows held sparse.
 
     Returns
@@ -260,35 +258,37 @@ def _project_sparse(
         (N, D). `mapper`'s output on each row.
     """
     linear = mapper if isinstance(mapper, nn.Linear) else mapper[0]
-    x_rows = _SumSparseDenseBackward.apply(x_block.x_column, x_block.x_value, linear.weight)
+    x_rows = _SumSparseDenseBackward.apply(
+        x_block.lengths, x_block.rows.x_column, x_block.rows.x_value, linear.weight
+    )
     if linear.bias is not None:
         x_rows = x_rows + linear.bias
     return x_rows if isinstance(mapper, nn.Linear) else mapper[1:](x_rows)
 
 
 def _add_owned(
-    x_first: torch.Tensor, x_owned_sparse: X_OwnedSparse, mapper: nn.Sequential
+    x_first: torch.Tensor, x_owned_sparse: Jagged[X_SparseRows], mapper: nn.Sequential
 ) -> None:
     """Add an owned row kind's rows into their owners' rows of `x_first`.
 
-    Each token owns `x_count` of the rows, and each row is scaled by 1/sqrt(its owner's count).
+    Each token owns one segment of rows, and each row is scaled by 1/sqrt(its owner's count).
 
     Parameters
     ----------
     x_first : torch.Tensor
         (N_tok, D). The tokens' first-layer rows, updated in place.
-    x_owned_sparse : X_OwnedSparse
+    x_owned_sparse : Jagged[X_SparseRows]
         The owned row kind's rows, held sparse.
     mapper : nn.Sequential
         The owned row kind's MLP.
     """
     # Project owned rows
-    x_rows = _project_sparse(mapper, x_owned_sparse)  # (M, D)
+    x_rows = _project_sparse(mapper, x_owned_sparse.rows)  # (M, D)
 
     # Each owned row's owner, from the counts widened
-    x_count = x_owned_sparse.x_count  # (N_tok,) int16
+    x_count = x_owned_sparse.lengths  # (N_tok,) int16
     x_owner = torch.repeat_interleave(
-        x_count.long(), output_size=x_owned_sparse.x_column.shape[0]
+        x_count.long(), output_size=x_owned_sparse.rows.lengths.shape[0]
     )  # (M,)
 
     # Sum projected owned rows to their respective owners' first-layer output representations
@@ -361,18 +361,24 @@ class _SumSparseDenseBackward(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: Any, x_column: torch.Tensor, x_value: torch.Tensor, x_weight: torch.Tensor
+        ctx: Any,
+        x_lengths: torch.Tensor,
+        x_column: torch.Tensor,
+        x_value: torch.Tensor,
+        x_weight: torch.Tensor,
     ) -> torch.Tensor:
-        """Run the (N, K) entries through a linear layer's weight, bias aside.
+        """Run N rows' flat sparse entries through a linear layer's weight, bias aside.
 
         Sums the weight's columns at the entries' columns, scaled by their values.
 
         Parameters
         ----------
+        x_lengths : torch.Tensor
+            (N,) int16. Each row's number of entries, including empty rows.
         x_column : torch.Tensor
-            (N, K) int16. The entries' columns.
+            (F,) int16. The entries' columns, row after row.
         x_value : torch.Tensor
-            (N, K) float32. The entries' values.
+            (F,) float32. The entries' values, in the same order.
         x_weight : torch.Tensor
             (D, in). The linear layer's weight.
 
@@ -381,16 +387,22 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         torch.Tensor
             (N, D). Each row's sum.
         """
-        ctx.save_for_backward(x_column, x_value)
+        ctx.save_for_backward(x_lengths, x_column, x_value)
         ctx.num_columns = x_weight.shape[1]
+        x_offsets = F.pad(x_lengths.cumsum(0, dtype=torch.long), (1, 0))  # (N + 1,)
 
         # The transposed weight copied whole: as a strided view, a GPU reads its rows uncoalesced
         return F.embedding_bag(
-            x_column.int(), x_weight.t().contiguous(), per_sample_weights=x_value, mode="sum"
+            x_column.int(),
+            x_weight.t().contiguous(),
+            offsets=x_offsets,
+            per_sample_weights=x_value,
+            mode="sum",
+            include_last_offset=True,
         )
 
     @staticmethod
-    def backward(ctx: Any, x_grad: torch.Tensor) -> tuple[None, None, torch.Tensor]:
+    def backward(ctx: Any, x_grad: torch.Tensor) -> tuple[None, None, None, torch.Tensor]:
         """Take the weight's gradient as one GEMM over the entries densified to (N, in) rows.
 
         Parameters
@@ -401,17 +413,21 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         Returns
         -------
         None
+            The row lengths take no gradient.
+        None
             The entries' columns take no gradient.
         None
             The entries' values take no gradient.
         torch.Tensor
             (D, in). The weight's gradient.
         """
-        x_column, x_value = ctx.saved_tensors
+        x_lengths, x_column, x_value = ctx.saved_tensors
 
-        # The pad entries (0, 0.0) add zeros
+        # Entry owners are derived from lengths; the flat entry shape supplies output_size,
+        # so no tensor value needs to be read back to the CPU.
+        x_owner = torch.repeat_interleave(x_lengths.long(), output_size=x_column.shape[0])
         x_dense = torch.zeros(
-            x_column.shape[0], ctx.num_columns, dtype=x_grad.dtype, device=x_grad.device
+            x_lengths.shape[0], ctx.num_columns, dtype=x_grad.dtype, device=x_grad.device
         )
-        x_dense.scatter_add_(1, x_column.long(), x_value)  # (N, in)
-        return None, None, x_grad.t() @ x_dense  # (D, in)
+        x_dense.view(-1).scatter_add_(0, x_owner * ctx.num_columns + x_column.long(), x_value)
+        return None, None, None, x_grad.t() @ x_dense  # (D, in)

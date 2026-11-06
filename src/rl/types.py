@@ -235,16 +235,28 @@ class Tag(IntEnum):
 
 @final
 @dataclass
-class X_OwnedSparse:
-    """Rows owned by tokens, one owned row kind per X_Tokens field.
+class Jagged[T]:
+    """Consecutive variable-length segments of a row record.
 
-    The projector adds them into their owners. Every token's rows, token after token; `x_count`
-    says how many each token owns.
+    `lengths[i]` is the number of rows in segment i. Every field in `rows` has the same logical
+    row axis: tensors hold one entry per row, and nested Jagged records hold one segment per
+    row. Only populated rows belong here; shared storage capacity is a separate concern.
     """
 
-    x_column: torch.Tensor  # (M, K) int16 — as in X_Tokens
-    x_value: torch.Tensor  # (M, K) float32
-    x_count: torch.Tensor  # (N,) int16, one per token row
+    lengths: torch.Tensor  # (number of segments,) integer, nonnegative
+    rows: T
+
+
+@final
+@dataclass
+class X_SparseEntries:
+    """Nonzero entries in row order, with each row's columns increasing."""
+
+    x_column: torch.Tensor  # (F,) int16
+    x_value: torch.Tensor  # (F,) float32
+
+
+type X_SparseRows = Jagged[X_SparseEntries]  # One int16 entry count per sparse row
 
 
 @final
@@ -252,16 +264,13 @@ class X_OwnedSparse:
 class X_Tokens:
     """Every Entity token as a row, every state's in window order, state after state.
 
-    `x_count` says how many each state has. K is the rows' most nonzero columns, except in
-    the step buffer's regions, which have a fixed width, and in a minibatch, which keeps its
-    rollout's K. Each row is its nonzero (column, value) entries in column order, then (0, 0.0)
-    entries up to K; the entries index the shared column space, each Entity kind's columns
-    from its COL_START, then the health/block, price and slot columns Entity kinds share and
-    the Tag columns Cards, Relics and Potions share.
+    Sparse features index the shared column space, each Entity kind's columns from its
+    COL_START, then the health/block, price and slot columns Entity kinds share and the Tag
+    columns Cards, Relics and Potions share. Effects and Modifiers each have one segment per
+    token; the projector adds their rows into that token.
     """
 
-    x_column: torch.Tensor  # (N, K) int16
-    x_value: torch.Tensor  # (N, K) float32
+    x_features: X_SparseRows
     x_token_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
 
     # Legal under the action type: an L2 selection, deduped by Card identity, or an L3 target
@@ -273,40 +282,21 @@ class X_Tokens:
     x_node_idx: torch.Tensor  # (N,) int16: a Room token's Map node; 0 on every other token
 
     # The rows the tokens own
-    x_effect_rows: X_OwnedSparse  # Any number per token
-    x_modifier_rows: X_OwnedSparse  # Any number per Character / Monster
-
-    # Number of tokens per state
-    x_count: torch.Tensor  # (B,) long
-
-
-@final
-@dataclass
-class X_EffectPending:
-    """The pending halts' Effect rows, held sparse.
-
-    One per state with a halt pending, state after state: global context, since no token owns
-    them.
-    """
-
-    x_column: torch.Tensor  # (P, K) int16
-    x_value: torch.Tensor  # (P, K) float32
-    x_count: torch.Tensor  # (B,) long, 0 or 1
+    x_effect_rows: Jagged[X_SparseRows]  # Any number per token; lengths are int16
+    x_modifier_rows: Jagged[X_SparseRows]  # Any number per Character / Monster; int16
 
 
 @dataclass
 class X_GameState:
-    """The game state, as the encoders write it and the model, rollout and minibatches hold it.
+    """Compact game states held by the encoders, model, rollout and minibatches.
 
-    Each block holds only its rows, every state's in the block's order, state after state, and its
-    sparse entries cut to the most a row uses, except in a minibatch, which keeps its rollout's
-    width; each block's `x_count` holds each state's rows in it; an owned row kind's holds each
-    token's. The per-state fields are (B, ...).
-    `src/rl/packed.py` chooses its states and joins them.
+    Tokens and pending Effects each have one segment per state. Tokens in turn own segments
+    of Effects and Modifiers. All other fields have one row per state. `src/rl/packed.py`
+    selects and joins states using those explicit segment boundaries.
     """
 
-    x_tokens: X_Tokens
-    x_effect_pending: X_EffectPending
+    x_tokens: Jagged[X_Tokens]  # (B,) long lengths
+    x_effect_pending: Jagged[X_SparseRows]  # (B,) long lengths, 0 or 1
     x_energy: torch.Tensor  # (B, ENCODING_DIM_ENERGY) float32
     x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
     x_map_meta: torch.Tensor  # (B, ENCODING_DIM_MAP_META) float32
@@ -316,6 +306,47 @@ class X_GameState:
     x_shop_meta: torch.Tensor  # (B, ENCODING_DIM_SHOP_META) float32
     x_event_meta: torch.Tensor  # (B, ENCODING_DIM_EVENT_META) float32
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
+
+
+@dataclass(frozen=True)
+class RowTotals:
+    """Host integers sizing a selected batch's row and sparse-entry tables."""
+
+    tokens: int
+    effects: int
+    modifiers: int
+    pending: int
+    token_entries: int
+    effect_entries: int
+    modifier_entries: int
+    pending_entries: int
+
+
+@dataclass(frozen=True)
+class MinibatchPlan:
+    """Selected state IDs on the model's device, paired with their CPU-planned row totals."""
+
+    state_ids: torch.Tensor
+    row_totals: RowTotals
+
+
+@dataclass(frozen=True)
+class BatchLayout:
+    """Cached boundaries for one immutable game batch; never a mutable worker slot.
+
+    Device offsets index each Jagged's rows. CPU state boundaries also permit contiguous
+    views without reading device scalars. Rebuild this layout if the batch's lengths change.
+    """
+
+    token_offsets: torch.Tensor  # (B + 1,) int64
+    effect_offsets: torch.Tensor  # (N_tokens + 1,) int64
+    modifier_offsets: torch.Tensor  # (N_tokens + 1,) int64
+    pending_offsets: torch.Tensor  # (B + 1,) int64
+    token_entry_offsets: torch.Tensor  # (N_tokens + 1,) int64
+    effect_entry_offsets: torch.Tensor  # (N_effects + 1,) int64
+    modifier_entry_offsets: torch.Tensor  # (N_modifiers + 1,) int64
+    pending_entry_offsets: torch.Tensor  # (N_pending + 1,) int64
+    state_offsets_cpu: torch.Tensor  # (B + 1, 8) int64, in RowTotals' field order
 
 
 @dataclass
@@ -421,6 +452,7 @@ class X_TrainingBatch:
     """
 
     x_game_state: X_GameState  # N states — taken per minibatch (take_states)
+    layout: BatchLayout  # Built once for this immutable rollout, reused throughout the update
 
     # x_game_state's counts on the CPU, where minibatches sum their sizes
     x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order

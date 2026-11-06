@@ -16,7 +16,6 @@ from slai import Relic
 from slai import Room
 
 from src.rl.constants import ASCENSION_LEVEL
-from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
@@ -34,18 +33,13 @@ from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.effect import encode_batch_effect_pending
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
-from src.rl.encoding.energy import ENCODING_DIM_ENERGY
 from src.rl.encoding.energy import encode_batch_energy
-from src.rl.encoding.event import ENCODING_DIM_EVENT_META
 from src.rl.encoding.event import encode_batch_event_meta
 from src.rl.encoding.event import get_event_option_entities
-from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.focus import encode_batch_focus
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
-from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
-from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import encode_batch_map
 from src.rl.encoding.map_ import get_room_entities
 from src.rl.encoding.mask import encode_batch_masks
@@ -68,27 +62,23 @@ from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
 from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into_w_cache
 from src.rl.encoding.relic import get_relic_entities
-from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.reward import encode_batch_rewards
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
-from src.rl.encoding.shop import ENCODING_DIM_SHOP_META
 from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_batch_shop_meta
 from src.rl.encoding.shop import encode_price_into
-from src.rl.encoding.sparse import compile_sparse_owned
+from src.rl.encoding.sparse import compile_sparse_rows
 from src.rl.encoding.sparse import compile_sparse_tokens
 from src.rl.types import MAP_TOKEN_KIND_CAP
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import TOKEN_KINDS_CARD
 from src.rl.types import TOKEN_KINDS_POTION
 from src.rl.types import TOKEN_KINDS_RELIC
 from src.rl.types import EffectSource
 from src.rl.types import Entity
+from src.rl.types import Jagged
 from src.rl.types import Tag
 from src.rl.types import TokenKind
-from src.rl.types import X_EffectPending
 from src.rl.types import X_GameState
-from src.rl.types import X_OwnedSparse
 from src.rl.types import X_Tokens
 
 
@@ -233,7 +223,7 @@ def _encode_batch_tokens(
     batch_game_state: list[GameState],
     batch_legal_actions: list[list[Action]],
     device: torch.device,
-) -> tuple[X_Tokens, torch.Tensor]:
+) -> tuple[Jagged[X_Tokens], torch.Tensor]:
     """Encode the tokens and each state's legal action types.
 
     Parameters
@@ -247,7 +237,7 @@ def _encode_batch_tokens(
 
     Returns
     -------
-    x_tokens : X_Tokens
+    x_tokens : Jagged[X_Tokens]
         The tokens, each state's in window order, state after state, with their masks from each
         state's legal actions, and the Effect and Modifier rows they own.
     x_legal_action_type : torch.Tensor
@@ -335,10 +325,10 @@ def _encode_batch_tokens(
         np_count,
         ENCODING_DIM_SPARSE_TOKEN,
         device,
-        x_effect_rows=compile_sparse_owned(
+        x_effect_rows=compile_sparse_rows(
             np_effect_rows, np_count_effects.astype(np.int16), ENCODING_DIM_SPARSE_EFFECT, device
         ),
-        x_modifier_rows=compile_sparse_owned(
+        x_modifier_rows=compile_sparse_rows(
             np_modifier_rows,
             np_count_modifiers.astype(np.int16),
             ENCODING_DIM_SPARSE_MODIFIER,
@@ -584,61 +574,6 @@ def _encode_batch_ascension(
         np_out[b, : game_state.ascension] = 1.0
 
     return torch.from_numpy(np_out).to(device)
-
-
-def empty_game_state(batch_size: int) -> X_GameState:
-    """Return `batch_size` game states with nothing in them.
-
-    Every block has rows for all of them at every cap: the shared step's, which each worker fills
-    from its region's start.
-
-    Parameters
-    ----------
-    batch_size : int
-        The number of game states, B.
-
-    Returns
-    -------
-    X_GameState
-        The game states, every tensor zero.
-    """
-    num_tokens = batch_size * CAP_TOKENS
-    return X_GameState(
-        x_tokens=X_Tokens(
-            x_column=torch.zeros(num_tokens, ENCODING_DIM_SPARSE_TOKEN, dtype=torch.int16),
-            x_value=torch.zeros(num_tokens, ENCODING_DIM_SPARSE_TOKEN),
-            x_token_kind=torch.zeros(num_tokens, dtype=torch.int16),
-            x_legal=torch.zeros(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
-            x_needs_target=torch.zeros(num_tokens, dtype=torch.bool),
-            x_node_idx=torch.zeros(num_tokens, dtype=torch.int16),
-            x_effect_rows=_empty_owned(batch_size, MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT),
-            x_modifier_rows=_empty_owned(batch_size, MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER),
-            x_count=torch.zeros(batch_size, dtype=torch.long),
-        ),
-        x_effect_pending=X_EffectPending(
-            x_column=torch.zeros(batch_size, ENCODING_DIM_SPARSE_EFFECT, dtype=torch.int16),
-            x_value=torch.zeros(batch_size, ENCODING_DIM_SPARSE_EFFECT),
-            x_count=torch.zeros(batch_size, dtype=torch.long),
-        ),
-        x_energy=torch.zeros(batch_size, ENCODING_DIM_ENERGY),
-        x_map_grid=torch.zeros(batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
-        x_map_meta=torch.zeros(batch_size, ENCODING_DIM_MAP_META),
-        x_focus=torch.zeros(batch_size, ENCODING_DIM_FOCUS),
-        x_ascension=torch.zeros(batch_size, ENCODING_DIM_ASCENSION),
-        x_reward_meta=torch.zeros(batch_size, ENCODING_DIM_REWARD_META),
-        x_shop_meta=torch.zeros(batch_size, ENCODING_DIM_SHOP_META),
-        x_event_meta=torch.zeros(batch_size, ENCODING_DIM_EVENT_META),
-        x_legal_action_type=torch.zeros(batch_size, NUM_ACTION_TYPES, dtype=torch.bool),
-    )
-
-
-def _empty_owned(batch_size: int, cap: int, num_sparse: int) -> X_OwnedSparse:
-    num_rows = batch_size * cap
-    return X_OwnedSparse(
-        x_column=torch.zeros(num_rows, num_sparse, dtype=torch.int16),
-        x_value=torch.zeros(num_rows, num_sparse),
-        x_count=torch.zeros(batch_size * CAP_TOKENS, dtype=torch.int16),
-    )
 
 
 def _check_tables() -> None:
