@@ -7,8 +7,12 @@ import torch.nn.functional as F
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.models import ActorCritic
+from src.rl.packed import build_batch_layout
+from src.rl.packed import plan_minibatches
+from src.rl.packed import slice_states
 from src.rl.packed import take_states
 from src.rl.reward import RewardStream
+from src.rl.types import BatchLayout
 from src.rl.types import X_Rollout
 from src.rl.types import X_TrainingBatch
 
@@ -76,7 +80,7 @@ def _compute_gae(
 
 
 def _recompute(
-    model: ActorCritic, x_rollout: X_Rollout, minibatch_size: int
+    model: ActorCritic, x_rollout: X_Rollout, minibatch_size: int, layout: BatchLayout
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
 
@@ -90,6 +94,8 @@ def _recompute(
         The rollout: T steps of E games.
     minibatch_size : int
         The most states per forward.
+    layout : BatchLayout
+        The rollout's cached boundaries, shared with the subsequent shuffled update.
 
     Returns
     -------
@@ -102,19 +108,12 @@ def _recompute(
     """
     T, E, K = x_rollout.x_rewards.shape
     log_probs, values = [], []
-    x_order = torch.arange(T * E, device=x_rollout.x_actions.device)
-    starts = range(0, T * E, minibatch_size)
-
-    # Each minibatch's rows in each block, summed on the CPU before the first one runs
-    x_count_totals = [
-        x_rollout.x_count_cpu[start : start + minibatch_size].sum(0) for start in starts
-    ]
     with torch.no_grad():
-        for start, x_count_total in zip(starts, x_count_totals):
-            x_states = x_order[start : start + minibatch_size]
+        for start in range(0, T * E, minibatch_size):
+            stop = start + minibatch_size
             x_log_probs, _, _, x_values = model.evaluate_actions(
-                take_states(x_rollout.x_game_state, x_states, x_count_total),
-                x_rollout.x_actions[x_states],
+                slice_states(x_rollout.x_game_state, start, stop, layout),
+                x_rollout.x_actions[start:stop],
             )
             log_probs.append(x_log_probs)
             values.append(x_values)
@@ -148,8 +147,9 @@ def prepare_batch(
         values, the returns and the normalized advantages.
     """
     T, E, K = x_rollout.x_rewards.shape
+    layout = build_batch_layout(x_rollout.x_game_state, x_rollout.x_count_cpu)
     x_log_probs_prox, x_values_prox, x_values_final = _recompute(
-        model, x_rollout, ppo_config.minibatch_size
+        model, x_rollout, ppo_config.minibatch_size, layout
     )
 
     x_returns, x_advantages = _compute_gae(
@@ -169,6 +169,7 @@ def prepare_batch(
     x_advantages = (x_advantages - x_advantages.mean()) / (x_advantages.std() + 1e-8)
     return X_TrainingBatch(
         x_game_state=x_rollout.x_game_state,
+        layout=layout,
         x_count_cpu=x_rollout.x_count_cpu,
         x_actions=x_rollout.x_actions,
         x_log_probs_behavior=x_rollout.x_log_probs_behavior,
@@ -300,33 +301,19 @@ def update_ppo(
         "offpolicy/kl_behavior_prox": (weight - 1 - log_weight).mean().item(),
     }
 
-    # Every epoch's shuffle, planned before the first minibatch runs: the minibatches' states, sent
-    # to the device in one copy, and their rows in each block, summed on the CPU. No CPU work then
-    # sits between a minibatch's KL read and the next minibatch's launch
-    batch_size = len(batch.x_actions)
-    starts = range(0, batch_size, ppo_config.minibatch_size)
-    x_order = torch.stack(
-        [torch.randperm(batch_size, generator=generator) for _ in range(ppo_config.num_epochs)]
-    )
-    x_count_totals = [
-        [
-            batch.x_count_cpu[x_order_epoch[start : start + ppo_config.minibatch_size]].sum(0)
-            for start in starts
-        ]
-        for x_order_epoch in x_order
-    ]
-    x_order = (x_order.pin_memory() if device.type == "cuda" else x_order).to(
-        device, non_blocking=True
+    # All shuffles and CPU output sizes are planned before the first minibatch launches.
+    plans = plan_minibatches(
+        batch.x_count_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
     )
 
     epochs_run = 0.0
-    for epoch in range(ppo_config.num_epochs):
+    for epoch_plans in plans:
         epoch_start = len(records)
         stopped = False
-        for start, x_count_total in zip(starts, x_count_totals[epoch]):
-            x_states = x_order[epoch, start : start + ppo_config.minibatch_size]
+        for plan in epoch_plans:
+            x_states = plan.state_ids
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                take_states(batch.x_game_state, x_states, x_count_total),
+                take_states(batch.x_game_state, plan, batch.layout),
                 batch.x_actions[x_states],
             )
             log_probs_prox = batch.x_log_probs_prox[x_states]
@@ -405,8 +392,7 @@ def update_ppo(
             ):
                 stopped = True
                 break
-        mb_total = (batch_size + ppo_config.minibatch_size - 1) // ppo_config.minibatch_size
-        epochs_run += (len(records) - epoch_start) / mb_total
+        epochs_run += (len(records) - epoch_start) / len(epoch_plans)
         if stopped:
             break
 

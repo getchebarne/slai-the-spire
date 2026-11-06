@@ -58,9 +58,10 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
-from src.rl.encoding.sparse import compile_sparse_effect_pending
+from src.rl.encoding.sparse import compile_sparse_rows
 from src.rl.types import EffectSource
-from src.rl.types import X_EffectPending
+from src.rl.types import Jagged
+from src.rl.types import X_SparseRows
 from src.rl.types import make_channel_allocator
 
 
@@ -1054,7 +1055,7 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
 
 def encode_batch_effect_pending(
     batch_game_state: list[GameState], device: torch.device
-) -> X_EffectPending:
+) -> Jagged[X_SparseRows]:
     """Encode the pending Effect rows as one (P, D) block, held sparse.
 
     One row per state with a halt pending, every state's after the previous state's.
@@ -1068,7 +1069,7 @@ def encode_batch_effect_pending(
 
     Returns
     -------
-    X_EffectPending
+    Jagged[X_SparseRows]
         The pending Effect rows, held sparse, and each state's (B,) row count, 1 or 0.
     """
     batch_effect_pending = [game_state.effect_pending for game_state in batch_game_state]
@@ -1085,6 +1086,6 @@ def encode_batch_effect_pending(
             row += 1
 
     normalize_effect_rows(np_effect_rows)
-    return compile_sparse_effect_pending(
+    return compile_sparse_rows(
         np_effect_rows, np_count, ENCODING_DIM_SPARSE_EFFECT, device
     )
