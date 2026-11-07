@@ -181,8 +181,10 @@ def publish(
     """
     if bool(actor_handle._x_stop):
         raise RuntimeError("The Actor has been stopped")
+    
     if not actor_handle._process.is_alive():
         raise _died(actor_handle)
+    
     write_weights(actor_handle._weight_buffer, model.state_dict(), version, ascension_current)
 
 
