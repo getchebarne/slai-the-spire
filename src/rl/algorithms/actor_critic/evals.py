@@ -53,11 +53,11 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        x_game_state = encode_batch_game_state([game_state], [legal_actions], torch.device("cpu"))
-        x_action = model.act(x_game_state, greedy=True)
+        batch = encode_batch_game_state([game_state], [legal_actions], torch.device("cpu"))
+        policy = model.act(batch, greedy=True)
 
         # Game step
-        action = action_from_actiontype(x_action, 0, game_state)
+        action = action_from_actiontype(policy, 0, game_state)
         game_state, _, done = step_env(env, game_state, stats, action, gamma)
     return stats
 
@@ -208,7 +208,7 @@ def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
     dict[str, torch.Tensor]
         The model's state dict, every tensor on the CPU.
     """
-    return {k: v.cpu() for k, v in model.state_dict().items()}
+    return {name: x_weight.cpu() for name, x_weight in model.state_dict().items()}
 
 
 def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> None:

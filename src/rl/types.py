@@ -237,14 +237,14 @@ class Tag(IntEnum):
 class Jagged[T]:
     """Consecutive variable-length segments of a tensor or row record.
 
-    `lengths[i]` is the number of logical rows in segment i. A tensor has one value per row on
+    `x_lengths[i]` is the number of logical rows in segment i. A tensor has one value per row on
     its leading axis. A Tokens record has one value per token in its direct tensors and one
     row or segment per token in its nested records. A Sparse record has one length per logical
     row, with columns and values on its entry axis. Only populated rows belong here; shared
     storage capacity is a separate concern.
     """
 
-    lengths: torch.Tensor  # (number of segments,) integer, nonnegative
+    x_lengths: torch.Tensor  # (number of segments,) integer, nonnegative
     rows: T
 
 
@@ -253,13 +253,13 @@ class Jagged[T]:
 class Sparse:
     """Sparse rows with consecutive nonzero entries, ordered by row then column.
 
-    In a populated batch, lengths sum to the number of columns and values. Private worker
+    In a populated batch, x_lengths sum to the number of x_columns and x_values. Private worker
     storage may reserve extra capacity; read_slot exposes only its populated prefixes.
     """
 
-    lengths: torch.Tensor  # (R,) int16, entries per row, including empty rows
-    columns: torch.Tensor  # (F,) int16
-    values: torch.Tensor  # (F,) float32
+    x_lengths: torch.Tensor  # (R,) int16, entries per row, including empty rows
+    x_columns: torch.Tensor  # (F,) int16
+    x_values: torch.Tensor  # (F,) float32
 
 
 @final
@@ -274,15 +274,15 @@ class Tokens:
     """
 
     features: Sparse
-    kind: torch.Tensor  # (N,) int16, which also names the Entity kind
+    x_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
 
     # Legal under the action type: an L2 selection, deduped by Card identity, or an L3 target
-    legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+    x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
 
     # Selections whose legal actions carry a Monster target (Cards / Potions)
-    needs_target: torch.Tensor  # (N,) bool
+    x_needs_target: torch.Tensor  # (N,) bool
 
-    node_idx: torch.Tensor  # (N,) int16: a Room token's Map node; 0 on every other token
+    x_node_idx: torch.Tensor  # (N,) int16: a Room token's Map node; 0 on every other token
 
     # The rows the tokens own
     effects: Jagged[Sparse]  # Any number per token; lengths are int16
@@ -300,16 +300,16 @@ class StateBatch:
 
     tokens: Jagged[Tokens]  # (B,) long lengths
     pending: Jagged[Sparse]  # (B,) long lengths, 0 or 1
-    context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
-    map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
-    legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
+    x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
+    x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
+    x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
 
 
 @dataclass(frozen=True)
 class MinibatchPlan:
     """Selected device state IDs and host integers sizing every selected table."""
 
-    state_ids: torch.Tensor
+    x_state_ids: torch.Tensor
     tokens: int
     effects: int
     modifiers: int
@@ -328,15 +328,15 @@ class BatchLayout:
     views without reading device scalars. Rebuild this layout if the batch's lengths change.
     """
 
-    token_offsets: torch.Tensor  # (B + 1,) int64
-    effect_offsets: torch.Tensor  # (N_tokens + 1,) int64
-    modifier_offsets: torch.Tensor  # (N_tokens + 1,) int64
-    pending_offsets: torch.Tensor  # (B + 1,) int64
-    token_entry_offsets: torch.Tensor  # (N_tokens + 1,) int64
-    effect_entry_offsets: torch.Tensor  # (N_effects + 1,) int64
-    modifier_entry_offsets: torch.Tensor  # (N_modifiers + 1,) int64
-    pending_entry_offsets: torch.Tensor  # (N_pending + 1,) int64
-    state_offsets_cpu: torch.Tensor  # (B + 1, 8) int64, in MinibatchPlan's totals order
+    x_token_offsets: torch.Tensor  # (B + 1,) int64
+    x_effect_offsets: torch.Tensor  # (N_tokens + 1,) int64
+    x_modifier_offsets: torch.Tensor  # (N_tokens + 1,) int64
+    x_pending_offsets: torch.Tensor  # (B + 1,) int64
+    x_token_entry_offsets: torch.Tensor  # (N_tokens + 1,) int64
+    x_effect_entry_offsets: torch.Tensor  # (N_effects + 1,) int64
+    x_modifier_entry_offsets: torch.Tensor  # (N_modifiers + 1,) int64
+    x_pending_entry_offsets: torch.Tensor  # (N_pending + 1,) int64
+    x_state_offsets_cpu: torch.Tensor  # (B + 1, 8) int64, in MinibatchPlan's totals order
 
 
 @dataclass
@@ -344,16 +344,16 @@ class TokenIndex:
     """Cached lookups for the model's token rows, built once by the projector.
 
     Token rows stay in the encoded batch's order through projection and attention, so these
-    indices remain valid throughout the model pass. State boundaries belong to Jagged.lengths;
+    indices remain valid throughout the model pass. State boundaries belong to Jagged.x_lengths;
     action masks belong to StateBatch.tokens.rows. Host entity counts share the projector's
     one device read with the draw-order sizes.
     """
 
-    kind: torch.Tensor  # (N,) long, token kind widened for indexing and engine-facing actions
-    entity_kind: torch.Tensor  # (N,) long
-    state: torch.Tensor  # (N,) long, the state owning each token
-    kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
-    kind_count: torch.Tensor  # (B, len(TokenKind)) long
+    x_kind: torch.Tensor  # (N,) long, token kind widened for indexing and engine-facing actions
+    x_entity_kind: torch.Tensor  # (N,) long
+    x_state: torch.Tensor  # (N,) long, the state owning each token
+    x_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
+    x_kind_count: torch.Tensor  # (B, len(TokenKind)) long
     entity_counts: list[int]  # One per Entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
 
 
@@ -368,8 +368,8 @@ class CoreOutput:
 
     tokens: Jagged[torch.Tensor]  # (B,) lengths; (N, dim_entity) refined token rows
     index: TokenIndex
-    policy_context: torch.Tensor  # (B, dim_global)
-    value_context: torch.Tensor  # (B, dim_global)
+    x_policy_context: torch.Tensor  # (B, dim_global)
+    x_value_context: torch.Tensor  # (B, dim_global)
 
 
 @dataclass
@@ -383,10 +383,10 @@ class PolicyOutput:
     Entity ids using the encoder's token ordering.
     """
 
-    actions: torch.Tensor  # (B, 3) long; action type, state-local token offset, Monster rank
-    log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
-    entropy: torch.Tensor  # (B, 3) float, 0 where N/A
-    kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
+    x_actions: torch.Tensor  # (B, 3) long; action type, state-local token offset, Monster rank
+    x_log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
+    x_entropy: torch.Tensor  # (B, 3) float, 0 where N/A
+    x_kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
 @dataclass
@@ -398,11 +398,11 @@ class Rollout:
     """
 
     states: StateBatch  # N states
-    counts_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
-    actions: torch.Tensor  # (N, 3): action type, state-local token offset, Monster rank
-    log_probs_behavior: torch.Tensor  # (N,) under the weights that played
-    rewards: torch.Tensor  # (T, E, K)
-    dones: torch.Tensor  # (T, E)
+    x_counts_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
+    x_actions: torch.Tensor  # (N, 3): action type, state-local token offset, Monster rank
+    x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    x_rewards: torch.Tensor  # (T, E, K)
+    x_dones: torch.Tensor  # (T, E)
     final_states: StateBatch  # E states
 
 

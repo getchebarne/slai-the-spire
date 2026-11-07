@@ -22,7 +22,7 @@ def encode_sparse(dense: np.ndarray, max_entries: int, device: torch.device) -> 
     if largest > np.iinfo(np.int16).max:
         raise ValueError("Sparse row lengths exceed int16 capacity")
     return Sparse(
-        lengths=torch.from_numpy(lengths.astype(np.int16)).to(device),
-        columns=torch.from_numpy(columns.astype(np.int16)).to(device),
-        values=torch.from_numpy(dense.reshape(-1)[positions]).to(device),
+        x_lengths=torch.from_numpy(lengths.astype(np.int16)).to(device),
+        x_columns=torch.from_numpy(columns.astype(np.int16)).to(device),
+        x_values=torch.from_numpy(dense.reshape(-1)[positions]).to(device),
     )

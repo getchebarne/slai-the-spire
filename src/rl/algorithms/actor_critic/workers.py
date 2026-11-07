@@ -175,13 +175,13 @@ def snapshot_to_device(
 
     Returns
     -------
-    x_game_state : StateBatch
+    batch : StateBatch
         Every game's state, on the device.
     x_count_cpu : torch.Tensor
         (E, number of blocks) long. Each of the E games' rows in each block, on the CPU.
     """
-    x_game_state = cat_states([read_slot(slot) for slot in step_buffer.slots])
-    return to_device(x_game_state, device), count_blocks(x_game_state)
+    batch = cat_states([read_slot(slot) for slot in step_buffer.slots])
+    return to_device(batch, device), count_blocks(batch)
 
 
 def drain_episodes(queue: Queue[EpisodeStats]) -> list[EpisodeStats]:
@@ -341,5 +341,5 @@ def _write_states(
     """
     cpu = torch.device("cpu")
     batch_legal_actions = [env.get_legal_actions() for env in batch_env]
-    x_game_state = encode_batch_game_state(batch_game_state, batch_legal_actions, cpu)
-    write_slot(step_buffer_region.slots[0], x_game_state)
+    batch = encode_batch_game_state(batch_game_state, batch_legal_actions, cpu)
+    write_slot(step_buffer_region.slots[0], batch)

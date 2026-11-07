@@ -59,8 +59,8 @@ def broadcast_from_rank0(model: nn.Module) -> None:
         This rank's model, its weights overwritten in place with rank 0's.
     """
     if dist.is_initialized():
-        for x in model.state_dict().values():
-            dist.broadcast(x, src=0)
+        for x_weight in model.state_dict().values():
+            dist.broadcast(x_weight, src=0)
 
 
 def average_gradients(model: nn.Module) -> None:
@@ -77,15 +77,25 @@ def average_gradients(model: nn.Module) -> None:
         return
     params = list(model.parameters())
     x_flat = torch.cat(
-        [(p.grad if p.grad is not None else torch.zeros_like(p)).flatten() for p in params]
-        + [torch.tensor([float(p.grad is not None) for p in params], device=params[0].device)]
+        [
+            (x_param.grad if x_param.grad is not None else torch.zeros_like(x_param)).flatten()
+            for x_param in params
+        ]
+        + [
+            torch.tensor(
+                [float(x_param.grad is not None) for x_param in params],
+                device=params[0].device,
+            )
+        ]
     )
     dist.all_reduce(x_flat)
     x_grads = x_flat[: -len(params)] / dist.get_world_size()
     offset = 0
-    for p, reached in zip(params, x_flat[-len(params) :].tolist()):
-        p.grad = x_grads[offset : offset + p.numel()].view_as(p) if reached else None
-        offset += p.numel()
+    for x_param, reached in zip(params, x_flat[-len(params) :].tolist()):
+        x_param.grad = (
+            x_grads[offset : offset + x_param.numel()].view_as(x_param) if reached else None
+        )
+        offset += x_param.numel()
 
 
 def mean_over_ranks(value: float, device: torch.device) -> float:
@@ -105,9 +115,9 @@ def mean_over_ranks(value: float, device: torch.device) -> float:
     """
     if not dist.is_initialized():
         return value
-    x = torch.tensor([value], dtype=torch.float64, device=device)
-    dist.all_reduce(x)
-    return x.item() / dist.get_world_size()
+    x_value = torch.tensor([value], dtype=torch.float64, device=device)
+    dist.all_reduce(x_value)
+    return x_value.item() / dist.get_world_size()
 
 
 def any_rank(flag: bool, device: torch.device) -> bool:
@@ -127,9 +137,9 @@ def any_rank(flag: bool, device: torch.device) -> bool:
     """
     if not dist.is_initialized():
         return flag
-    x = torch.tensor([float(flag)], device=device)
-    dist.all_reduce(x, op=dist.ReduceOp.MAX)
-    return bool(x.item())
+    x_flag = torch.tensor([float(flag)], device=device)
+    dist.all_reduce(x_flag, op=dist.ReduceOp.MAX)
+    return bool(x_flag.item())
 
 
 def broadcast_float(value: float, device: torch.device) -> float:
@@ -149,9 +159,9 @@ def broadcast_float(value: float, device: torch.device) -> float:
     """
     if not dist.is_initialized():
         return value
-    x = torch.tensor([value], dtype=torch.float64, device=device)
-    dist.broadcast(x, src=0)
-    return x.item()
+    x_value = torch.tensor([value], dtype=torch.float64, device=device)
+    dist.broadcast(x_value, src=0)
+    return x_value.item()
 
 
 def gather_episodes(episodes: list[EpisodeStats]) -> list[EpisodeStats]:
