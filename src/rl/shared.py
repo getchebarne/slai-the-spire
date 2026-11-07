@@ -1,21 +1,19 @@
-"""Reusable worker storage, with published shapes for its live jagged batch."""
-
 from dataclasses import dataclass
 
 import torch
 
+from src.rl.constants import CAP_TOKENS
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
+from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.encoding.context import ENCODING_DIM_CONTEXT
 from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
-from src.rl.encoding.state import CAP_TOKENS
 from src.rl.encoding.state import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.packed import map_tensors
-from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import Jagged
 from src.rl.types import Sparse
 from src.rl.types import StateBatch
@@ -41,7 +39,8 @@ class _StateSlot:
     x_token_lengths: torch.Tensor
     token_features: Sparse
     x_token_kind: torch.Tensor
-    x_legal: torch.Tensor
+    x_legal_selection: torch.Tensor
+    x_legal_target: torch.Tensor
     x_needs_target: torch.Tensor
     x_node_idx: torch.Tensor
     x_effect_lengths: torch.Tensor
@@ -80,7 +79,8 @@ def allocate_slots(num_workers: int, batch_size: int) -> list[_StateSlot]:
         x_token_lengths=shared(batch_size, dtype=torch.long),
         token_features=sparse("token_features", num_tokens),
         x_token_kind=shared(num_tokens, dtype=torch.int16),
-        x_legal=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_legal_selection=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_legal_target=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
         x_needs_target=shared(num_tokens, dtype=torch.bool),
         x_node_idx=shared(num_tokens, dtype=torch.int16),
         x_effect_lengths=shared(num_tokens, dtype=torch.int16),
@@ -114,7 +114,8 @@ def write_slot(slot: _StateSlot, batch: StateBatch) -> None:
     ]
     token_pairs = [
         (slot.x_token_kind, tokens.x_kind),
-        (slot.x_legal, tokens.x_legal),
+        (slot.x_legal_selection, tokens.x_legal_selection),
+        (slot.x_legal_target, tokens.x_legal_target),
         (slot.x_needs_target, tokens.x_needs_target),
         (slot.x_node_idx, tokens.x_node_idx),
         (slot.x_effect_lengths, tokens.effects.x_lengths),
@@ -188,7 +189,8 @@ def read_slot(slot: _StateSlot) -> StateBatch:
             Tokens(
                 features=_live_rows(slot.token_features, token_shape),
                 x_kind=slot.x_token_kind[:num_tokens],
-                x_legal=slot.x_legal[:num_tokens],
+                x_legal_selection=slot.x_legal_selection[:num_tokens],
+                x_legal_target=slot.x_legal_target[:num_tokens],
                 x_needs_target=slot.x_needs_target[:num_tokens],
                 x_node_idx=slot.x_node_idx[:num_tokens],
                 effects=Jagged(

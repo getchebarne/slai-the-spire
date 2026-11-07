@@ -30,8 +30,8 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_SELECTED
 from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
 from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
+from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.encoding.effect import catalog_effects
-from src.rl.types import TOKEN_KINDS_CARD_REWARDS
 from src.rl.types import Tag
 from src.rl.types import TokenKind
 from src.rl.types import make_channel_allocator

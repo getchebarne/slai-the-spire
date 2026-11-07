@@ -275,15 +275,6 @@ def stop_actor(actor_handle: ActorHandle) -> None:
         actor_handle.process.join()
 
 
-def _died(actor_handle: ActorHandle) -> RuntimeError:
-    actor_handle.process.join(timeout=5.0)
-
-    return RuntimeError(
-        f"The actor process died (exitcode {actor_handle.process.exitcode}); "
-        "see its traceback above"
-    )
-
-
 def _actor_loop(
     weight_buffer: WeightBuffer,
     x_stop: torch.Tensor,
@@ -315,9 +306,13 @@ def _actor_loop(
     # Torch's default allocator before CUDA starts: the Learner can then open this process's
     # rollouts, which containers forbid for memory from the expandable-segments allocator
     os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+
+    # Set the Actor's visible device
     device = actor_config.device
     if device.type == "cuda":
         torch.cuda.set_device(device)
+
+    # Set PyTorch config
     torch.set_float32_matmul_precision(actor_config.matmul_precision)
     torch.set_num_threads(actor_config.num_threads)
     torch.use_deterministic_algorithms(actor_config.deterministic)
@@ -349,7 +344,7 @@ def _actor_loop(
         stack.callback(stop_workers, worker_handles)
 
         # Loop
-        version_rolled, t_idle = version_first, time.perf_counter()  # Already waited for
+        version_rolled, t_idle = version_first, time.perf_counter()
         for rollout in itertools.count(version_first):
             version = max(rollout - 1, version_first)
 
@@ -544,3 +539,12 @@ def _wait_for_version(sph_new_version: Semaphore, x_stop: torch.Tensor) -> bool:
             return False
 
     return not x_stop
+
+
+def _died(actor_handle: ActorHandle) -> RuntimeError:
+    actor_handle.process.join(timeout=5.0)
+
+    return RuntimeError(
+        f"The actor process died (exitcode {actor_handle.process.exitcode}); "
+        "see its traceback above"
+    )

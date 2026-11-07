@@ -1,5 +1,3 @@
-"""The Learner: PPO on the Actor's rollouts, with the evals, the curriculum and the checkpoints."""
-
 import random
 import threading
 import time
@@ -92,20 +90,26 @@ def train(
     # Offset the seeds per resume and rank; rank 0 of a fresh run keeps the single-GPU seeds
     if iteration_start > 0 or rank_info.rank > 0:
         set_rng_seeds(seed + iteration_start + 7919 * rank_info.rank)
+
+    # Announce train start
     if rank_info.rank == 0:
         _print_start(
             exp_name, model, iteration_start, run_state, rollout_config, rank_info.world_size
         )
+
+    # Broadcast model's weights to the rest of the GPUs
     distributed.broadcast_from_rank0(model)
+
+    # Calculate number of steps per iteration
     steps_per_iteration = (
         rank_info.world_size * rollout_config.rollout_length * rollout_config.num_envs
     )
 
-    # Adaptive-KL lr: base recovered from the (possibly resumed-scaled) group lr
+    # Adaptive-KL learning rate: base recovered from the (possibly resumed-scaled) learning rate
     base_lr = optimizer.param_groups[0]["lr"] / run_state.lr_scale
     with ExitStack() as stack:
-        writer: SummaryWriter | None = None
-        evaluator: Evaluator | None = None
+        writer = None
+        evaluator = None
 
         # Rank 0 alone logs, checkpoints and evaluates: greedy fixed-seed games in a side process
         if rank_info.rank == 0:
@@ -129,11 +133,14 @@ def train(
         # A failure must still stop the Actor: this process's exit would wait for it
         stack.callback(stop_actor, actor_handle)
 
-        # Learner only, GPU only: the Actor's model stays eager
+        # Compile Learner's model only iff training on GPU: the Actor's model stays eager
         if rank_info.device.type == _DEVICE_TYPE_CUDA:
             compile_hot_paths(model)
 
+        # Instance generator for batch sampling 
         generator = torch.Generator().manual_seed(random.randint(0, 2**31 - 1))
+
+        # Let's go
         t_iteration = time.perf_counter()
         for iteration in range(iteration_start, num_iterations):
             delivery, seconds_learner_wait = receive_rollout(actor_handle)
@@ -240,6 +247,7 @@ def _print_start(
             f"iter-{iteration_start - 1}.pth: iteration {iteration_start}, "
             f"{run_state.total_steps} steps"
         )
+
     print(f"Starting training: {exp_name} on {world_size} rank(s)")
     n_params = sum(x_param.numel() for x_param in model.parameters())
     print(f"  params={n_params:,} ({n_params / 1e6:.2f}M)")
