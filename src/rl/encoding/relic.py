@@ -1,6 +1,3 @@
-from enum import StrEnum
-from enum import auto
-
 import numpy as np
 from slai import GameState
 from slai import Relic
@@ -22,24 +19,18 @@ _RELIC_TIER_TO_IDX = {tier: int(tier) for tier in RelicTier.members()}
 _COUNTER_MAX = max(template.counter_reset for template in get_relic_templates())
 
 
-class RelicChannel(StrEnum):
-    NAME = auto()
-    TIER = auto()
-    USED_UP = auto()
-    COUNTER = auto()
-    COUNTER_PROGRESS = auto()  # Counter / counter_reset for firing counters, else 0
-    COUNTER_REMAINING = auto()  # Triggers left until it fires, bucket 0 the next one
-    LINKED = auto()  # The Relic the Sapphire Key is linked to
-
-
 CHANNEL_LAYOUT_RELIC, _alloc = make_channel_allocator()
-OFF_RELIC_NAME = _alloc(RelicChannel.NAME, len(_RELIC_NAME_TO_IDX))
-OFF_RELIC_TIER = _alloc(RelicChannel.TIER, len(_RELIC_TIER_TO_IDX))
-OFF_RELIC_USED_UP = _alloc(RelicChannel.USED_UP)
-OFF_RELIC_COUNTER = _alloc(RelicChannel.COUNTER)
-OFF_RELIC_COUNTER_PROGRESS = _alloc(RelicChannel.COUNTER_PROGRESS)
-OFF_RELIC_COUNTER_REMAINING = _alloc(RelicChannel.COUNTER_REMAINING, _COUNTER_MAX)
-OFF_RELIC_LINKED = _alloc(RelicChannel.LINKED)
+OFF_RELIC_NAME = _alloc("name", len(_RELIC_NAME_TO_IDX))
+OFF_RELIC_TIER = _alloc("tier", len(_RELIC_TIER_TO_IDX))
+OFF_RELIC_USED_UP = _alloc("used_up")
+OFF_RELIC_COUNTER = _alloc("counter")
+OFF_RELIC_COUNTER_PROGRESS = _alloc(
+    "counter_progress"
+)  # Counter / counter_reset for firing counters, else 0
+OFF_RELIC_COUNTER_REMAINING = _alloc(
+    "counter_remaining", _COUNTER_MAX
+)  # Triggers left until it fires, bucket 0 the next one
+OFF_RELIC_LINKED = _alloc("linked")  # The Relic the Sapphire Key is linked to
 
 ENCODING_DIM_RELIC = sum(w for _, w in CHANNEL_LAYOUT_RELIC)
 

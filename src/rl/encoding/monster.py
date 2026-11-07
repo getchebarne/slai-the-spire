@@ -1,6 +1,4 @@
 import math
-from enum import StrEnum
-from enum import auto
 
 import numpy as np
 from slai import Effect
@@ -53,56 +51,44 @@ _DAMAGE_TOTAL_DIM = get_piecewise_dim(0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHO
 
 
 # Health/block is not here: it is the combatants' health/block columns (health_block.py)
-class MonsterChannel(StrEnum):
-    NAME = auto()
-    INTENT_DAMAGE = auto()
-    INTENT_DAMAGE_SCALAR = auto()
-    INTENT_INSTANCES = auto()
-    INTENT_DAMAGE_TOTAL = auto()  # Damage x instances
-    INTENT_DAMAGE_TOTAL_SCALAR = auto()
-    INTENT_HAS_BLOCK = auto()
-    INTENT_HAS_BUFF = auto()
-    INTENT_HAS_DEBUFF = auto()
-    HIT_FULLY_BLOCKED = auto()
-    HIT_IS_LETHAL = auto()
-    MAX_HEALTH_MAGNITUDE = auto()
-    HEALTH_FRACTION = auto()
-    POISON_IS_LETHAL = auto()  # Its next turn start's Poison tick kills it
-    GOLD_STOLEN = auto()
-    INTENT_KIND = auto()
-    INTENT_HIDDEN = auto()  # Runic Dome: every intent channel and hit flag reads 0
-    MOVE_CURRENT = auto()  # Index into the spawn-rolled moveset
-    MOVE_PREV_1 = auto()  # One move back (move_history's last entry is the current move)
-    MOVE_PREV_2 = auto()
-    REPLAY_TARGET = auto()  # A waiting replay aims at it
-    HALF_DEAD = auto()  # Health and block read 0, no Card can target it (Awakened One, Darkling)
-    ULTIMATE_USED = auto()  # Its once-per-Combat move has executed
 
 
 CHANNEL_LAYOUT_MONSTER, _alloc = make_channel_allocator()
-OFF_MONSTER_NAME = _alloc(MonsterChannel.NAME, len(_MAP_MONSTER_NAME))
-OFF_MONSTER_INTENT_DAMAGE = _alloc(MonsterChannel.INTENT_DAMAGE, _DAMAGE_DIM)
-OFF_MONSTER_INTENT_DAMAGE_SCALAR = _alloc(MonsterChannel.INTENT_DAMAGE_SCALAR)
-OFF_MONSTER_INTENT_INSTANCES = _alloc(MonsterChannel.INTENT_INSTANCES)
-OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc(MonsterChannel.INTENT_DAMAGE_TOTAL, _DAMAGE_TOTAL_DIM)
-OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR = _alloc(MonsterChannel.INTENT_DAMAGE_TOTAL_SCALAR)
-OFF_MONSTER_INTENT_HAS_BLOCK = _alloc(MonsterChannel.INTENT_HAS_BLOCK)
-OFF_MONSTER_INTENT_HAS_BUFF = _alloc(MonsterChannel.INTENT_HAS_BUFF)
-OFF_MONSTER_INTENT_HAS_DEBUFF = _alloc(MonsterChannel.INTENT_HAS_DEBUFF)
-OFF_MONSTER_HIT_FULLY_BLOCKED = _alloc(MonsterChannel.HIT_FULLY_BLOCKED)
-OFF_MONSTER_HIT_IS_LETHAL = _alloc(MonsterChannel.HIT_IS_LETHAL)
-OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc(MonsterChannel.MAX_HEALTH_MAGNITUDE)
-OFF_MONSTER_HEALTH_FRACTION = _alloc(MonsterChannel.HEALTH_FRACTION)
-OFF_MONSTER_POISON_IS_LETHAL = _alloc(MonsterChannel.POISON_IS_LETHAL)
-OFF_MONSTER_GOLD_STOLEN = _alloc(MonsterChannel.GOLD_STOLEN)
-OFF_MONSTER_INTENT_KIND = _alloc(MonsterChannel.INTENT_KIND, len(_MAP_INTENT_KIND))
-OFF_MONSTER_INTENT_HIDDEN = _alloc(MonsterChannel.INTENT_HIDDEN)
-OFF_MONSTER_MOVE_CURRENT = _alloc(MonsterChannel.MOVE_CURRENT, MONSTER_MOVESET_MAX)
-OFF_MONSTER_MOVE_PREV_1 = _alloc(MonsterChannel.MOVE_PREV_1, MONSTER_MOVESET_MAX)
-OFF_MONSTER_MOVE_PREV_2 = _alloc(MonsterChannel.MOVE_PREV_2, MONSTER_MOVESET_MAX)
-OFF_MONSTER_REPLAY_TARGET = _alloc(MonsterChannel.REPLAY_TARGET)
-OFF_MONSTER_HALF_DEAD = _alloc(MonsterChannel.HALF_DEAD)
-OFF_MONSTER_ULTIMATE_USED = _alloc(MonsterChannel.ULTIMATE_USED)
+OFF_MONSTER_NAME = _alloc("name", len(_MAP_MONSTER_NAME))
+OFF_MONSTER_INTENT_DAMAGE = _alloc("intent_damage", _DAMAGE_DIM)
+OFF_MONSTER_INTENT_DAMAGE_SCALAR = _alloc("intent_damage_scalar")
+OFF_MONSTER_INTENT_INSTANCES = _alloc("intent_instances")
+OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc(
+    "intent_damage_total", _DAMAGE_TOTAL_DIM
+)  # Damage x instances
+OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR = _alloc("intent_damage_total_scalar")
+OFF_MONSTER_INTENT_HAS_BLOCK = _alloc("intent_has_block")
+OFF_MONSTER_INTENT_HAS_BUFF = _alloc("intent_has_buff")
+OFF_MONSTER_INTENT_HAS_DEBUFF = _alloc("intent_has_debuff")
+OFF_MONSTER_HIT_FULLY_BLOCKED = _alloc("hit_fully_blocked")
+OFF_MONSTER_HIT_IS_LETHAL = _alloc("hit_is_lethal")
+OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
+OFF_MONSTER_HEALTH_FRACTION = _alloc("health_fraction")
+OFF_MONSTER_POISON_IS_LETHAL = _alloc(
+    "poison_is_lethal"
+)  # Its next turn start's Poison tick kills it
+OFF_MONSTER_GOLD_STOLEN = _alloc("gold_stolen")
+OFF_MONSTER_INTENT_KIND = _alloc("intent_kind", len(_MAP_INTENT_KIND))
+OFF_MONSTER_INTENT_HIDDEN = _alloc(
+    "intent_hidden"
+)  # Runic Dome: every intent channel and hit flag reads 0
+OFF_MONSTER_MOVE_CURRENT = _alloc(
+    "move_current", MONSTER_MOVESET_MAX
+)  # Index into the spawn-rolled moveset
+OFF_MONSTER_MOVE_PREV_1 = _alloc(
+    "move_prev_1", MONSTER_MOVESET_MAX
+)  # One move back (move_history's last entry is the current move)
+OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MONSTER_MOVESET_MAX)
+OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")  # A waiting replay aims at it
+OFF_MONSTER_HALF_DEAD = _alloc(
+    "half_dead"
+)  # Health and block read 0, no Card can target it (Awakened One, Darkling)
+OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")  # Its once-per-Combat move has executed
 
 ENCODING_DIM_MONSTER = sum(w for _, w in CHANNEL_LAYOUT_MONSTER)
 
@@ -212,9 +198,7 @@ def moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
     if by_name is None:
         by_name = {
             template.name: tuple(
-                effect
-                for move in dict.fromkeys(template.moves)
-                for effect in move.effects
+                effect for move in dict.fromkeys(template.moves) for effect in move.effects
             )
             for template in get_monster_templates(ascension)
         }

@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from slai import ACTION_SPEC_REGISTRY
 
+from src.rl.encoding.context import focus_view
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
@@ -26,7 +27,7 @@ from src.rl.types import NUM_ACTION_TYPES
 from src.rl.types import TokenKind
 from src.rl.types import X_Action
 from src.rl.types import X_CoreOutput
-from src.rl.types import X_GameState
+from src.rl.types import StateBatch
 from src.rl.types import X_Window
 
 
@@ -391,7 +392,7 @@ class ActorCritic(nn.Module):
     def _select_actions(
         self,
         heads: Callable[..., tuple[torch.Tensor, ...]],
-        x_game_state: X_GameState,
+        x_game_state: StateBatch,
         x_core_out: X_CoreOutput,
         greedy: bool,
         generator: torch.Generator | None = None,
@@ -399,11 +400,11 @@ class ActorCritic(nn.Module):
     ) -> X_Action:
         x_action_type, x_token_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
             self,
-            x_focus=x_game_state.x_focus,
+            x_focus=focus_view(x_game_state.context),
             x_global=x_core_out.x_global,
             x_refined=x_core_out.x_refined,
             x_window=x_core_out.x_window,
-            x_legal_action_type=x_game_state.x_legal_action_type,
+            x_legal_action_type=x_game_state.legal_action_type,
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
@@ -418,12 +419,12 @@ class ActorCritic(nn.Module):
             x_kl_uniform=x_kl_uniform,
         )
 
-    def forward(self, x_game_state: X_GameState) -> torch.Tensor:
+    def forward(self, x_game_state: StateBatch) -> torch.Tensor:
         """Compute the values.
 
         Parameters
         ----------
-        x_game_state : X_GameState
+        x_game_state : StateBatch
             The game states.
 
         Returns
@@ -435,7 +436,7 @@ class ActorCritic(nn.Module):
 
     def act(
         self,
-        x_game_state: X_GameState,
+        x_game_state: StateBatch,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> X_Action:
@@ -446,7 +447,7 @@ class ActorCritic(nn.Module):
 
         Parameters
         ----------
-        x_game_state : X_GameState
+        x_game_state : StateBatch
             The game states.
         greedy : bool, default False
             Whether each level takes its argmax rather than a sample.
@@ -465,13 +466,13 @@ class ActorCritic(nn.Module):
         return self._select_actions(_policy_heads, x_game_state, x_core_out, greedy, generator)
 
     def evaluate_actions(
-        self, x_game_state: X_GameState, x_recorded_actions: torch.Tensor
+        self, x_game_state: StateBatch, x_recorded_actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
         Parameters
         ----------
-        x_game_state : X_GameState
+        x_game_state : StateBatch
             The game states.
         x_recorded_actions : torch.Tensor
             (B, 4) long. Each state's recorded action: action type, token kind, rank, target, -1

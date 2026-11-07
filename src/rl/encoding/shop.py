@@ -1,24 +1,14 @@
-from enum import StrEnum
-from enum import auto
-
 import numpy as np
-import torch
 from slai import GameState
 
 from src.rl.constants import SHOP_PRICE_CAP
 from src.rl.types import make_channel_allocator
 
 
-class PriceChannel(StrEnum):
-    PRICE = auto()
-    AFFORDABLE = auto()
-    GOLD_GAP = auto()  # `abs(gold - price)`
-
-
 CHANNEL_LAYOUT_PRICE, _alloc = make_channel_allocator()
-OFF_SHOP_PRICE = _alloc(PriceChannel.PRICE)
-OFF_SHOP_AFFORDABLE = _alloc(PriceChannel.AFFORDABLE)
-OFF_SHOP_GOLD_GAP = _alloc(PriceChannel.GOLD_GAP)
+OFF_SHOP_PRICE = _alloc("price")
+OFF_SHOP_AFFORDABLE = _alloc("affordable")
+OFF_SHOP_GOLD_GAP = _alloc("gold_gap")  # `abs(gold - price)`
 
 ENCODING_DIM_PRICE = sum(w for _, w in CHANNEL_LAYOUT_PRICE)
 
@@ -36,31 +26,10 @@ def encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
     out[OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
 
 
-def encode_batch_shop_meta(
-    batch_game_state: list[GameState], device: torch.device
-) -> torch.Tensor:
-    """Encode each state's Shop meta: the purge service's price row + the purged flag.
-
-    Parameters
-    ----------
-    batch_game_state : list[GameState]
-        The states to encode, B of them.
-    device : torch.device
-        The device of the returned tensor.
-
-    Returns
-    -------
-    torch.Tensor
-        (B, ENCODING_DIM_SHOP_META) float32. Each state's Shop meta; 0 outside Shops.
-    """
-    np_meta = np.zeros((len(batch_game_state), ENCODING_DIM_SHOP_META), dtype=np.float32)
-    for b, game_state in enumerate(batch_game_state):
-        shop = game_state.shop
-        if shop is None:
-            continue
-
-        # Purge service price (same features as the per-item prices) + purged flag
-        encode_price_into(shop.purge_cost, game_state.character.gold, np_meta[b])
-        np_meta[b, OFF_SHOP_PURGED] = float(shop.purged)
-
-    return torch.from_numpy(np_meta).to(device)
+def encode_shop_meta_into(game_state: GameState, out: np.ndarray) -> None:
+    """Write the purge service's price features and whether it was used."""
+    shop = game_state.shop
+    if shop is None:
+        return
+    encode_price_into(shop.purge_cost, game_state.character.gold, out)
+    out[OFF_SHOP_PURGED] = float(shop.purged)
