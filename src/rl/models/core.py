@@ -1,18 +1,18 @@
 import torch
 import torch.nn as nn
 
-from src.rl.encoding.context import ENCODING_DIM_CONTEXT
+from src.rl.constants import MAP_TOKEN_KIND_CAP
+from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import DrawOrderLayer
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
 from src.rl.models.spread_embedding import SpreadEmbedding
-from src.rl.types import MAP_TOKEN_KIND_CAP
-from src.rl.types import TOKEN_KINDS_CARD_REWARDS
-from src.rl.types import Jagged
-from src.rl.types import TokenKind
+from src.rl.schema.context import ENCODING_DIM_CONTEXT
 from src.rl.types import CoreOutput
+from src.rl.types import Jagged
 from src.rl.types import StateBatch
+from src.rl.types import TokenKind
 
 
 # Count features: one per token kind except the Character singleton (a constant 1.0), each
@@ -98,6 +98,10 @@ class Core(nn.Module):
             torch.tensor([token_kind in TOKEN_KINDS_CARD_REWARDS for token_kind in TokenKind]),
             persistent=False,
         )
+
+    def init_token_weights(self) -> None:
+        """Initialize the projector's token feature ranges after the general linear init."""
+        self._entity_projector.init_token_weights()
 
     def forward(self, game_state: StateBatch, with_value: bool = True) -> CoreOutput:
         """Compute the core's output.

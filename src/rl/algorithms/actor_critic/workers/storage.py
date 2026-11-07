@@ -1,21 +1,19 @@
-"""Reusable worker storage, with published shapes for its live jagged batch."""
-
 from dataclasses import dataclass
 
 import torch
 
+from src.rl.constants import CAP_TOKENS
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
-from src.rl.encoding.context import ENCODING_DIM_CONTEXT
-from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.encoding.map_ import NUM_CHANNELS
-from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
-from src.rl.encoding.state import CAP_TOKENS
-from src.rl.encoding.state import ENCODING_DIM_SPARSE_TOKEN
-from src.rl.packed import map_tensors
-from src.rl.types import NUM_ACTION_TYPES
+from src.rl.constants import NUM_ACTION_TYPES
+from src.rl.schema.context import ENCODING_DIM_CONTEXT
+from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.schema.map_ import NUM_CHANNELS
+from src.rl.schema.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.schema.state import ENCODING_DIM_SPARSE_TOKEN
+from src.rl.tensor_ops import map_tensors
 from src.rl.types import Jagged
 from src.rl.types import Sparse
 from src.rl.types import StateBatch
@@ -41,7 +39,8 @@ class _StateSlot:
     x_token_lengths: torch.Tensor
     token_features: Sparse
     x_token_kind: torch.Tensor
-    x_legal: torch.Tensor
+    x_legal_selection: torch.Tensor
+    x_legal_target: torch.Tensor
     x_needs_target: torch.Tensor
     x_node_idx: torch.Tensor
     x_effect_lengths: torch.Tensor
@@ -57,12 +56,36 @@ class _StateSlot:
 
 
 def allocate_slot(batch_size: int) -> _StateSlot:
-    """Allocate one worker's shared capacity."""
+    """Allocate one worker's shared capacity.
+
+    Parameters
+    ----------
+    batch_size : int
+        The number of games assigned to the worker.
+
+    Returns
+    -------
+    _StateSlot
+        The worker's reusable capacity, with every tensor in shared CPU memory.
+    """
     return allocate_slots(1, batch_size)[0]
 
 
 def allocate_slots(num_workers: int, batch_size: int) -> list[_StateSlot]:
-    """Allocate each field once, with an explicit worker axis, and return disjoint slot views."""
+    """Allocate each field once, with an explicit worker axis, and return disjoint slot views.
+
+    Parameters
+    ----------
+    num_workers : int
+        The number of workers that will share the allocation.
+    batch_size : int
+        The number of games assigned to each worker.
+
+    Returns
+    -------
+    list[_StateSlot]
+        One slot per worker, with disjoint views into shared CPU storage.
+    """
 
     def shared(*shape: int, dtype: torch.dtype = torch.float32) -> torch.Tensor:
         return torch.zeros(num_workers, *shape, dtype=dtype).share_memory_()
@@ -80,7 +103,8 @@ def allocate_slots(num_workers: int, batch_size: int) -> list[_StateSlot]:
         x_token_lengths=shared(batch_size, dtype=torch.long),
         token_features=sparse("token_features", num_tokens),
         x_token_kind=shared(num_tokens, dtype=torch.int16),
-        x_legal=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_legal_selection=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_legal_target=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
         x_needs_target=shared(num_tokens, dtype=torch.bool),
         x_node_idx=shared(num_tokens, dtype=torch.int16),
         x_effect_lengths=shared(num_tokens, dtype=torch.int16),
@@ -104,6 +128,13 @@ def write_slot(slot: _StateSlot, batch: StateBatch) -> None:
 
     Validate every destination before writing. Bytes outside the live shapes stay stale;
     readers never include them.
+
+    Parameters
+    ----------
+    slot : _StateSlot
+        The worker's reusable shared capacity.
+    batch : StateBatch
+        The worker's encoded states on the CPU, with the slot's batch size and field dtypes.
     """
     tokens = batch.tokens.rows
     sparse = [
@@ -114,7 +145,8 @@ def write_slot(slot: _StateSlot, batch: StateBatch) -> None:
     ]
     token_pairs = [
         (slot.x_token_kind, tokens.x_kind),
-        (slot.x_legal, tokens.x_legal),
+        (slot.x_legal_selection, tokens.x_legal_selection),
+        (slot.x_legal_target, tokens.x_legal_target),
         (slot.x_needs_target, tokens.x_needs_target),
         (slot.x_node_idx, tokens.x_node_idx),
         (slot.x_effect_lengths, tokens.effects.x_lengths),
@@ -179,7 +211,18 @@ def write_slot(slot: _StateSlot, batch: StateBatch) -> None:
 
 
 def read_slot(slot: _StateSlot) -> StateBatch:
-    """View the published batch after the worker replies, valid until its next write."""
+    """View the published batch after the worker replies, valid until its next write.
+
+    Parameters
+    ----------
+    slot : _StateSlot
+        The worker's shared capacity, with its live shapes already published.
+
+    Returns
+    -------
+    StateBatch
+        Views of the populated prefixes, sharing the slot's CPU storage.
+    """
     token_shape, effect_shape, modifier_shape, pending_shape = slot.x_shapes.tolist()
     num_tokens = token_shape[0]
     return StateBatch(
@@ -188,7 +231,8 @@ def read_slot(slot: _StateSlot) -> StateBatch:
             Tokens(
                 features=_live_rows(slot.token_features, token_shape),
                 x_kind=slot.x_token_kind[:num_tokens],
-                x_legal=slot.x_legal[:num_tokens],
+                x_legal_selection=slot.x_legal_selection[:num_tokens],
+                x_legal_target=slot.x_legal_target[:num_tokens],
                 x_needs_target=slot.x_needs_target[:num_tokens],
                 x_node_idx=slot.x_node_idx[:num_tokens],
                 effects=Jagged(
@@ -208,6 +252,20 @@ def read_slot(slot: _StateSlot) -> StateBatch:
 
 
 def _live_rows(storage: Sparse, shape: list[int]) -> Sparse:
+    """View the populated rows and entries of sparse storage.
+
+    Parameters
+    ----------
+    storage : Sparse
+        The sparse arrays, including unused trailing capacity.
+    shape : list[int]
+        The published number of rows and number of entries, in that order.
+
+    Returns
+    -------
+    Sparse
+        Views of the populated prefixes, sharing the original storage.
+    """
     rows, entries = shape
     return Sparse(
         storage.x_lengths[:rows], storage.x_columns[:entries], storage.x_values[:entries]

@@ -5,6 +5,12 @@ Centralizes magic numbers and configuration values used across the RL codebase.
 
 import slai as _slai
 
+from src.rl.types import TokenKind
+
+
+# The policy's action types are exactly the engine's
+ACTION_TYPE_BY_INT = _slai.ActionType.members()
+NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 # The top Ascension, which GameEnv doesn't expose; it sizes the ascension thermometer
 # (a checkpoint shape) and every catalog fold
@@ -173,3 +179,127 @@ SHOP_PRICE_CAP = max(
     _slai.SHOP_PRICE_CARD_MAX, _slai.SHOP_PRICE_RELIC_MAX, _slai.SHOP_PRICE_POTION_MAX
 )
 EVENT_STAGE_CAP = 10
+
+
+TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (tokens.py owns their packing)
+    TokenKind.CARD_REWARD_0,
+    TokenKind.CARD_REWARD_1,
+    TokenKind.CARD_REWARD_2,
+    TokenKind.CARD_REWARD_3,
+    TokenKind.CARD_REWARD_4,
+)
+
+# Pack order within the Card Entity kind: decision pools first, observational piles last
+TOKEN_KINDS_CARD = (
+    TokenKind.CARD_PILE_HAND,
+    TokenKind.CARD_PILE_DISCOVER,
+    TokenKind.CARD_PILE_SELECTED,
+    *TOKEN_KINDS_CARD_REWARDS,
+    TokenKind.CARD_SHOP,
+    TokenKind.CARD_PILE_EVENT_ROLL,
+    TokenKind.CARD_MATCH_FLIPPED,
+    TokenKind.CARD_MATCH_PAIRS,
+    TokenKind.CARD_PILE_STASIS,
+    TokenKind.CARD_PLAY_QUEUE,
+    TokenKind.CARD_PILE_NIGHTMARE,
+    TokenKind.CARD_PILE_DRAW,
+    TokenKind.CARD_PILE_DISCARD,
+    TokenKind.CARD_PILE_EXHAUST,
+    TokenKind.CARD_PILE_DECK,
+)
+
+# Pack order within the Relic Entity kind: decision pools first, the owned Relics last
+TOKEN_KINDS_RELIC = (
+    TokenKind.RELIC_REWARD,
+    TokenKind.RELIC_SHOP,
+    TokenKind.RELIC_EVENT_ROLL,
+    TokenKind.RELIC_OWNED,
+)
+
+# Pack order within the Potion Entity kind; every source is engine-bounded
+TOKEN_KINDS_POTION = (
+    TokenKind.POTION_OWNED,
+    TokenKind.POTION_REWARD,
+    TokenKind.POTION_SHOP,
+    TokenKind.POTION_EVENT_ROLL,
+)
+
+# The Entity kinds in window order, each its token kinds; the last four hold a single token kind
+TOKEN_KINDS_OF_ENTITY_KIND = (
+    TOKEN_KINDS_CARD,
+    TOKEN_KINDS_RELIC,
+    TOKEN_KINDS_POTION,
+    (TokenKind.MONSTERS,),
+    (TokenKind.EVENT_OPTIONS,),
+    (TokenKind.CHARACTER,),
+    (TokenKind.ROOMS,),
+)
+
+# Each token kind's token cap: the slice token traversal applies to that collection
+MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
+    TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
+    TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
+    TokenKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
+    TokenKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
+    TokenKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
+    TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
+    TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
+    TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up Card
+    TokenKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
+    TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
+    TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
+    TokenKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
+    TokenKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
+    TokenKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
+    TokenKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
+    TokenKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
+    TokenKind.RELIC_REWARD: MAX_RELIC_REWARDS,
+    TokenKind.RELIC_SHOP: MAX_SHOP_RELICS,
+    TokenKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
+    TokenKind.RELIC_OWNED: MAX_RELICS,
+    TokenKind.POTION_OWNED: MAX_POTION_SLOTS,
+    TokenKind.POTION_REWARD: MAX_POTION_REWARDS,
+    TokenKind.POTION_SHOP: MAX_SHOP_POTIONS,
+    TokenKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
+    TokenKind.MONSTERS: MAX_MONSTERS,
+    TokenKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
+    TokenKind.CHARACTER: 1,
+    TokenKind.ROOMS: MAP_WIDTH,
+}
+
+# The cap of the block every collection packs into: the sum of the collections' caps
+CAP_TOKENS = sum(MAP_TOKEN_KIND_CAP.values())
+
+
+def _check_tables() -> None:
+    """Check that the tables that restate the engine or an enum still agree with it."""
+    if len(TOKEN_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
+        raise RuntimeError(
+            f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
+            "add CARD_REWARD_<b> token kinds"
+        )
+    if set(MAP_TOKEN_KIND_CAP) != set(TokenKind):
+        raise RuntimeError(
+            "A TokenKind has no entry in MAP_TOKEN_KIND_CAP: "
+            f"{set(TokenKind) - set(MAP_TOKEN_KIND_CAP)}"
+        )
+
+    # TokenKind is declared in packing order, valued 0..len-1: the Entity kind tables, one after
+    # another, list it, every token kind in one table
+    token_kinds = [
+        token_kind
+        for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND
+        for token_kind in token_kinds_entity_kind
+    ]
+    if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):
+        names = [token_kind.name for token_kind in token_kinds]
+        raise RuntimeError(
+            "Declare TokenKind in packing order, valued 0..len-1: TOKEN_KINDS_OF_ENTITY_KIND's "
+            f"entity kinds, one after another, list {names}"
+        )
+
+
+_check_tables()

@@ -3,21 +3,11 @@
 import glob
 import os
 import shutil
-from dataclasses import dataclass
 
 import torch
 
+from src.rl.algorithms.actor_critic.progress import RunState
 from src.rl.models import ActorCritic
-
-
-@dataclass
-class RunState:
-    """What a checkpoint resumes besides the weights, the optimizer and the iteration."""
-
-    total_steps: int          # Steps played so far, every rank's games counted
-    ascension_current: float  # The soft-curriculum position
-    streak: int               # The consecutive passes at ascension_current so far
-    lr_scale: float           # The Adaptive-KL learning rate scale
 
 
 def experiment_dir(exp_name: str) -> str:

@@ -1,5 +1,3 @@
-"""The Learner: PPO on the Actor's rollouts, with the evals, the curriculum and the checkpoints."""
-
 import random
 import threading
 import time
@@ -11,12 +9,10 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.rl.algorithms.actor_critic import distributed
 from src.rl.algorithms.actor_critic.actor import RolloutConfig
-from src.rl.algorithms.actor_critic.actor import make_weight_buffer
 from src.rl.algorithms.actor_critic.actor import publish
 from src.rl.algorithms.actor_critic.actor import receive_rollout
 from src.rl.algorithms.actor_critic.actor import start_actor
 from src.rl.algorithms.actor_critic.actor import stop_actor
-from src.rl.algorithms.actor_critic.checkpoint import RunState
 from src.rl.algorithms.actor_critic.checkpoint import experiment_dir
 from src.rl.algorithms.actor_critic.checkpoint import load_checkpoint
 from src.rl.algorithms.actor_critic.checkpoint import save_checkpoint
@@ -29,7 +25,6 @@ from src.rl.algorithms.actor_critic.evals import EVAL_ACT4_RATE
 from src.rl.algorithms.actor_critic.evals import EVAL_FLOOR_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_RETURN_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_WIN_RATE
-from src.rl.algorithms.actor_critic.evals import Evaluator
 from src.rl.algorithms.actor_critic.evals import poll_eval
 from src.rl.algorithms.actor_critic.evals import start_eval
 from src.rl.algorithms.actor_critic.evals import stop_evaluator
@@ -37,6 +32,7 @@ from src.rl.algorithms.actor_critic.evals import submit_eval
 from src.rl.algorithms.actor_critic.ppo import PPOConfig
 from src.rl.algorithms.actor_critic.ppo import adapt_lr_scale
 from src.rl.algorithms.actor_critic.ppo import update_ppo
+from src.rl.algorithms.actor_critic.progress import RunState
 from src.rl.algorithms.actor_critic.stats import episode_scalars
 from src.rl.models import ActorCritic
 from src.rl.models.actor_critic import compile_hot_paths
@@ -92,20 +88,26 @@ def train(
     # Offset the seeds per resume and rank; rank 0 of a fresh run keeps the single-GPU seeds
     if iteration_start > 0 or rank_info.rank > 0:
         set_rng_seeds(seed + iteration_start + 7919 * rank_info.rank)
+
+    # Announce train start
     if rank_info.rank == 0:
         _print_start(
             exp_name, model, iteration_start, run_state, rollout_config, rank_info.world_size
         )
+
+    # Broadcast model's weights to the rest of the GPUs
     distributed.broadcast_from_rank0(model)
+
+    # Calculate number of steps per iteration
     steps_per_iteration = (
         rank_info.world_size * rollout_config.rollout_length * rollout_config.num_envs
     )
 
-    # Adaptive-KL lr: base recovered from the (possibly resumed-scaled) group lr
+    # Adaptive-KL learning rate: base recovered from the (possibly resumed-scaled) learning rate
     base_lr = optimizer.param_groups[0]["lr"] / run_state.lr_scale
     with ExitStack() as stack:
-        writer: SummaryWriter | None = None
-        evaluator: Evaluator | None = None
+        writer = None
+        evaluator = None
 
         # Rank 0 alone logs, checkpoints and evaluates: greedy fixed-seed games in a side process
         if rank_info.rank == 0:
@@ -113,13 +115,9 @@ def train(
             evaluator = start_eval(model_config, gamma)
             stack.callback(stop_evaluator, evaluator)
 
-        # The weights the Actor plays: the Learner publishes them, the Actor reads them
-        weight_buffer = make_weight_buffer(model)
-        publish(weight_buffer, model, iteration_start, run_state.ascension_current)
-
         # The Actor process plays one update behind; the Learner's own RNG keeps runs reproducible
         actor_handle = start_actor(
-            weight_buffer,
+            model,
             model_config=model_config,
             rollout_config=rollout_config,
             device=rank_info.device,
@@ -129,11 +127,17 @@ def train(
         # A failure must still stop the Actor: this process's exit would wait for it
         stack.callback(stop_actor, actor_handle)
 
-        # Learner only, GPU only: the Actor's model stays eager
+        # The weights the Actor plays: the Learner publishes them, the Actor reads them
+        publish(actor_handle, model, iteration_start, run_state.ascension_current)
+
+        # Compile Learner's model only iff training on GPU: the Actor's model stays eager
         if rank_info.device.type == _DEVICE_TYPE_CUDA:
             compile_hot_paths(model)
 
+        # Instance generator for batch sampling 
         generator = torch.Generator().manual_seed(random.randint(0, 2**31 - 1))
+
+        # Let's go
         t_iteration = time.perf_counter()
         for iteration in range(iteration_start, num_iterations):
             delivery, seconds_learner_wait = receive_rollout(actor_handle)
@@ -167,7 +171,7 @@ def train(
             run_state.ascension_current = distributed.broadcast_float(
                 run_state.ascension_current, rank_info.device
             )
-            publish(weight_buffer, model, iteration + 1, run_state.ascension_current)
+            publish(actor_handle, model, iteration + 1, run_state.ascension_current)
             t_now = time.perf_counter()
             samples_per_s = steps_per_iteration / (t_now - t_iteration)
             t_iteration = t_now
@@ -240,6 +244,7 @@ def _print_start(
             f"iter-{iteration_start - 1}.pth: iteration {iteration_start}, "
             f"{run_state.total_steps} steps"
         )
+
     print(f"Starting training: {exp_name} on {world_size} rank(s)")
     n_params = sum(x_param.numel() for x_param in model.parameters())
     print(f"  params={n_params:,} ({n_params / 1e6:.2f}M)")

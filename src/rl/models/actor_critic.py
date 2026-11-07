@@ -5,16 +5,8 @@ import torch
 import torch.nn as nn
 from slai import ACTION_SPEC_REGISTRY
 
-from src.rl.encoding.context import focus_view
-from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.state import COL_START_CHARACTER
-from src.rl.encoding.state import COL_START_HEALTH_BLOCK
-from src.rl.encoding.state import COL_START_MONSTER
-from src.rl.encoding.state import COL_START_POTION
-from src.rl.encoding.state import COL_START_PRICE
-from src.rl.encoding.state import COL_START_RELIC
-from src.rl.encoding.state import COL_START_STASIS_SLOT
-from src.rl.encoding.state import COL_START_TAG
+from src.rl.constants import ACTION_TYPE_BY_INT
+from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -22,8 +14,8 @@ from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
 from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
-from src.rl.types import ACTION_TYPE_BY_INT
-from src.rl.types import NUM_ACTION_TYPES
+from src.rl.schema.context import focus_view
+from src.rl.schema.focus import ENCODING_DIM_FOCUS
 from src.rl.types import CoreOutput
 from src.rl.types import Jagged
 from src.rl.types import PolicyOutput
@@ -321,25 +313,7 @@ class ActorCritic(nn.Module):
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per column range, each Entity kind's then the health/block, price,
-        # slot and Tag ones, as its own layer: orthogonal over all of them would shrink each
-        # column's scale
-        with torch.no_grad():
-            for x_weight_range in torch.tensor_split(
-                self.core._entity_projector._pre_token.weight,
-                (
-                    COL_START_RELIC,
-                    COL_START_POTION,
-                    COL_START_MONSTER,
-                    COL_START_CHARACTER,
-                    COL_START_HEALTH_BLOCK,
-                    COL_START_PRICE,
-                    COL_START_STASIS_SLOT,
-                    COL_START_TAG,
-                ),
-                dim=1,
-            ):
-                nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
+        self.core.init_token_weights()
         nn.init.orthogonal_(self._head_action_type._scorer[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_2._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)
@@ -360,7 +334,8 @@ class ActorCritic(nn.Module):
             x_global=core_out.x_policy_context,
             refined=core_out.tokens,
             index=core_out.index,
-            x_legal=game_state.tokens.rows.x_legal,
+            x_legal_selection=game_state.tokens.rows.x_legal_selection,
+            x_legal_target=game_state.tokens.rows.x_legal_target,
             x_needs_target=game_state.tokens.rows.x_needs_target,
             x_legal_action_type=game_state.x_legal_action_type,
             greedy=greedy,
@@ -471,7 +446,8 @@ def _policy_heads(
     x_global: torch.Tensor,
     refined: Jagged[torch.Tensor],
     index: TokenIndex,
-    x_legal: torch.Tensor,
+    x_legal_selection: torch.Tensor,
+    x_legal_target: torch.Tensor,
     x_needs_target: torch.Tensor,
     x_legal_action_type: torch.Tensor,
     greedy: bool,
@@ -495,8 +471,10 @@ def _policy_heads(
         The core's (N, dim_entity) refined token rows, segmented by state.
     index : TokenIndex
         The token kind, state and row lookup tables.
-    x_legal : torch.Tensor
-        (N, NUM_ACTION_TYPES) bool. Each token's legal selections and targets.
+    x_legal_selection : torch.Tensor
+        (N, NUM_ACTION_TYPES) bool. Each token's legal selections.
+    x_legal_target : torch.Tensor
+        (N, NUM_ACTION_TYPES) bool. Each token's legal Monster targets.
     x_needs_target : torch.Tensor
         (N,) bool. Whether a token's selection needs a Monster target.
     x_legal_action_type : torch.Tensor
@@ -577,14 +555,12 @@ def _policy_heads(
     )
 
     # L2: score every row against its state's query, conditioned on the `ActionType` embedding;
-    # the mask keeps exactly the type's legal tokens
+    # the selection mask keeps exactly the type's legal items
     x_selects_token = model._x_selects_token[x_action_type]
-    x_legal_for_action = x_legal.gather(1, x_action_type[index.x_state].unsqueeze(1))
+    x_legal_for_action = x_legal_selection.gather(1, x_action_type[index.x_state].unsqueeze(1))
     x_mask_rows = x_legal_for_action.squeeze(1)[x_order]
 
-    # Monster rows' bits mark L3 targets, not L2 selections
     num_rows_before_monster = num_cards + num_relics + num_potions
-    x_mask_rows[num_rows_before_monster : num_rows_before_monster + num_monsters] = False
 
     # Every state at once: a type that selects no token (TurnEnd...) gets its state's Character
     # row as a placeholder, so its categorical stays finite. One per state, past the earlier
@@ -633,7 +609,7 @@ def _policy_heads(
     x_monster_rows = x_order.narrow(0, num_rows_before_monster, num_monsters)
     x_monster_state = x_state.narrow(0, num_rows_before_monster, num_monsters)
     x_choice_state = torch.cat([x_monster_state, x_states])
-    x_target_legal = x_legal[x_monster_rows, x_action_type[x_monster_state]]
+    x_target_legal = x_legal_target[x_monster_rows, x_action_type[x_monster_state]]
     x_mask_l3 = torch.cat([x_has_target[x_monster_state] & x_target_legal, ~x_has_target])
 
     # A cat, not F.pad: compiled, F.pad's backward fails on an empty Monster block

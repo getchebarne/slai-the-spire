@@ -1,158 +1,41 @@
-import warnings
-from typing import get_args
 
 import numpy as np
 from slai import Card
-from slai import CardColor
-from slai import CardCostKind
 from slai import CardCostKindXCost
-from slai import CardKind
-from slai import CardName
-from slai import CardRarity
-from slai import CostScope
-from slai import EffectSetCostOverride
-from slai import GameState
-from slai import PlaySource
-from slai import get_card_templates
 
-from src.rl.constants import MAX_CARD_REWARD_ROLL
-from src.rl.constants import MAX_COMBAT_CARD_REWARD
-from src.rl.constants import MAX_SIZE_CARD_MATCH_PAIRS
-from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
-from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
-from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
-from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
-from src.rl.constants import MAX_SIZE_CARD_PILE_EXHAUST
-from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
-from src.rl.constants import MAX_SIZE_CARD_PILE_NIGHTMARE
-from src.rl.constants import MAX_SIZE_CARD_PILE_SELECTED
-from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
-from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
-from src.rl.constants import MAX_SIZE_SHOP_CARDS
-from src.rl.encoding.effect import catalog_effects
-from src.rl.types import TOKEN_KINDS_CARD_REWARDS
-from src.rl.types import Tag
-from src.rl.types import TokenKind
-from src.rl.types import make_channel_allocator
+from src.rl.schema.card import COST_MAX
+from src.rl.schema.card import COST_MIN
+from src.rl.schema.card import COST_OFFSET_MAX
+from src.rl.schema.card import ENCODING_DIM_CARD
+from src.rl.schema.card import MAP_CARD_COLOR
+from src.rl.schema.card import MAP_CARD_COST_KIND
+from src.rl.schema.card import MAP_CARD_KIND
+from src.rl.schema.card import MAP_CARD_NAME
+from src.rl.schema.card import MAP_CARD_RARITY
+from src.rl.schema.card import MAP_COST_SCOPE
+from src.rl.schema.card import MAP_PLAY_SOURCE
+from src.rl.schema.card import OFF_CARD_BOTTLED
+from src.rl.schema.card import OFF_CARD_COLOR
+from src.rl.schema.card import OFF_CARD_COST_BASE
+from src.rl.schema.card import OFF_CARD_COST_KIND
+from src.rl.schema.card import OFF_CARD_COST_OFFSET
+from src.rl.schema.card import OFF_CARD_COST_SCALAR
+from src.rl.schema.card import OFF_CARD_COST_SCOPE
+from src.rl.schema.card import OFF_CARD_COST_VECTOR
+from src.rl.schema.card import OFF_CARD_ENERGY_DELTA
+from src.rl.schema.card import OFF_CARD_ETHEREAL
+from src.rl.schema.card import OFF_CARD_EXHAUST
+from src.rl.schema.card import OFF_CARD_FREE_TO_PLAY_ONCE
+from src.rl.schema.card import OFF_CARD_INNATE
+from src.rl.schema.card import OFF_CARD_KIND
+from src.rl.schema.card import OFF_CARD_NAME
+from src.rl.schema.card import OFF_CARD_PLAY_SOURCE
+from src.rl.schema.card import OFF_CARD_PLAYABLE
+from src.rl.schema.card import OFF_CARD_RARITY
+from src.rl.schema.card import OFF_CARD_REQUIRES_TARGET
+from src.rl.schema.card import OFF_CARD_RETAIN
+from src.rl.schema.card import OFF_CARD_UPGRADED
 
-
-# Enum maps, keyed by int(): the declaration-order discriminant
-_MAP_CARD_NAME = {card_name: int(card_name) for card_name in CardName.members()}
-_MAP_CARD_KIND = {card_kind: int(card_kind) for card_kind in CardKind.members()}
-_MAP_CARD_COLOR = {card_color: int(card_color) for card_color in CardColor.members()}
-_MAP_CARD_RARITY = {card_rarity: int(card_rarity) for card_rarity in CardRarity.members()}
-_MAP_COST_SCOPE = {scope: int(scope) for scope in CostScope.members()}
-_MAP_PLAY_SOURCE = {play_source: int(play_source) for play_source in PlaySource.members()}
-_MAP_CARD_COST_KIND = {cls: i for i, cls in enumerate(get_args(CardCostKind))}
-
-# Cost, derived: the catalog's widest base cost or override amount
-_COST_MIN = 0
-_COST_MAX = max(
-    max(card_template.cost_base for card_template in get_card_templates()),
-    max(
-        effect.amount for effect in catalog_effects() if isinstance(effect, EffectSetCostOverride)
-    ),
-)
-_COST_VECTOR_DIM = _COST_MAX - _COST_MIN + 1
-_COST_OFFSET_MAX = max(
-    1.0,
-    max(
-        (
-            abs(card_template.cost_kind.offset)
-            for card_template in get_card_templates()
-            if isinstance(card_template.cost_kind, CardCostKindXCost)
-        ),
-        default=0,
-    ),
-)
-
-
-# Per-card identity + energy
-
-
-CHANNEL_LAYOUT_CARD, _alloc = make_channel_allocator()
-OFF_CARD_NAME = _alloc("name", len(_MAP_CARD_NAME))
-OFF_CARD_KIND = _alloc("kind", len(_MAP_CARD_KIND))
-OFF_CARD_COLOR = _alloc("color", len(_MAP_CARD_COLOR))
-OFF_CARD_RARITY = _alloc("rarity", len(_MAP_CARD_RARITY))
-OFF_CARD_COST_KIND = _alloc("cost_kind", len(_MAP_CARD_COST_KIND))
-OFF_CARD_COST_SCOPE = _alloc("cost_scope", len(_MAP_COST_SCOPE))  # All-zero = no override
-OFF_CARD_COST_VECTOR = _alloc("cost_vector", _COST_VECTOR_DIM)
-OFF_CARD_COST_SCALAR = _alloc("cost_scalar")
-OFF_CARD_UPGRADED = _alloc("upgraded")
-OFF_CARD_EXHAUST = _alloc("exhaust")
-OFF_CARD_INNATE = _alloc("innate")
-OFF_CARD_ETHEREAL = _alloc("ethereal")
-OFF_CARD_RETAIN = _alloc("retain")
-OFF_CARD_REQUIRES_TARGET = _alloc("requires_target")
-OFF_CARD_PLAYABLE = _alloc("playable")
-OFF_CARD_ENERGY_DELTA = _alloc("energy_delta")  # Signed: energy_current - cost
-OFF_CARD_COST_BASE = _alloc("cost_base")
-OFF_CARD_BOTTLED = _alloc("bottled")
-OFF_CARD_COST_OFFSET = _alloc("cost_offset")  # X-Cost offset
-OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(
-    "free_to_play_once"
-)  # Setup, Forethought: the 0 in `cost` lasts one play
-OFF_CARD_PLAY_SOURCE = _alloc(
-    "play_source", len(_MAP_PLAY_SOURCE)
-)  # All-zero = not in the play queue
-
-ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
-
-# Most nonzero columns a Card row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_CARD = len(CHANNEL_LAYOUT_CARD)
-
-# Each tagged Card's Tags, by name: an upgraded Card keeps them
-TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {
-    CardName.Accuracy: (Tag.NINJA,),
-    CardName.Acrobatics: (Tag.DISCARD,),
-    CardName.AfterImage: (Tag.NINJA,),
-    CardName.AllOutAttack: (Tag.DISCARD,),
-    CardName.AThousandCuts: (Tag.NINJA,),
-    CardName.Backstab: (Tag.NINJA,),
-    CardName.Bane: (Tag.POISON,),
-    CardName.BladeDance: (Tag.NINJA,),
-    CardName.BouncingFlask: (Tag.POISON,),
-    CardName.Burst: (Tag.SETUP,),
-    CardName.CalculatedGamble: (Tag.DISCARD,),
-    CardName.Catalyst: (Tag.POISON, Tag.SETUP),
-    CardName.Choke: (Tag.NINJA,),
-    CardName.CloakAndDagger: (Tag.NINJA,),
-    CardName.Concentrate: (Tag.DISCARD,),
-    CardName.CorpseExplosion: (Tag.POISON,),
-    CardName.CripplingPoison: (Tag.POISON,),
-    CardName.DaggerThrow: (Tag.DISCARD,),
-    CardName.DeadlyPoison: (Tag.POISON,),
-    CardName.Doppelganger: (Tag.SETUP,),
-    CardName.EndlessAgony: (Tag.NINJA,),
-    CardName.Envenom: (Tag.POISON, Tag.NINJA),
-    CardName.Eviscerate: (Tag.DISCARD,),
-    CardName.Finisher: (Tag.NINJA,),
-    CardName.FlashOfSteel: (Tag.NINJA,),
-    CardName.Forethought: (Tag.SETUP,),
-    CardName.GrandFinale: (Tag.SETUP,),
-    CardName.InfiniteBlades: (Tag.NINJA,),
-    CardName.Madness: (Tag.SETUP,),
-    CardName.Neutralize: (Tag.NINJA,),
-    CardName.Nightmare: (Tag.SETUP,),
-    CardName.NoxiousFumes: (Tag.POISON,),
-    CardName.Outmaneuver: (Tag.SETUP,),
-    CardName.Panache: (Tag.NINJA,),
-    CardName.PoisonedStab: (Tag.POISON,),
-    CardName.Prepared: (Tag.DISCARD,),
-    CardName.Reflex: (Tag.DISCARD,),
-    CardName.Setup: (Tag.SETUP,),
-    CardName.Shiv: (Tag.NINJA,),
-    CardName.SneakyStrike: (Tag.DISCARD,),
-    CardName.StormOfSteel: (Tag.NINJA,),
-    CardName.Survivor: (Tag.DISCARD,),
-    CardName.Tactician: (Tag.DISCARD,),
-    CardName.ThinkingAhead: (Tag.SETUP,),
-    CardName.ToolsOfTheTrade: (Tag.DISCARD,),
-    CardName.Unload: (Tag.DISCARD,),
-    CardName.WellLaidPlans: (Tag.SETUP,),
-}
 
 # Per-card encoding cache, keyed by (card_key, energy) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
@@ -164,18 +47,18 @@ def _cost_offset(card: Card) -> float:
 
 
 def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
-    out[OFF_CARD_NAME + _MAP_CARD_NAME[card.name]] = 1.0
-    out[OFF_CARD_KIND + _MAP_CARD_KIND[card.kind]] = 1.0
-    out[OFF_CARD_COLOR + _MAP_CARD_COLOR[card.color]] = 1.0
-    out[OFF_CARD_RARITY + _MAP_CARD_RARITY[card.rarity]] = 1.0
-    out[OFF_CARD_COST_KIND + _MAP_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
+    out[OFF_CARD_NAME + MAP_CARD_NAME[card.name]] = 1.0
+    out[OFF_CARD_KIND + MAP_CARD_KIND[card.kind]] = 1.0
+    out[OFF_CARD_COLOR + MAP_CARD_COLOR[card.color]] = 1.0
+    out[OFF_CARD_RARITY + MAP_CARD_RARITY[card.rarity]] = 1.0
+    out[OFF_CARD_COST_KIND + MAP_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
     if card.cost_override_scope is not None:
-        out[OFF_CARD_COST_SCOPE + _MAP_COST_SCOPE[card.cost_override_scope]] = 1.0
+        out[OFF_CARD_COST_SCOPE + MAP_COST_SCOPE[card.cost_override_scope]] = 1.0
 
-    cost = max(_COST_MIN, min(card.cost, _COST_MAX))
+    cost = max(COST_MIN, min(card.cost, COST_MAX))
     out[OFF_CARD_COST_VECTOR + cost] = 1.0
 
-    out[OFF_CARD_COST_SCALAR] = cost / _COST_MAX
+    out[OFF_CARD_COST_SCALAR] = cost / COST_MAX
     out[OFF_CARD_UPGRADED] = float(card.upgraded)
     out[OFF_CARD_EXHAUST] = float(card.exhaust)
     out[OFF_CARD_INNATE] = float(card.innate)
@@ -184,14 +67,14 @@ def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
     out[OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
     out[OFF_CARD_PLAYABLE] = float(card.playable)
     out[OFF_CARD_ENERGY_DELTA] = (
-        max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
+        max(-COST_MAX, min(energy_current - card.cost, COST_MAX)) / COST_MAX
     )
-    out[OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
+    out[OFF_CARD_COST_BASE] = max(COST_MIN, min(card.cost_base, COST_MAX)) / COST_MAX
     out[OFF_CARD_BOTTLED] = float(card.bottled)
-    out[OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
+    out[OFF_CARD_COST_OFFSET] = _cost_offset(card) / COST_OFFSET_MAX
     out[OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
     if card.play_source is not None:
-        out[OFF_CARD_PLAY_SOURCE + _MAP_PLAY_SOURCE[card.play_source]] = 1.0
+        out[OFF_CARD_PLAY_SOURCE + MAP_PLAY_SOURCE[card.play_source]] = 1.0
 
 
 def card_key(card: Card) -> tuple:
@@ -257,141 +140,3 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
 
     # Write into output array
     out[:] = row
-
-
-_REWARD_BUNDLE_OF_TOKEN_KIND = {
-    token_kind: bundle for bundle, token_kind in enumerate(TOKEN_KINDS_CARD_REWARDS)
-}
-
-# The token kinds that have already warned about overflow
-_WARNED_OVERFLOW: set[TokenKind] = set()
-
-
-def _capped(
-    token_kind: TokenKind, cards: list[Card], cap: int, keep_last: bool = False
-) -> list[Card]:
-    """Cut `cards` to `cap`, warning once per token kind when that drops any.
-
-    Parameters
-    ----------
-    token_kind : TokenKind
-        The Cards' token kind.
-    cards : list[Card]
-        The Cards to cut.
-    cap : int
-        The token kind's cap.
-    keep_last : bool, default False
-        Keep the last `cap` Cards rather than the first.
-
-    Returns
-    -------
-    list[Card]
-        The first `cap` Cards, or the last `cap` with `keep_last`.
-    """
-    if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
-        _WARNED_OVERFLOW.add(token_kind)
-        warnings.warn(
-            f"{token_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
-            "dropped"
-        )
-    return cards[max(0, len(cards) - cap) :] if keep_last else cards[:cap]
-
-
-def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
-    """Return the GameState Card pile a Card token kind names, truncated to the pile's cap.
-
-    Used by get_entities_for_token_kind. A Card past the cap has no token, so masks cannot name
-    it.
-
-    Parameters
-    ----------
-    token_kind : TokenKind
-        A Card token kind.
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    list[Card]
-        The pile's Cards in engine order, the draw pile's cut to the ones nearest its top; empty
-        when the state has no such pile.
-    """
-    combat = game_state.combat
-    match token_kind:
-        case TokenKind.CARD_PILE_HAND:
-            return combat.card_pile_hand[:MAX_SIZE_CARD_PILE_HAND] if combat is not None else []
-        case TokenKind.CARD_PILE_DRAW:
-            if combat is None:
-                return []
-
-            # The top of the pile, still in engine order (bottom first)
-            return _capped(
-                token_kind, combat.card_pile_draw, MAX_SIZE_CARD_PILE_DRAW, keep_last=True
-            )
-        case TokenKind.CARD_PILE_DISCARD:
-            if combat is None:
-                return []
-            return _capped(token_kind, combat.card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD)
-        case TokenKind.CARD_PILE_EXHAUST:
-            return (
-                combat.card_pile_exhaust[:MAX_SIZE_CARD_PILE_EXHAUST] if combat is not None else []
-            )
-        case TokenKind.CARD_PILE_STASIS:
-            if combat is None:
-                return []
-
-            # Index-aligned with the Monsters: a Monster holding no Card is None
-            cards = [card for card in combat.card_pile_stasis if card is not None]
-            return cards[:MAX_SIZE_CARD_PILE_STASIS]
-        case TokenKind.CARD_PILE_DECK:
-            return _capped(token_kind, game_state.card_pile_deck, MAX_SIZE_CARD_PILE_DECK)
-        case TokenKind.CARD_PILE_DISCOVER:
-            return (
-                combat.card_pile_discover[:MAX_SIZE_CARD_PILE_DISCOVER]
-                if combat is not None
-                else []
-            )
-        case (
-            TokenKind.CARD_REWARD_0
-            | TokenKind.CARD_REWARD_1
-            | TokenKind.CARD_REWARD_2
-            | TokenKind.CARD_REWARD_3
-            | TokenKind.CARD_REWARD_4
-        ):
-            reward = game_state.reward
-            bundle = _REWARD_BUNDLE_OF_TOKEN_KIND[token_kind]
-            if reward is None or bundle >= len(reward.cards):
-                return []
-
-            # Bundle 0 must hold The Library's single wide roll
-            cap = MAX_CARD_REWARD_ROLL if bundle == 0 else MAX_COMBAT_CARD_REWARD
-            return reward.cards[bundle][:cap]
-        case TokenKind.CARD_SHOP:
-            shop = game_state.shop
-            return shop.cards[:MAX_SIZE_SHOP_CARDS] if shop is not None else []
-        case TokenKind.CARD_PILE_EVENT_ROLL:
-            event = game_state.event
-            return (
-                event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
-                if event is not None
-                else []
-            )
-        case TokenKind.CARD_MATCH_FLIPPED:
-            event = game_state.event
-            card = event.card_match_flipped if event is not None else None
-            return [card] if card is not None else []
-        case TokenKind.CARD_MATCH_PAIRS:
-            event = game_state.event
-            return event.card_match_pairs[:MAX_SIZE_CARD_MATCH_PAIRS] if event is not None else []
-        case TokenKind.CARD_PLAY_QUEUE:
-            if combat is None:
-                return []
-            return _capped(token_kind, combat.card_play_queue, MAX_SIZE_CARD_PLAY_QUEUE)
-        case TokenKind.CARD_PILE_NIGHTMARE:
-            if combat is None:
-                return []
-            return _capped(token_kind, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE)
-        case TokenKind.CARD_PILE_SELECTED:
-            return game_state.card_pile_selected[:MAX_SIZE_CARD_PILE_SELECTED]
-        case _:
-            raise ValueError(f"Unsupported `TokenKind`: {token_kind}")

@@ -35,6 +35,7 @@ def init() -> RankInfo:
     """
     if "WORLD_SIZE" not in os.environ:
         return RankInfo(0, 1, torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+    
     if torch.cuda.is_available():
         device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
         torch.cuda.set_device(device)
@@ -42,6 +43,7 @@ def init() -> RankInfo:
     else:
         device = torch.device("cpu")
         dist.init_process_group("gloo")
+        
     return RankInfo(dist.get_rank(), dist.get_world_size(), device)
 
 

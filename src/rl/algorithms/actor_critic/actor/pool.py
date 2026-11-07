@@ -19,17 +19,17 @@ import slai
 import torch
 import torch.multiprocessing as mp
 
-from src.rl.algorithms.actor_critic.curriculum import ascensions
+from src.rl.algorithms.actor_critic.actor.storage import _WeightBuffer
+from src.rl.algorithms.actor_critic.actor.storage import allocate_buffer
+from src.rl.algorithms.actor_critic.actor.storage import write_weights
 from src.rl.algorithms.actor_critic.stats import EpisodeStats
-from src.rl.algorithms.actor_critic.workers import StepBuffer
-from src.rl.algorithms.actor_critic.workers import WorkerHandle
-from src.rl.algorithms.actor_critic.workers import drain_episodes
+from src.rl.algorithms.actor_critic.workers import Workers
 from src.rl.algorithms.actor_critic.workers import snapshot_to_device
 from src.rl.algorithms.actor_critic.workers import start_workers
 from src.rl.algorithms.actor_critic.workers import step_workers
 from src.rl.algorithms.actor_critic.workers import stop_workers
+from src.rl.batches import cat_states
 from src.rl.models import ActorCritic
-from src.rl.packed import cat_states
 from src.rl.reward import RewardStream
 from src.rl.types import Rollout
 from src.rl.types import StateBatch
@@ -60,36 +60,21 @@ class Delivery:
 
 
 @dataclass
-class WeightSlot:
-    """One slot the Learner publishes weights into, with their version and curriculum position."""
-
-    x_version: torch.Tensor  # () int64, in shared memory
-
-    # In shared CPU memory: containers block sharing the GPU memory of the Learner's allocator
-    weights: dict[str, torch.Tensor]
-    x_ascension_current: torch.Tensor  # () float64, in shared memory
-
-
-@dataclass
-class WeightBuffer:
-    """The weights the Learner publishes and the Actor plays: two slots, a new-version signal."""
-
-    # Two suffice: the Learner overwrites the older slot only after taking rollouts played on it
-    weight_slots: list[WeightSlot]  # Last two weights published by the Learner
-    sph_new_version: Semaphore  # Released once per publish; the Actor acquires once per version
-
-
-@dataclass
 class ActorHandle:
-    """The Learner's handle on the Actor process: its process, pipe read end and stop flag."""
+    """The Learner's handle on its Actor.
 
-    process: BaseProcess
-    conn_read: Connection  # FIFO; holds at most two Deliveries
-    x_stop: torch.Tensor  # () bool in shared memory, lock-free like the workers' stop flag
+    Pass it to `publish`, `receive_rollout` and `stop_actor`. The Actor package owns its
+    process, pipe, stop flag and shared weight storage.
+    """
+
+    _process: BaseProcess
+    _conn_read: Connection  # FIFO; holds at most two Deliveries
+    _x_stop: torch.Tensor  # () bool in shared memory, lock-free like the workers' stop flag
+    _weight_buffer: _WeightBuffer
 
 
 @dataclass
-class ActorConfig:
+class _ActorConfig:
     """The Actor process's config, fixed for the run."""
 
     model_config: dict[str, Any]
@@ -106,51 +91,22 @@ class ActorConfig:
     use_duck_shape: bool
 
 
-def make_weight_buffer(model: ActorCritic) -> WeightBuffer:
-    """Return a weight buffer sized for `model`'s weights, with both slots unpublished.
-
-    Parameters
-    ----------
-    model : ActorCritic
-        The Learner's model.
-
-    Returns
-    -------
-    WeightBuffer
-        The buffer, in shared CPU memory.
-    """
-    return WeightBuffer(
-        weight_slots=[
-            WeightSlot(
-                x_version=torch.tensor(-1).share_memory_(),
-                weights={
-                    name: torch.empty_like(x_weight, device="cpu").share_memory_()
-                    for name, x_weight in model.state_dict().items()
-                },
-                x_ascension_current=torch.tensor(0.0, dtype=torch.float64).share_memory_(),
-            )
-            for _ in range(2)
-        ],
-        sph_new_version=mp.get_context(_SPAWN).Semaphore(0),
-    )
-
-
 def start_actor(
-    weight_buffer: WeightBuffer,
+    model: ActorCritic,
     model_config: dict[str, Any],
     rollout_config: RolloutConfig,
     device: torch.device,
     gamma: float,
 ) -> ActorHandle:
-    """Start the Actor process, playing the weights the Learner publishes into `weight_buffer`.
+    """Start the Actor process and allocate the weights the Learner will publish to it.
 
     The Actor process starts its workers and collects on a model of its own, from the
-    Learner's random stream and torch settings.
+    Learner's random stream and torch settings. It waits for the first call to `publish`.
 
     Parameters
     ----------
-    weight_buffer : WeightBuffer
-        The buffer the Learner publishes the weights into.
+    model : ActorCritic
+        The Learner's model, whose state dictionary sizes the private weight storage.
     model_config : dict[str, Any]
         The model's architecture, which the Actor process builds a model of its own from.
     rollout_config : RolloutConfig
@@ -165,8 +121,10 @@ def start_actor(
     ActorHandle
         The Learner's handle on the Actor process.
     """
+    weight_buffer = allocate_buffer(model.state_dict())
+
     # Instance the Actor's config. Read by the Actor loop
-    actor_config = ActorConfig(
+    actor_config = _ActorConfig(
         model_config=model_config,
         rollout_config=rollout_config,
         device=device,
@@ -188,24 +146,32 @@ def start_actor(
     process = ctx.Process(
         target=_actor_loop, args=(weight_buffer, x_stop, conn_write, actor_config)
     )
-    process.start()
+    try:
+        process.start()
+    except BaseException:
+        conn_read.close()
+        conn_write.close()
+        raise
 
     # Close the Learner's copy of the write end. Only the Actor can write to it
     conn_write.close()
 
     # Return Actor handle for the Learner
-    return ActorHandle(process, conn_read, x_stop)
+    return ActorHandle(process, conn_read, x_stop, weight_buffer)
 
 
 def publish(
-    weight_buffer: WeightBuffer, model: ActorCritic, version: int, ascension_current: float
+    actor_handle: ActorHandle, model: ActorCritic, version: int, ascension_current: float
 ) -> None:
     """Make the Learner's current weights version `version`.
 
+    Publish once after startup, then once after each received rollout. The Actor can keep
+    playing the previous version while the Learner updates the next one.
+
     Parameters
     ----------
-    weight_buffer : WeightBuffer
-        The buffer the Actor plays from; its older slot is overwritten.
+    actor_handle : ActorHandle
+        The handle returned by `start_actor`; its older weight slot is overwritten.
     model : ActorCritic
         The Learner's model.
     version : int
@@ -213,13 +179,11 @@ def publish(
     ascension_current : float
         The curriculum position the Actor should play them at.
     """
-    older = min(weight_buffer.weight_slots, key=lambda ws: int(ws.x_version))
-    for name, x_weight in model.state_dict().items():
-        # A copy to the CPU's pageable memory returns once done.
-        older.weights[name].copy_(x_weight)
-    older.x_ascension_current.fill_(ascension_current)
-    older.x_version.fill_(version)
-    weight_buffer.sph_new_version.release()
+    if bool(actor_handle._x_stop):
+        raise RuntimeError("The Actor has been stopped")
+    if not actor_handle._process.is_alive():
+        raise _died(actor_handle)
+    write_weights(actor_handle._weight_buffer, model.state_dict(), version, ascension_current)
 
 
 def receive_rollout(actor_handle: ActorHandle) -> tuple[Delivery, float]:
@@ -239,15 +203,17 @@ def receive_rollout(actor_handle: ActorHandle) -> tuple[Delivery, float]:
     seconds_learner_wait : float
         How long the Learner waited for it, in seconds.
     """
+    if bool(actor_handle._x_stop):
+        raise RuntimeError("The Actor has been stopped")
     t_start = time.perf_counter()
 
     # Check if the Actor process is still alive
-    while not actor_handle.conn_read.poll(timeout=1.0):
-        if not actor_handle.process.is_alive():
+    while not actor_handle._conn_read.poll(timeout=1.0):
+        if not actor_handle._process.is_alive():
             raise _died(actor_handle)
 
     try:
-        delivery = actor_handle.conn_read.recv()
+        delivery = actor_handle._conn_read.recv()
 
     except (EOFError, OSError):
         # It died before or while sending a rollout
@@ -261,34 +227,26 @@ def stop_actor(actor_handle: ActorHandle) -> None:
 
     If it hangs, it is killed with its workers. It stops its own workers, which also exit on
     their own once it's gone. One waiting for a version sees the flag within a second.
+    Calling it again has no effect.
 
     Parameters
     ----------
     actor_handle : ActorHandle
         The Learner's handle on the Actor process: its stop flag is set and its pipe end closed.
     """
-    actor_handle.x_stop.fill_(True)
-    actor_handle.conn_read.close()  # Ends a delivery it may be sending
-    actor_handle.process.join(timeout=60.0)
-    if actor_handle.process.is_alive():  # Likely stuck on a hung worker: kill its whole group
-        os.killpg(actor_handle.process.pid, signal.SIGKILL)
-        actor_handle.process.join()
-
-
-def _died(actor_handle: ActorHandle) -> RuntimeError:
-    actor_handle.process.join(timeout=5.0)
-
-    return RuntimeError(
-        f"The actor process died (exitcode {actor_handle.process.exitcode}); "
-        "see its traceback above"
-    )
+    actor_handle._x_stop.fill_(True)
+    actor_handle._conn_read.close()  # Ends a delivery it may be sending
+    actor_handle._process.join(timeout=60.0)
+    if actor_handle._process.is_alive():  # Likely stuck on a hung worker: kill its whole group
+        os.killpg(actor_handle._process.pid, signal.SIGKILL)
+        actor_handle._process.join()
 
 
 def _actor_loop(
-    weight_buffer: WeightBuffer,
+    weight_buffer: _WeightBuffer,
     x_stop: torch.Tensor,
     conn_write: Connection,
-    actor_config: ActorConfig,
+    actor_config: _ActorConfig,
 ) -> None:
     """Collect rollouts on the published weights, one version behind the Learner.
 
@@ -297,13 +255,13 @@ def _actor_loop(
 
     Parameters
     ----------
-    weight_buffer : WeightBuffer
+    weight_buffer : _WeightBuffer
         The weights the Learner publishes, in shared memory.
     x_stop : torch.Tensor
         () bool. The stop flag, in shared memory.
     conn_write : Connection
         This process's end of the pipe the deliveries go through.
-    actor_config : ActorConfig
+    actor_config : _ActorConfig
         The Actor process's config, fixed for the run.
     """
     # A group of its own, which its workers join
@@ -315,9 +273,13 @@ def _actor_loop(
     # Torch's default allocator before CUDA starts: the Learner can then open this process's
     # rollouts, which containers forbid for memory from the expandable-segments allocator
     os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+
+    # Set the Actor's visible device
     device = actor_config.device
     if device.type == "cuda":
         torch.cuda.set_device(device)
+
+    # Set PyTorch config
     torch.set_float32_matmul_precision(actor_config.matmul_precision)
     torch.set_num_threads(actor_config.num_threads)
     torch.use_deterministic_algorithms(actor_config.deterministic)
@@ -339,17 +301,17 @@ def _actor_loop(
 
     with ExitStack() as stack:
         # Start Workers
-        step_buffer, worker_handles = start_workers(
+        workers = start_workers(
             actor_config.rollout_config.num_envs,
             actor_config.rollout_config.rollout_workers,
             float(weight_slot_first.x_ascension_current),
             actor_config.gamma,
             actor_config.seed,
         )
-        stack.callback(stop_workers, worker_handles)
+        stack.callback(stop_workers, workers)
 
         # Loop
-        version_rolled, t_idle = version_first, time.perf_counter()  # Already waited for
+        version_rolled, t_idle = version_first, time.perf_counter()
         for rollout in itertools.count(version_first):
             version = max(rollout - 1, version_first)
 
@@ -370,8 +332,7 @@ def _actor_loop(
             t_collect = time.perf_counter()
             rollout, episodes, metrics = _collect_rollout(
                 model,
-                step_buffer,
-                worker_handles,
+                workers,
                 actor_config.rollout_config,
                 device,
                 float(weight_slot.x_ascension_current),
@@ -403,8 +364,7 @@ def _actor_loop(
 
 def _collect_rollout(
     model: ActorCritic,
-    step_buffer: StepBuffer,
-    worker_handles: list[WorkerHandle],
+    workers: Workers,
     rollout_config: RolloutConfig,
     device: torch.device,
     ascension_current: float,
@@ -418,10 +378,8 @@ def _collect_rollout(
     ----------
     model : ActorCritic
         The Actor's model, in eval mode during the rollout and back in training mode after it.
-    step_buffer : StepBuffer
-        What the Actor and its workers exchange; its step holds the E games.
-    worker_handles : list[WorkerHandle]
-        The worker processes that step the games.
+    workers : Workers
+        The handle to the workers that step the rollout's E games.
     rollout_config : RolloutConfig
         The rollout's games, E, and steps, T.
     device : torch.device
@@ -436,16 +394,14 @@ def _collect_rollout(
     rollout : Rollout
         The T steps of the E games, before GAE.
     episodes : list[EpisodeStats]
-        The finished episodes, drained from the workers' queue.
+        The episodes finished during the rollout.
     metrics : dict[str, float]
         The rollout's scalars: its terminations (step-limit cuts included), boundary truncations and
         Rest Site upgrade rate.
     """
-    step_buffer.x_ascensions.copy_(
-        torch.tensor(ascensions(ascension_current, rollout_config.num_envs))
-    )
     state_batches: list[StateBatch] = []  # Per step, in state order
     count_batches: list[torch.Tensor] = []  # Their counts, on the CPU
+    episodes: list[EpisodeStats] = []
     x_actions = torch.empty(
         rollout_config.rollout_length * rollout_config.num_envs, 3, dtype=torch.long, device=device
     )
@@ -464,7 +420,7 @@ def _collect_rollout(
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
-        state_batch, x_count_cpu = snapshot_to_device(step_buffer, device)
+        state_batch, x_count_cpu = snapshot_to_device(workers, device)
         for t in range(rollout_config.rollout_length):
             policy = model.act(state_batch, generator=generator)
             state_batches.append(state_batch)
@@ -483,11 +439,13 @@ def _collect_rollout(
                 (x_both & (policy.x_actions[:, 0] == _ACTION_TYPE_SMITH)).sum()
             )
 
-            step_buffer.x_actions.copy_(x_actions[step_rows])
-            step_workers(worker_handles)
-            x_rewards[t] = step_buffer.x_rewards
-            x_dones[t] = step_buffer.x_dones
-            state_batch, x_count_cpu = snapshot_to_device(step_buffer, device)
+            x_step_rewards, x_step_dones, step_episodes = step_workers(
+                workers, x_actions[step_rows], ascension_current
+            )
+            x_rewards[t] = x_step_rewards
+            x_dones[t] = x_step_dones
+            episodes.extend(step_episodes)
+            state_batch, x_count_cpu = snapshot_to_device(workers, device)
 
     # Set model to training mode
     model.train()
@@ -514,7 +472,7 @@ def _collect_rollout(
             x_dones=x_dones,
             final_states=state_batch,
         ),
-        drain_episodes(step_buffer.episodes),
+        episodes,
         metrics,
     )
 
@@ -544,3 +502,24 @@ def _wait_for_version(sph_new_version: Semaphore, x_stop: torch.Tensor) -> bool:
             return False
 
     return not x_stop
+
+
+def _died(actor_handle: ActorHandle) -> RuntimeError:
+    """Reap a failed Actor and describe its exit status.
+
+    Parameters
+    ----------
+    actor_handle : ActorHandle
+        The handle whose process died or closed its delivery pipe.
+
+    Returns
+    -------
+    RuntimeError
+        The failure to report to the Learner.
+    """
+    actor_handle._process.join(timeout=5.0)
+
+    return RuntimeError(
+        f"The actor process died (exitcode {actor_handle._process.exitcode}); "
+        "see its traceback above"
+    )

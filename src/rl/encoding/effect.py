@@ -18,429 +18,106 @@ Two rules the layout depends on:
 import math
 from collections.abc import Callable
 from collections.abc import Iterable
-from collections.abc import Iterator
-from enum import StrEnum
-from enum import auto
-from types import UnionType
-from typing import Any, Protocol, SupportsInt, TypeVar, get_args
+from typing import Any
 
 import numpy as np
 import slai
 import torch
 from slai import Amount
-from slai import AmountAbsolute
-from slai import AmountRange
 from slai import AmountRelative
-from slai import CandidateFilter
-from slai import CandidatePool
-from slai import CardColor
-from slai import CardKind
-from slai import CardPile
-from slai import CardRarity
 from slai import CostScope
-from slai import DeltaSign
 from slai import Effect
 from slai import GameState
-from slai import ModifierKind
-from slai import ReadAt
-from slai import RelicExclusion
-from slai import RelicTier
-from slai import RewardRollTrigger
-from slai import Rounding
-from slai import SelectionKind
-from slai import get_card_templates
-from slai import get_event_option_templates
-from slai import get_monster_templates
-from slai import get_potion_templates
-from slai import get_relic_templates
 
-from src.rl.constants import ASCENSION_LEVEL
-from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
-from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.sparse import encode_sparse
+from src.rl.schema.effect import BUCKET_META
+from src.rl.schema.effect import ENCODING_DIM_EFFECT
+from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.schema.effect import IDXS_SCALED
+from src.rl.schema.effect import INDEX_CAND_FILTER
+from src.rl.schema.effect import INDEX_CAND_POOL
+from src.rl.schema.effect import INDEX_CARD_COLOR
+from src.rl.schema.effect import INDEX_CARD_KIND
+from src.rl.schema.effect import INDEX_CARD_PILE
+from src.rl.schema.effect import INDEX_CARD_RARITY
+from src.rl.schema.effect import INDEX_COST_SCOPE
+from src.rl.schema.effect import INDEX_DELTA_SIGN
+from src.rl.schema.effect import INDEX_EFFECT
+from src.rl.schema.effect import INDEX_MODIFIER_KIND
+from src.rl.schema.effect import INDEX_READ_AT
+from src.rl.schema.effect import INDEX_RELIC_EXCLUSION
+from src.rl.schema.effect import INDEX_RELIC_TIER
+from src.rl.schema.effect import INDEX_REWARD_ROLL_TRIGGER
+from src.rl.schema.effect import INDEX_ROUNDING
+from src.rl.schema.effect import INDEX_SELECTION_KIND
+from src.rl.schema.effect import OFF_ADVANCE_ON_MISS
+from src.rl.schema.effect import OFF_AMOUNT_IS_RANGE
+from src.rl.schema.effect import OFF_BLOCK
+from src.rl.schema.effect import OFF_BLOCK_FROM_HIT
+from src.rl.schema.effect import OFF_BOTTOM
+from src.rl.schema.effect import OFF_CANDIDATE_FILTER
+from src.rl.schema.effect import OFF_CANDIDATE_POOL
+from src.rl.schema.effect import OFF_CARD_COLOR
+from src.rl.schema.effect import OFF_CARD_KIND
+from src.rl.schema.effect import OFF_CARD_NAME
+from src.rl.schema.effect import OFF_CARD_PILE
+from src.rl.schema.effect import OFF_CARD_RARITY
+from src.rl.schema.effect import OFF_CHANCE
+from src.rl.schema.effect import OFF_CHOOSE_DISCARDS
+from src.rl.schema.effect import OFF_COLORLESS
+from src.rl.schema.effect import OFF_COST
+from src.rl.schema.effect import OFF_COST_SCOPE
+from src.rl.schema.effect import OFF_COST_ZERO_PRESENT
+from src.rl.schema.effect import OFF_COUNT
+from src.rl.schema.effect import OFF_DAMAGE
+from src.rl.schema.effect import OFF_DELTA
+from src.rl.schema.effect import OFF_DELTA_SIGN
+from src.rl.schema.effect import OFF_EFFECT_KIND
+from src.rl.schema.effect import OFF_EFFECT_SOURCE
+from src.rl.schema.effect import OFF_ENERGY
+from src.rl.schema.effect import OFF_ESCAPED_CHARACTER
+from src.rl.schema.effect import OFF_FACTOR
+from src.rl.schema.effect import OFF_FREE
+from src.rl.schema.effect import OFF_GOLD_ABSOLUTE
+from src.rl.schema.effect import OFF_GOLD_RELATIVE
+from src.rl.schema.effect import OFF_HEALTH_ABSOLUTE
+from src.rl.schema.effect import OFF_HEALTH_RELATIVE
+from src.rl.schema.effect import OFF_IF_POISONED
+from src.rl.schema.effect import OFF_INSTANCES
+from src.rl.schema.effect import OFF_LIFESTEAL
+from src.rl.schema.effect import OFF_LIMITED
+from src.rl.schema.effect import OFF_MODIFIER_BUFF
+from src.rl.schema.effect import OFF_MODIFIER_KIND
+from src.rl.schema.effect import OFF_MONSTER_NAME
+from src.rl.schema.effect import OFF_ON_OWNER
+from src.rl.schema.effect import OFF_ONLY_REDUCE
+from src.rl.schema.effect import OFF_RANDOM
+from src.rl.schema.effect import OFF_RARE_ONLY
+from src.rl.schema.effect import OFF_READ_AT
+from src.rl.schema.effect import OFF_RELIC_EXCLUSION
+from src.rl.schema.effect import OFF_RELIC_NAME
+from src.rl.schema.effect import OFF_RELIC_POOL_SIZE
+from src.rl.schema.effect import OFF_RELIC_TIER
+from src.rl.schema.effect import OFF_REWARD_ROLL_TRIGGER
+from src.rl.schema.effect import OFF_ROUNDING
+from src.rl.schema.effect import OFF_SELECT_COUNT
+from src.rl.schema.effect import OFF_SELECTION_KIND
+from src.rl.schema.effect import OFF_STACKS
+from src.rl.schema.effect import OFF_STACKS_NEGATIVE
+from src.rl.schema.effect import OFF_TARGETED
+from src.rl.schema.effect import OFF_TURNS
+from src.rl.schema.effect import OFF_UNIFORM
+from src.rl.schema.effect import OFF_UPGRADED
+from src.rl.schema.effect import SCALED_CAPS
+from src.rl.schema.effect import SCALED_LINEAR
+from src.rl.schema.effect import SCALED_SQRT
+from src.rl.schema.effect import VOCAB_CARD
+from src.rl.schema.effect import VOCAB_MONSTER
+from src.rl.schema.effect import VOCAB_RELIC
+from src.rl.schema.effect import amount_parts
 from src.rl.types import EffectSource
 from src.rl.types import Jagged
 from src.rl.types import Sparse
-from src.rl.types import make_channel_allocator
-
-
-# Live Card / Relic amounts arrive Modifier-scaled, so a catalog maximum is a
-# floor rather than a ceiling; past this the channel clamps
-_LIVE_SCALE_HEADROOM = 1.5
-_ASCENSIONS = range(ASCENSION_LEVEL + 1)
-
-
-def catalog_effects() -> Iterator[Effect]:
-    """Yield every Effect reachable from a static definition, at every ascension.
-
-    Yields
-    ------
-    Effect
-        One Effect of a Card, Potion or Relic template, or of an Event Option or a Monster move
-        at an ascension from 0 to ASCENSION_LEVEL.
-    """
-
-    # Cards
-    for template in get_card_templates():
-        yield from (*template.effects_play, *template.effects_discard, *template.effects_draw)
-
-    # Potions
-    for potion in get_potion_templates():
-        yield from potion.effects
-
-    # Relics, one sweep per trigger field
-    for relic in get_relic_templates():
-        for effects in (
-            relic.effects_combat_start,
-            relic.effects_turn_start,
-            relic.effects_turn_end,
-            relic.effects_combat_end,
-            relic.effects_pickup,
-            relic.effects_rest,
-            relic.effects_counter,
-        ):
-            yield from effects
-
-    # Event Options
-    for ascension in _ASCENSIONS:
-        for option in get_event_option_templates(ascension):
-            yield from option.effects
-
-    # Monster moves
-    for ascension in _ASCENSIONS:
-        for monster in get_monster_templates(ascension):
-            for move in monster.moves:
-                yield from move.effects
-
-
-# Bucketed by exact type once
-_BY_TYPE: dict = {}
-for _effect in catalog_effects():
-    _BY_TYPE.setdefault(type(_effect), []).append(_effect)
-del _effect
-
-
-def _amount_parts(amount: Amount) -> tuple[float, float, bool]:
-    """Split an Amount union into (absolute, relative_fraction, is_range).
-
-    A range folds to its midpoint in the absolute channel.
-
-    Parameters
-    ----------
-    amount : Amount
-        The amount to split.
-
-    Returns
-    -------
-    absolute : float
-        An absolute amount, or a range's midpoint; 0.0 for a relative one.
-    relative_fraction : float
-        A relative amount's numerator / denominator; 0.0 otherwise.
-    is_range : bool
-        Whether the amount is a range.
-    """
-    if isinstance(amount, AmountAbsolute):
-        return float(amount.amount), 0.0, False
-    if isinstance(amount, AmountRelative):
-        return 0.0, amount.numerator / amount.denominator, False
-    if isinstance(amount, AmountRange):
-        return (amount.min + amount.max) / 2, 0.0, True
-
-    raise ValueError(f"Unsupported Amount variant: {type(amount).__name__}")
-
-
-E = TypeVar("E")
-V = TypeVar("V")
-
-
-class _MirrorEnum(SupportsInt, Protocol):
-    @staticmethod
-    def members() -> "list[Any]":
-        ...
-
-
-M = TypeVar("M", bound=_MirrorEnum)
-
-
-def _field(cls: type[E], get: Callable[[E], V]) -> Iterator[V]:
-    """Yield one field across every catalog instance of an Effect type.
-
-    Parameters
-    ----------
-    cls : type[E]
-        The Effect type.
-    get : Callable[[E], V]
-        The field's getter, called on each instance.
-
-    Yields
-    ------
-    V
-        The field of one catalog instance of `cls`.
-    """
-    effects: list[E] = _BY_TYPE.get(cls, [])
-    for effect in effects:
-        yield get(effect)
-
-
-def _cap(*specs: Iterable[Amount | float], floor: float = 1.0) -> float:
-    """Return the max |value| over catalog fields sharing a physical scale.
-
-    Parameters
-    ----------
-    *specs : Iterable[Amount | float]
-        Each field's values; an Amount counts as its absolute part, a range as its midpoint.
-    floor : float, default 1.0
-        The smallest cap returned.
-
-    Returns
-    -------
-    float
-        The largest |value|, at least `floor`.
-    """
-    max_ = floor
-    for spec in specs:
-        for value in spec:
-            if isinstance(value, (AmountAbsolute, AmountRelative, AmountRange)):
-                value_scalar = _amount_parts(value)[0]
-            else:
-                value_scalar = float(value)
-
-            max_ = max(max_, abs(value_scalar))
-
-    return max_
-
-
-def _vocabulary(*specs: Iterable[M | list[M]]) -> dict[M, int]:
-    """Build a catalog-derived identity vocabulary; index 0 is reserved as unseen.
-
-    Parameters
-    ----------
-    *specs : Iterable[M | list[M]]
-        Each field's values; a list adds each of its names.
-
-    Returns
-    -------
-    dict[M, int]
-        Each name, mapped to its index from 1, in the names' int order.
-    """
-    names: set[M] = set()
-    for spec in specs:
-        for value in spec:
-            names.update(value if isinstance(value, list) else [value])
-
-    return {name: i + 1 for i, name in enumerate(sorted(names, key=int))}
-
-
-def _index_enum(enum: type[M]) -> dict[M, int]:
-    return {member: int(member) for member in enum.members()}
-
-
-def _index_union(union: UnionType) -> dict[type, int]:
-    return {cls: i for i, cls in enumerate(get_args(union))}
-
-
-_INDEX_EFFECT = _index_union(Effect)
-_INDEX_CAND_POOL = _index_enum(CandidatePool)
-_INDEX_SELECTION_KIND = _index_union(SelectionKind)
-_INDEX_CAND_FILTER = _index_enum(CandidateFilter)
-_INDEX_MODIFIER_KIND = _index_enum(ModifierKind)
-_INDEX_REWARD_ROLL_TRIGGER = _index_enum(RewardRollTrigger)
-_INDEX_DELTA_SIGN = _index_enum(DeltaSign)
-_INDEX_CARD_PILE = _index_enum(CardPile)
-_INDEX_CARD_KIND = _index_enum(CardKind)
-_INDEX_CARD_COLOR = _index_enum(CardColor)
-_INDEX_CARD_RARITY = _index_enum(CardRarity)
-_INDEX_RELIC_TIER = _index_enum(RelicTier)
-_INDEX_RELIC_EXCLUSION = _index_enum(RelicExclusion)
-_INDEX_COST_SCOPE = _index_enum(CostScope)
-_INDEX_READ_AT = _index_enum(ReadAt)
-_INDEX_ROUNDING = _index_enum(Rounding)
-
-_VOCAB_CARD = _vocabulary(_field(slai.EffectCardAdd, lambda effect: effect.card_name))
-_VOCAB_RELIC = _vocabulary(
-    _field(slai.EffectRelicGrantSpecific, lambda effect: effect.name),
-    _field(slai.EffectRelicGrantPool, lambda effect: effect.pool),
-    _field(slai.EffectRewardRollRelic, lambda effect: effect.pool),
-)
-_VOCAB_MONSTER = _vocabulary(
-    _field(slai.EffectMonsterSpawn, lambda effect: effect.name),
-    _field(slai.EffectMonsterSplit, lambda effect: effect.name),
-    _field(slai.EffectMonsterSummon, lambda effect: effect.pool),
-)
-
-
-# Caps
-_CAP_DAMAGE = _LIVE_SCALE_HEADROOM * _cap(
-    _field(slai.EffectDamagePhysical, lambda effect: effect.amount),
-    _field(slai.EffectHeelHookProc, lambda effect: effect.damage),
-    _field(slai.EffectSkewerProc, lambda effect: effect.damage),
-    _field(slai.EffectDamageFinisher, lambda effect: effect.damage),
-    _field(slai.EffectDamageFlechettes, lambda effect: effect.damage),
-    _field(slai.EffectDamageMindBlast, lambda effect: effect.damage),
-    _field(slai.EffectBombArm, lambda effect: effect.damage),
-    _field(slai.EffectRitualDaggerProc, lambda effect: effect.bump),
-    _field(slai.EffectGlassKnifeDecay, lambda effect: effect.delta),
-)
-
-# The catalog's Multi-Stab is a 0-hit placeholder, so its live hit count is bridged
-_CAP_INSTANCES = max(
-    _cap(_field(slai.EffectDamagePhysical, lambda effect: effect.instances)),
-    float(MULTI_STAB_INSTANCES_MAX),
-)
-_CAP_BLOCK = _LIVE_SCALE_HEADROOM * _cap(
-    _field(slai.EffectBlockGain, lambda effect: effect.amount),
-    _field(slai.EffectEscapePlanCheck, lambda effect: effect.block),
-)
-_CAP_HEALTH = _cap(
-    _field(slai.EffectHealthDelta, lambda effect: effect.amount),
-    _field(slai.EffectHealthSet, lambda effect: effect.amount),
-    _field(slai.EffectMaxHealthDelta, lambda effect: effect.amount),
-)
-_CAP_GOLD = _cap(
-    _field(slai.EffectGoldDelta, lambda effect: effect.amount),
-    _field(slai.EffectHandOfGreedProc, lambda effect: effect.gold),
-    _field(slai.EffectRewardRollGold, lambda effect: effect.amount),
-)
-_CAP_ENERGY = _cap(
-    _field(slai.EffectEnergyDelta, lambda effect: effect.amount),
-    _field(slai.EffectSneakyStrikeProc, lambda effect: effect.energy),
-)
-_CAP_STACKS = _cap(
-    _field(slai.EffectModifierDelta, lambda effect: effect.stacks),
-    _field(slai.EffectStrengthLoseTemp, lambda effect: effect.stacks),
-)
-_CAP_COUNT = max(
-    _cap(
-        _field(slai.EffectCardAdd, lambda effect: effect.count),
-        _field(slai.EffectCardAddRandom, lambda effect: effect.count),
-        _field(slai.EffectCardDiscoverSelect, lambda effect: effect.copies),
-        _field(slai.EffectCardDraw, lambda effect: effect.count),
-        _field(slai.EffectCardDrawIfNoAttacks, lambda effect: effect.count),
-        _field(slai.EffectCardDrawUpTo, lambda effect: effect.amount),
-        _field(slai.EffectCardDiscoverRoll, lambda effect: effect.count),
-        _field(slai.EffectRewardRollPotions, lambda effect: effect.count),
-    ),
-    float(MAX_SIZE_CARD_PILE_HAND),
-)
-_CAP_DELTA = _cap(_field(slai.EffectEventAdvanceState, lambda effect: effect.delta))
-_CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda effect: effect.factor))
-_CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda effect: effect.amount))
-_CAP_TURNS = float(slai.GameEnv.BOMB_FUSE_TURNS)
-_CAP_SELECT_COUNT = float(MAX_SIZE_CARD_PILE_DECK)
-_CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
-
-
-# Contiguous groups; every column carries a cap and a mode
-
-
-def _bucket_width(cap: float) -> int:
-    return int(math.sqrt(cap)) + 1
-
-
-CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
-
-
-# Effect's kind: one-hot over the Effect union
-OFF_EFFECT_KIND = _alloc("effect_kind", len(_INDEX_EFFECT))
-
-# Target
-OFF_TARGETED = _alloc("targeted")
-OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
-OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
-OFF_SELECT_COUNT = _alloc("select_count")
-OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
-OFF_EFFECT_SOURCE = _alloc(
-    "effect_source", len(EffectSource)
-)  # Written by encode_effect_row_into_w_cache, outside the row cache
-
-# Categorical params, named for the engine type they one-hot
-OFF_MODIFIER_KIND = _alloc("modifier_kind", len(_INDEX_MODIFIER_KIND))
-OFF_MODIFIER_BUFF = _alloc("modifier_buff")
-OFF_DELTA_SIGN = _alloc("delta_sign", len(_INDEX_DELTA_SIGN))
-OFF_CARD_PILE = _alloc("card_pile", len(_INDEX_CARD_PILE))
-OFF_CARD_KIND = _alloc("card_kind", len(_INDEX_CARD_KIND))
-OFF_CARD_COLOR = _alloc("card_color", len(_INDEX_CARD_COLOR))
-OFF_CARD_RARITY = _alloc("card_rarity", len(_INDEX_CARD_RARITY))
-OFF_RELIC_TIER = _alloc("relic_tier", len(_INDEX_RELIC_TIER))
-OFF_RELIC_EXCLUSION = _alloc("relic_exclusion", len(_INDEX_RELIC_EXCLUSION))
-OFF_COST_SCOPE = _alloc("cost_scope", len(_INDEX_COST_SCOPE))
-OFF_COST_ZERO_PRESENT = _alloc("cost_zero_present")
-OFF_REWARD_ROLL_TRIGGER = _alloc("reward_roll_trigger", len(_INDEX_REWARD_ROLL_TRIGGER))
-OFF_READ_AT = _alloc("read_at", len(_INDEX_READ_AT))
-OFF_ROUNDING = _alloc("rounding", len(_INDEX_ROUNDING))
-
-# Identity vocabularies, named for the engine name enum (index 0 = unseen)
-OFF_CARD_NAME = _alloc("card_name", len(_VOCAB_CARD) + 1)
-OFF_RELIC_NAME = _alloc("relic_name", len(_VOCAB_RELIC) + 1)
-OFF_MONSTER_NAME = _alloc("monster_name", len(_VOCAB_MONSTER) + 1)
-OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
-
-# Magnitudes, one per physical unit
-OFF_DAMAGE = _alloc("damage")
-OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE))
-OFF_INSTANCES = _alloc("instances")
-OFF_BLOCK = _alloc("block")
-OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
-OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
-OFF_HEALTH_RELATIVE = _alloc("health_relative")
-OFF_GOLD_ABSOLUTE = _alloc("gold_absolute")
-OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD))
-OFF_GOLD_RELATIVE = _alloc("gold_relative")
-OFF_AMOUNT_IS_RANGE = _alloc("amount_is_range")
-OFF_ENERGY = _alloc("energy")
-OFF_STACKS = _alloc("stacks")
-OFF_STACKS_NEGATIVE = _alloc("stacks_negative")
-OFF_STACKS_BUCKETS = _alloc("stacks_buckets", _bucket_width(_CAP_STACKS))
-OFF_COUNT = _alloc("count")
-OFF_DELTA = _alloc("delta")
-OFF_CHANCE = _alloc("chance")
-OFF_FACTOR = _alloc("factor")
-OFF_COST = _alloc("cost")
-OFF_TURNS = _alloc("turns")
-
-# Boolean flags
-# Boolean flags, named for the engine field
-OFF_ADVANCE_ON_MISS = _alloc("advance_on_miss")
-OFF_BLOCK_FROM_HIT = _alloc("block_from_hit")
-OFF_BOTTOM = _alloc("bottom")
-OFF_CHOOSE_DISCARDS = _alloc("choose_discards")
-OFF_COLORLESS = _alloc("colorless")
-OFF_ESCAPED_CHARACTER = _alloc("escaped_character")
-OFF_FREE = _alloc("free")
-OFF_IF_POISONED = _alloc("if_poisoned")
-OFF_LIFESTEAL = _alloc("lifesteal")
-OFF_LIMITED = _alloc("limited")
-OFF_ON_OWNER = _alloc("on_owner")
-OFF_ONLY_REDUCE = _alloc("only_reduce")
-OFF_RANDOM = _alloc("random")
-OFF_RARE_ONLY = _alloc("rare_only")
-OFF_UNIFORM = _alloc("uniform")
-OFF_UPGRADED = _alloc("upgraded")
-
-# (float channel, bucket block, cap) — buckets derive from the final raw floats
-_BUCKET_META: tuple[tuple[int, int, float], ...] = (
-    (OFF_DAMAGE, OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
-    (OFF_HEALTH_ABSOLUTE, OFF_HEALTH_BUCKETS, _CAP_HEALTH),
-    (OFF_GOLD_ABSOLUTE, OFF_GOLD_BUCKETS, _CAP_GOLD),
-    (OFF_STACKS, OFF_STACKS_BUCKETS, _CAP_STACKS),
-)
-
-# Total
-ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT_EFFECT)
-
-# The channels that set several of a row's columns
-_MULTI_HOT_CHANNELS = (
-    "candidate_filter",
-    "relic_name",
-    "monster_name",
-)
-
-# Most nonzero columns an Effect row holds: one per one-hot or scalar channel, and every column
-# of the multi-hot ones
-ENCODING_DIM_SPARSE_EFFECT = sum(
-    width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in CHANNEL_LAYOUT_EFFECT
-)
 
 
 # Per-effect-kind encoders
@@ -458,7 +135,7 @@ def _write_amount(out: np.ndarray, amount: Amount, off_abs: int, off_rel: int) -
     off_rel : int
         The relative channel's column.
     """
-    absolute, relative, is_range = _amount_parts(amount)
+    absolute, relative, is_range = amount_parts(amount)
     out[off_abs] += absolute
     out[off_rel] += relative
     if is_range:
@@ -466,8 +143,8 @@ def _write_amount(out: np.ndarray, amount: Amount, off_abs: int, off_rel: int) -
 
     # A fraction also says which value it reads and how it rounds
     if isinstance(amount, AmountRelative):
-        out[OFF_READ_AT + _INDEX_READ_AT[amount.read_at]] = 1.0
-        out[OFF_ROUNDING + _INDEX_ROUNDING[amount.rounding]] = 1.0
+        out[OFF_READ_AT + INDEX_READ_AT[amount.read_at]] = 1.0
+        out[OFF_ROUNDING + INDEX_ROUNDING[amount.rounding]] = 1.0
 
 
 def _cost_zero(out: np.ndarray, value: CostScope | None) -> None:
@@ -482,7 +159,7 @@ def _cost_zero(out: np.ndarray, value: CostScope | None) -> None:
     """
     if value is not None:
         out[OFF_COST_ZERO_PRESENT] = 1.0
-        out[OFF_COST_SCOPE + _INDEX_COST_SCOPE[value]] = 1.0
+        out[OFF_COST_SCOPE + INDEX_COST_SCOPE[value]] = 1.0
 
 
 def _encode_block_gain(out: np.ndarray, effect: slai.EffectBlockGain) -> None:
@@ -495,22 +172,22 @@ def _encode_bomb_arm(out: np.ndarray, effect: slai.EffectBombArm) -> None:
 
 
 def _encode_card_add(out: np.ndarray, effect: slai.EffectCardAdd) -> None:
-    out[OFF_CARD_NAME + _VOCAB_CARD.get(effect.card_name, 0)] = 1.0
+    out[OFF_CARD_NAME + VOCAB_CARD.get(effect.card_name, 0)] = 1.0
     out[OFF_COUNT] += effect.count
-    out[OFF_CARD_PILE + _INDEX_CARD_PILE[effect.card_pile]] = 1.0
+    out[OFF_CARD_PILE + INDEX_CARD_PILE[effect.card_pile]] = 1.0
     if effect.upgraded:
         out[OFF_UPGRADED] = 1.0
 
 
 def _encode_card_add_random(out: np.ndarray, effect: slai.EffectCardAddRandom) -> None:
-    out[OFF_CARD_COLOR + _INDEX_CARD_COLOR[effect.color]] = 1.0
+    out[OFF_CARD_COLOR + INDEX_CARD_COLOR[effect.color]] = 1.0
     _cost_zero(out, effect.cost_zero)
     out[OFF_COUNT] += effect.count
     if effect.kind is not None:
-        out[OFF_CARD_KIND + _INDEX_CARD_KIND[effect.kind]] = 1.0
-    out[OFF_CARD_PILE + _INDEX_CARD_PILE[effect.card_pile]] = 1.0
+        out[OFF_CARD_KIND + INDEX_CARD_KIND[effect.kind]] = 1.0
+    out[OFF_CARD_PILE + INDEX_CARD_PILE[effect.card_pile]] = 1.0
     if effect.rarity is not None:
-        out[OFF_CARD_RARITY + _INDEX_CARD_RARITY[effect.rarity]] = 1.0
+        out[OFF_CARD_RARITY + INDEX_CARD_RARITY[effect.rarity]] = 1.0
     if effect.upgraded:
         out[OFF_UPGRADED] = 1.0
 
@@ -518,14 +195,14 @@ def _encode_card_add_random(out: np.ndarray, effect: slai.EffectCardAddRandom) -
 def _encode_card_discover_select(out: np.ndarray, effect: slai.EffectCardDiscoverSelect) -> None:
     out[OFF_COUNT] += effect.copies
     _cost_zero(out, effect.cost_zero)
-    out[OFF_CARD_PILE + _INDEX_CARD_PILE[effect.card_pile]] = 1.0
+    out[OFF_CARD_PILE + INDEX_CARD_PILE[effect.card_pile]] = 1.0
 
 
 def _encode_card_discover_roll(out: np.ndarray, effect: slai.EffectCardDiscoverRoll) -> None:
-    out[OFF_CARD_COLOR + _INDEX_CARD_COLOR[effect.color]] = 1.0
+    out[OFF_CARD_COLOR + INDEX_CARD_COLOR[effect.color]] = 1.0
     out[OFF_COUNT] += effect.count
     if effect.kind is not None:
-        out[OFF_CARD_KIND + _INDEX_CARD_KIND[effect.kind]] = 1.0
+        out[OFF_CARD_KIND + INDEX_CARD_KIND[effect.kind]] = 1.0
 
 
 def _encode_card_draw(out: np.ndarray, effect: slai.EffectCardDraw) -> None:
@@ -543,12 +220,12 @@ def _encode_card_draw_up_to(out: np.ndarray, effect: slai.EffectCardDrawUpTo) ->
 
 
 def _encode_card_duplicate(out: np.ndarray, effect: slai.EffectCardDuplicate) -> None:
-    out[OFF_CARD_PILE + _INDEX_CARD_PILE[effect.card_pile]] = 1.0
+    out[OFF_CARD_PILE + INDEX_CARD_PILE[effect.card_pile]] = 1.0
 
 
 def _encode_card_move(out: np.ndarray, effect: slai.EffectCardMove) -> None:
     _cost_zero(out, effect.cost_zero)
-    out[OFF_CARD_PILE + _INDEX_CARD_PILE[effect.card_pile]] = 1.0
+    out[OFF_CARD_PILE + INDEX_CARD_PILE[effect.card_pile]] = 1.0
 
 
 def _encode_card_setup_select(out: np.ndarray, effect: slai.EffectCardSetupSelect) -> None:
@@ -599,7 +276,7 @@ def _encode_damage_deal(out: np.ndarray, effect: slai.EffectDamageDeal) -> None:
 
 def _encode_energy_delta(out: np.ndarray, effect: slai.EffectEnergyDelta) -> None:
     out[OFF_ENERGY] += effect.amount
-    out[OFF_DELTA_SIGN + _INDEX_DELTA_SIGN[effect.sign]] = 1.0
+    out[OFF_DELTA_SIGN + INDEX_DELTA_SIGN[effect.sign]] = 1.0
 
 
 def _encode_escape_plan_check(out: np.ndarray, effect: slai.EffectEscapePlanCheck) -> None:
@@ -621,7 +298,7 @@ def _encode_glass_knife_decay(out: np.ndarray, effect: slai.EffectGlassKnifeDeca
 
 def _encode_gold_delta(out: np.ndarray, effect: slai.EffectGoldDelta) -> None:
     _write_amount(out, effect.amount, OFF_GOLD_ABSOLUTE, OFF_GOLD_RELATIVE)
-    out[OFF_DELTA_SIGN + _INDEX_DELTA_SIGN[effect.sign]] = 1.0
+    out[OFF_DELTA_SIGN + INDEX_DELTA_SIGN[effect.sign]] = 1.0
 
 
 def _encode_hand_of_greed_proc(out: np.ndarray, effect: slai.EffectHandOfGreedProc) -> None:
@@ -630,7 +307,7 @@ def _encode_hand_of_greed_proc(out: np.ndarray, effect: slai.EffectHandOfGreedPr
 
 def _encode_health_delta(out: np.ndarray, effect: slai.EffectHealthDelta) -> None:
     _write_amount(out, effect.amount, OFF_HEALTH_ABSOLUTE, OFF_HEALTH_RELATIVE)
-    out[OFF_DELTA_SIGN + _INDEX_DELTA_SIGN[effect.sign]] = 1.0
+    out[OFF_DELTA_SIGN + INDEX_DELTA_SIGN[effect.sign]] = 1.0
 
 
 def _encode_health_set(out: np.ndarray, effect: slai.EffectHealthSet) -> None:
@@ -648,11 +325,11 @@ def _encode_joust_bet(out: np.ndarray, effect: slai.EffectJoustBet) -> None:
 
 def _encode_max_health_delta(out: np.ndarray, effect: slai.EffectMaxHealthDelta) -> None:
     _write_amount(out, effect.amount, OFF_HEALTH_ABSOLUTE, OFF_HEALTH_RELATIVE)
-    out[OFF_DELTA_SIGN + _INDEX_DELTA_SIGN[effect.sign]] = 1.0
+    out[OFF_DELTA_SIGN + INDEX_DELTA_SIGN[effect.sign]] = 1.0
 
 
 def _encode_modifier_delta(out: np.ndarray, effect: slai.EffectModifierDelta) -> None:
-    out[OFF_MODIFIER_KIND + _INDEX_MODIFIER_KIND[effect.kind]] = 1.0
+    out[OFF_MODIFIER_KIND + INDEX_MODIFIER_KIND[effect.kind]] = 1.0
     if effect.kind.is_buff:
         out[OFF_MODIFIER_BUFF] = 1.0
     out[OFF_STACKS] += effect.stacks
@@ -660,32 +337,32 @@ def _encode_modifier_delta(out: np.ndarray, effect: slai.EffectModifierDelta) ->
 
 def _encode_modifier_multiply(out: np.ndarray, effect: slai.EffectModifierMultiply) -> None:
     out[OFF_FACTOR] += effect.factor
-    out[OFF_MODIFIER_KIND + _INDEX_MODIFIER_KIND[effect.kind]] = 1.0
+    out[OFF_MODIFIER_KIND + INDEX_MODIFIER_KIND[effect.kind]] = 1.0
     if effect.kind.is_buff:
         out[OFF_MODIFIER_BUFF] = 1.0
 
 
 def _encode_monster_spawn(out: np.ndarray, effect: slai.EffectMonsterSpawn) -> None:
-    out[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(effect.name, 0)] = 1.0
+    out[OFF_MONSTER_NAME + VOCAB_MONSTER.get(effect.name, 0)] = 1.0
 
 
 def _encode_reward_roll_cards(out: np.ndarray, effect: slai.EffectRewardRollCards) -> None:
     out[OFF_COUNT] += effect.bundles
-    out[OFF_REWARD_ROLL_TRIGGER + _INDEX_REWARD_ROLL_TRIGGER[effect.trigger]] = 1.0
+    out[OFF_REWARD_ROLL_TRIGGER + INDEX_REWARD_ROLL_TRIGGER[effect.trigger]] = 1.0
 
 
 def _encode_monster_split(out: np.ndarray, effect: slai.EffectMonsterSplit) -> None:
-    out[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(effect.name, 0)] = 1.0
+    out[OFF_MONSTER_NAME + VOCAB_MONSTER.get(effect.name, 0)] = 1.0
 
 
 def _encode_monster_summon(out: np.ndarray, effect: slai.EffectMonsterSummon) -> None:
     # Each name's share of the pool
     for name in effect.pool:
-        out[OFF_MONSTER_NAME + _VOCAB_MONSTER.get(name, 0)] += 1 / len(effect.pool)
+        out[OFF_MONSTER_NAME + VOCAB_MONSTER.get(name, 0)] += 1 / len(effect.pool)
 
 
 def _encode_modifier_remove(out: np.ndarray, effect: slai.EffectModifierRemove) -> None:
-    out[OFF_MODIFIER_KIND + _INDEX_MODIFIER_KIND[effect.kind]] = 1.0
+    out[OFF_MODIFIER_KIND + INDEX_MODIFIER_KIND[effect.kind]] = 1.0
     out[OFF_MODIFIER_BUFF] = float(effect.kind.is_buff)
 
 
@@ -711,18 +388,18 @@ def _encode_potion_add_random(out: np.ndarray, effect: slai.EffectPotionAddRando
 
 def _encode_relic_grant_pool(out: np.ndarray, effect: slai.EffectRelicGrantPool) -> None:
     for name in effect.pool:
-        out[OFF_RELIC_NAME + _VOCAB_RELIC.get(name, 0)] = 1.0
+        out[OFF_RELIC_NAME + VOCAB_RELIC.get(name, 0)] = 1.0
     out[OFF_RELIC_POOL_SIZE] += len(effect.pool)
 
 
 def _encode_relic_grant_random(out: np.ndarray, effect: slai.EffectRelicGrantRandom) -> None:
-    out[OFF_RELIC_EXCLUSION + _INDEX_RELIC_EXCLUSION[effect.exclusion]] = 1.0
+    out[OFF_RELIC_EXCLUSION + INDEX_RELIC_EXCLUSION[effect.exclusion]] = 1.0
     if effect.tier is not None:
-        out[OFF_RELIC_TIER + _INDEX_RELIC_TIER[effect.tier]] = 1.0
+        out[OFF_RELIC_TIER + INDEX_RELIC_TIER[effect.tier]] = 1.0
 
 
 def _encode_relic_grant_specific(out: np.ndarray, effect: slai.EffectRelicGrantSpecific) -> None:
-    out[OFF_RELIC_NAME + _VOCAB_RELIC.get(effect.name, 0)] = 1.0
+    out[OFF_RELIC_NAME + VOCAB_RELIC.get(effect.name, 0)] = 1.0
 
 
 def _encode_reward_roll_gold(out: np.ndarray, effect: slai.EffectRewardRollGold) -> None:
@@ -731,12 +408,12 @@ def _encode_reward_roll_gold(out: np.ndarray, effect: slai.EffectRewardRollGold)
 
 def _encode_reward_roll_potions(out: np.ndarray, effect: slai.EffectRewardRollPotions) -> None:
     out[OFF_COUNT] += effect.count
-    out[OFF_REWARD_ROLL_TRIGGER + _INDEX_REWARD_ROLL_TRIGGER[effect.trigger]] = 1.0
+    out[OFF_REWARD_ROLL_TRIGGER + INDEX_REWARD_ROLL_TRIGGER[effect.trigger]] = 1.0
 
 
 def _encode_reward_roll_relic(out: np.ndarray, effect: slai.EffectRewardRollRelic) -> None:
     for name in effect.pool:
-        out[OFF_RELIC_NAME + _VOCAB_RELIC.get(name, 0)] = 1.0
+        out[OFF_RELIC_NAME + VOCAB_RELIC.get(name, 0)] = 1.0
     out[OFF_RELIC_POOL_SIZE] += len(effect.pool)
 
 
@@ -756,7 +433,7 @@ def _encode_set_cost_override(out: np.ndarray, effect: slai.EffectSetCostOverrid
         out[OFF_ONLY_REDUCE] = 1.0
     if effect.random:
         out[OFF_RANDOM] = 1.0
-    out[OFF_COST_SCOPE + _INDEX_COST_SCOPE[effect.scope]] = 1.0
+    out[OFF_COST_SCOPE + INDEX_COST_SCOPE[effect.scope]] = 1.0
 
 
 def _encode_skewer_proc(out: np.ndarray, effect: slai.EffectSkewerProc) -> None:
@@ -849,19 +526,19 @@ def encode_effect_row_into(effect: Effect, out: np.ndarray) -> None:
     """
 
     # Effect's kind
-    out[OFF_EFFECT_KIND + _INDEX_EFFECT[type(effect)]] = 1.0
+    out[OFF_EFFECT_KIND + INDEX_EFFECT[type(effect)]] = 1.0
 
     # Rows the engine never targets carry no `target` field at all
     target = getattr(effect, "target", None)
     if target is not None:
         out[OFF_TARGETED] = 1.0
-        out[OFF_CANDIDATE_POOL + _INDEX_CAND_POOL[target.candidate_pool]] = 1.0
-        out[OFF_SELECTION_KIND + _INDEX_SELECTION_KIND[type(target.selection_kind)]] = 1.0
+        out[OFF_CANDIDATE_POOL + INDEX_CAND_POOL[target.candidate_pool]] = 1.0
+        out[OFF_SELECTION_KIND + INDEX_SELECTION_KIND[type(target.selection_kind)]] = 1.0
         out[OFF_SELECT_COUNT] = float(getattr(target.selection_kind, "count", 1))
 
         # Multi-hot over the target's filters; an empty list keeps every candidate
         for candidate_filter in target.filters:
-            out[OFF_CANDIDATE_FILTER + _INDEX_CAND_FILTER[candidate_filter]] = 1.0
+            out[OFF_CANDIDATE_FILTER + INDEX_CAND_FILTER[candidate_filter]] = 1.0
 
     # Effect Type encoder
     encode = _ENCODERS.get(type(effect))
@@ -869,7 +546,7 @@ def encode_effect_row_into(effect: Effect, out: np.ndarray) -> None:
         encode(out, effect)
 
     # Buckets read the final raw floats; nothing may write those channels below
-    for off_float, off_bucket, cap in _BUCKET_META:
+    for off_float, off_bucket, cap in BUCKET_META:
         value = out[off_float]
         if value:
             out[off_bucket + int(math.sqrt(min(abs(value), cap)))] = 1.0
@@ -913,43 +590,6 @@ def encode_effect_row_into_w_cache(effect: Effect, source: EffectSource, out: np
     out[OFF_EFFECT_SOURCE + source] = 1.0
 
 
-class _NormMode(StrEnum):
-    SQRT = auto()
-    LINEAR = auto()
-
-
-# (offset, cap, mode) for every non-unit channel
-_NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
-    (OFF_SELECT_COUNT, _CAP_SELECT_COUNT, _NormMode.LINEAR),
-    (OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
-    (OFF_DAMAGE, _CAP_DAMAGE, _NormMode.SQRT),
-    (OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
-    (OFF_BLOCK, _CAP_BLOCK, _NormMode.LINEAR),
-    (OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, _NormMode.SQRT),
-    (OFF_GOLD_ABSOLUTE, _CAP_GOLD, _NormMode.SQRT),
-    (OFF_ENERGY, _CAP_ENERGY, _NormMode.LINEAR),
-    (OFF_STACKS, _CAP_STACKS, _NormMode.SQRT),
-    (OFF_COUNT, _CAP_COUNT, _NormMode.LINEAR),
-    (OFF_DELTA, _CAP_DELTA, _NormMode.LINEAR),
-    (OFF_CHANCE, 100.0, _NormMode.LINEAR),
-    (OFF_FACTOR, _CAP_FACTOR, _NormMode.LINEAR),
-    (OFF_COST, _CAP_COST, _NormMode.LINEAR),
-    (OFF_TURNS, _CAP_TURNS, _NormMode.LINEAR),
-)
-
-_SCALED_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
-_CAPS = np.ones(ENCODING_DIM_EFFECT, dtype=np.float32)
-_SQRT_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
-for _off, _cap_value, _mode in _NORM_META:
-    _SCALED_MASK[_off] = True
-    _CAPS[_off] = _cap_value
-    _SQRT_MASK[_off] = _mode == _NormMode.SQRT
-
-# Only the _NORM_META channels need scaling at all
-_IDXS_SCALED = np.nonzero(_SCALED_MASK)[0]
-_SCALED_CAPS = _CAPS[_IDXS_SCALED]
-_SCALED_SQRT = _SQRT_MASK[_IDXS_SCALED]
-_SCALED_LINEAR = ~_SCALED_SQRT
 
 
 def normalize_effect_rows(rows: np.ndarray) -> None:
@@ -970,14 +610,14 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
     if not rows.size:
         return
 
-    rows_gather = rows[..., _IDXS_SCALED]
-    np.clip(rows_gather, -_SCALED_CAPS, _SCALED_CAPS, out=rows_gather)
-    rows_gather[..., _SCALED_LINEAR] /= _SCALED_CAPS[_SCALED_LINEAR]
-    sqrt_vals = rows_gather[..., _SCALED_SQRT]
-    rows_gather[..., _SCALED_SQRT] = np.sign(sqrt_vals) * np.sqrt(
-        np.abs(sqrt_vals) / _SCALED_CAPS[_SCALED_SQRT]
+    rows_gather = rows[..., IDXS_SCALED]
+    np.clip(rows_gather, -SCALED_CAPS, SCALED_CAPS, out=rows_gather)
+    rows_gather[..., SCALED_LINEAR] /= SCALED_CAPS[SCALED_LINEAR]
+    sqrt_vals = rows_gather[..., SCALED_SQRT]
+    rows_gather[..., SCALED_SQRT] = np.sign(sqrt_vals) * np.sqrt(
+        np.abs(sqrt_vals) / SCALED_CAPS[SCALED_SQRT]
     )
-    rows[..., _IDXS_SCALED] = rows_gather
+    rows[..., IDXS_SCALED] = rows_gather
 
 
 def encode_batch_effect_pending(
