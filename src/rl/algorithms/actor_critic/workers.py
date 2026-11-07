@@ -14,16 +14,16 @@ from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.envs import new_env
 from src.rl.algorithms.actor_critic.envs import step_env
 from src.rl.algorithms.actor_critic.stats import EpisodeStats
-from src.rl.encoding.state import empty_game_state
 from src.rl.encoding.state import encode_batch_game_state
+from src.rl.packed import cat_states
 from src.rl.packed import count_blocks
-from src.rl.packed import join_regions
-from src.rl.packed import region_of_states
-from src.rl.packed import share_memory
 from src.rl.packed import to_device
-from src.rl.packed import write_rows
 from src.rl.reward import RewardStream
-from src.rl.types import X_GameState
+from src.rl.shared import _StateSlot
+from src.rl.shared import allocate_slots
+from src.rl.shared import read_slot
+from src.rl.shared import write_slot
+from src.rl.types import StateBatch
 from src.rl.utils import parent_alive
 from src.rl.utils import set_rng_seeds
 
@@ -34,18 +34,16 @@ class StepBuffer:
     finished episodes.
 
     The action the Actor sampled, then the reward, done flag and state, masks included, the
-    worker wrote back. Every tensor is `num_regions` equal regions, a worker's each: its games'
-    entries, and in every block rows for all its games at every cap, which it fills from the
-    region's start.
+    worker wrote back. Each worker owns a state slot and a disjoint slice of the per-game
+    tensors. The slot publishes the live shapes of its reusable storage with each reply.
     """
 
-    x_actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
+    x_actions: torch.Tensor  # (E, 3) long: action type, state-local token offset, Monster target rank
     x_rewards: torch.Tensor  # (E, K)
     x_dones: torch.Tensor  # (E,)
-    x_game_state: X_GameState  # E games; a region's rows past its games' counts are stale
+    slots: list[_StateSlot]  # One per worker, in game order
     x_ascensions: torch.Tensor  # (E,) long. Each game's ascension under the live position
     episodes: Queue[EpisodeStats]
-    num_regions: int
 
 
 @dataclass
@@ -85,22 +83,21 @@ def start_workers(
     worker_handles : list[WorkerHandle]
         The worker processes and their semaphores.
     """
-    if num_envs % rollout_workers != 0: 
+    if num_envs % rollout_workers != 0:
         raise RuntimeError("`num_envs` must divide evenly across workers")
-    
+
+    envs_per_worker = num_envs // rollout_workers
     ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
     step_buffer = StepBuffer(
-        x_actions=torch.zeros(num_envs, 4, dtype=torch.long).share_memory_(),
+        x_actions=torch.zeros(num_envs, 3, dtype=torch.long).share_memory_(),
         x_rewards=torch.zeros(num_envs, len(RewardStream)).share_memory_(),
         x_dones=torch.zeros(num_envs).share_memory_(),
-        x_game_state=share_memory(empty_game_state(num_envs)),
+        slots=allocate_slots(rollout_workers, envs_per_worker),
         x_ascensions=torch.tensor(
             ascensions(ascension_current, num_envs), dtype=torch.long
         ).share_memory_(),
         episodes=ctx.Queue(),
-        num_regions=rollout_workers,
     )
-    envs_per_worker = num_envs // rollout_workers
     worker_handles = []
     try:
         for w in range(rollout_workers):
@@ -111,7 +108,14 @@ def start_workers(
             x_stop = torch.tensor(False).share_memory_()
             process = ctx.Process(
                 target=_worker_loop,
-                args=(step_buffer, sph_request, sph_reply, x_stop, games, seed * 7919 + w, gamma),
+                args=(
+                    _worker_region(step_buffer, games, w),
+                    sph_request,
+                    sph_reply,
+                    x_stop,
+                    seed * 7919 + w,
+                    gamma,
+                ),
                 daemon=True,
             )
             process.start()
@@ -137,7 +141,7 @@ def step_workers(worker_handles: list[WorkerHandle]) -> None:
     """
     for worker_handle in worker_handles:
         worker_handle.sph_request.release()
-    
+
     _wait_for_replies(worker_handles)
 
 
@@ -148,14 +152,14 @@ def _wait_for_replies(worker_handles: list[WorkerHandle]) -> None:
                 raise RuntimeError(
                     f"Rollout worker {worker_idx} died (exitcode {worker_handle.process.exitcode})"
                 )
-            
+
             if not parent_alive():
                 raise RuntimeError(f"The learner died while rollout worker {worker_idx} stepped")
 
 
 def snapshot_to_device(
     step_buffer: StepBuffer, device: torch.device
-) -> tuple[X_GameState, torch.Tensor]:
+) -> tuple[StateBatch, torch.Tensor]:
     """Copy every game's state out of the step buffer onto the device.
 
     The workers' rows are joined on the CPU and copied onto the device in one copy, with the
@@ -171,12 +175,12 @@ def snapshot_to_device(
 
     Returns
     -------
-    x_game_state : X_GameState
+    x_game_state : StateBatch
         Every game's state, on the device.
     x_count_cpu : torch.Tensor
         (E, number of blocks) long. Each of the E games' rows in each block, on the CPU.
     """
-    x_game_state = join_regions(step_buffer.x_game_state, step_buffer.num_regions)
+    x_game_state = cat_states([read_slot(slot) for slot in step_buffer.slots])
     return to_device(x_game_state, device), count_blocks(x_game_state)
 
 
@@ -198,7 +202,7 @@ def stop_workers(worker_handles: list[WorkerHandle]) -> None:
     for worker_handle in worker_handles:
         worker_handle.x_stop.fill_(True)
         worker_handle.sph_request.release()
-        
+
     for worker_handle in worker_handles:
         worker_handle.process.join(timeout=5)
         if worker_handle.process.is_alive():
@@ -206,11 +210,10 @@ def stop_workers(worker_handles: list[WorkerHandle]) -> None:
 
 
 def _worker_loop(
-    step_buffer: StepBuffer,
+    step_buffer_region: StepBuffer,
     sph_request: Semaphore,
     sph_reply: Semaphore,
     x_stop: torch.Tensor,
-    games: range,
     seed: int,
     gamma: float,
 ) -> None:
@@ -222,17 +225,14 @@ def _worker_loop(
 
     Parameters
     ----------
-    step_buffer : StepBuffer
-        What the Actor and its workers exchange.
+    step_buffer_region : StepBuffer
+        This worker's state slot and its slices of the Actor's per-game tensors.
     sph_request : Semaphore
         The step loop's request, released once per step.
     sph_reply : Semaphore
         The worker's reply, released once its games' states are written.
     x_stop : torch.Tensor
         () bool. Its stop flag, in shared memory.
-    games : range
-        The worker's games: their indices among the run's games, whose ascensions spread over
-        all of them, so the level mix doesn't depend on the sharding.
     seed : int
         The worker's seed, fixed for the run.
     gamma : float
@@ -240,7 +240,6 @@ def _worker_loop(
     """
     set_rng_seeds(seed)
     torch.set_num_threads(1)  # Workers are the parallelism; don't oversubscribe
-    step_buffer_region = _worker_region(step_buffer, games)
 
     # Each game's tally lives in `batch_stats`, not per rollout, so an episode that spans
     # rollouts reports its true totals
@@ -249,16 +248,16 @@ def _worker_loop(
         env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
         batch_env.append(env)
         batch_game_state.append(game_state)
-    batch_stats = [EpisodeStats() for _ in games]
+    batch_stats = [EpisodeStats() for _ in batch_env]
     _write_states(step_buffer_region, batch_env, batch_game_state)
     sph_reply.release()
     while _wait_for_request(sph_request, x_stop):
         batch_ascension = step_buffer_region.x_ascensions.tolist()  # Promotions apply on reset
 
-        for j, (action_type, token_kind, rank, target) in enumerate(
+        for j, (action_type, token_offset, target) in enumerate(
             step_buffer_region.x_actions.tolist()
         ):
-            action = engine_action(action_type, token_kind, rank, target, batch_game_state[j])
+            action = engine_action(action_type, token_offset, target, batch_game_state[j])
             game_state_next, reward, done = step_env(
                 batch_env[j], batch_game_state[j], batch_stats[j], action, gamma
             )
@@ -296,7 +295,7 @@ def _wait_for_request(sph_request: Semaphore, x_stop: torch.Tensor) -> bool:
     return not x_stop
 
 
-def _worker_region(step_buffer: StepBuffer, games: range) -> StepBuffer:
+def _worker_region(step_buffer: StepBuffer, games: range, worker_index: int) -> StepBuffer:
     """Return the worker's region of the step buffer, one region of its own.
 
     The region holds its games' actions, rewards, done flags and ascensions, their counts,
@@ -308,6 +307,8 @@ def _worker_region(step_buffer: StepBuffer, games: range) -> StepBuffer:
         The step buffer.
     games : range
         The worker's games, by their indices among the run's games.
+    worker_index : int
+        The worker's state slot.
 
     Returns
     -------
@@ -318,10 +319,9 @@ def _worker_region(step_buffer: StepBuffer, games: range) -> StepBuffer:
         x_actions=step_buffer.x_actions[games.start : games.stop],
         x_rewards=step_buffer.x_rewards[games.start : games.stop],
         x_dones=step_buffer.x_dones[games.start : games.stop],
-        x_game_state=region_of_states(step_buffer.x_game_state, games.start, len(games)),
+        slots=[step_buffer.slots[worker_index]],
         x_ascensions=step_buffer.x_ascensions[games.start : games.stop],
         episodes=step_buffer.episodes,
-        num_regions=1,
     )
 
 
@@ -342,4 +342,4 @@ def _write_states(
     cpu = torch.device("cpu")
     batch_legal_actions = [env.get_legal_actions() for env in batch_env]
     x_game_state = encode_batch_game_state(batch_game_state, batch_legal_actions, cpu)
-    write_rows(step_buffer_region.x_game_state, x_game_state)
+    write_slot(step_buffer_region.slots[0], x_game_state)

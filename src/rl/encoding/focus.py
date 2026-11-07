@@ -1,10 +1,7 @@
 from enum import IntEnum
-from enum import StrEnum
-from enum import auto
 from typing import get_args
 
 import numpy as np
-import torch
 from slai import CandidatePool
 from slai import ChestKind
 from slai import EffectBombArm
@@ -75,19 +72,6 @@ _EFFECT_PENDING_TO_IDX = {cls: i for i, cls in enumerate(EFFECT_PENDING)}
 _NUM_CHEST_KINDS = len(ChestKind.members())
 
 
-class FocusChannel(StrEnum):
-    KIND = auto()
-    PENDING_KIND = auto()  # All-zero = no pending halt
-    PENDING_COUNT = auto()
-    PENDING_SKIPPABLE = auto()  # `InputUpTo` is exactly when `SelectionSkip` is legal
-    BOMB_DAMAGE_DUE = auto()  # Per fuse turn left: the damage the bombs deal then
-    CHEST_KIND = auto()
-    CHEST_OPENED = auto()
-    REST_DONE = auto()
-    PRESENCE = auto()  # Context-presence bits: Combat/reward/shop/event/rest/chest
-    DRAW_ORDER_VISIBLE = auto()  # Frozen Eye: the Actor may see the draw pile's order
-
-
 _BOMB_TURNS = GameEnv.BOMB_FUSE_TURNS  # The Bomb's fuse length
 
 # The catalog's biggest bomb; bombs due on the same turn add up and clamp to it
@@ -96,16 +80,24 @@ _BOMB_DAMAGE_MAX = max(
 )
 
 CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
-OFF_FOCUS_KIND = _alloc(FocusChannel.KIND, len(Focus))
-OFF_FOCUS_PENDING_KIND = _alloc(FocusChannel.PENDING_KIND, len(EFFECT_PENDING))
-OFF_FOCUS_PENDING_COUNT = _alloc(FocusChannel.PENDING_COUNT)
-OFF_FOCUS_PENDING_SKIPPABLE = _alloc(FocusChannel.PENDING_SKIPPABLE)
-OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc(FocusChannel.BOMB_DAMAGE_DUE, _BOMB_TURNS)
-OFF_FOCUS_CHEST_KIND = _alloc(FocusChannel.CHEST_KIND, _NUM_CHEST_KINDS)
-OFF_FOCUS_CHEST_OPENED = _alloc(FocusChannel.CHEST_OPENED)
-OFF_FOCUS_REST_DONE = _alloc(FocusChannel.REST_DONE)
-OFF_FOCUS_PRESENCE = _alloc(FocusChannel.PRESENCE, 6)
-OFF_FOCUS_DRAW_ORDER_VISIBLE = _alloc(FocusChannel.DRAW_ORDER_VISIBLE)
+OFF_FOCUS_KIND = _alloc("kind", len(Focus))
+OFF_FOCUS_PENDING_KIND = _alloc("pending_kind", len(EFFECT_PENDING))  # All-zero = no pending halt
+OFF_FOCUS_PENDING_COUNT = _alloc("pending_count")
+OFF_FOCUS_PENDING_SKIPPABLE = _alloc(
+    "pending_skippable"
+)  # `InputUpTo` is exactly when `SelectionSkip` is legal
+OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc(
+    "bomb_damage_due", _BOMB_TURNS
+)  # Per fuse turn left: the damage the bombs deal then
+OFF_FOCUS_CHEST_KIND = _alloc("chest_kind", _NUM_CHEST_KINDS)
+OFF_FOCUS_CHEST_OPENED = _alloc("chest_opened")
+OFF_FOCUS_REST_DONE = _alloc("rest_done")
+OFF_FOCUS_PRESENCE = _alloc(
+    "presence", 6
+)  # Context-presence bits: Combat/reward/shop/event/rest/chest
+OFF_FOCUS_DRAW_ORDER_VISIBLE = _alloc(
+    "draw_order_visible"
+)  # Frozen Eye: the Actor may see the draw pile's order
 
 ENCODING_DIM_FOCUS = sum(w for _, w in CHANNEL_LAYOUT_FOCUS)
 
@@ -122,7 +114,7 @@ _INPUT_POOL_CAP = {
 }
 
 
-def _encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
+def encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
     combat = game_state.combat
     chest = game_state.chest
     rest_site = game_state.rest_site
@@ -173,18 +165,6 @@ def _encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
             out[OFF_FOCUS_PRESENCE + i] = 1.0
 
     out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(game_state))
-
-
-def encode_batch_focus(batch_game_state: list[GameState], device: torch.device) -> torch.Tensor:
-    batch_size = len(batch_game_state)
-
-    # Pre-allocate NumPy array
-    np_out = np.zeros((batch_size, ENCODING_DIM_FOCUS), dtype=np.float32)
-
-    for b, game_state in enumerate(batch_game_state):
-        _encode_focus_into(game_state, np_out[b])
-
-    return torch.from_numpy(np_out).to(device)
 
 
 def _check_tables() -> None:

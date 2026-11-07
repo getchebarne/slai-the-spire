@@ -37,7 +37,7 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
 
     # Every size its own symbol, process-wide: duck sizing ties sizes that match at the heads'
-    # first trace, such as a block's 4 rows and the recorded actions' 4 columns, and the heads
+    # first trace, such as a block's 3 rows and the recorded actions' 3 columns, and the heads
     # recompile each time those sizes part
     torch.fx.experimental._config.use_duck_shape = False
 

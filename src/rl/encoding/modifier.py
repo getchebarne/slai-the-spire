@@ -1,6 +1,4 @@
 import math
-from enum import StrEnum
-from enum import auto
 
 import numpy as np
 from slai import Modifier
@@ -25,20 +23,12 @@ _STACKS_MAX_OF_MODIFIER_KIND = {
 _STACKS_BUCKET_DIM = int(math.sqrt(max(_STACKS_MAX, *_STACKS_MAX_OF_MODIFIER_KIND.values()))) + 1
 
 
-class ModifierChannel(StrEnum):
-    KIND = auto()
-    BUFF = auto()
-    STACKS = auto()
-    STACKS_NEGATIVE = auto()
-    STACKS_OHE = auto()
-
-
 CHANNEL_LAYOUT_MODIFIER, _alloc = make_channel_allocator()
-_OFF_MODIFIER_KIND = _alloc(ModifierChannel.KIND, len(_MODIFIER_KIND_TO_IDX))
-_OFF_MODIFIER_BUFF = _alloc(ModifierChannel.BUFF)
-_OFF_MODIFIER_STACKS = _alloc(ModifierChannel.STACKS)
-_OFF_MODIFIER_STACKS_NEGATIVE = _alloc(ModifierChannel.STACKS_NEGATIVE)
-_OFF_MODIFIER_STACKS_OHE = _alloc(ModifierChannel.STACKS_OHE, _STACKS_BUCKET_DIM)
+_OFF_MODIFIER_KIND = _alloc("kind", len(_MODIFIER_KIND_TO_IDX))
+_OFF_MODIFIER_BUFF = _alloc("buff")
+_OFF_MODIFIER_STACKS = _alloc("stacks")
+_OFF_MODIFIER_STACKS_NEGATIVE = _alloc("stacks_negative")
+_OFF_MODIFIER_STACKS_OHE = _alloc("stacks_ohe", _STACKS_BUCKET_DIM)
 
 ENCODING_DIM_MODIFIER = sum(w for _, w in CHANNEL_LAYOUT_MODIFIER)
 

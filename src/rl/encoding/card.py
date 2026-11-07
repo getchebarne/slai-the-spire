@@ -1,6 +1,4 @@
 import warnings
-from enum import StrEnum
-from enum import auto
 from typing import get_args
 
 import numpy as np
@@ -71,52 +69,34 @@ _COST_OFFSET_MAX = max(
 
 
 # Per-card identity + energy
-class CardChannel(StrEnum):
-    NAME = auto()
-    KIND = auto()
-    COLOR = auto()
-    RARITY = auto()
-    COST_KIND = auto()
-    COST_SCOPE = auto()  # All-zero = no override
-    COST_VECTOR = auto()
-    COST_SCALAR = auto()
-    UPGRADED = auto()
-    EXHAUST = auto()
-    INNATE = auto()
-    ETHEREAL = auto()
-    RETAIN = auto()
-    REQUIRES_TARGET = auto()
-    PLAYABLE = auto()
-    ENERGY_DELTA = auto()  # Signed: energy_current - cost
-    COST_BASE = auto()
-    BOTTLED = auto()
-    COST_OFFSET = auto()  # X-Cost offset
-    FREE_TO_PLAY_ONCE = auto()  # Setup, Forethought: the 0 in `cost` lasts one play
-    PLAY_SOURCE = auto()  # All-zero = not in the play queue
 
 
 CHANNEL_LAYOUT_CARD, _alloc = make_channel_allocator()
-OFF_CARD_NAME = _alloc(CardChannel.NAME, len(_MAP_CARD_NAME))
-OFF_CARD_KIND = _alloc(CardChannel.KIND, len(_MAP_CARD_KIND))
-OFF_CARD_COLOR = _alloc(CardChannel.COLOR, len(_MAP_CARD_COLOR))
-OFF_CARD_RARITY = _alloc(CardChannel.RARITY, len(_MAP_CARD_RARITY))
-OFF_CARD_COST_KIND = _alloc(CardChannel.COST_KIND, len(_MAP_CARD_COST_KIND))
-OFF_CARD_COST_SCOPE = _alloc(CardChannel.COST_SCOPE, len(_MAP_COST_SCOPE))
-OFF_CARD_COST_VECTOR = _alloc(CardChannel.COST_VECTOR, _COST_VECTOR_DIM)
-OFF_CARD_COST_SCALAR = _alloc(CardChannel.COST_SCALAR)
-OFF_CARD_UPGRADED = _alloc(CardChannel.UPGRADED)
-OFF_CARD_EXHAUST = _alloc(CardChannel.EXHAUST)
-OFF_CARD_INNATE = _alloc(CardChannel.INNATE)
-OFF_CARD_ETHEREAL = _alloc(CardChannel.ETHEREAL)
-OFF_CARD_RETAIN = _alloc(CardChannel.RETAIN)
-OFF_CARD_REQUIRES_TARGET = _alloc(CardChannel.REQUIRES_TARGET)
-OFF_CARD_PLAYABLE = _alloc(CardChannel.PLAYABLE)
-OFF_CARD_ENERGY_DELTA = _alloc(CardChannel.ENERGY_DELTA)
-OFF_CARD_COST_BASE = _alloc(CardChannel.COST_BASE)
-OFF_CARD_BOTTLED = _alloc(CardChannel.BOTTLED)
-OFF_CARD_COST_OFFSET = _alloc(CardChannel.COST_OFFSET)
-OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(CardChannel.FREE_TO_PLAY_ONCE)
-OFF_CARD_PLAY_SOURCE = _alloc(CardChannel.PLAY_SOURCE, len(_MAP_PLAY_SOURCE))
+OFF_CARD_NAME = _alloc("name", len(_MAP_CARD_NAME))
+OFF_CARD_KIND = _alloc("kind", len(_MAP_CARD_KIND))
+OFF_CARD_COLOR = _alloc("color", len(_MAP_CARD_COLOR))
+OFF_CARD_RARITY = _alloc("rarity", len(_MAP_CARD_RARITY))
+OFF_CARD_COST_KIND = _alloc("cost_kind", len(_MAP_CARD_COST_KIND))
+OFF_CARD_COST_SCOPE = _alloc("cost_scope", len(_MAP_COST_SCOPE))  # All-zero = no override
+OFF_CARD_COST_VECTOR = _alloc("cost_vector", _COST_VECTOR_DIM)
+OFF_CARD_COST_SCALAR = _alloc("cost_scalar")
+OFF_CARD_UPGRADED = _alloc("upgraded")
+OFF_CARD_EXHAUST = _alloc("exhaust")
+OFF_CARD_INNATE = _alloc("innate")
+OFF_CARD_ETHEREAL = _alloc("ethereal")
+OFF_CARD_RETAIN = _alloc("retain")
+OFF_CARD_REQUIRES_TARGET = _alloc("requires_target")
+OFF_CARD_PLAYABLE = _alloc("playable")
+OFF_CARD_ENERGY_DELTA = _alloc("energy_delta")  # Signed: energy_current - cost
+OFF_CARD_COST_BASE = _alloc("cost_base")
+OFF_CARD_BOTTLED = _alloc("bottled")
+OFF_CARD_COST_OFFSET = _alloc("cost_offset")  # X-Cost offset
+OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(
+    "free_to_play_once"
+)  # Setup, Forethought: the 0 in `cost` lasts one play
+OFF_CARD_PLAY_SOURCE = _alloc(
+    "play_source", len(_MAP_PLAY_SOURCE)
+)  # All-zero = not in the play queue
 
 ENCODING_DIM_CARD = sum(w for _, w in CHANNEL_LAYOUT_CARD)
 
