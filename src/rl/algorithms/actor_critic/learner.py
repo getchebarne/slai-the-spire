@@ -36,7 +36,6 @@ from src.rl.algorithms.actor_critic.evals import stop_evaluator
 from src.rl.algorithms.actor_critic.evals import submit_eval
 from src.rl.algorithms.actor_critic.ppo import PPOConfig
 from src.rl.algorithms.actor_critic.ppo import adapt_lr_scale
-from src.rl.algorithms.actor_critic.ppo import prepare_batch
 from src.rl.algorithms.actor_critic.ppo import update_ppo
 from src.rl.algorithms.actor_critic.stats import episode_scalars
 from src.rl.models import ActorCritic
@@ -142,8 +141,9 @@ def train(
 
             # Update
             t_update = time.perf_counter()
-            batch = prepare_batch(model, delivery.x_rollout, gamma, ppo_config)
-            metrics = update_ppo(model, batch, optimizer, ppo_config, rank_info.device, generator)
+            metrics = update_ppo(
+                model, delivery.rollout, optimizer, ppo_config, gamma, rank_info.device, generator
+            )
             seconds_update = time.perf_counter() - t_update
 
             # Adaptive-KL-LR: the early stops bound epochs, not the first epoch's step size

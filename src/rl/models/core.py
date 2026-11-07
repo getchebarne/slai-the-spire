@@ -9,8 +9,9 @@ from src.rl.models.map_encoder import MapGNN
 from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import MAP_TOKEN_KIND_CAP
 from src.rl.types import TOKEN_KINDS_CARD_REWARDS
+from src.rl.types import Jagged
 from src.rl.types import TokenKind
-from src.rl.types import X_CoreOutput
+from src.rl.types import CoreOutput
 from src.rl.types import StateBatch
 
 
@@ -98,7 +99,7 @@ class Core(nn.Module):
             persistent=False,
         )
 
-    def forward(self, x_game_state: StateBatch, with_value: bool = True) -> X_CoreOutput:
+    def forward(self, x_game_state: StateBatch, with_value: bool = True) -> CoreOutput:
         """Compute the core's output.
 
         Parameters
@@ -107,27 +108,31 @@ class Core(nn.Module):
             The game states.
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
-            need no value, and leaves `x_global_value` the policy's.
+            need no value, and leaves `value_context` the policy's.
 
         Returns
         -------
-        X_CoreOutput
-            The policy heads' and the value head's global vectors, the refined rows and the
-            packed window's X_Window.
+        CoreOutput
+            The policy heads' and the value head's global vectors, the refined token embeddings
+            grouped by state, and their cached index.
         """
 
         # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
         x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_game_state.map_grid)
 
-        # The window packed (its tokens and their X_Window), the draw-order layer's states, and
-        # the embedded pending halt
-        x_projected, x_window, x_draw_order, x_pending = self._entity_projector(
+        # Token embeddings grouped by state, their index, the draw-order layer's states, and the
+        # embedded pending halt
+        x_projected, index, x_draw_order, x_pending = self._entity_projector(
             x_game_state, x_hidden_map, x_map_of_state
         )
 
         # One transformer pass over every state, without the draw depths
         x_refined, x_global_token = self._entity_transformer(
-            self._embed_identity(x_projected, x_window.x_token_kind), x_window
+            Jagged(
+                lengths=x_projected.lengths,
+                rows=self._embed_identity(x_projected.rows, index.kind),
+            ),
+            index.state,
         )
 
         # Per-state inputs to the global context: the same for the transformer and the layer, so
@@ -135,7 +140,7 @@ class Core(nn.Module):
         x_state_inputs = torch.cat(
             [
                 x_map_readout,
-                self._get_token_counts(x_window.x_token_kind_count),
+                self._get_token_counts(index.kind_count),
                 x_game_state.context,
                 x_pending,
             ],
@@ -143,33 +148,35 @@ class Core(nn.Module):
         )
 
         # The one Character token per state, its CHARACTER row
-        x_character_row = x_window.x_token_kind_row[:, TokenKind.CHARACTER]  # (B,)
-        x_global = self._global_context(x_refined[x_character_row], x_global_token, x_state_inputs)
+        x_character_row = index.kind_row[:, TokenKind.CHARACTER]  # (B,)
+        x_global = self._global_context(
+            x_refined.rows[x_character_row], x_global_token, x_state_inputs
+        )
 
         # The layer's states, whose pile shows an order: the Frozen Eye ones, then the rest unless
         # `with_value` is False, with their rows and pile rows
-        x_states = x_draw_order.x_states
+        x_states = x_draw_order.states
         num_rows, num_pile = x_draw_order.num_rows, x_draw_order.num_pile
         if not with_value:
             x_states = x_states[: x_draw_order.num_states_visible]
             num_rows, num_pile = x_draw_order.num_rows_visible, x_draw_order.num_pile_visible
         if x_states.shape[0] == 0:
-            return X_CoreOutput(
-                x_global=x_global,
-                x_global_value=x_global,
-                x_refined=x_refined,
-                x_window=x_window,
+            return CoreOutput(
+                tokens=x_refined,
+                index=index,
+                policy_context=x_global,
+                value_context=x_global,
             )
 
         # The value head reads the layer on every one of its states
         x_rows, x_refined_layer, x_global_token_layer = self._draw_order_layer(
-            x_refined, x_global_token, x_window, x_states, num_rows, num_pile
+            x_refined, x_global_token, index, x_states, num_rows, num_pile
         )
 
         # Each layer state's Character among the layer's rows: the one CHARACTER row of each of
         # its states, state after state
         x_character_layer = torch.nonzero_static(
-            x_window.x_token_kind[x_rows] == TokenKind.CHARACTER, size=x_states.shape[0]
+            index.kind[x_rows] == TokenKind.CHARACTER, size=x_states.shape[0]
         ).squeeze(1)
         x_global_layer = self._global_context(
             x_refined_layer[x_character_layer], x_global_token_layer, x_state_inputs[x_states]
@@ -184,14 +191,17 @@ class Core(nn.Module):
             x_global = x_global.index_copy(
                 0, x_states[:num_states_visible], x_global_layer[:num_states_visible]
             )
-            x_refined = x_refined.index_copy(
-                0, x_rows[:num_rows_visible], x_refined_layer[:num_rows_visible]
+            x_refined = Jagged(
+                lengths=x_refined.lengths,
+                rows=x_refined.rows.index_copy(
+                    0, x_rows[:num_rows_visible], x_refined_layer[:num_rows_visible]
+                ),
             )
-        return X_CoreOutput(
-            x_global=x_global,
-            x_global_value=x_global_value,
-            x_refined=x_refined,
-            x_window=x_window,
+        return CoreOutput(
+            tokens=x_refined,
+            index=index,
+            policy_context=x_global,
+            value_context=x_global_value,
         )
 
     def _global_context(

@@ -13,8 +13,7 @@ from src.rl.packed import slice_states
 from src.rl.packed import take_states
 from src.rl.reward import RewardStream
 from src.rl.types import BatchLayout
-from src.rl.types import X_Rollout
-from src.rl.types import X_TrainingBatch
+from src.rl.types import Rollout
 
 
 @dataclass
@@ -80,7 +79,7 @@ def _compute_gae(
 
 
 def _recompute(
-    model: ActorCritic, x_rollout: X_Rollout, minibatch_size: int, layout: BatchLayout
+    model: ActorCritic, rollout: Rollout, minibatch_size: int, layout: BatchLayout
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
 
@@ -90,7 +89,7 @@ def _recompute(
     ----------
     model : ActorCritic
         The Learner's model.
-    x_rollout : X_Rollout
+    rollout : Rollout
         The rollout: T steps of E games.
     minibatch_size : int
         The most states per forward.
@@ -106,78 +105,22 @@ def _recompute(
     x_values_final : torch.Tensor
         (E, K). Each game's final value.
     """
-    T, E, K = x_rollout.x_rewards.shape
+    T, E, K = rollout.rewards.shape
     log_probs, values = [], []
     with torch.no_grad():
         for start in range(0, T * E, minibatch_size):
             stop = start + minibatch_size
             x_log_probs, _, _, x_values = model.evaluate_actions(
-                slice_states(x_rollout.x_game_state, start, stop, layout),
-                x_rollout.x_actions[start:stop],
+                slice_states(rollout.states, start, stop, layout),
+                rollout.actions[start:stop],
             )
             log_probs.append(x_log_probs)
             values.append(x_values)
 
         # Bootstrap value V(s_T) per env (a fresh env's value if it reset on the last step;
         # GAE's done-masking ensures that only contributes to non-terminal timesteps).
-        x_values_final = model(x_rollout.x_game_state_final)
+        x_values_final = model(rollout.final_states)
     return torch.cat(log_probs), torch.cat(values).reshape(T, E, K), x_values_final
-
-
-def prepare_batch(
-    model: ActorCritic, x_rollout: X_Rollout, gamma: float, ppo_config: PPOConfig
-) -> X_TrainingBatch:
-    """Prepare the update's batch: GAE, and the anchor π_prox the clip and the KL measure from.
-
-    Parameters
-    ----------
-    model : ActorCritic
-        The Learner's model; its current weights give π_prox and the values.
-    x_rollout : X_Rollout
-        The collected rollout.
-    gamma : float
-        The discount.
-    ppo_config : PPOConfig
-        The PPO settings, for GAE's λ and the minibatch size.
-
-    Returns
-    -------
-    X_TrainingBatch
-        The rollout's states, actions and behavior log-probs, with π_prox's log-probs and
-        values, the returns and the normalized advantages.
-    """
-    T, E, K = x_rollout.x_rewards.shape
-    layout = build_batch_layout(x_rollout.x_game_state, x_rollout.x_count_cpu)
-    x_log_probs_prox, x_values_prox, x_values_final = _recompute(
-        model, x_rollout, ppo_config.minibatch_size, layout
-    )
-
-    x_returns, x_advantages = _compute_gae(
-        x_rollout.x_rewards,
-        x_values_prox,
-        x_rollout.x_dones.unsqueeze(-1),
-        x_values_final,
-        gamma,
-        ppo_config.lam,
-    )
-
-    # Policy advantage: per-stream advantages summed (≡ single-critic GAE on the
-    # summed reward, by linearity)
-    x_advantages = x_advantages.sum(-1)
-
-    # Normalize advantages over the batch
-    x_advantages = (x_advantages - x_advantages.mean()) / (x_advantages.std() + 1e-8)
-    return X_TrainingBatch(
-        x_game_state=x_rollout.x_game_state,
-        layout=layout,
-        x_count_cpu=x_rollout.x_count_cpu,
-        x_actions=x_rollout.x_actions,
-        x_log_probs_behavior=x_rollout.x_log_probs_behavior,
-        x_log_probs_prox=x_log_probs_prox,
-        x_values_prox=x_values_prox.reshape(-1, K),
-        x_returns=x_returns.reshape(-1, K),
-        x_advantages=x_advantages.reshape(-1, 1),
-    )
 
 
 def _minibatch_metrics(
@@ -253,24 +196,27 @@ def _minibatch_metrics(
 
 def update_ppo(
     model: ActorCritic,
-    batch: X_TrainingBatch,
+    rollout: Rollout,
     optimizer: torch.optim.Optimizer,
     ppo_config: PPOConfig,
+    gamma: float,
     device: torch.device,
     generator: torch.Generator,
 ) -> dict[str, float]:
-    """Run one PPO update over the batch.
+    """Recompute the rollout's anchor policy and GAE, then run one PPO update.
 
     Parameters
     ----------
     model : ActorCritic
         The Learner's model, updated in place.
-    batch : X_TrainingBatch
-        The update's batch.
+    rollout : Rollout
+        The collected states, actions and rewards.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
     ppo_config : PPOConfig
         The PPO settings.
+    gamma : float
+        The discount.
     device : torch.device
         The Learner's device.
     generator : torch.Generator
@@ -283,17 +229,36 @@ def update_ppo(
         averaged over the minibatches run, then `update/epochs_run`, the `Value/ev_*` explained
         variances and the `offpolicy/*` scalars, each computed once per update.
     """
+    K = rollout.rewards.shape[-1]
+    layout = build_batch_layout(rollout.states, rollout.counts_cpu)
+    x_log_probs_prox, x_values_prox, x_values_final = _recompute(
+        model, rollout, ppo_config.minibatch_size, layout
+    )
+    x_returns, x_advantages = _compute_gae(
+        rollout.rewards,
+        x_values_prox,
+        rollout.dones.unsqueeze(-1),
+        x_values_final,
+        gamma,
+        ppo_config.lam,
+    )
+
+    # Policy advantage: per-stream advantages summed (equivalent to one summed-reward critic).
+    x_advantages = x_advantages.sum(-1)
+    x_advantages = (x_advantages - x_advantages.mean()) / (x_advantages.std() + 1e-8)
+    x_values_prox = x_values_prox.reshape(-1, K)
+    x_returns = x_returns.reshape(-1, K)
+    x_advantages = x_advantages.reshape(-1, 1)
+
     records: list[dict[str, float]] = []
 
     # Per-stream explained variance of the values the Learner recomputed before the update:
     # which return stream the critic predicts (EV → 1) and which carries the residual noise
-    ev = 1.0 - (batch.x_returns - batch.x_values_prox).var(dim=0) / (
-        batch.x_returns.var(dim=0) + 1e-8
-    )
+    ev = 1.0 - (x_returns - x_values_prox).var(dim=0) / (x_returns.var(dim=0) + 1e-8)
 
     # How far the anchor sits from the weights that played: the off-policy weight
     # π_prox / π_behavior, its truncation rate, and KL(π_behavior ‖ π_prox)
-    log_weight = batch.x_log_probs_prox - batch.x_log_probs_behavior
+    log_weight = x_log_probs_prox - rollout.log_probs_behavior
     weight = log_weight.exp()
     offpolicy = {
         "offpolicy/is_weight_mean": weight.clamp(max=ppo_config.is_clip).mean().item(),
@@ -303,7 +268,7 @@ def update_ppo(
 
     # All shuffles and CPU output sizes are planned before the first minibatch launches.
     plans = plan_minibatches(
-        batch.x_count_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
+        rollout.counts_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
     )
 
     epochs_run = 0.0
@@ -313,18 +278,18 @@ def update_ppo(
         for plan in epoch_plans:
             x_states = plan.state_ids
             log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
-                take_states(batch.x_game_state, plan, batch.layout),
-                batch.x_actions[x_states],
+                take_states(rollout.states, plan, layout),
+                rollout.actions[x_states],
             )
-            log_probs_prox = batch.x_log_probs_prox[x_states]
-            adv = batch.x_advantages[x_states].squeeze(-1)
-            returns = batch.x_returns[x_states]
-            values_prox = batch.x_values_prox[x_states]
+            log_probs_prox = x_log_probs_prox[x_states]
+            adv = x_advantages[x_states].squeeze(-1)
+            returns = x_returns[x_states]
+            values_prox = x_values_prox[x_states]
 
             # Decoupled PPO (Hilton et al. 2021): clip against π_prox, and weight each
             # sample by π_prox / π_behavior, capped, for the weights that played
             ratio = torch.exp(log_probs_new - log_probs_prox)
-            weight = torch.exp(log_probs_prox - batch.x_log_probs_behavior[x_states]).clamp(
+            weight = torch.exp(log_probs_prox - rollout.log_probs_behavior[x_states]).clamp(
                 max=ppo_config.is_clip
             )
             surr1 = ratio * adv

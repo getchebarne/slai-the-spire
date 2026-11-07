@@ -24,11 +24,12 @@ from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
 from src.rl.types import ACTION_TYPE_BY_INT
 from src.rl.types import NUM_ACTION_TYPES
-from src.rl.types import TokenKind
-from src.rl.types import X_Action
-from src.rl.types import X_CoreOutput
+from src.rl.types import CoreOutput
+from src.rl.types import Jagged
+from src.rl.types import PolicyOutput
 from src.rl.types import StateBatch
-from src.rl.types import X_Window
+from src.rl.types import TokenIndex
+from src.rl.types import TokenKind
 
 
 # Barrier probability floor: each legal action's −log p contribution to the
@@ -232,55 +233,6 @@ def _categorical_rows(
     return x_row, x_log_prob[x_row], x_entropy, x_kl_uniform
 
 
-def _row(x_window: X_Window, x_token_kind: torch.Tensor, x_rank: torch.Tensor) -> torch.Tensor:
-    """Find the row of the rank-th token of `x_token_kind`, per state.
-
-    Where the token kind is -1, the row is the placeholder's: its state's Character row.
-
-    Parameters
-    ----------
-    x_window : X_Window
-        The packed window's X_Window.
-    x_token_kind : torch.Tensor
-        (B,) long. Each state's token kind, -1 for none.
-    x_rank : torch.Tensor
-        (B,) long. Each state's rank within its token kind.
-
-    Returns
-    -------
-    torch.Tensor
-        (B,) long. Each state's row in the window.
-    """
-    x_first_row = x_window.x_token_kind_row.gather(1, x_token_kind.clamp(min=0).unsqueeze(1))
-    return torch.where(
-        x_token_kind >= 0,
-        x_first_row.squeeze(1) + x_rank,
-        x_window.x_token_kind_row[:, TokenKind.CHARACTER],
-    )
-
-
-def _token_kind_rank(x_window: X_Window, x_row: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Find a row's token kind and its rank within that token kind, per state.
-
-    Parameters
-    ----------
-    x_window : X_Window
-        The packed window's X_Window.
-    x_row : torch.Tensor
-        (B,) long. Each state's row in the window.
-
-    Returns
-    -------
-    x_token_kind : torch.Tensor
-        (B,) long. The row's token kind.
-    x_rank : torch.Tensor
-        (B,) long. The row's rank within that token kind.
-    """
-    x_token_kind = x_window.x_token_kind[x_row]
-    x_first_row = x_window.x_token_kind_row.gather(1, x_token_kind.unsqueeze(1)).squeeze(1)
-    return x_token_kind, x_row - x_first_row
-
-
 class ActorCritic(nn.Module):
     # The buffers __init__ registers, typed for mypy
     _x_selects_token: torch.Tensor
@@ -389,34 +341,27 @@ class ActorCritic(nn.Module):
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_value._network[-1].weight, gain=1.0)
 
-    def _select_actions(
+    def _run_policy_heads(
         self,
         heads: Callable[..., tuple[torch.Tensor, ...]],
         x_game_state: StateBatch,
-        x_core_out: X_CoreOutput,
+        x_core_out: CoreOutput,
         greedy: bool,
         generator: torch.Generator | None = None,
         x_recorded_actions: torch.Tensor | None = None,
-    ) -> X_Action:
-        x_action_type, x_token_kind, x_rank, x_target, x_log_prob, x_entropy, x_kl_uniform = heads(
+    ) -> tuple[torch.Tensor, ...]:
+        return heads(
             self,
             x_focus=focus_view(x_game_state.context),
-            x_global=x_core_out.x_global,
-            x_refined=x_core_out.x_refined,
-            x_window=x_core_out.x_window,
+            x_global=x_core_out.policy_context,
+            x_refined=x_core_out.tokens,
+            index=x_core_out.index,
+            x_legal=x_game_state.tokens.rows.legal,
+            x_needs_target=x_game_state.tokens.rows.needs_target,
             x_legal_action_type=x_game_state.legal_action_type,
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
-        )
-        return X_Action(
-            x_action_type=x_action_type,
-            x_token_kind=x_token_kind,
-            x_rank=x_rank,
-            x_target=x_target,
-            x_log_prob=x_log_prob,
-            x_entropy=x_entropy,
-            x_kl_uniform=x_kl_uniform,
         )
 
     def forward(self, x_game_state: StateBatch) -> torch.Tensor:
@@ -432,14 +377,14 @@ class ActorCritic(nn.Module):
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(x_game_state).x_global_value)
+        return self._head_value(self.core(x_game_state).value_context)
 
     def act(
         self,
         x_game_state: StateBatch,
         greedy: bool = False,
         generator: torch.Generator | None = None,
-    ) -> X_Action:
+    ) -> PolicyOutput:
         """Select each state's action.
 
         Without values to compute, the core runs the draw-order layer only on the states the
@@ -456,14 +401,27 @@ class ActorCritic(nn.Module):
 
         Returns
         -------
-        X_Action
-            The X_Action, each level's argmax under `greedy` and sampled from `generator`
-            otherwise.
+        PolicyOutput
+            The selected actions and each level's statistics. Actions use the argmax under
+            `greedy`, otherwise samples from `generator`.
         """
         x_core_out = self.core(x_game_state, with_value=False)
 
         # Sampling actions runs eager
-        return self._select_actions(_policy_heads, x_game_state, x_core_out, greedy, generator)
+        (
+            x_action_type,
+            x_token_offset,
+            x_target,
+            x_log_prob,
+            x_entropy,
+            x_kl_uniform,
+        ) = self._run_policy_heads(_policy_heads, x_game_state, x_core_out, greedy, generator)
+        return PolicyOutput(
+            actions=torch.stack([x_action_type, x_token_offset, x_target], dim=1),
+            log_prob=x_log_prob,
+            entropy=x_entropy,
+            kl_uniform=x_kl_uniform,
+        )
 
     def evaluate_actions(
         self, x_game_state: StateBatch, x_recorded_actions: torch.Tensor
@@ -475,8 +433,8 @@ class ActorCritic(nn.Module):
         x_game_state : StateBatch
             The game states.
         x_recorded_actions : torch.Tensor
-            (B, 4) long. Each state's recorded action: action type, token kind, rank, target, -1
-            where a level didn't apply.
+            (B, 3) long. Each state's recorded action: action type, token offset within that
+            state, Monster target rank; -1 where a selection or target didn't apply.
 
         Returns
         -------
@@ -490,25 +448,27 @@ class ActorCritic(nn.Module):
             (B, len(RewardStream)). The values.
         """
         x_core_out = self.core(x_game_state)
-        x_values = self._head_value(x_core_out.x_global_value)
+        x_values = self._head_value(x_core_out.value_context)
 
         # Recorded actions run the attribute, compiled on the Learner
-        x_action = self._select_actions(
+        _, _, _, x_log_prob, x_entropy, x_kl_uniform = self._run_policy_heads(
             self.policy_heads_recorded,
             x_game_state,
             x_core_out,
             greedy=True,
             x_recorded_actions=x_recorded_actions,
         )
-        return x_action.x_log_prob.sum(-1), x_action.x_entropy, x_action.x_kl_uniform, x_values
+        return x_log_prob.sum(-1), x_entropy, x_kl_uniform, x_values
 
 
 def _policy_heads(
     model: ActorCritic,
     x_focus: torch.Tensor,
     x_global: torch.Tensor,
-    x_refined: torch.Tensor,
-    x_window: X_Window,
+    x_refined: Jagged[torch.Tensor],
+    index: TokenIndex,
+    x_legal: torch.Tensor,
+    x_needs_target: torch.Tensor,
     x_legal_action_type: torch.Tensor,
     greedy: bool,
     generator: torch.Generator | None,
@@ -527,10 +487,14 @@ def _policy_heads(
         (B, ENCODING_DIM_FOCUS) float32. Each state's focus row, the L1 head's context.
     x_global : torch.Tensor
         (B, dim_global). The core's global vector of each state.
-    x_refined : torch.Tensor
-        (N, dim_entity). The core's refined rows of the packed window.
-    x_window : X_Window
-        The packed window's X_Window.
+    x_refined : Jagged[torch.Tensor]
+        The core's (N, dim_entity) refined token rows, segmented by state.
+    index : TokenIndex
+        The token kind, state and row lookup tables.
+    x_legal : torch.Tensor
+        (N, NUM_ACTION_TYPES) bool. Each token's legal selections and targets.
+    x_needs_target : torch.Tensor
+        (N,) bool. Whether a token's selection needs a Monster target.
     x_legal_action_type : torch.Tensor
         (B, NUM_ACTION_TYPES) bool. The L1 mask.
     greedy : bool
@@ -538,19 +502,19 @@ def _policy_heads(
     generator : torch.Generator | None
         The generator samples draw from, or None for the global one.
     x_recorded_actions : torch.Tensor | None
-        (B, 4) long. The recorded actions to score: action type, token kind, rank, target; None
-        to select.
+        (B, 3) long. Recorded action type, state-local token offset, and Monster target rank;
+        None to select. Absent selections and targets hold -1.
 
     Returns
     -------
     tuple[torch.Tensor, ...]
-        X_Action's fields in order: the action type, the L2 selection's token kind and rank, and
-        the L3 target, each (B,) long and -1 where its level doesn't apply; then each level's
-        log-prob, entropy and KL(uniform‖π), each (B, 3) and 0 where the level doesn't apply.
+        The action type, the L2 selection's state-local token offset, and the L3 Monster target
+        rank, each (B,) long and -1 where its level doesn't apply; then each level's log-prob,
+        entropy and KL(uniform‖π), each (B, 3) and 0 where the level doesn't apply.
     """
     # The recorded actions' columns, or None when selecting
-    x_recorded_action_type, x_recorded_token_kind, x_recorded_rank, x_recorded_target = (
-        x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 4
+    x_recorded_action_type, x_recorded_token_offset, x_recorded_target = (
+        x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 3
     )
 
     # Select the `ActionType` for every row — one masked categorical, focus-gated.
@@ -562,12 +526,13 @@ def _policy_heads(
     # Compute the `Action`'s selections from the chosen `ActionType`
     batch_size = x_action_type.shape[0]
     x_states = torch.arange(batch_size, device=x_action_type.device)
+    x_state_first = x_refined.lengths.cumsum(0) - x_refined.lengths
 
     # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's state
     # after state: what the key nets split and the scoring runs on. Selections map back to the
     # window through it
-    x_order = torch.argsort(x_window.x_entity_kind, stable=True)  # (N,)
-    x_state = x_window.x_state[x_order]
+    x_order = torch.argsort(index.entity_kind, stable=True)  # (N,)
+    x_state = index.state[x_order]
     (
         num_cards,
         num_relics,
@@ -576,12 +541,12 @@ def _policy_heads(
         num_event_options,
         num_character,
         _,
-    ) = x_window.num_tokens_entity_kind
+    ) = index.entity_counts
 
     # The split hands each class its rows
-    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_refined[
+    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_refined.rows[
         x_order
-    ].split(x_window.num_tokens_entity_kind)
+    ].split(index.entity_counts)
 
     # L2 keys, once per token: its own class's net, the one every action type scores
     # it with. Monsters and the Character are never L2 selections: zero keys
@@ -591,11 +556,17 @@ def _policy_heads(
             model._pointer_key_relic(x_relics),
             model._pointer_key_potion(x_potions),
             torch.zeros(
-                num_monsters, model._dim_key, dtype=x_refined.dtype, device=x_refined.device
+                num_monsters,
+                model._dim_key,
+                dtype=x_refined.rows.dtype,
+                device=x_refined.rows.device,
             ),
             model._pointer_key_event(x_event_options),
             torch.zeros(
-                num_character, model._dim_key, dtype=x_refined.dtype, device=x_refined.device
+                num_character,
+                model._dim_key,
+                dtype=x_refined.rows.dtype,
+                device=x_refined.rows.device,
             ),
             model._pointer_key_room(x_rooms),
         ]
@@ -604,8 +575,8 @@ def _policy_heads(
     # L2: score every row against its state's query, conditioned on the `ActionType` embedding;
     # the mask keeps exactly the type's legal tokens
     x_selects_token = model._x_selects_token[x_action_type]
-    x_legal = x_window.x_legal.gather(1, x_action_type[x_window.x_state].unsqueeze(1))
-    x_mask_rows = x_legal.squeeze(1)[x_order]
+    x_legal_for_action = x_legal.gather(1, x_action_type[index.state].unsqueeze(1))
+    x_mask_rows = x_legal_for_action.squeeze(1)[x_order]
 
     # Monster rows' bits mark L3 targets, not L2 selections
     num_rows_before_monster = num_cards + num_relics + num_potions
@@ -617,14 +588,19 @@ def _policy_heads(
     num_rows_before_character = num_rows_before_monster + num_monsters + num_event_options
     x_mask_rows[num_rows_before_character + x_states] |= ~x_selects_token
 
-    # Recorded selections are (token kind, rank); the pointer scores rows
-    # A state without a selection records token kind and rank -1: _row gives the placeholder
+    # Local offsets survive state reordering; add this batch's starts before grouping the rows.
+    # An absent selection (-1) uses its state's Character placeholder.
     x_recorded_row = None
-    if x_recorded_token_kind is not None:
+    if x_recorded_token_offset is not None:
         # Each window row's place among the grouped rows
         x_place = torch.empty_like(x_order)
         x_place[x_order] = torch.arange(x_order.shape[0], device=x_order.device)
-        x_recorded_row = x_place[_row(x_window, x_recorded_token_kind, x_recorded_rank)]
+        x_recorded_token = torch.where(
+            x_recorded_token_offset >= 0,
+            x_state_first + x_recorded_token_offset,
+            index.kind_row[:, TokenKind.CHARACTER],
+        )
+        x_recorded_row = x_place[x_recorded_token]
 
     # Calculate the rows' logits & select from each state's
     x_logits = model._head_level_2(
@@ -636,7 +612,7 @@ def _policy_heads(
 
     # The selected rows back in the window
     x_token_selected = x_order[x_row_selected]
-    x_token_kind, x_rank = _token_kind_rank(x_window, x_token_selected)
+    x_token_offset = x_token_selected - x_state_first
 
     # L3: Monster target, only for actions that take one (CardPlay / PotionUse)
     # Keep only rows whose committed L2 selection takes a target: at recompute
@@ -644,7 +620,7 @@ def _policy_heads(
     x_has_target = (
         x_recorded_target >= 0
         if x_recorded_target is not None
-        else model._x_is_targeted[x_action_type] & x_window.x_needs_target[x_token_selected]
+        else model._x_is_targeted[x_action_type] & x_needs_target[x_token_selected]
     )
 
     # The choices: each Monster row, scored against its state's selected Card/potion token and
@@ -653,7 +629,7 @@ def _policy_heads(
     x_monster_rows = x_order.narrow(0, num_rows_before_monster, num_monsters)
     x_monster_state = x_state.narrow(0, num_rows_before_monster, num_monsters)
     x_choice_state = torch.cat([x_monster_state, x_states])
-    x_target_legal = x_window.x_legal[x_monster_rows, x_action_type[x_monster_state]]
+    x_target_legal = x_legal[x_monster_rows, x_action_type[x_monster_state]]
     x_mask_l3 = torch.cat([x_has_target[x_monster_state] & x_target_legal, ~x_has_target])
 
     # A cat, not F.pad: compiled, F.pad's backward fails on an empty Monster block
@@ -670,7 +646,7 @@ def _policy_heads(
     )
 
     # A target is a Monster's rank: its choice is its state's first Monster choice plus the rank
-    x_count_monster = x_window.x_token_kind_count[:, TokenKind.MONSTERS]
+    x_count_monster = index.kind_count[:, TokenKind.MONSTERS]
     x_first_monster = x_count_monster.cumsum(0) - x_count_monster
     x_recorded_choice = None
     if x_recorded_target is not None:
@@ -680,7 +656,7 @@ def _policy_heads(
 
     # Calculate the choices' logits & select from each state's
     x_logits = model._head_level_3(
-        x_keys, x_global, x_refined[x_token_selected], x_choice_state, x_mask_l3
+        x_keys, x_global, x_refined.rows[x_token_selected], x_choice_state, x_mask_l3
     )
     x_choice, x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _categorical_rows(
         x_logits, x_mask_l3, x_choice_state, batch_size, x_recorded_choice, greedy, generator
@@ -688,8 +664,7 @@ def _policy_heads(
     x_target = x_choice - x_first_monster
 
     # A level a row doesn't reach: no selection (-1) and zero terms, whatever its placeholder drew
-    x_token_kind = torch.where(x_selects_token, x_token_kind, -1)
-    x_rank = torch.where(x_selects_token, x_rank, -1)
+    x_token_offset = torch.where(x_selects_token, x_token_offset, -1)
     x_log_prob_l2 = torch.where(x_selects_token, x_log_prob_l2, 0.0)
     x_entropy_l2 = torch.where(x_selects_token, x_entropy_l2, 0.0)
     x_kl_uniform_l2 = torch.where(x_selects_token, x_kl_uniform_l2, 0.0)
@@ -701,8 +676,7 @@ def _policy_heads(
     # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
     return (
         x_action_type,
-        x_token_kind,
-        x_rank,
+        x_token_offset,
         x_target,
         torch.stack([x_log_prob_l1, x_log_prob_l2, x_log_prob_l3], dim=1),
         torch.stack([x_entropy_l1, x_entropy_l2, x_entropy_l3], dim=1),

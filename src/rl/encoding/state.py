@@ -1,4 +1,5 @@
 import warnings
+from collections.abc import Iterator
 from collections.abc import Sequence
 
 import numpy as np
@@ -73,9 +74,9 @@ from src.rl.types import TOKEN_KINDS_RELIC
 from src.rl.types import EffectSource
 from src.rl.types import Entity
 from src.rl.types import Jagged
+from src.rl.types import StateBatch
 from src.rl.types import Tag
 from src.rl.types import TokenKind
-from src.rl.types import StateBatch
 from src.rl.types import Tokens
 
 
@@ -187,6 +188,13 @@ def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) ->
             raise ValueError(f"Unsupported `TokenKind`: {token_kind}")
 
 
+def iter_tokens(game_state: GameState) -> Iterator[tuple[TokenKind, Entity]]:
+    """Yield a state's tokens in the shared order used by encoding and action decoding."""
+    for token_kind in TokenKind:
+        for entity in get_entities_for_token_kind(token_kind, game_state):
+            yield token_kind, entity
+
+
 def encode_batch_game_state(
     batch_game_state: list[GameState],
     batch_legal_actions: list[list[Action]],
@@ -234,14 +242,7 @@ def _encode_batch_tokens(
         (B, NUM_ACTION_TYPES) bool. Each state's legal action types.
     """
     # Each state's tokens, as (token kind, Entity) in window order
-    batch_tokens = [
-        [
-            (token_kind, entity)
-            for token_kind in TokenKind
-            for entity in get_entities_for_token_kind(token_kind, game_state)
-        ]
-        for game_state in batch_game_state
-    ]
+    batch_tokens = [list(iter_tokens(game_state)) for game_state in batch_game_state]
 
     # Number of tokens for each state in the batch
     np_count = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
