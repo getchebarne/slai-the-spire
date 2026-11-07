@@ -97,11 +97,15 @@ def start_workers(
     """
     if num_envs <= 0 or rollout_workers <= 0:
         raise ValueError("`num_envs` and `rollout_workers` must be positive")
+    
     if num_envs % rollout_workers != 0:
         raise RuntimeError("`num_envs` must divide evenly across workers")
 
+    # Set spawn context. CUDA is live in this process; fork is unsafe
+    ctx = mp.get_context("spawn") 
+
+    # Instance step buffer
     envs_per_worker = num_envs // rollout_workers
-    ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
     step_buffer = _StepBuffer(
         x_actions=torch.zeros(num_envs, 3, dtype=torch.long).share_memory_(),
         x_rewards=torch.zeros(num_envs, len(RewardStream)).share_memory_(),

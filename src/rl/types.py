@@ -119,8 +119,8 @@ class Jagged[T]:
 class Sparse:
     """Sparse rows with consecutive nonzero entries, ordered by row then column.
 
-    In a populated batch, x_lengths sum to the number of x_columns and x_values. Private worker
-    storage may reserve extra capacity; read_slot exposes only its populated prefixes.
+    x_lengths sum to the number of x_columns and x_values. Only populated rows and entries
+    belong here; shared storage capacity is a separate concern.
     """
 
     x_lengths: torch.Tensor  # (R,) int16, entries per row, including empty rows
