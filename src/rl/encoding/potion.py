@@ -1,6 +1,3 @@
-from enum import StrEnum
-from enum import auto
-
 import numpy as np
 from slai import GameState
 from slai import Potion
@@ -20,20 +17,14 @@ _POTION_NAME_TO_IDX = {potion_name: int(potion_name) for potion_name in PotionNa
 _POTION_RARITY_TO_IDX = {rarity: int(rarity) for rarity in PotionRarity.members()}
 
 
-class PotionChannel(StrEnum):
-    NAME = auto()
-    RARITY = auto()
-    REQUIRES_TARGET = auto()
-    COMBAT_ONLY = auto()
-    DOUBLED = auto()  # Sacred Bark: its Effect rows already carry the doubled amounts
-
-
 CHANNEL_LAYOUT_POTION, _alloc = make_channel_allocator()
-OFF_POTION_NAME = _alloc(PotionChannel.NAME, len(_POTION_NAME_TO_IDX))
-OFF_POTION_RARITY = _alloc(PotionChannel.RARITY, len(_POTION_RARITY_TO_IDX))
-OFF_POTION_REQUIRES_TARGET = _alloc(PotionChannel.REQUIRES_TARGET)
-OFF_POTION_COMBAT_ONLY = _alloc(PotionChannel.COMBAT_ONLY)
-OFF_POTION_DOUBLED = _alloc(PotionChannel.DOUBLED)
+OFF_POTION_NAME = _alloc("name", len(_POTION_NAME_TO_IDX))
+OFF_POTION_RARITY = _alloc("rarity", len(_POTION_RARITY_TO_IDX))
+OFF_POTION_REQUIRES_TARGET = _alloc("requires_target")
+OFF_POTION_COMBAT_ONLY = _alloc("combat_only")
+OFF_POTION_DOUBLED = _alloc(
+    "doubled"
+)  # Sacred Bark: its Effect rows already carry the doubled amounts
 
 ENCODING_DIM_POTION = sum(w for _, w in CHANNEL_LAYOUT_POTION)
 
@@ -98,9 +89,7 @@ def get_potion_entities(token_kind: TokenKind, game_state: GameState) -> list:
         case TokenKind.POTION_EVENT_ROLL:
             event = game_state.event
             return (
-                event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
-                if event is not None
-                else []
+                event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL] if event is not None else []
             )
         case _:
             raise ValueError(f"not a potion token kind: {token_kind}")

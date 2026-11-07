@@ -1,10 +1,6 @@
 import warnings
-from enum import StrEnum
-from enum import auto
 
 import numpy as np
-import torch
-from slai import Event
 from slai import EventName
 from slai import EventOption
 from slai import GameEnv
@@ -32,36 +28,19 @@ _MONSTER_ENCOUNTER_TO_IDX = {
 _MATCH_AND_KEEP_BOARD_SIZE = 12
 
 
-class EventMetaChannel(StrEnum):
-    NAME = auto()
-    CONSUMED = auto()
-    STAGE = auto()
-    HEALTH_MAX_AT_OPEN = auto()  # What ReadAt.EventOpen fractions read
-
-    # Dead Adventurer only
-    FOUND_GOLD = auto()
-    FOUND_NOTHING = auto()
-    FOUND_RELIC = auto()
-    MONSTER_ENCOUNTER = auto()
-
-    # Match and Keep! only
-    MATCH_ATTEMPTS = auto()
-    CARD_MATCH_UNSEEN_COUNT = auto()
-
-
 CHANNEL_LAYOUT_EVENT_META, _alloc = make_channel_allocator()
-OFF_EVENT_NAME = _alloc(EventMetaChannel.NAME, len(_EVENT_NAME_TO_IDX))
-OFF_EVENT_CONSUMED = _alloc(EventMetaChannel.CONSUMED)
-OFF_EVENT_STAGE = _alloc(EventMetaChannel.STAGE)
-OFF_EVENT_HEALTH_MAX_AT_OPEN = _alloc(EventMetaChannel.HEALTH_MAX_AT_OPEN)
-OFF_EVENT_FOUND_GOLD = _alloc(EventMetaChannel.FOUND_GOLD)
-OFF_EVENT_FOUND_NOTHING = _alloc(EventMetaChannel.FOUND_NOTHING)
-OFF_EVENT_FOUND_RELIC = _alloc(EventMetaChannel.FOUND_RELIC)
-OFF_EVENT_MONSTER_ENCOUNTER = _alloc(
-    EventMetaChannel.MONSTER_ENCOUNTER, len(_MONSTER_ENCOUNTER_TO_IDX)
-)
-OFF_EVENT_MATCH_ATTEMPTS = _alloc(EventMetaChannel.MATCH_ATTEMPTS)
-OFF_EVENT_CARD_MATCH_UNSEEN_COUNT = _alloc(EventMetaChannel.CARD_MATCH_UNSEEN_COUNT)
+OFF_EVENT_NAME = _alloc("name", len(_EVENT_NAME_TO_IDX))
+OFF_EVENT_CONSUMED = _alloc("consumed")
+OFF_EVENT_STAGE = _alloc("stage")
+OFF_EVENT_HEALTH_MAX_AT_OPEN = _alloc("health_max_at_open")  # What ReadAt.EventOpen fractions read
+# Dead Adventurer only
+OFF_EVENT_FOUND_GOLD = _alloc("found_gold")
+OFF_EVENT_FOUND_NOTHING = _alloc("found_nothing")
+OFF_EVENT_FOUND_RELIC = _alloc("found_relic")
+OFF_EVENT_MONSTER_ENCOUNTER = _alloc("monster_encounter", len(_MONSTER_ENCOUNTER_TO_IDX))
+# Match and Keep! only
+OFF_EVENT_MATCH_ATTEMPTS = _alloc("match_attempts")
+OFF_EVENT_CARD_MATCH_UNSEEN_COUNT = _alloc("card_match_unseen_count")
 
 ENCODING_DIM_EVENT_META = sum(w for _, w in CHANNEL_LAYOUT_EVENT_META)
 
@@ -69,7 +48,18 @@ ENCODING_DIM_EVENT_META = sum(w for _, w in CHANNEL_LAYOUT_EVENT_META)
 _WARNED_EVENT_TRUNCATED: set = set()
 
 
-def _encode_event_meta_into(event: Event, out: np.ndarray) -> None:
+def encode_event_meta_into(game_state: GameState, out: np.ndarray) -> None:
+    """Write event features, retaining the option-cap warning used by token encoding."""
+    event = game_state.event
+    if event is None:
+        return
+    if len(event.options) > MAX_EVENT_OPTIONS and event.name not in _WARNED_EVENT_TRUNCATED:
+        _WARNED_EVENT_TRUNCATED.add(event.name)
+        warnings.warn(
+            f"Event {event.name!r} has {len(event.options)} options, truncated to"
+            f" encoder cap ({MAX_EVENT_OPTIONS})"
+        )
+
     out[OFF_EVENT_NAME + _EVENT_NAME_TO_IDX[event.name]] = 1.0
     out[OFF_EVENT_CONSUMED] = float(event.consumed)
     out[OFF_EVENT_STAGE] = min(event.stage, EVENT_STAGE_CAP) / EVENT_STAGE_CAP
@@ -115,39 +105,3 @@ def get_event_option_entities(game_state: GameState) -> list[EventOption]:
     """
     event = game_state.event
     return event.options[:MAX_EVENT_OPTIONS] if event is not None else []
-
-
-def encode_batch_event_meta(
-    batch_game_state: list[GameState], device: torch.device
-) -> torch.Tensor:
-    """Encode each state's Event meta.
-
-    Parameters
-    ----------
-    batch_game_state : list[GameState]
-        The states to encode, B of them.
-    device : torch.device
-        The device of the returned tensor.
-
-    Returns
-    -------
-    torch.Tensor
-        (B, ENCODING_DIM_EVENT_META) float32. Each state's Event meta; 0 outside Events.
-    """
-    np_meta = np.zeros((len(batch_game_state), ENCODING_DIM_EVENT_META), dtype=np.float32)
-    for b, game_state in enumerate(batch_game_state):
-        event = game_state.event
-        if event is None:
-            continue
-
-        if len(event.options) > MAX_EVENT_OPTIONS and event.name not in _WARNED_EVENT_TRUNCATED:
-            _WARNED_EVENT_TRUNCATED.add(event.name)
-            warnings.warn(
-                f"Event {event.name!r} has {len(event.options)} options, truncated to"
-                f" encoder cap ({MAX_EVENT_OPTIONS})"
-            )
-
-        # Event metadata
-        _encode_event_meta_into(event, np_meta[b])
-
-    return torch.from_numpy(np_meta).to(device)

@@ -19,11 +19,11 @@ from src.rl.packed import cat_states
 from src.rl.packed import count_blocks
 from src.rl.packed import to_device
 from src.rl.reward import RewardStream
-from src.rl.shared import SharedStateSlot
+from src.rl.shared import _StateSlot
 from src.rl.shared import allocate_slots
 from src.rl.shared import read_slot
 from src.rl.shared import write_slot
-from src.rl.types import X_GameState
+from src.rl.types import StateBatch
 from src.rl.utils import parent_alive
 from src.rl.utils import set_rng_seeds
 
@@ -41,7 +41,7 @@ class StepBuffer:
     x_actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
     x_rewards: torch.Tensor  # (E, K)
     x_dones: torch.Tensor  # (E,)
-    slots: list[SharedStateSlot]  # One per worker, in game order
+    slots: list[_StateSlot]  # One per worker, in game order
     x_ascensions: torch.Tensor  # (E,) long. Each game's ascension under the live position
     episodes: Queue[EpisodeStats]
 
@@ -159,7 +159,7 @@ def _wait_for_replies(worker_handles: list[WorkerHandle]) -> None:
 
 def snapshot_to_device(
     step_buffer: StepBuffer, device: torch.device
-) -> tuple[X_GameState, torch.Tensor]:
+) -> tuple[StateBatch, torch.Tensor]:
     """Copy every game's state out of the step buffer onto the device.
 
     The workers' rows are joined on the CPU and copied onto the device in one copy, with the
@@ -175,7 +175,7 @@ def snapshot_to_device(
 
     Returns
     -------
-    x_game_state : X_GameState
+    x_game_state : StateBatch
         Every game's state, on the device.
     x_count_cpu : torch.Tensor
         (E, number of blocks) long. Each of the E games' rows in each block, on the CPU.

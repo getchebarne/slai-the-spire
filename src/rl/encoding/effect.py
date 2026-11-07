@@ -58,10 +58,10 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
-from src.rl.encoding.sparse import compile_sparse_rows
+from src.rl.encoding.sparse import encode_sparse
 from src.rl.types import EffectSource
 from src.rl.types import Jagged
-from src.rl.types import X_SparseRows
+from src.rl.types import Sparse
 from src.rl.types import make_channel_allocator
 
 
@@ -332,80 +332,6 @@ _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
 
 
 # Contiguous groups; every column carries a cap and a mode
-class EffectChannel(StrEnum):
-    # One-hot over the Effect union
-    EFFECT_KIND = auto()
-
-    # Target
-    TARGETED = auto()
-    CANDIDATE_POOL = auto()
-    SELECTION_KIND = auto()
-    SELECT_COUNT = auto()
-    CANDIDATE_FILTER = auto()
-    EFFECT_SOURCE = auto()  # Written by encode_effect_row_into_w_cache, outside the row cache
-
-    # Categorical params, named for the engine type they one-hot
-    MODIFIER_KIND = auto()
-    MODIFIER_BUFF = auto()
-    DELTA_SIGN = auto()
-    CARD_PILE = auto()
-    CARD_KIND = auto()
-    CARD_COLOR = auto()
-    CARD_RARITY = auto()
-    RELIC_TIER = auto()
-    RELIC_EXCLUSION = auto()
-    COST_SCOPE = auto()
-    COST_ZERO_PRESENT = auto()
-    REWARD_ROLL_TRIGGER = auto()
-    READ_AT = auto()
-    ROUNDING = auto()
-
-    # Identity vocabularies, named for the engine name enum
-    CARD_NAME = auto()
-    RELIC_NAME = auto()
-    MONSTER_NAME = auto()
-    RELIC_POOL_SIZE = auto()
-
-    # Magnitudes, one per physical unit
-    DAMAGE = auto()
-    DAMAGE_BUCKETS = auto()
-    INSTANCES = auto()
-    BLOCK = auto()
-    HEALTH_ABSOLUTE = auto()
-    HEALTH_BUCKETS = auto()
-    HEALTH_RELATIVE = auto()
-    GOLD_ABSOLUTE = auto()
-    GOLD_BUCKETS = auto()
-    GOLD_RELATIVE = auto()
-    AMOUNT_IS_RANGE = auto()
-    ENERGY = auto()
-    STACKS = auto()
-    STACKS_NEGATIVE = auto()
-    STACKS_BUCKETS = auto()
-    COUNT = auto()
-    DELTA = auto()
-    CHANCE = auto()
-    FACTOR = auto()
-    COST = auto()
-    TURNS = auto()
-
-    # Boolean flags, named for the engine field
-    ADVANCE_ON_MISS = auto()
-    BLOCK_FROM_HIT = auto()
-    BOTTOM = auto()
-    CHOOSE_DISCARDS = auto()
-    COLORLESS = auto()
-    ESCAPED_CHARACTER = auto()
-    FREE = auto()
-    IF_POISONED = auto()
-    LIFESTEAL = auto()
-    LIMITED = auto()
-    ON_OWNER = auto()
-    ONLY_REDUCE = auto()
-    RANDOM = auto()
-    RARE_ONLY = auto()
-    UNIFORM = auto()
-    UPGRADED = auto()
 
 
 def _bucket_width(cap: float) -> int:
@@ -415,81 +341,82 @@ def _bucket_width(cap: float) -> int:
 CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
 
 
-# Effect's kind
-OFF_EFFECT_KIND = _alloc(EffectChannel.EFFECT_KIND, len(_INDEX_EFFECT))
+# Effect's kind: one-hot over the Effect union
+OFF_EFFECT_KIND = _alloc("effect_kind", len(_INDEX_EFFECT))
 
 # Target
-OFF_TARGETED = _alloc(EffectChannel.TARGETED)
-OFF_CANDIDATE_POOL = _alloc(EffectChannel.CANDIDATE_POOL, len(_INDEX_CAND_POOL))
-OFF_SELECTION_KIND = _alloc(EffectChannel.SELECTION_KIND, len(_INDEX_SELECTION_KIND))
-OFF_SELECT_COUNT = _alloc(EffectChannel.SELECT_COUNT)
-OFF_CANDIDATE_FILTER = _alloc(EffectChannel.CANDIDATE_FILTER, len(_INDEX_CAND_FILTER))
-OFF_EFFECT_SOURCE = _alloc(EffectChannel.EFFECT_SOURCE, len(EffectSource))
+OFF_TARGETED = _alloc("targeted")
+OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
+OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
+OFF_SELECT_COUNT = _alloc("select_count")
+OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
+OFF_EFFECT_SOURCE = _alloc(
+    "effect_source", len(EffectSource)
+)  # Written by encode_effect_row_into_w_cache, outside the row cache
 
-# Categorical params
-OFF_MODIFIER_KIND = _alloc(EffectChannel.MODIFIER_KIND, len(_INDEX_MODIFIER_KIND))
-OFF_MODIFIER_BUFF = _alloc(EffectChannel.MODIFIER_BUFF)
-OFF_DELTA_SIGN = _alloc(EffectChannel.DELTA_SIGN, len(_INDEX_DELTA_SIGN))
-OFF_CARD_PILE = _alloc(EffectChannel.CARD_PILE, len(_INDEX_CARD_PILE))
-OFF_CARD_KIND = _alloc(EffectChannel.CARD_KIND, len(_INDEX_CARD_KIND))
-OFF_CARD_COLOR = _alloc(EffectChannel.CARD_COLOR, len(_INDEX_CARD_COLOR))
-OFF_CARD_RARITY = _alloc(EffectChannel.CARD_RARITY, len(_INDEX_CARD_RARITY))
-OFF_RELIC_TIER = _alloc(EffectChannel.RELIC_TIER, len(_INDEX_RELIC_TIER))
-OFF_RELIC_EXCLUSION = _alloc(EffectChannel.RELIC_EXCLUSION, len(_INDEX_RELIC_EXCLUSION))
-OFF_COST_SCOPE = _alloc(EffectChannel.COST_SCOPE, len(_INDEX_COST_SCOPE))
-OFF_COST_ZERO_PRESENT = _alloc(EffectChannel.COST_ZERO_PRESENT)
-OFF_REWARD_ROLL_TRIGGER = _alloc(
-    EffectChannel.REWARD_ROLL_TRIGGER, len(_INDEX_REWARD_ROLL_TRIGGER)
-)
-OFF_READ_AT = _alloc(EffectChannel.READ_AT, len(_INDEX_READ_AT))
-OFF_ROUNDING = _alloc(EffectChannel.ROUNDING, len(_INDEX_ROUNDING))
+# Categorical params, named for the engine type they one-hot
+OFF_MODIFIER_KIND = _alloc("modifier_kind", len(_INDEX_MODIFIER_KIND))
+OFF_MODIFIER_BUFF = _alloc("modifier_buff")
+OFF_DELTA_SIGN = _alloc("delta_sign", len(_INDEX_DELTA_SIGN))
+OFF_CARD_PILE = _alloc("card_pile", len(_INDEX_CARD_PILE))
+OFF_CARD_KIND = _alloc("card_kind", len(_INDEX_CARD_KIND))
+OFF_CARD_COLOR = _alloc("card_color", len(_INDEX_CARD_COLOR))
+OFF_CARD_RARITY = _alloc("card_rarity", len(_INDEX_CARD_RARITY))
+OFF_RELIC_TIER = _alloc("relic_tier", len(_INDEX_RELIC_TIER))
+OFF_RELIC_EXCLUSION = _alloc("relic_exclusion", len(_INDEX_RELIC_EXCLUSION))
+OFF_COST_SCOPE = _alloc("cost_scope", len(_INDEX_COST_SCOPE))
+OFF_COST_ZERO_PRESENT = _alloc("cost_zero_present")
+OFF_REWARD_ROLL_TRIGGER = _alloc("reward_roll_trigger", len(_INDEX_REWARD_ROLL_TRIGGER))
+OFF_READ_AT = _alloc("read_at", len(_INDEX_READ_AT))
+OFF_ROUNDING = _alloc("rounding", len(_INDEX_ROUNDING))
 
-# Identity vocabularies (index 0 = unseen)
-OFF_CARD_NAME = _alloc(EffectChannel.CARD_NAME, len(_VOCAB_CARD) + 1)
-OFF_RELIC_NAME = _alloc(EffectChannel.RELIC_NAME, len(_VOCAB_RELIC) + 1)
-OFF_MONSTER_NAME = _alloc(EffectChannel.MONSTER_NAME, len(_VOCAB_MONSTER) + 1)
-OFF_RELIC_POOL_SIZE = _alloc(EffectChannel.RELIC_POOL_SIZE)
+# Identity vocabularies, named for the engine name enum (index 0 = unseen)
+OFF_CARD_NAME = _alloc("card_name", len(_VOCAB_CARD) + 1)
+OFF_RELIC_NAME = _alloc("relic_name", len(_VOCAB_RELIC) + 1)
+OFF_MONSTER_NAME = _alloc("monster_name", len(_VOCAB_MONSTER) + 1)
+OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
 
-# Magnitudes
-OFF_DAMAGE = _alloc(EffectChannel.DAMAGE)
-OFF_DAMAGE_BUCKETS = _alloc(EffectChannel.DAMAGE_BUCKETS, _bucket_width(_CAP_DAMAGE))
-OFF_INSTANCES = _alloc(EffectChannel.INSTANCES)
-OFF_BLOCK = _alloc(EffectChannel.BLOCK)
-OFF_HEALTH_ABSOLUTE = _alloc(EffectChannel.HEALTH_ABSOLUTE)
-OFF_HEALTH_BUCKETS = _alloc(EffectChannel.HEALTH_BUCKETS, _bucket_width(_CAP_HEALTH))
-OFF_HEALTH_RELATIVE = _alloc(EffectChannel.HEALTH_RELATIVE)
-OFF_GOLD_ABSOLUTE = _alloc(EffectChannel.GOLD_ABSOLUTE)
-OFF_GOLD_BUCKETS = _alloc(EffectChannel.GOLD_BUCKETS, _bucket_width(_CAP_GOLD))
-OFF_GOLD_RELATIVE = _alloc(EffectChannel.GOLD_RELATIVE)
-OFF_AMOUNT_IS_RANGE = _alloc(EffectChannel.AMOUNT_IS_RANGE)
-OFF_ENERGY = _alloc(EffectChannel.ENERGY)
-OFF_STACKS = _alloc(EffectChannel.STACKS)
-OFF_STACKS_NEGATIVE = _alloc(EffectChannel.STACKS_NEGATIVE)
-OFF_STACKS_BUCKETS = _alloc(EffectChannel.STACKS_BUCKETS, _bucket_width(_CAP_STACKS))
-OFF_COUNT = _alloc(EffectChannel.COUNT)
-OFF_DELTA = _alloc(EffectChannel.DELTA)
-OFF_CHANCE = _alloc(EffectChannel.CHANCE)
-OFF_FACTOR = _alloc(EffectChannel.FACTOR)
-OFF_COST = _alloc(EffectChannel.COST)
-OFF_TURNS = _alloc(EffectChannel.TURNS)
+# Magnitudes, one per physical unit
+OFF_DAMAGE = _alloc("damage")
+OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE))
+OFF_INSTANCES = _alloc("instances")
+OFF_BLOCK = _alloc("block")
+OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
+OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
+OFF_HEALTH_RELATIVE = _alloc("health_relative")
+OFF_GOLD_ABSOLUTE = _alloc("gold_absolute")
+OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD))
+OFF_GOLD_RELATIVE = _alloc("gold_relative")
+OFF_AMOUNT_IS_RANGE = _alloc("amount_is_range")
+OFF_ENERGY = _alloc("energy")
+OFF_STACKS = _alloc("stacks")
+OFF_STACKS_NEGATIVE = _alloc("stacks_negative")
+OFF_STACKS_BUCKETS = _alloc("stacks_buckets", _bucket_width(_CAP_STACKS))
+OFF_COUNT = _alloc("count")
+OFF_DELTA = _alloc("delta")
+OFF_CHANCE = _alloc("chance")
+OFF_FACTOR = _alloc("factor")
+OFF_COST = _alloc("cost")
+OFF_TURNS = _alloc("turns")
 
 # Boolean flags
-OFF_ADVANCE_ON_MISS = _alloc(EffectChannel.ADVANCE_ON_MISS)
-OFF_BLOCK_FROM_HIT = _alloc(EffectChannel.BLOCK_FROM_HIT)
-OFF_BOTTOM = _alloc(EffectChannel.BOTTOM)
-OFF_CHOOSE_DISCARDS = _alloc(EffectChannel.CHOOSE_DISCARDS)
-OFF_COLORLESS = _alloc(EffectChannel.COLORLESS)
-OFF_ESCAPED_CHARACTER = _alloc(EffectChannel.ESCAPED_CHARACTER)
-OFF_FREE = _alloc(EffectChannel.FREE)
-OFF_IF_POISONED = _alloc(EffectChannel.IF_POISONED)
-OFF_LIFESTEAL = _alloc(EffectChannel.LIFESTEAL)
-OFF_LIMITED = _alloc(EffectChannel.LIMITED)
-OFF_ON_OWNER = _alloc(EffectChannel.ON_OWNER)
-OFF_ONLY_REDUCE = _alloc(EffectChannel.ONLY_REDUCE)
-OFF_RANDOM = _alloc(EffectChannel.RANDOM)
-OFF_RARE_ONLY = _alloc(EffectChannel.RARE_ONLY)
-OFF_UNIFORM = _alloc(EffectChannel.UNIFORM)
-OFF_UPGRADED = _alloc(EffectChannel.UPGRADED)
+# Boolean flags, named for the engine field
+OFF_ADVANCE_ON_MISS = _alloc("advance_on_miss")
+OFF_BLOCK_FROM_HIT = _alloc("block_from_hit")
+OFF_BOTTOM = _alloc("bottom")
+OFF_CHOOSE_DISCARDS = _alloc("choose_discards")
+OFF_COLORLESS = _alloc("colorless")
+OFF_ESCAPED_CHARACTER = _alloc("escaped_character")
+OFF_FREE = _alloc("free")
+OFF_IF_POISONED = _alloc("if_poisoned")
+OFF_LIFESTEAL = _alloc("lifesteal")
+OFF_LIMITED = _alloc("limited")
+OFF_ON_OWNER = _alloc("on_owner")
+OFF_ONLY_REDUCE = _alloc("only_reduce")
+OFF_RANDOM = _alloc("random")
+OFF_RARE_ONLY = _alloc("rare_only")
+OFF_UNIFORM = _alloc("uniform")
+OFF_UPGRADED = _alloc("upgraded")
 
 # (float channel, bucket block, cap) — buckets derive from the final raw floats
 _BUCKET_META: tuple[tuple[int, int, float], ...] = (
@@ -504,9 +431,9 @@ ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT_EFFECT)
 
 # The channels that set several of a row's columns
 _MULTI_HOT_CHANNELS = (
-    EffectChannel.CANDIDATE_FILTER,
-    EffectChannel.RELIC_NAME,
-    EffectChannel.MONSTER_NAME,
+    "candidate_filter",
+    "relic_name",
+    "monster_name",
 )
 
 # Most nonzero columns an Effect row holds: one per one-hot or scalar channel, and every column
@@ -1055,7 +982,7 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
 
 def encode_batch_effect_pending(
     batch_game_state: list[GameState], device: torch.device
-) -> Jagged[X_SparseRows]:
+) -> Jagged[Sparse]:
     """Encode the pending Effect rows as one (P, D) block, held sparse.
 
     One row per state with a halt pending, every state's after the previous state's.
@@ -1069,7 +996,7 @@ def encode_batch_effect_pending(
 
     Returns
     -------
-    Jagged[X_SparseRows]
+    Jagged[Sparse]
         The pending Effect rows, held sparse, and each state's (B,) row count, 1 or 0.
     """
     batch_effect_pending = [game_state.effect_pending for game_state in batch_game_state]
@@ -1086,6 +1013,7 @@ def encode_batch_effect_pending(
             row += 1
 
     normalize_effect_rows(np_effect_rows)
-    return compile_sparse_rows(
-        np_effect_rows, np_count, ENCODING_DIM_SPARSE_EFFECT, device
+    return Jagged(
+        torch.from_numpy(np_count).to(device),
+        encode_sparse(np_effect_rows, ENCODING_DIM_SPARSE_EFFECT, device),
     )

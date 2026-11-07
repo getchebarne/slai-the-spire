@@ -1,13 +1,7 @@
 import torch
 import torch.nn as nn
 
-from src.rl.encoding.energy import ENCODING_DIM_ENERGY
-from src.rl.encoding.event import ENCODING_DIM_EVENT_META
-from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
-from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
-from src.rl.encoding.shop import ENCODING_DIM_SHOP_META
-from src.rl.encoding.state import ENCODING_DIM_ASCENSION
+from src.rl.encoding.context import ENCODING_DIM_CONTEXT
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import DrawOrderLayer
 from src.rl.models.entity_transformer import EntityTransformer
@@ -17,7 +11,7 @@ from src.rl.types import MAP_TOKEN_KIND_CAP
 from src.rl.types import TOKEN_KINDS_CARD_REWARDS
 from src.rl.types import TokenKind
 from src.rl.types import X_CoreOutput
-from src.rl.types import X_GameState
+from src.rl.types import StateBatch
 
 
 # Count features: one per token kind except the Character singleton (a constant 1.0), each
@@ -66,13 +60,7 @@ class Core(nn.Module):
             + dim_entity  # Character (refined singleton)
             + map_encoder_dim  # Map GNN readout (whole-graph summary)
             + len(_COUNT_TOKEN_KINDS)  # Per-token-kind token counts, sqrt-normalized by their caps
-            + ENCODING_DIM_ENERGY  # Energy (raw)
-            + ENCODING_DIM_FOCUS  # Focus row
-            + ENCODING_DIM_ASCENSION  # Ascension thermometer (curriculum level)
-            + ENCODING_DIM_MAP_META  # Floor, act, boss, keys, Room kinds, "?" odds and Event pools
-            + ENCODING_DIM_REWARD_META
-            + ENCODING_DIM_SHOP_META  # Shop purge price triple + purged flag
-            + ENCODING_DIM_EVENT_META
+            + ENCODING_DIM_CONTEXT  # Raw per-state features, in their established column order
             + dim_entity  # Embedded pending-halt Effect (EntityProjector)
         )
 
@@ -110,12 +98,12 @@ class Core(nn.Module):
             persistent=False,
         )
 
-    def forward(self, x_game_state: X_GameState, with_value: bool = True) -> X_CoreOutput:
+    def forward(self, x_game_state: StateBatch, with_value: bool = True) -> X_CoreOutput:
         """Compute the core's output.
 
         Parameters
         ----------
-        x_game_state : X_GameState
+        x_game_state : StateBatch
             The game states.
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
@@ -129,7 +117,7 @@ class Core(nn.Module):
         """
 
         # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
-        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_game_state.x_map_grid)
+        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(x_game_state.map_grid)
 
         # The window packed (its tokens and their X_Window), the draw-order layer's states, and
         # the embedded pending halt
@@ -148,13 +136,7 @@ class Core(nn.Module):
             [
                 x_map_readout,
                 self._get_token_counts(x_window.x_token_kind_count),
-                x_game_state.x_energy,
-                x_game_state.x_focus,
-                x_game_state.x_ascension,
-                x_game_state.x_map_meta,
-                x_game_state.x_reward_meta,
-                x_game_state.x_shop_meta,
-                x_game_state.x_event_meta,
+                x_game_state.context,
                 x_pending,
             ],
             dim=1,

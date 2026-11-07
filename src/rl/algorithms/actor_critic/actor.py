@@ -31,7 +31,7 @@ from src.rl.algorithms.actor_critic.workers import stop_workers
 from src.rl.models import ActorCritic
 from src.rl.packed import cat_states
 from src.rl.reward import RewardStream
-from src.rl.types import X_GameState
+from src.rl.types import StateBatch
 from src.rl.types import X_Rollout
 from src.rl.utils import parent_alive
 
@@ -444,7 +444,7 @@ def _collect_rollout(
     step_buffer.x_ascensions.copy_(
         torch.tensor(ascensions(ascension_current, rollout_config.num_envs))
     )
-    x_game_states: list[X_GameState] = []  # Per step, in state order
+    x_game_states: list[StateBatch] = []  # Per step, in state order
     x_count_cpus: list[torch.Tensor] = []  # Their counts, on the CPU
     x_actions = torch.empty(
         rollout_config.rollout_length * rollout_config.num_envs, 4, dtype=torch.long, device=device
@@ -483,8 +483,8 @@ def _collect_rollout(
 
             # Campfire decision: both Rest and RestSmith legal — which was chosen?
             x_both = (
-                x_game_state.x_legal_action_type[:, _ACTION_TYPE_REST]
-                & x_game_state.x_legal_action_type[:, _ACTION_TYPE_SMITH]
+                x_game_state.legal_action_type[:, _ACTION_TYPE_REST]
+                & x_game_state.legal_action_type[:, _ACTION_TYPE_SMITH]
             )
             x_rest_selections.add_((x_both & (x_action.x_action_type == _ACTION_TYPE_REST)).sum())
             x_upgrade_selections.add_(

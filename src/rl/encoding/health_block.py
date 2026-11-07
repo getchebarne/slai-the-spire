@@ -1,6 +1,3 @@
-from enum import StrEnum
-from enum import auto
-
 import numpy as np
 
 from src.rl.constants import BLOCK_MAX_ENTITY
@@ -20,22 +17,13 @@ _BLOCK_OHE_DIM = get_piecewise_dim(_BLOCK_MIN, BLOCK_MAX_ENTITY, _LINEAR_SQRT_TH
 _TOTAL_OHE_DIM = get_piecewise_dim(_TOTAL_MIN, _TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
 
 
-class HealthBlockChannel(StrEnum):
-    HEALTH_OHE = auto()
-    BLOCK_OHE = auto()
-    TOTAL_OHE = auto()
-    HEALTH_SCALAR = auto()
-    BLOCK_SCALAR = auto()
-    TOTAL_SCALAR = auto()
-
-
 CHANNEL_LAYOUT_HEALTH_BLOCK, _alloc = make_channel_allocator()
-OFF_HEALTH_BLOCK_HEALTH = _alloc(HealthBlockChannel.HEALTH_OHE, _HEALTH_OHE_DIM)
-OFF_HEALTH_BLOCK_BLOCK = _alloc(HealthBlockChannel.BLOCK_OHE, _BLOCK_OHE_DIM)
-OFF_HEALTH_BLOCK_TOTAL = _alloc(HealthBlockChannel.TOTAL_OHE, _TOTAL_OHE_DIM)
-OFF_HEALTH_BLOCK_HEALTH_SCALAR = _alloc(HealthBlockChannel.HEALTH_SCALAR)
-OFF_HEALTH_BLOCK_BLOCK_SCALAR = _alloc(HealthBlockChannel.BLOCK_SCALAR)
-OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc(HealthBlockChannel.TOTAL_SCALAR)
+OFF_HEALTH_BLOCK_HEALTH = _alloc("health_ohe", _HEALTH_OHE_DIM)
+OFF_HEALTH_BLOCK_BLOCK = _alloc("block_ohe", _BLOCK_OHE_DIM)
+OFF_HEALTH_BLOCK_TOTAL = _alloc("total_ohe", _TOTAL_OHE_DIM)
+OFF_HEALTH_BLOCK_HEALTH_SCALAR = _alloc("health_scalar")
+OFF_HEALTH_BLOCK_BLOCK_SCALAR = _alloc("block_scalar")
+OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc("total_scalar")
 
 # The one width every combatant writes: the token rows' health/block columns
 ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w in CHANNEL_LAYOUT_HEALTH_BLOCK)

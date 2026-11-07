@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.encoding.context import focus_view
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
@@ -13,8 +14,8 @@ from src.rl.types import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.types import Jagged
 from src.rl.types import TokenKind
 from src.rl.types import X_DrawOrderStates
-from src.rl.types import X_GameState
-from src.rl.types import X_SparseRows
+from src.rl.types import StateBatch
+from src.rl.types import Sparse
 from src.rl.types import X_Window
 
 
@@ -90,13 +91,13 @@ class EntityProjector(nn.Module):
         )
 
     def forward(
-        self, x_game_state: X_GameState, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
+        self, x_game_state: StateBatch, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
     ) -> tuple[torch.Tensor, X_Window, X_DrawOrderStates, torch.Tensor]:
         """Embed `x_game_state`'s window.
 
         Parameters
         ----------
-        x_game_state : X_GameState
+        x_game_state : StateBatch
             The game states.
         x_hidden_map : torch.Tensor
             (U, H * W, dim_map). The Map GNN's per-node features of each Map it ran on (see
@@ -117,19 +118,19 @@ class EntityProjector(nn.Module):
         """
         # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
         # with a pending halt, A = the action types
-        x_tokens = x_game_state.x_tokens.rows
-        batch_size = x_game_state.x_tokens.lengths.shape[0]
-        num_tokens = x_tokens.x_token_kind.shape[0]
+        x_tokens = x_game_state.tokens.rows
+        batch_size = x_game_state.tokens.lengths.shape[0]
+        num_tokens = x_tokens.kind.shape[0]
 
         # Each token's token kind, Entity kind and state, and each state's tokens
-        x_token_kind = x_tokens.x_token_kind.long()  # (N_tok,)
+        x_token_kind = x_tokens.kind.long()  # (N_tok,)
         x_entity_kind = self._x_entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
 
         # Handy alias
-        x_count_window = x_game_state.x_tokens.lengths  # (B,)
+        x_count_window = x_game_state.tokens.lengths  # (B,)
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
-        x_first = _project_sparse(self._pre_token, x_tokens.x_features) + SpreadEmbedding.apply(
+        x_first = _project_sparse(self._pre_token, x_tokens.features) + SpreadEmbedding.apply(
             self._x_bias_entity_kind, x_entity_kind
         )
 
@@ -146,7 +147,9 @@ class EntityProjector(nn.Module):
         # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
         x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = x_game_state.x_focus[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0  # (B,)
+        x_draw_order_visible = (
+            focus_view(x_game_state.context)[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
+        )  # (B,)
         x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
         )  # (2, B)
@@ -193,17 +196,17 @@ class EntityProjector(nn.Module):
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
         x_node_hidden = x_hidden_map[
             x_map_of_state[x_state[x_room_row]],
-            x_tokens.x_node_idx[x_room_row].long(),
+            x_tokens.node_idx[x_room_row].long(),
         ]  # (N_rooms, dim_map)
         x_first[x_room_row] = self._pre_room(x_node_hidden)
 
         # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
         # ReLU/LayerNorm
-        _add_owned(x_first, x_tokens.x_effect_rows, self._effects_mlp)
-        _add_owned(x_first, x_tokens.x_modifier_rows, self._modifiers_mlp)
+        _add_owned(x_first, x_tokens.effects, self._effects_mlp)
+        _add_owned(x_first, x_tokens.modifiers, self._modifiers_mlp)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
-        x_effect_pending = x_game_state.x_effect_pending
+        x_effect_pending = x_game_state.pending
         x_pending_state = torch.repeat_interleave(
             x_effect_pending.lengths, output_size=x_effect_pending.rows.lengths.shape[0]
         )  # (P,)
@@ -222,8 +225,8 @@ class EntityProjector(nn.Module):
         x_window = X_Window(
             x_token_kind=x_token_kind,
             x_entity_kind=x_entity_kind,
-            x_legal=x_tokens.x_legal,
-            x_needs_target=x_tokens.x_needs_target,
+            x_legal=x_tokens.legal,
+            x_needs_target=x_tokens.needs_target,
             x_state=x_state,
             x_count=x_count_window,
             x_token_kind_row=x_token_kind_row,
@@ -238,7 +241,7 @@ class EntityProjector(nn.Module):
         )
 
 
-def _project_sparse(mapper: nn.Linear | nn.Sequential, x_block: X_SparseRows) -> torch.Tensor:
+def _project_sparse(mapper: nn.Linear | nn.Sequential, x_block: Sparse) -> torch.Tensor:
     """Run `mapper` on the dense rows represented by `x_block`'s jagged entries.
 
     Its first linear layer (the mapper, or a Sequential's first layer) sums its weight's columns
@@ -249,7 +252,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, x_block: X_SparseRows) ->
     ----------
     mapper : nn.Linear | nn.Sequential
         A linear layer, or a Sequential whose first layer is linear.
-    x_block : X_SparseRows
+    x_block : Sparse
         The block, its rows held sparse.
 
     Returns
@@ -259,7 +262,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, x_block: X_SparseRows) ->
     """
     linear = mapper if isinstance(mapper, nn.Linear) else mapper[0]
     x_rows = _SumSparseDenseBackward.apply(
-        x_block.lengths, x_block.rows.x_column, x_block.rows.x_value, linear.weight
+        x_block.lengths, x_block.columns, x_block.values, linear.weight
     )
     if linear.bias is not None:
         x_rows = x_rows + linear.bias
@@ -267,7 +270,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, x_block: X_SparseRows) ->
 
 
 def _add_owned(
-    x_first: torch.Tensor, x_owned_sparse: Jagged[X_SparseRows], mapper: nn.Sequential
+    x_first: torch.Tensor, x_owned_sparse: Jagged[Sparse], mapper: nn.Sequential
 ) -> None:
     """Add an owned row kind's rows into their owners' rows of `x_first`.
 
@@ -277,7 +280,7 @@ def _add_owned(
     ----------
     x_first : torch.Tensor
         (N_tok, D). The tokens' first-layer rows, updated in place.
-    x_owned_sparse : Jagged[X_SparseRows]
+    x_owned_sparse : Jagged[Sparse]
         The owned row kind's rows, held sparse.
     mapper : nn.Sequential
         The owned row kind's MLP.
