@@ -58,4 +58,4 @@ def action_from_actiontype(
     slai.Action
         The engine's action.
     """
-    return engine_action(*output.actions[i].tolist(), game_state)
+    return engine_action(*output.x_actions[i].tolist(), game_state)

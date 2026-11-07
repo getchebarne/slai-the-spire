@@ -66,7 +66,7 @@ class WeightSlot:
     x_version: torch.Tensor  # () int64, in shared memory
 
     # In shared CPU memory: containers block sharing the GPU memory of the Learner's allocator
-    x_weights: dict[str, torch.Tensor]
+    weights: dict[str, torch.Tensor]
     x_ascension_current: torch.Tensor  # () float64, in shared memory
 
 
@@ -123,9 +123,9 @@ def make_weight_buffer(model: ActorCritic) -> WeightBuffer:
         weight_slots=[
             WeightSlot(
                 x_version=torch.tensor(-1).share_memory_(),
-                x_weights={
-                    n: torch.empty_like(x, device="cpu").share_memory_()
-                    for n, x in model.state_dict().items()
+                weights={
+                    name: torch.empty_like(x_weight, device="cpu").share_memory_()
+                    for name, x_weight in model.state_dict().items()
                 },
                 x_ascension_current=torch.tensor(0.0, dtype=torch.float64).share_memory_(),
             )
@@ -214,8 +214,9 @@ def publish(
         The curriculum position the Actor should play them at.
     """
     older = min(weight_buffer.weight_slots, key=lambda ws: int(ws.x_version))
-    for name, x in model.state_dict().items():
-        older.x_weights[name].copy_(x)  # A copy to the CPU's pageable memory returns once done
+    for name, x_weight in model.state_dict().items():
+        # A copy to the CPU's pageable memory returns once done.
+        older.weights[name].copy_(x_weight)
     older.x_ascension_current.fill_(ascension_current)
     older.x_version.fill_(version)
     weight_buffer.sph_new_version.release()
@@ -363,7 +364,7 @@ def _actor_loop(
             weight_slot = next(
                 slot for slot in weight_buffer.weight_slots if int(slot.x_version) == version
             )
-            model.load_state_dict(weight_slot.x_weights)
+            model.load_state_dict(weight_slot.weights)
 
             # Collect the rollout using the version's weights
             t_collect = time.perf_counter()
@@ -443,8 +444,8 @@ def _collect_rollout(
     step_buffer.x_ascensions.copy_(
         torch.tensor(ascensions(ascension_current, rollout_config.num_envs))
     )
-    x_game_states: list[StateBatch] = []  # Per step, in state order
-    x_count_cpus: list[torch.Tensor] = []  # Their counts, on the CPU
+    state_batches: list[StateBatch] = []  # Per step, in state order
+    count_batches: list[torch.Tensor] = []  # Their counts, on the CPU
     x_actions = torch.empty(
         rollout_config.rollout_length * rollout_config.num_envs, 3, dtype=torch.long, device=device
     )
@@ -463,30 +464,30 @@ def _collect_rollout(
     # Set model to eval, turn off gradient computation
     model.eval()
     with torch.no_grad():
-        x_game_state, x_count_cpu = snapshot_to_device(step_buffer, device)
+        state_batch, x_count_cpu = snapshot_to_device(step_buffer, device)
         for t in range(rollout_config.rollout_length):
-            policy = model.act(x_game_state, generator=generator)
-            x_game_states.append(x_game_state)
-            x_count_cpus.append(x_count_cpu)
+            policy = model.act(state_batch, generator=generator)
+            state_batches.append(state_batch)
+            count_batches.append(x_count_cpu)
             step_rows = slice(t * rollout_config.num_envs, (t + 1) * rollout_config.num_envs)
-            x_actions[step_rows] = policy.actions
-            x_log_probs_behavior[step_rows] = policy.log_prob.sum(-1)
+            x_actions[step_rows] = policy.x_actions
+            x_log_probs_behavior[step_rows] = policy.x_log_prob.sum(-1)
 
             # Campfire decision: both Rest and RestSmith legal — which was chosen?
             x_both = (
-                x_game_state.legal_action_type[:, _ACTION_TYPE_REST]
-                & x_game_state.legal_action_type[:, _ACTION_TYPE_SMITH]
+                state_batch.x_legal_action_type[:, _ACTION_TYPE_REST]
+                & state_batch.x_legal_action_type[:, _ACTION_TYPE_SMITH]
             )
-            x_rest_selections.add_((x_both & (policy.actions[:, 0] == _ACTION_TYPE_REST)).sum())
+            x_rest_selections.add_((x_both & (policy.x_actions[:, 0] == _ACTION_TYPE_REST)).sum())
             x_upgrade_selections.add_(
-                (x_both & (policy.actions[:, 0] == _ACTION_TYPE_SMITH)).sum()
+                (x_both & (policy.x_actions[:, 0] == _ACTION_TYPE_SMITH)).sum()
             )
 
             step_buffer.x_actions.copy_(x_actions[step_rows])
             step_workers(worker_handles)
             x_rewards[t] = step_buffer.x_rewards
             x_dones[t] = step_buffer.x_dones
-            x_game_state, x_count_cpu = snapshot_to_device(step_buffer, device)
+            state_batch, x_count_cpu = snapshot_to_device(step_buffer, device)
 
     # Set model to training mode
     model.train()
@@ -505,13 +506,13 @@ def _collect_rollout(
 
     return (
         Rollout(
-            states=cat_states(x_game_states),
-            counts_cpu=torch.cat(x_count_cpus),
-            actions=x_actions,
-            log_probs_behavior=x_log_probs_behavior,
-            rewards=x_rewards,
-            dones=x_dones,
-            final_states=x_game_state,
+            states=cat_states(state_batches),
+            x_counts_cpu=torch.cat(count_batches),
+            x_actions=x_actions,
+            x_log_probs_behavior=x_log_probs_behavior,
+            x_rewards=x_rewards,
+            x_dones=x_dones,
+            final_states=state_batch,
         ),
         drain_episodes(step_buffer.episodes),
         metrics,

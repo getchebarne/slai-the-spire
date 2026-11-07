@@ -200,7 +200,9 @@ def encode_batch_game_state(
     batch_legal_actions: list[list[Action]],
     device: torch.device,
 ) -> StateBatch:
-    tokens, legal_action_type = _encode_batch_tokens(batch_game_state, batch_legal_actions, device)
+    tokens, x_legal_action_type = _encode_batch_tokens(
+        batch_game_state, batch_legal_actions, device
+    )
     context = np.zeros((len(batch_game_state), ENCODING_DIM_CONTEXT), dtype=np.float32)
     map_grid = np.zeros(
         (len(batch_game_state), MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32
@@ -211,9 +213,9 @@ def encode_batch_game_state(
     return StateBatch(
         tokens=tokens,
         pending=encode_batch_effect_pending(batch_game_state, device),
-        context=torch.from_numpy(context).to(device),
-        map_grid=torch.from_numpy(map_grid).to(device),
-        legal_action_type=legal_action_type,
+        x_context=torch.from_numpy(context).to(device),
+        x_map_grid=torch.from_numpy(map_grid).to(device),
+        x_legal_action_type=x_legal_action_type,
     )
 
 
@@ -235,7 +237,7 @@ def _encode_batch_tokens(
 
     Returns
     -------
-    x_tokens : Jagged[Tokens]
+    tokens : Jagged[Tokens]
         The tokens, each state's in window order, state after state, with their masks from each
         state's legal actions, and the Effect and Modifier rows they own.
     x_legal_action_type : torch.Tensor
@@ -308,13 +310,13 @@ def _encode_batch_tokens(
 
     # Keep ownership boundaries separate from each sparse row's feature-entry lengths.
     tokens = Jagged(
-        lengths=torch.from_numpy(np_count).to(device),
+        x_lengths=torch.from_numpy(np_count).to(device),
         rows=Tokens(
             features=encode_sparse(np_tokens, ENCODING_DIM_SPARSE_TOKEN, device),
-            kind=torch.from_numpy(np_token_kind).to(device),
-            legal=torch.from_numpy(np_legal).to(device),
-            needs_target=torch.from_numpy(np_needs_target).to(device),
-            node_idx=torch.from_numpy(np_node_idx).to(device),
+            x_kind=torch.from_numpy(np_token_kind).to(device),
+            x_legal=torch.from_numpy(np_legal).to(device),
+            x_needs_target=torch.from_numpy(np_needs_target).to(device),
+            x_node_idx=torch.from_numpy(np_node_idx).to(device),
             effects=Jagged(
                 torch.from_numpy(np_count_effects.astype(np.int16)).to(device),
                 encode_sparse(np_effect_rows, ENCODING_DIM_SPARSE_EFFECT, device),

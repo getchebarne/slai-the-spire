@@ -38,22 +38,22 @@ class _StateSlot:
     Only `read_slot` exposes populated prefixes, valid until the worker's next write.
     """
 
-    token_lengths: torch.Tensor
+    x_token_lengths: torch.Tensor
     token_features: Sparse
-    token_kind: torch.Tensor
-    legal: torch.Tensor
-    needs_target: torch.Tensor
-    node_idx: torch.Tensor
-    effect_lengths: torch.Tensor
+    x_token_kind: torch.Tensor
+    x_legal: torch.Tensor
+    x_needs_target: torch.Tensor
+    x_node_idx: torch.Tensor
+    x_effect_lengths: torch.Tensor
     effects: Sparse
-    modifier_lengths: torch.Tensor
+    x_modifier_lengths: torch.Tensor
     modifiers: Sparse
-    pending_lengths: torch.Tensor
+    x_pending_lengths: torch.Tensor
     pending: Sparse
-    context: torch.Tensor
-    map_grid: torch.Tensor
-    legal_action_type: torch.Tensor
-    shapes: torch.Tensor  # (4, 2): live (rows, entries) of tokens, effects, modifiers, pending
+    x_context: torch.Tensor
+    x_map_grid: torch.Tensor
+    x_legal_action_type: torch.Tensor
+    x_shapes: torch.Tensor  # (4, 2): live (rows, entries) of tokens, effects, modifiers, pending
 
 
 def allocate_slot(batch_size: int) -> _StateSlot:
@@ -77,24 +77,26 @@ def allocate_slots(num_workers: int, batch_size: int) -> list[_StateSlot]:
 
     num_tokens = batch_size * CAP_TOKENS
     storage = _StateSlot(
-        token_lengths=shared(batch_size, dtype=torch.long),
+        x_token_lengths=shared(batch_size, dtype=torch.long),
         token_features=sparse("token_features", num_tokens),
-        token_kind=shared(num_tokens, dtype=torch.int16),
-        legal=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
-        needs_target=shared(num_tokens, dtype=torch.bool),
-        node_idx=shared(num_tokens, dtype=torch.int16),
-        effect_lengths=shared(num_tokens, dtype=torch.int16),
+        x_token_kind=shared(num_tokens, dtype=torch.int16),
+        x_legal=shared(num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_needs_target=shared(num_tokens, dtype=torch.bool),
+        x_node_idx=shared(num_tokens, dtype=torch.int16),
+        x_effect_lengths=shared(num_tokens, dtype=torch.int16),
         effects=sparse("effects", batch_size * MAX_EFFECTS),
-        modifier_lengths=shared(num_tokens, dtype=torch.int16),
+        x_modifier_lengths=shared(num_tokens, dtype=torch.int16),
         modifiers=sparse("modifiers", batch_size * MAX_MODIFIERS),
-        pending_lengths=shared(batch_size, dtype=torch.long),
+        x_pending_lengths=shared(batch_size, dtype=torch.long),
         pending=sparse("pending", batch_size),
-        context=shared(batch_size, ENCODING_DIM_CONTEXT),
-        map_grid=shared(batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
-        legal_action_type=shared(batch_size, NUM_ACTION_TYPES, dtype=torch.bool),
-        shapes=shared(4, 2, dtype=torch.long),
+        x_context=shared(batch_size, ENCODING_DIM_CONTEXT),
+        x_map_grid=shared(batch_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS),
+        x_legal_action_type=shared(batch_size, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_shapes=shared(4, 2, dtype=torch.long),
     )
-    return [map_tensors(storage, lambda tensor: tensor[worker]) for worker in range(num_workers)]
+    return [
+        map_tensors(storage, lambda x_tensor: x_tensor[worker]) for worker in range(num_workers)
+    ]
 
 
 def write_slot(slot: _StateSlot, batch: StateBatch) -> None:
@@ -111,97 +113,102 @@ def write_slot(slot: _StateSlot, batch: StateBatch) -> None:
         ("pending", batch.pending.rows),
     ]
     token_pairs = [
-        (slot.token_kind, tokens.kind),
-        (slot.legal, tokens.legal),
-        (slot.needs_target, tokens.needs_target),
-        (slot.node_idx, tokens.node_idx),
-        (slot.effect_lengths, tokens.effects.lengths),
-        (slot.modifier_lengths, tokens.modifiers.lengths),
+        (slot.x_token_kind, tokens.x_kind),
+        (slot.x_legal, tokens.x_legal),
+        (slot.x_needs_target, tokens.x_needs_target),
+        (slot.x_node_idx, tokens.x_node_idx),
+        (slot.x_effect_lengths, tokens.effects.x_lengths),
+        (slot.x_modifier_lengths, tokens.modifiers.x_lengths),
     ]
     state_pairs = [
-        (slot.token_lengths, batch.tokens.lengths),
-        (slot.pending_lengths, batch.pending.lengths),
-        (slot.context, batch.context),
-        (slot.map_grid, batch.map_grid),
-        (slot.legal_action_type, batch.legal_action_type),
+        (slot.x_token_lengths, batch.tokens.x_lengths),
+        (slot.x_pending_lengths, batch.pending.x_lengths),
+        (slot.x_context, batch.x_context),
+        (slot.x_map_grid, batch.x_map_grid),
+        (slot.x_legal_action_type, batch.x_legal_action_type),
     ]
-    if any(source.shape != target.shape for target, source in state_pairs):
+    if any(x_source.shape != x_target.shape for x_target, x_source in state_pairs):
         raise ValueError("A worker batch must contain exactly its slot's number of states")
-    num_tokens = len(tokens.features.lengths)
-    if any(len(source) != num_tokens for _, source in token_pairs):
+    num_tokens = len(tokens.features.x_lengths)
+    if any(len(x_source) != num_tokens for _, x_source in token_pairs):
         raise ValueError("Token fields and owned-row lengths must match the number of tokens")
     pairs = state_pairs + token_pairs
-    for target, source in pairs:
-        if source.shape[1:] != target.shape[1:]:
+    for x_target, x_source in pairs:
+        if x_source.shape[1:] != x_target.shape[1:]:
             raise ValueError("A worker field's trailing shape does not match its storage")
     for name, source in sparse:
         target = getattr(slot, name)
-        if source.values.ndim != 1 or source.columns.shape != source.values.shape:
+        if source.x_values.ndim != 1 or source.x_columns.shape != source.x_values.shape:
             raise ValueError("Sparse columns and values must have the same one-dimensional shape")
         pairs.extend(
             [
-                (target.lengths, source.lengths),
-                (target.columns, source.columns),
-                (target.values, source.values),
+                (target.x_lengths, source.x_lengths),
+                (target.x_columns, source.x_columns),
+                (target.x_values, source.x_values),
             ]
         )
-    for target, source in pairs:
-        if source.device.type != "cpu" or source.dtype != target.dtype:
+    for x_target, x_source in pairs:
+        if x_source.device.type != "cpu" or x_source.dtype != x_target.dtype:
             raise ValueError("A worker field must be on the CPU with its storage's dtype")
-        if source.ndim != target.ndim or any(a > b for a, b in zip(source.shape, target.shape)):
+        if x_source.ndim != x_target.ndim or any(
+            a > b for a, b in zip(x_source.shape, x_target.shape)
+        ):
             raise ValueError(
-                f"Worker field shape {tuple(source.shape)} exceeds capacity {tuple(target.shape)}"
+                f"Worker field shape {tuple(x_source.shape)} exceeds capacity {tuple(x_target.shape)}"
             )
     # Validate relationships after dtype/rank checks and before touching shared storage.
     lengths_and_totals = [
-        (batch.tokens.lengths, num_tokens),
-        (tokens.effects.lengths, len(tokens.effects.rows.lengths)),
-        (tokens.modifiers.lengths, len(tokens.modifiers.rows.lengths)),
-        (batch.pending.lengths, len(batch.pending.rows.lengths)),
-        *((source.lengths, len(source.values)) for _, source in sparse),
+        (batch.tokens.x_lengths, num_tokens),
+        (tokens.effects.x_lengths, len(tokens.effects.rows.x_lengths)),
+        (tokens.modifiers.x_lengths, len(tokens.modifiers.rows.x_lengths)),
+        (batch.pending.x_lengths, len(batch.pending.rows.x_lengths)),
+        *((source.x_lengths, len(source.x_values)) for _, source in sparse),
     ]
-    for lengths, total in lengths_and_totals:
-        if bool((lengths < 0).any()) or int(lengths.sum(dtype=torch.long)) != total:
+    for x_lengths, total in lengths_and_totals:
+        if bool((x_lengths < 0).any()) or int(x_lengths.sum(dtype=torch.long)) != total:
             raise ValueError("Jagged lengths must be nonnegative and sum to their live row count")
     for name, source in sparse:
-        if bool((source.lengths > _ENTRY_CAPS[name]).any()):
+        if bool((source.x_lengths > _ENTRY_CAPS[name]).any()):
             raise ValueError("A sparse row exceeds its entry capacity")
-    shapes = torch.tensor(
-        [[len(source.lengths), len(source.values)] for _, source in sparse], dtype=torch.long
+    x_shapes = torch.tensor(
+        [[len(source.x_lengths), len(source.x_values)] for _, source in sparse], dtype=torch.long
     )
-    for target, source in pairs:
-        target[tuple(slice(0, size) for size in source.shape)].copy_(source)
-    slot.shapes.copy_(shapes)
+    for x_target, x_source in pairs:
+        x_target[tuple(slice(0, size) for size in x_source.shape)].copy_(x_source)
+    slot.x_shapes.copy_(x_shapes)
 
 
 def read_slot(slot: _StateSlot) -> StateBatch:
     """View the published batch after the worker replies, valid until its next write."""
-    token_shape, effect_shape, modifier_shape, pending_shape = slot.shapes.tolist()
+    token_shape, effect_shape, modifier_shape, pending_shape = slot.x_shapes.tolist()
     num_tokens = token_shape[0]
     return StateBatch(
         tokens=Jagged(
-            slot.token_lengths,
+            slot.x_token_lengths,
             Tokens(
                 features=_live_rows(slot.token_features, token_shape),
-                kind=slot.token_kind[:num_tokens],
-                legal=slot.legal[:num_tokens],
-                needs_target=slot.needs_target[:num_tokens],
-                node_idx=slot.node_idx[:num_tokens],
+                x_kind=slot.x_token_kind[:num_tokens],
+                x_legal=slot.x_legal[:num_tokens],
+                x_needs_target=slot.x_needs_target[:num_tokens],
+                x_node_idx=slot.x_node_idx[:num_tokens],
                 effects=Jagged(
-                    slot.effect_lengths[:num_tokens], _live_rows(slot.effects, effect_shape)
+                    slot.x_effect_lengths[:num_tokens], _live_rows(slot.effects, effect_shape)
                 ),
                 modifiers=Jagged(
-                    slot.modifier_lengths[:num_tokens], _live_rows(slot.modifiers, modifier_shape)
+                    slot.x_modifier_lengths[:num_tokens],
+                    _live_rows(slot.modifiers, modifier_shape),
                 ),
             ),
         ),
-        pending=Jagged(slot.pending_lengths, _live_rows(slot.pending, pending_shape)),
-        context=slot.context,
-        map_grid=slot.map_grid,
-        legal_action_type=slot.legal_action_type,
+        pending=Jagged(slot.x_pending_lengths, _live_rows(slot.pending, pending_shape)),
+        x_context=slot.x_context,
+        x_map_grid=slot.x_map_grid,
+        x_legal_action_type=slot.x_legal_action_type,
     )
 
 
 def _live_rows(storage: Sparse, shape: list[int]) -> Sparse:
     rows, entries = shape
-    return Sparse(storage.lengths[:rows], storage.columns[:entries], storage.values[:entries])
+    return Sparse(
+        storage.x_lengths[:rows], storage.x_columns[:entries], storage.x_values[:entries]
+    )

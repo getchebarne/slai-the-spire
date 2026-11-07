@@ -93,12 +93,12 @@ def _categorical_step(
     return x_idx, dist.log_prob(x_idx), dist.entropy(), x_kl_uniform
 
 
-def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
-    """Sum each state's rows' `x`.
+def _sum_by_state(x_values: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
+    """Sum each state's rows' `x_values`.
 
     Parameters
     ----------
-    x : torch.Tensor
+    x_values : torch.Tensor
         (R,). Each row's value.
     x_state : torch.Tensor
         (R,) long. Each row's state.
@@ -108,17 +108,19 @@ def _sum_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> to
     Returns
     -------
     torch.Tensor
-        (S,). Each state's sum of its rows' `x`.
+        (S,). Each state's sum of its rows' `x_values`.
     """
-    return torch.zeros(batch_size, dtype=x.dtype, device=x.device).index_add_(0, x_state, x)
+    return torch.zeros(batch_size, dtype=x_values.dtype, device=x_values.device).index_add_(
+        0, x_state, x_values
+    )
 
 
-def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
-    """Find each state's max of its rows' `x`.
+def _max_by_state(x_values: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
+    """Find each state's max of its rows' `x_values`.
 
     Parameters
     ----------
-    x : torch.Tensor
+    x_values : torch.Tensor
         (R,). Each row's value.
     x_state : torch.Tensor
         (R,) long. Each row's state.
@@ -128,19 +130,21 @@ def _max_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> to
     Returns
     -------
     torch.Tensor
-        (S,). Each state's max of its rows' `x`.
+        (S,). Each state's max of its rows' `x_values`.
     """
     return torch.full(
-        (batch_size,), float("-inf"), dtype=x.dtype, device=x.device
-    ).scatter_reduce_(0, x_state, x, reduce="amax")
+        (batch_size,), float("-inf"), dtype=x_values.dtype, device=x_values.device
+    ).scatter_reduce_(0, x_state, x_values, reduce="amax")
 
 
-def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) -> torch.Tensor:
-    """Find each state's row of its highest `x`, the first of a tie.
+def _argmax_by_state(
+    x_values: torch.Tensor, x_state: torch.Tensor, batch_size: int
+) -> torch.Tensor:
+    """Find each state's row of its highest `x_values`, the first of a tie.
 
     Parameters
     ----------
-    x : torch.Tensor
+    x_values : torch.Tensor
         (R,). Each row's value.
     x_state : torch.Tensor
         (R,) long. Each row's state.
@@ -150,14 +154,14 @@ def _argmax_by_state(x: torch.Tensor, x_state: torch.Tensor, batch_size: int) ->
     Returns
     -------
     torch.Tensor
-        (S,) long. Each state's row of its highest `x`, the first of a tie.
+        (S,) long. Each state's row of its highest `x_values`, the first of a tie.
     """
-    num_rows = x.shape[0]
-    x_row = torch.arange(num_rows, device=x.device)
-    x_is_max = x == _max_by_state(x, x_state, batch_size)[x_state]
-    return torch.full((batch_size,), num_rows, dtype=torch.long, device=x.device).scatter_reduce_(
-        0, x_state, x_row.masked_fill(~x_is_max, num_rows), reduce="amin"
-    )
+    num_rows = x_values.shape[0]
+    x_row = torch.arange(num_rows, device=x_values.device)
+    x_is_max = x_values == _max_by_state(x_values, x_state, batch_size)[x_state]
+    return torch.full(
+        (batch_size,), num_rows, dtype=torch.long, device=x_values.device
+    ).scatter_reduce_(0, x_state, x_row.masked_fill(~x_is_max, num_rows), reduce="amin")
 
 
 def _categorical_rows(
@@ -344,32 +348,32 @@ class ActorCritic(nn.Module):
     def _run_policy_heads(
         self,
         heads: Callable[..., tuple[torch.Tensor, ...]],
-        x_game_state: StateBatch,
-        x_core_out: CoreOutput,
+        game_state: StateBatch,
+        core_out: CoreOutput,
         greedy: bool,
         generator: torch.Generator | None = None,
         x_recorded_actions: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, ...]:
         return heads(
             self,
-            x_focus=focus_view(x_game_state.context),
-            x_global=x_core_out.policy_context,
-            x_refined=x_core_out.tokens,
-            index=x_core_out.index,
-            x_legal=x_game_state.tokens.rows.legal,
-            x_needs_target=x_game_state.tokens.rows.needs_target,
-            x_legal_action_type=x_game_state.legal_action_type,
+            x_focus=focus_view(game_state.x_context),
+            x_global=core_out.x_policy_context,
+            refined=core_out.tokens,
+            index=core_out.index,
+            x_legal=game_state.tokens.rows.x_legal,
+            x_needs_target=game_state.tokens.rows.x_needs_target,
+            x_legal_action_type=game_state.x_legal_action_type,
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
         )
 
-    def forward(self, x_game_state: StateBatch) -> torch.Tensor:
+    def forward(self, game_state: StateBatch) -> torch.Tensor:
         """Compute the values.
 
         Parameters
         ----------
-        x_game_state : StateBatch
+        game_state : StateBatch
             The game states.
 
         Returns
@@ -377,11 +381,11 @@ class ActorCritic(nn.Module):
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(x_game_state).value_context)
+        return self._head_value(self.core(game_state).x_value_context)
 
     def act(
         self,
-        x_game_state: StateBatch,
+        game_state: StateBatch,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> PolicyOutput:
@@ -392,7 +396,7 @@ class ActorCritic(nn.Module):
 
         Parameters
         ----------
-        x_game_state : StateBatch
+        game_state : StateBatch
             The game states.
         greedy : bool, default False
             Whether each level takes its argmax rather than a sample.
@@ -405,7 +409,7 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
-        x_core_out = self.core(x_game_state, with_value=False)
+        core_out = self.core(game_state, with_value=False)
 
         # Sampling actions runs eager
         (
@@ -415,22 +419,22 @@ class ActorCritic(nn.Module):
             x_log_prob,
             x_entropy,
             x_kl_uniform,
-        ) = self._run_policy_heads(_policy_heads, x_game_state, x_core_out, greedy, generator)
+        ) = self._run_policy_heads(_policy_heads, game_state, core_out, greedy, generator)
         return PolicyOutput(
-            actions=torch.stack([x_action_type, x_token_offset, x_target], dim=1),
-            log_prob=x_log_prob,
-            entropy=x_entropy,
-            kl_uniform=x_kl_uniform,
+            x_actions=torch.stack([x_action_type, x_token_offset, x_target], dim=1),
+            x_log_prob=x_log_prob,
+            x_entropy=x_entropy,
+            x_kl_uniform=x_kl_uniform,
         )
 
     def evaluate_actions(
-        self, x_game_state: StateBatch, x_recorded_actions: torch.Tensor
+        self, game_state: StateBatch, x_recorded_actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
         Parameters
         ----------
-        x_game_state : StateBatch
+        game_state : StateBatch
             The game states.
         x_recorded_actions : torch.Tensor
             (B, 3) long. Each state's recorded action: action type, token offset within that
@@ -447,14 +451,14 @@ class ActorCritic(nn.Module):
         x_values : torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        x_core_out = self.core(x_game_state)
-        x_values = self._head_value(x_core_out.value_context)
+        core_out = self.core(game_state)
+        x_values = self._head_value(core_out.x_value_context)
 
         # Recorded actions run the attribute, compiled on the Learner
         _, _, _, x_log_prob, x_entropy, x_kl_uniform = self._run_policy_heads(
             self.policy_heads_recorded,
-            x_game_state,
-            x_core_out,
+            game_state,
+            core_out,
             greedy=True,
             x_recorded_actions=x_recorded_actions,
         )
@@ -465,7 +469,7 @@ def _policy_heads(
     model: ActorCritic,
     x_focus: torch.Tensor,
     x_global: torch.Tensor,
-    x_refined: Jagged[torch.Tensor],
+    refined: Jagged[torch.Tensor],
     index: TokenIndex,
     x_legal: torch.Tensor,
     x_needs_target: torch.Tensor,
@@ -487,7 +491,7 @@ def _policy_heads(
         (B, ENCODING_DIM_FOCUS) float32. Each state's focus row, the L1 head's context.
     x_global : torch.Tensor
         (B, dim_global). The core's global vector of each state.
-    x_refined : Jagged[torch.Tensor]
+    refined : Jagged[torch.Tensor]
         The core's (N, dim_entity) refined token rows, segmented by state.
     index : TokenIndex
         The token kind, state and row lookup tables.
@@ -526,13 +530,13 @@ def _policy_heads(
     # Compute the `Action`'s selections from the chosen `ActionType`
     batch_size = x_action_type.shape[0]
     x_states = torch.arange(batch_size, device=x_action_type.device)
-    x_state_first = x_refined.lengths.cumsum(0) - x_refined.lengths
+    x_state_first = refined.x_lengths.cumsum(0) - refined.x_lengths
 
     # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's state
     # after state: what the key nets split and the scoring runs on. Selections map back to the
     # window through it
-    x_order = torch.argsort(index.entity_kind, stable=True)  # (N,)
-    x_state = index.state[x_order]
+    x_order = torch.argsort(index.x_entity_kind, stable=True)  # (N,)
+    x_state = index.x_state[x_order]
     (
         num_cards,
         num_relics,
@@ -544,7 +548,7 @@ def _policy_heads(
     ) = index.entity_counts
 
     # The split hands each class its rows
-    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = x_refined.rows[
+    x_cards, x_relics, x_potions, x_monster_tokens, x_event_options, _, x_rooms = refined.rows[
         x_order
     ].split(index.entity_counts)
 
@@ -558,15 +562,15 @@ def _policy_heads(
             torch.zeros(
                 num_monsters,
                 model._dim_key,
-                dtype=x_refined.rows.dtype,
-                device=x_refined.rows.device,
+                dtype=refined.rows.dtype,
+                device=refined.rows.device,
             ),
             model._pointer_key_event(x_event_options),
             torch.zeros(
                 num_character,
                 model._dim_key,
-                dtype=x_refined.rows.dtype,
-                device=x_refined.rows.device,
+                dtype=refined.rows.dtype,
+                device=refined.rows.device,
             ),
             model._pointer_key_room(x_rooms),
         ]
@@ -575,7 +579,7 @@ def _policy_heads(
     # L2: score every row against its state's query, conditioned on the `ActionType` embedding;
     # the mask keeps exactly the type's legal tokens
     x_selects_token = model._x_selects_token[x_action_type]
-    x_legal_for_action = x_legal.gather(1, x_action_type[index.state].unsqueeze(1))
+    x_legal_for_action = x_legal.gather(1, x_action_type[index.x_state].unsqueeze(1))
     x_mask_rows = x_legal_for_action.squeeze(1)[x_order]
 
     # Monster rows' bits mark L3 targets, not L2 selections
@@ -598,7 +602,7 @@ def _policy_heads(
         x_recorded_token = torch.where(
             x_recorded_token_offset >= 0,
             x_state_first + x_recorded_token_offset,
-            index.kind_row[:, TokenKind.CHARACTER],
+            index.x_kind_row[:, TokenKind.CHARACTER],
         )
         x_recorded_row = x_place[x_recorded_token]
 
@@ -646,7 +650,7 @@ def _policy_heads(
     )
 
     # A target is a Monster's rank: its choice is its state's first Monster choice plus the rank
-    x_count_monster = index.kind_count[:, TokenKind.MONSTERS]
+    x_count_monster = index.x_kind_count[:, TokenKind.MONSTERS]
     x_first_monster = x_count_monster.cumsum(0) - x_count_monster
     x_recorded_choice = None
     if x_recorded_target is not None:
@@ -656,7 +660,7 @@ def _policy_heads(
 
     # Calculate the choices' logits & select from each state's
     x_logits = model._head_level_3(
-        x_keys, x_global, x_refined.rows[x_token_selected], x_choice_state, x_mask_l3
+        x_keys, x_global, refined.rows[x_token_selected], x_choice_state, x_mask_l3
     )
     x_choice, x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _categorical_rows(
         x_logits, x_mask_l3, x_choice_state, batch_size, x_recorded_choice, greedy, generator

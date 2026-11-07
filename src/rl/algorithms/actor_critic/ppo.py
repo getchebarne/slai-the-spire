@@ -105,14 +105,14 @@ def _recompute(
     x_values_final : torch.Tensor
         (E, K). Each game's final value.
     """
-    T, E, K = rollout.rewards.shape
+    T, E, K = rollout.x_rewards.shape
     log_probs, values = [], []
     with torch.no_grad():
         for start in range(0, T * E, minibatch_size):
             stop = start + minibatch_size
             x_log_probs, _, _, x_values = model.evaluate_actions(
                 slice_states(rollout.states, start, stop, layout),
-                rollout.actions[start:stop],
+                rollout.x_actions[start:stop],
             )
             log_probs.append(x_log_probs)
             values.append(x_values)
@@ -124,16 +124,16 @@ def _recompute(
 
 
 def _minibatch_metrics(
-    loss_policy: torch.Tensor,
-    loss_value: torch.Tensor,
-    loss_entropy: torch.Tensor,
-    entropies: torch.Tensor,
-    loss_kl_uniform: torch.Tensor,
-    kl_uniform: torch.Tensor,
-    ratio: torch.Tensor,
-    log_probs_new: torch.Tensor,
-    log_probs_prox: torch.Tensor,
-    grad_norm: torch.Tensor,
+    x_loss_policy: torch.Tensor,
+    x_loss_value: torch.Tensor,
+    x_loss_entropy: torch.Tensor,
+    x_entropies: torch.Tensor,
+    x_loss_kl_uniform: torch.Tensor,
+    x_kl_uniform: torch.Tensor,
+    x_ratio: torch.Tensor,
+    x_log_probs_new: torch.Tensor,
+    x_log_probs_prox: torch.Tensor,
+    x_grad_norm: torch.Tensor,
     clip_eps: float,
 ) -> dict[str, float]:
     """Return the per-minibatch TensorBoard scalars (minibatch means).
@@ -143,25 +143,25 @@ def _minibatch_metrics(
 
     Parameters
     ----------
-    loss_policy : torch.Tensor
+    x_loss_policy : torch.Tensor
         (). The policy loss.
-    loss_value : torch.Tensor
+    x_loss_value : torch.Tensor
         (). The value loss.
-    loss_entropy : torch.Tensor
+    x_loss_entropy : torch.Tensor
         (). The entropy loss.
-    entropies : torch.Tensor
+    x_entropies : torch.Tensor
         (B, 3). The entropy of each of the minibatch's B states at each level.
-    loss_kl_uniform : torch.Tensor
+    x_loss_kl_uniform : torch.Tensor
         (). The uniform-KL loss.
-    kl_uniform : torch.Tensor
+    x_kl_uniform : torch.Tensor
         (B, 3). Each state's KL(uniform‖π) at each level.
-    ratio : torch.Tensor
+    x_ratio : torch.Tensor
         (B,). Each recorded action's probability ratio, the current weights' over π_prox's.
-    log_probs_new : torch.Tensor
+    x_log_probs_new : torch.Tensor
         (B,). The recorded actions' log-probs under the current weights.
-    log_probs_prox : torch.Tensor
+    x_log_probs_prox : torch.Tensor
         (B,). The recorded actions' log-probs under π_prox.
-    grad_norm : torch.Tensor
+    x_grad_norm : torch.Tensor
         (). The gradients' total norm before clipping.
     clip_eps : float
         The clip range.
@@ -171,26 +171,26 @@ def _minibatch_metrics(
     dict[str, float]
         Each scalar under its TensorBoard name.
     """
-    ent_mean = entropies.mean(dim=0)
-    kl_uniform_mean = kl_uniform.mean(dim=0)
+    x_ent_mean = x_entropies.mean(dim=0)
+    x_kl_uniform_mean = x_kl_uniform.mean(dim=0)
     metrics = {
-        "loss/policy": loss_policy,
-        "loss/value": loss_value,
-        "loss/entropy": loss_entropy,
-        "loss/kl_uniform": loss_kl_uniform,
-        "entropy/L1": ent_mean[0],
-        "entropy/L2": ent_mean[1],
-        "entropy/L3": ent_mean[2],
-        "kl_uniform/L1": kl_uniform_mean[0],
-        "kl_uniform/L2": kl_uniform_mean[1],
-        "kl_uniform/L3": kl_uniform_mean[2],
-        "update/approx_kl": ((ratio - 1) - (log_probs_new - log_probs_prox)).mean(),
-        "update/clip_fraction": ((ratio - 1).abs() > clip_eps).float().mean(),
-        "grad/norm_preclip": grad_norm,
+        "loss/policy": x_loss_policy,
+        "loss/value": x_loss_value,
+        "loss/entropy": x_loss_entropy,
+        "loss/kl_uniform": x_loss_kl_uniform,
+        "entropy/L1": x_ent_mean[0],
+        "entropy/L2": x_ent_mean[1],
+        "entropy/L3": x_ent_mean[2],
+        "kl_uniform/L1": x_kl_uniform_mean[0],
+        "kl_uniform/L2": x_kl_uniform_mean[1],
+        "kl_uniform/L3": x_kl_uniform_mean[2],
+        "update/approx_kl": ((x_ratio - 1) - (x_log_probs_new - x_log_probs_prox)).mean(),
+        "update/clip_fraction": ((x_ratio - 1).abs() > clip_eps).float().mean(),
+        "grad/norm_preclip": x_grad_norm,
     }
 
     # One read for all of them: each .item() would make the CPU wait for the GPU
-    values = torch.stack([x.detach() for x in metrics.values()]).tolist()
+    values = torch.stack([x_metric.detach() for x_metric in metrics.values()]).tolist()
     return dict(zip(metrics, values))
 
 
@@ -229,15 +229,15 @@ def update_ppo(
         averaged over the minibatches run, then `update/epochs_run`, the `Value/ev_*` explained
         variances and the `offpolicy/*` scalars, each computed once per update.
     """
-    K = rollout.rewards.shape[-1]
-    layout = build_batch_layout(rollout.states, rollout.counts_cpu)
+    K = rollout.x_rewards.shape[-1]
+    layout = build_batch_layout(rollout.states, rollout.x_counts_cpu)
     x_log_probs_prox, x_values_prox, x_values_final = _recompute(
         model, rollout, ppo_config.minibatch_size, layout
     )
     x_returns, x_advantages = _compute_gae(
-        rollout.rewards,
+        rollout.x_rewards,
         x_values_prox,
-        rollout.dones.unsqueeze(-1),
+        rollout.x_dones.unsqueeze(-1),
         x_values_final,
         gamma,
         ppo_config.lam,
@@ -254,21 +254,21 @@ def update_ppo(
 
     # Per-stream explained variance of the values the Learner recomputed before the update:
     # which return stream the critic predicts (EV → 1) and which carries the residual noise
-    ev = 1.0 - (x_returns - x_values_prox).var(dim=0) / (x_returns.var(dim=0) + 1e-8)
+    x_ev = 1.0 - (x_returns - x_values_prox).var(dim=0) / (x_returns.var(dim=0) + 1e-8)
 
     # How far the anchor sits from the weights that played: the off-policy weight
     # π_prox / π_behavior, its truncation rate, and KL(π_behavior ‖ π_prox)
-    log_weight = x_log_probs_prox - rollout.log_probs_behavior
-    weight = log_weight.exp()
+    x_log_weight = x_log_probs_prox - rollout.x_log_probs_behavior
+    x_weight = x_log_weight.exp()
     offpolicy = {
-        "offpolicy/is_weight_mean": weight.clamp(max=ppo_config.is_clip).mean().item(),
-        "offpolicy/is_weight_truncated": (weight > ppo_config.is_clip).float().mean().item(),
-        "offpolicy/kl_behavior_prox": (weight - 1 - log_weight).mean().item(),
+        "offpolicy/is_weight_mean": x_weight.clamp(max=ppo_config.is_clip).mean().item(),
+        "offpolicy/is_weight_truncated": (x_weight > ppo_config.is_clip).float().mean().item(),
+        "offpolicy/kl_behavior_prox": (x_weight - 1 - x_log_weight).mean().item(),
     }
 
     # All shuffles and CPU output sizes are planned before the first minibatch launches.
     plans = plan_minibatches(
-        rollout.counts_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
+        rollout.x_counts_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
     )
 
     epochs_run = 0.0
@@ -276,70 +276,75 @@ def update_ppo(
         epoch_start = len(records)
         stopped = False
         for plan in epoch_plans:
-            x_states = plan.state_ids
-            log_probs_new, entropies, kl_uniform, values_new = model.evaluate_actions(
+            x_states = plan.x_state_ids
+            x_log_probs_new, x_entropies, x_kl_uniform, x_values_new = model.evaluate_actions(
                 take_states(rollout.states, plan, layout),
-                rollout.actions[x_states],
+                rollout.x_actions[x_states],
             )
-            log_probs_prox = x_log_probs_prox[x_states]
-            adv = x_advantages[x_states].squeeze(-1)
-            returns = x_returns[x_states]
-            values_prox = x_values_prox[x_states]
+            x_log_probs_prox_batch = x_log_probs_prox[x_states]
+            x_adv = x_advantages[x_states].squeeze(-1)
+            x_returns_batch = x_returns[x_states]
+            x_values_prox_batch = x_values_prox[x_states]
 
             # Decoupled PPO (Hilton et al. 2021): clip against π_prox, and weight each
             # sample by π_prox / π_behavior, capped, for the weights that played
-            ratio = torch.exp(log_probs_new - log_probs_prox)
-            weight = torch.exp(log_probs_prox - rollout.log_probs_behavior[x_states]).clamp(
-                max=ppo_config.is_clip
+            x_ratio = torch.exp(x_log_probs_new - x_log_probs_prox_batch)
+            x_weight = torch.exp(
+                x_log_probs_prox_batch - rollout.x_log_probs_behavior[x_states]
+            ).clamp(max=ppo_config.is_clip)
+            x_surr1 = x_ratio * x_adv
+            x_surr2 = (
+                torch.clamp(x_ratio, 1 - ppo_config.clip_eps, 1 + ppo_config.clip_eps) * x_adv
             )
-            surr1 = ratio * adv
-            surr2 = torch.clamp(ratio, 1 - ppo_config.clip_eps, 1 + ppo_config.clip_eps) * adv
-            loss_policy = -torch.mean(weight * torch.min(surr1, surr2))
+            x_loss_policy = -torch.mean(x_weight * torch.min(x_surr1, x_surr2))
 
             # Value loss: summed over streams, mean over the batch, so each stream's gradient
             # keeps the single-critic scale (a mean over K would divide coef_value by K)
             if ppo_config.clip_value_loss:
-                values_clipped = values_prox + torch.clamp(
-                    values_new - values_prox, -ppo_config.clip_eps, ppo_config.clip_eps
+                x_values_clipped = x_values_prox_batch + torch.clamp(
+                    x_values_new - x_values_prox_batch, -ppo_config.clip_eps, ppo_config.clip_eps
                 )
-                lv_unclipped = torch.pow(values_new - returns, 2)
-                lv_clipped = torch.pow(values_clipped - returns, 2)
-                loss_value = 0.5 * torch.max(lv_unclipped, lv_clipped).sum(dim=-1).mean()
+                x_lv_unclipped = torch.pow(x_values_new - x_returns_batch, 2)
+                x_lv_clipped = torch.pow(x_values_clipped - x_returns_batch, 2)
+                x_loss_value = 0.5 * torch.max(x_lv_unclipped, x_lv_clipped).sum(dim=-1).mean()
             else:
                 # 0.5·MSE, the clipped branch's canonical PPO scale: without the 0.5,
                 # toggling clip_value_loss would double the effective critic weight
-                loss_value = 0.5 * F.mse_loss(values_new, returns, reduction="none").sum(-1).mean()
+                x_loss_value = (
+                    0.5
+                    * F.mse_loss(x_values_new, x_returns_batch, reduction="none").sum(-1).mean()
+                )
 
-            loss_entropy = -torch.mean(entropies.sum(dim=-1))
+            x_loss_entropy = -torch.mean(x_entropies.sum(dim=-1))
 
             # Uniform-KL barrier, summed per head like the entropy term; each head's KL falls
             # only by lifting its own tail probs. Never decay it: it keeps rare actions reachable
-            loss_kl_uniform = torch.mean(kl_uniform.sum(dim=-1))
-            loss = (
-                loss_policy
-                + ppo_config.coef_value * loss_value
-                + ppo_config.coef_entropy * loss_entropy
-                + ppo_config.coef_kl_uniform * loss_kl_uniform
+            x_loss_kl_uniform = torch.mean(x_kl_uniform.sum(dim=-1))
+            x_loss = (
+                x_loss_policy
+                + ppo_config.coef_value * x_loss_value
+                + ppo_config.coef_entropy * x_loss_entropy
+                + ppo_config.coef_kl_uniform * x_loss_kl_uniform
             )
 
             optimizer.zero_grad()
-            loss.backward()
+            x_loss.backward()
             average_gradients(model)
-            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo_config.max_grad_norm)
+            x_grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo_config.max_grad_norm)
             optimizer.step()
 
             records.append(
                 _minibatch_metrics(
-                    loss_policy,
-                    loss_value,
-                    loss_entropy,
-                    entropies,
-                    loss_kl_uniform,
-                    kl_uniform,
-                    ratio,
-                    log_probs_new,
-                    log_probs_prox,
-                    grad_norm,
+                    x_loss_policy,
+                    x_loss_value,
+                    x_loss_entropy,
+                    x_entropies,
+                    x_loss_kl_uniform,
+                    x_kl_uniform,
+                    x_ratio,
+                    x_log_probs_new,
+                    x_log_probs_prox_batch,
+                    x_grad_norm,
                     ppo_config.clip_eps,
                 )
             )
@@ -372,7 +377,7 @@ def update_ppo(
     metrics = {key: sum(r[key] for r in records) / len(records) for key in records[0]}
     metrics["update/epochs_run"] = float(epochs_run)
     for k, name in enumerate(RewardStream):
-        metrics[f"Value/ev_{name}"] = ev[k].item()
+        metrics[f"Value/ev_{name}"] = x_ev[k].item()
     return metrics | offpolicy
 
 

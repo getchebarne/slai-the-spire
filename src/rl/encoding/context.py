@@ -31,9 +31,9 @@ EVENT_META = slice(SHOP_META.stop, SHOP_META.stop + ENCODING_DIM_EVENT_META)
 ENCODING_DIM_CONTEXT = EVENT_META.stop
 
 
-def focus_view(context: torch.Tensor) -> torch.Tensor:
+def focus_view(x_context: torch.Tensor) -> torch.Tensor:
     """View the focus columns without copying or storing a second tensor field."""
-    return context[:, FOCUS]
+    return x_context[:, FOCUS]
 
 
 def encode_context_into(game_state: GameState, out: np.ndarray) -> None:

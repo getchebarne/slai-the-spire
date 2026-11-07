@@ -241,7 +241,7 @@ def _print_start(
             f"{run_state.total_steps} steps"
         )
     print(f"Starting training: {exp_name} on {world_size} rank(s)")
-    n_params = sum(p.numel() for p in model.parameters())
+    n_params = sum(x_param.numel() for x_param in model.parameters())
     print(f"  params={n_params:,} ({n_params / 1e6:.2f}M)")
     print(
         f"  num_envs={rollout_config.num_envs}, "
