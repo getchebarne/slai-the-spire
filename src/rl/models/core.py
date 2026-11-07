@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 
+from src.rl.constants import MAP_TOKEN_KIND_CAP
+from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.encoding.context import ENCODING_DIM_CONTEXT
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import DrawOrderLayer
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
 from src.rl.models.spread_embedding import SpreadEmbedding
-from src.rl.types import MAP_TOKEN_KIND_CAP
-from src.rl.types import TOKEN_KINDS_CARD_REWARDS
 from src.rl.types import Jagged
 from src.rl.types import TokenKind
 from src.rl.types import CoreOutput

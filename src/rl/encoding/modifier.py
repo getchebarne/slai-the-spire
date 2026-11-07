@@ -7,6 +7,7 @@ from slai import ModifierKind
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INVINCIBLE_STACKS_MAX
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.types import ModifierOwner
 from src.rl.types import make_channel_allocator
 
 
@@ -29,6 +30,7 @@ _OFF_MODIFIER_BUFF = _alloc("buff")
 _OFF_MODIFIER_STACKS = _alloc("stacks")
 _OFF_MODIFIER_STACKS_NEGATIVE = _alloc("stacks_negative")
 _OFF_MODIFIER_STACKS_OHE = _alloc("stacks_ohe", _STACKS_BUCKET_DIM)
+_OFF_MODIFIER_OWNER = _alloc("owner", len(ModifierOwner))
 
 ENCODING_DIM_MODIFIER = sum(w for _, w in CHANNEL_LAYOUT_MODIFIER)
 
@@ -36,7 +38,7 @@ ENCODING_DIM_MODIFIER = sum(w for _, w in CHANNEL_LAYOUT_MODIFIER)
 ENCODING_DIM_SPARSE_MODIFIER = len(CHANNEL_LAYOUT_MODIFIER)
 
 
-def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
+def encode_modifier_row_into(modifier: Modifier, owner: ModifierOwner, out: np.ndarray) -> None:
     # Modifier kind
     out[_OFF_MODIFIER_KIND + _MODIFIER_KIND_TO_IDX[modifier.kind]] = 1.0
 
@@ -48,3 +50,6 @@ def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
     out[_OFF_MODIFIER_STACKS] = get_sqrt_norm(modifier.stacks, stacks_max)
     out[_OFF_MODIFIER_STACKS_NEGATIVE] = float(modifier.stacks < 0)
     out[_OFF_MODIFIER_STACKS_OHE + int(math.sqrt(min(abs(modifier.stacks), stacks_max)))] = 1.0
+
+    # The combatant carrying this modifier
+    out[_OFF_MODIFIER_OWNER + owner] = 1.0

@@ -5,13 +5,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.encoding.context import focus_view
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.state import ENCODING_DIM_TOKEN
 from src.rl.models.spread_embedding import SpreadEmbedding
-from src.rl.types import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.types import Jagged
 from src.rl.types import TokenIndex
 from src.rl.types import TokenKind
@@ -278,7 +278,10 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.T
     )
     if linear.bias is not None:
         x_rows = x_rows + linear.bias
-    return x_rows if isinstance(mapper, nn.Linear) else mapper[1:](x_rows)
+    if isinstance(mapper, nn.Sequential):
+        for i in range(1, len(mapper)):
+            x_rows = mapper[i](x_rows)
+    return x_rows
 
 
 def _add_owned(x_first: torch.Tensor, owned: Jagged[Sparse], mapper: nn.Sequential) -> None:

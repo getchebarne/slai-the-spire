@@ -4,7 +4,6 @@ from enum import IntEnum
 from typing import final
 
 import torch
-from slai import ActionType
 from slai import Card
 from slai import Character
 from slai import EventOption
@@ -12,34 +11,6 @@ from slai import Monster
 from slai import Potion
 from slai import Relic
 from slai import Room
-
-from src.rl.constants import MAP_WIDTH
-from src.rl.constants import MAX_CARD_REWARD_ROLL
-from src.rl.constants import MAX_COMBAT_CARD_REWARD
-from src.rl.constants import MAX_EVENT_OPTIONS
-from src.rl.constants import MAX_MONSTERS
-from src.rl.constants import MAX_POTION_REWARDS
-from src.rl.constants import MAX_POTION_SLOTS
-from src.rl.constants import MAX_RELIC_REWARDS
-from src.rl.constants import MAX_RELICS
-from src.rl.constants import MAX_REWARD_CARD_BUNDLES
-from src.rl.constants import MAX_SHOP_POTIONS
-from src.rl.constants import MAX_SHOP_RELICS
-from src.rl.constants import MAX_SIZE_CARD_MATCH_PAIRS
-from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.constants import MAX_SIZE_CARD_PILE_DISCARD
-from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
-from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
-from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
-from src.rl.constants import MAX_SIZE_CARD_PILE_EXHAUST
-from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
-from src.rl.constants import MAX_SIZE_CARD_PILE_NIGHTMARE
-from src.rl.constants import MAX_SIZE_CARD_PILE_SELECTED
-from src.rl.constants import MAX_SIZE_CARD_PILE_STASIS
-from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
-from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
-from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
-from src.rl.constants import MAX_SIZE_SHOP_CARDS
 
 
 # In packing order: TOKEN_KINDS_OF_ENTITY_KIND's Entity kinds, one after another, each its
@@ -78,97 +49,9 @@ class TokenKind(IntEnum):
     ROOMS = 30
 
 
-TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (card.py owns their packing)
-    TokenKind.CARD_REWARD_0,
-    TokenKind.CARD_REWARD_1,
-    TokenKind.CARD_REWARD_2,
-    TokenKind.CARD_REWARD_3,
-    TokenKind.CARD_REWARD_4,
-)
-
-# Pack order within the Card Entity kind: decision pools first, observational piles last
-TOKEN_KINDS_CARD = (
-    TokenKind.CARD_PILE_HAND,
-    TokenKind.CARD_PILE_DISCOVER,
-    TokenKind.CARD_PILE_SELECTED,
-    *TOKEN_KINDS_CARD_REWARDS,
-    TokenKind.CARD_SHOP,
-    TokenKind.CARD_PILE_EVENT_ROLL,
-    TokenKind.CARD_MATCH_FLIPPED,
-    TokenKind.CARD_MATCH_PAIRS,
-    TokenKind.CARD_PILE_STASIS,
-    TokenKind.CARD_PLAY_QUEUE,
-    TokenKind.CARD_PILE_NIGHTMARE,
-    TokenKind.CARD_PILE_DRAW,
-    TokenKind.CARD_PILE_DISCARD,
-    TokenKind.CARD_PILE_EXHAUST,
-    TokenKind.CARD_PILE_DECK,
-)
-
-# Pack order within the Relic Entity kind: decision pools first, the owned Relics last
-TOKEN_KINDS_RELIC = (
-    TokenKind.RELIC_REWARD,
-    TokenKind.RELIC_SHOP,
-    TokenKind.RELIC_EVENT_ROLL,
-    TokenKind.RELIC_OWNED,
-)
-
-# Pack order within the Potion Entity kind; every source is engine-bounded
-TOKEN_KINDS_POTION = (
-    TokenKind.POTION_OWNED,
-    TokenKind.POTION_REWARD,
-    TokenKind.POTION_SHOP,
-    TokenKind.POTION_EVENT_ROLL,
-)
-
-# The Entity kinds in window order, each its token kinds; the last four hold a single token kind
-TOKEN_KINDS_OF_ENTITY_KIND = (
-    TOKEN_KINDS_CARD,
-    TOKEN_KINDS_RELIC,
-    TOKEN_KINDS_POTION,
-    (TokenKind.MONSTERS,),
-    (TokenKind.EVENT_OPTIONS,),
-    (TokenKind.CHARACTER,),
-    (TokenKind.ROOMS,),
-)
-
-# Each token kind's token cap: the slice its encoder applies to that collection
-MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
-    TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
-    TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
-    TokenKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
-    TokenKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
-    TokenKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
-    TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
-    TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up Card
-    TokenKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
-    TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
-    TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
-    TokenKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
-    TokenKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
-    TokenKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
-    TokenKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
-    TokenKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
-    TokenKind.RELIC_REWARD: MAX_RELIC_REWARDS,
-    TokenKind.RELIC_SHOP: MAX_SHOP_RELICS,
-    TokenKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
-    TokenKind.RELIC_OWNED: MAX_RELICS,
-    TokenKind.POTION_OWNED: MAX_POTION_SLOTS,
-    TokenKind.POTION_REWARD: MAX_POTION_REWARDS,
-    TokenKind.POTION_SHOP: MAX_SHOP_POTIONS,
-    TokenKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
-    TokenKind.MONSTERS: MAX_MONSTERS,
-    TokenKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
-    TokenKind.CHARACTER: 1,
-    TokenKind.ROOMS: MAP_WIDTH,
-}
-
 # An Entity behind a token
 type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
+type Token = tuple[TokenKind, Entity]
 
 
 def make_channel_allocator() -> tuple[list[tuple[str, int]], Callable[..., int]]:
@@ -221,6 +104,13 @@ class EffectSource(IntEnum):
     # Cards, when discarded and when drawn
     CARD_DISCARD = 13
     CARD_DRAW = 14
+
+
+class ModifierOwner(IntEnum):
+    """The combatant carrying the Modifier."""
+
+    CHARACTER = 0
+    MONSTER = 1
 
 
 class Tag(IntEnum):
@@ -276,8 +166,11 @@ class Tokens:
     features: Sparse
     x_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
 
-    # Legal under the action type: an L2 selection, deduped by Card identity, or an L3 target
-    x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+    # Items selectable under each action type, deduped by Card identity
+    x_legal_selection: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+
+    # Monster targets legal under each action type
+    x_legal_target: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
 
     # Selections whose legal actions carry a Monster target (Cards / Potions)
     x_needs_target: torch.Tensor  # (N,) bool
@@ -349,7 +242,7 @@ class TokenIndex:
     one device read with the draw-order sizes.
     """
 
-    x_kind: torch.Tensor  # (N,) long, token kind widened for indexing and engine-facing actions
+    x_kind: torch.Tensor  # (N,) long, Tokens.x_kind widened once for the projector and Core
     x_entity_kind: torch.Tensor  # (N,) long
     x_state: torch.Tensor  # (N,) long, the state owning each token
     x_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
@@ -404,41 +297,3 @@ class Rollout:
     x_rewards: torch.Tensor  # (T, E, K)
     x_dones: torch.Tensor  # (T, E)
     final_states: StateBatch  # E states
-
-
-# members() is declaration order == int() order, which is what masks and heads index by
-ACTION_TYPE_BY_INT = ActionType.members()
-
-# The policy's action types are exactly the engine's
-NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
-
-
-def _check_tables() -> None:
-    """Check that the tables that restate the engine or an enum still agree with it."""
-    if len(TOKEN_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
-        raise RuntimeError(
-            f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
-            "add CARD_REWARD_<b> token kinds"
-        )
-    if set(MAP_TOKEN_KIND_CAP) != set(TokenKind):
-        raise RuntimeError(
-            "A TokenKind has no entry in MAP_TOKEN_KIND_CAP: "
-            f"{set(TokenKind) - set(MAP_TOKEN_KIND_CAP)}"
-        )
-
-    # TokenKind is declared in packing order, valued 0..len-1: the Entity kind tables, one after
-    # another, list it, every token kind in one table
-    token_kinds = [
-        token_kind
-        for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND
-        for token_kind in token_kinds_entity_kind
-    ]
-    if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):
-        names = [token_kind.name for token_kind in token_kinds]
-        raise RuntimeError(
-            "Declare TokenKind in packing order, valued 0..len-1: TOKEN_KINDS_OF_ENTITY_KIND's "
-            f"entity kinds, one after another, list {names}"
-        )
-
-
-_check_tables()

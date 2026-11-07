@@ -107,7 +107,7 @@ def encode_monster_into(
     monster: Monster,
     character_health: int,
     character_block: int,
-    outgoing_damage: int | None,
+    get_outgoing_damage: int | None,
     ascension: int,
     out: np.ndarray,
 ) -> None:
@@ -160,7 +160,7 @@ def encode_monster_into(
         out[OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in INTENT_DEBUFF_KINDS)
         out[OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
         out[OFF_MONSTER_HIT_IS_LETHAL] = float(
-            outgoing_damage >= character_health + character_block
+            get_outgoing_damage >= character_health + character_block
         )
 
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
@@ -180,7 +180,7 @@ def encode_monster_into(
         out[OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
 
 
-def outgoing_damage(monsters: list[Monster]) -> int | None:
+def get_outgoing_damage(monsters: list[Monster]) -> int | None:
     # Runic Dome hides every intent, so the incoming damage is unknown
     if any(monster.intent is None for monster in monsters):
         return None
