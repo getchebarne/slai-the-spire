@@ -4,3 +4,8 @@ This module provides functions to encode the game state into tensor representati
 for the neural network: its Entities (Cards, Relics, Potions, Monsters, the Character, Event
 Options and Rooms) as tokens, and its per-state fields such as the energy and the Map.
 """
+
+from src.rl.encoding.state import encode_batch_game_state
+
+
+__all__ = ["encode_batch_game_state"]

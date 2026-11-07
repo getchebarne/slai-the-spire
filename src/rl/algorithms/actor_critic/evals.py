@@ -23,7 +23,7 @@ from src.rl.algorithms.actor_critic.stats import KEY_WIN_RATE
 from src.rl.algorithms.actor_critic.stats import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.stats import EpisodeStats
 from src.rl.algorithms.actor_critic.stats import aggregate_episode_stats
-from src.rl.encoding.state import encode_batch_game_state
+from src.rl.encoding import encode_batch_game_state
 from src.rl.models import ActorCritic
 from src.rl.utils import parent_alive
 

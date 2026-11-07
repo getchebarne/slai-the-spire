@@ -3,9 +3,9 @@ from itertools import islice
 import slai
 from slai import ACTION_SPEC_REGISTRY
 
-from src.rl.encoding.state import get_entities_for_token_kind
-from src.rl.encoding.state import iter_tokens
-from src.rl.types import ACTION_TYPE_BY_INT
+from src.rl.constants import ACTION_TYPE_BY_INT
+from src.rl.tokens import get_entities_for_token_kind
+from src.rl.tokens import iter_tokens
 from src.rl.types import PolicyOutput
 from src.rl.types import TokenKind
 

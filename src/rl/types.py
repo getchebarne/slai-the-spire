@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import final
@@ -52,29 +51,6 @@ class TokenKind(IntEnum):
 # An Entity behind a token
 type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
 type Token = tuple[TokenKind, Entity]
-
-
-def make_channel_allocator() -> tuple[list[tuple[str, int]], Callable[..., int]]:
-    """Make a (layout, alloc) pair.
-
-    `alloc(channel, width=1)` appends and returns the offset, so offsets, widths and the total
-    all derive from one list.
-
-    Returns
-    -------
-    layout : list[tuple[str, int]]
-        Every allocated channel and its width, in allocation order.
-    alloc : Callable[..., int]
-        The allocator over `layout`.
-    """
-    layout: list[tuple[str, int]] = []
-
-    def alloc(channel: str, width: int = 1) -> int:
-        offset = sum(w for _, w in layout)
-        layout.append((channel, width))
-        return offset
-
-    return layout, alloc
 
 
 class EffectSource(IntEnum):
@@ -187,13 +163,13 @@ class StateBatch:
     """Compact game states held by the encoders, model, rollout and minibatches.
 
     Tokens and pending Effects each have one segment per state. Tokens in turn own segments
-    of Effects and Modifiers. All other fields have one row per state. `src/rl/packed.py`
+    of Effects and Modifiers. All other fields have one row per state. `src/rl/batches.py`
     selects and joins states using those explicit segment boundaries.
     """
 
     tokens: Jagged[Tokens]  # (B,) long lengths
     pending: Jagged[Sparse]  # (B,) long lengths, 0 or 1
-    x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
+    x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; schema.context owns its layout
     x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
 

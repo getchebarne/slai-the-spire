@@ -1,5 +1,4 @@
 import warnings
-from collections.abc import Iterator
 from collections.abc import Sequence
 
 import numpy as np
@@ -20,62 +19,49 @@ from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
-from src.rl.constants import MAX_MONSTERS
-from src.rl.constants import TOKEN_KINDS_CARD
-from src.rl.constants import TOKEN_KINDS_POTION
-from src.rl.constants import TOKEN_KINDS_RELIC
-from src.rl.encoding.card import ENCODING_DIM_CARD
-from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
-from src.rl.encoding.card import TAGS_OF_CARD_NAME
 from src.rl.encoding.card import encode_card_into_w_cache
-from src.rl.encoding.card import get_card_entities
-from src.rl.encoding.character import ENCODING_DIM_CHARACTER
-from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
-from src.rl.encoding.context import ENCODING_DIM_CONTEXT
 from src.rl.encoding.context import encode_context_into
-from src.rl.encoding.effect import ENCODING_DIM_EFFECT
-from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.effect import encode_batch_effect_pending
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
-from src.rl.encoding.event import get_event_option_entities
-from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
-from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
-from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import encode_map_grid_into
-from src.rl.encoding.map_ import get_room_entities
 from src.rl.encoding.mask import encode_batch_masks
-from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
-from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.modifier import encode_modifier_row_into
-from src.rl.encoding.monster import ENCODING_DIM_MONSTER
-from src.rl.encoding.monster import ENCODING_DIM_SPARSE_MONSTER
 from src.rl.encoding.monster import encode_monster_into
-from src.rl.encoding.monster import get_monster_entities
-from src.rl.encoding.monster import moveset_effects
 from src.rl.encoding.monster import get_outgoing_damage
-from src.rl.encoding.potion import ENCODING_DIM_POTION
-from src.rl.encoding.potion import ENCODING_DIM_SPARSE_POTION
-from src.rl.encoding.potion import TAGS_OF_POTION_NAME
 from src.rl.encoding.potion import encode_potion_into_w_cache
-from src.rl.encoding.potion import get_potion_entities
-from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
-from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into_w_cache
-from src.rl.encoding.relic import get_relic_entities
-from src.rl.encoding.shop import ENCODING_DIM_PRICE
-from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_price_into
 from src.rl.encoding.sparse import encode_sparse
+from src.rl.schema.card import TAGS_OF_CARD_NAME
+from src.rl.schema.context import ENCODING_DIM_CONTEXT
+from src.rl.schema.effect import ENCODING_DIM_EFFECT
+from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.schema.map_ import NUM_CHANNELS
+from src.rl.schema.modifier import ENCODING_DIM_MODIFIER
+from src.rl.schema.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.schema.monster import moveset_effects
+from src.rl.schema.potion import TAGS_OF_POTION_NAME
+from src.rl.schema.relic import TAGS_OF_RELIC_NAME
+from src.rl.schema.state import COL_START_CARD
+from src.rl.schema.state import COL_START_CHARACTER
+from src.rl.schema.state import COL_START_HEALTH_BLOCK
+from src.rl.schema.state import COL_START_MONSTER
+from src.rl.schema.state import COL_START_POTION
+from src.rl.schema.state import COL_START_PRICE
+from src.rl.schema.state import COL_START_RELIC
+from src.rl.schema.state import COL_START_STASIS_SLOT
+from src.rl.schema.state import COL_START_TAG
+from src.rl.schema.state import ENCODING_DIM_SPARSE_TOKEN
+from src.rl.schema.state import ENCODING_DIM_TOKEN
+from src.rl.tokens import get_monster_entities
+from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
-from src.rl.types import Entity
 from src.rl.types import Jagged
 from src.rl.types import ModifierOwner
 from src.rl.types import StateBatch
-from src.rl.types import Tag
 from src.rl.types import Token
 from src.rl.types import TokenKind
 from src.rl.types import Tokens
@@ -84,44 +70,6 @@ from src.rl.types import Tokens
 type EffectRow = tuple[int, Effect, EffectSource]
 type ModifierRow = tuple[int, Modifier, ModifierOwner]
 
-
-# The stasis slot columns: a one-hot over the Monsters' roster posts (Monster.slot)
-ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
-ENCODING_DIM_SPARSE_SLOT = 1
-
-# The Tag columns: a Multi-Hot over the Tags
-ENCODING_DIM_TAG = len(Tag)
-ENCODING_DIM_SPARSE_TAG = ENCODING_DIM_TAG
-
-# Each Entity kind's first column in the shared space; Event Options and Rooms have no columns
-COL_START_CARD = 0
-COL_START_RELIC = COL_START_CARD + ENCODING_DIM_CARD
-COL_START_POTION = COL_START_RELIC + ENCODING_DIM_RELIC
-COL_START_MONSTER = COL_START_POTION + ENCODING_DIM_POTION
-COL_START_CHARACTER = COL_START_MONSTER + ENCODING_DIM_MONSTER
-
-# The ranges shared across tokens of different Entity kinds
-COL_START_HEALTH_BLOCK = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
-COL_START_PRICE = COL_START_HEALTH_BLOCK + ENCODING_DIM_HEALTH_BLOCK
-COL_START_STASIS_SLOT = COL_START_PRICE + ENCODING_DIM_PRICE
-
-# The range Cards, Relics and Potions share, outside their cached rows
-COL_START_TAG = COL_START_STASIS_SLOT + ENCODING_DIM_STASIS_SLOT
-
-# Total token encoding dimension
-ENCODING_DIM_TOKEN = COL_START_TAG + ENCODING_DIM_TAG
-
-# Most nonzero columns a token row holds
-ENCODING_DIM_SPARSE_TOKEN = max(
-    ENCODING_DIM_SPARSE_CARD
-    + ENCODING_DIM_SPARSE_PRICE
-    + ENCODING_DIM_SPARSE_SLOT
-    + ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_MONSTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK + ENCODING_DIM_SPARSE_SLOT,
-    ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
-)
 
 # The owned row kinds that have already warned about overflow — truncation is never silent
 _WARNED_OVERFLOW: set[str] = set()
@@ -151,49 +99,6 @@ _TOKEN_KINDS_ID_LOOKUP = frozenset(TokenKind) - {
     TokenKind.CARD_PILE_SELECTED,
     TokenKind.CARD_PLAY_QUEUE,
 }
-
-
-def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) -> Sequence[Entity]:
-    """Return the Entities of a token kind's tokens in rank order.
-
-    They are the encoder's own lists, so an Entity's id and its token share one placement.
-
-    Parameters
-    ----------
-    token_kind : TokenKind
-        The token kind.
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    Sequence[Entity]
-        One Entity per token of the token kind, in rank order.
-    """
-    if token_kind in TOKEN_KINDS_CARD:
-        return get_card_entities(token_kind, game_state)
-    if token_kind in TOKEN_KINDS_RELIC:
-        return get_relic_entities(token_kind, game_state)
-    if token_kind in TOKEN_KINDS_POTION:
-        return get_potion_entities(token_kind, game_state)
-    match token_kind:
-        case TokenKind.MONSTERS:
-            return get_monster_entities(game_state)
-        case TokenKind.EVENT_OPTIONS:
-            return get_event_option_entities(game_state)
-        case TokenKind.CHARACTER:
-            return [game_state.character]
-        case TokenKind.ROOMS:
-            return get_room_entities(game_state)
-        case _:
-            raise ValueError(f"Unsupported `TokenKind`: {token_kind}")
-
-
-def iter_tokens(game_state: GameState) -> Iterator[Token]:
-    """Yield a state's tokens in the shared order used by encoding and action decoding."""
-    for token_kind in TokenKind:
-        for entity in get_entities_for_token_kind(token_kind, game_state):
-            yield token_kind, entity
 
 
 def encode_batch_game_state(
