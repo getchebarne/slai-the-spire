@@ -31,14 +31,15 @@ from src.rl.algorithms.actor_critic.workers import stop_workers
 from src.rl.models import ActorCritic
 from src.rl.packed import cat_states
 from src.rl.reward import RewardStream
+from src.rl.types import Rollout
 from src.rl.types import StateBatch
-from src.rl.types import X_Rollout
 from src.rl.utils import parent_alive
 
 
 _ACTION_TYPE_REST = int(slai.ActionType.Rest)
 _ACTION_TYPE_SMITH = int(slai.ActionType.RestSmith)
 _SPAWN = "spawn"
+
 
 @dataclass
 class RolloutConfig:
@@ -51,7 +52,7 @@ class RolloutConfig:
 class Delivery:
     """One collected rollout and how it was made."""
 
-    x_rollout: X_Rollout
+    rollout: Rollout
     episodes: list[EpisodeStats]
     metrics: dict[str, float]
     seconds_collect: float
@@ -164,7 +165,7 @@ def start_actor(
     ActorHandle
         The Learner's handle on the Actor process.
     """
-    # Instance the Actor's config. Read by the Actor loop 
+    # Instance the Actor's config. Read by the Actor loop
     actor_config = ActorConfig(
         model_config=model_config,
         rollout_config=rollout_config,
@@ -246,8 +247,8 @@ def receive_rollout(actor_handle: ActorHandle) -> tuple[Delivery, float]:
 
     try:
         delivery = actor_handle.conn_read.recv()
-    
-    except (EOFError, OSError):  
+
+    except (EOFError, OSError):
         # It died before or while sending a rollout
         raise _died(actor_handle) from None
 
@@ -331,12 +332,11 @@ def _actor_loop(
     # Get first weight versions
     if not _wait_for_version(weight_buffer.sph_new_version, x_stop):
         return
-    
+
     weight_slot_first = max(weight_buffer.weight_slots, key=lambda slot: int(slot.x_version))
     version_first = int(weight_slot_first.x_version)
 
     with ExitStack() as stack:
-        
         # Start Workers
         step_buffer, worker_handles = start_workers(
             actor_config.rollout_config.num_envs,
@@ -367,7 +367,7 @@ def _actor_loop(
 
             # Collect the rollout using the version's weights
             t_collect = time.perf_counter()
-            x_rollout, episodes, metrics = _collect_rollout(
+            rollout, episodes, metrics = _collect_rollout(
                 model,
                 step_buffer,
                 worker_handles,
@@ -380,7 +380,7 @@ def _actor_loop(
                 torch.cuda.synchronize(device)  # The Learner reads the rollout in another process
                 metrics["memory/actor_gb"] = torch.cuda.max_memory_reserved(device) / 2**30
             delivery = Delivery(
-                x_rollout,
+                rollout,
                 episodes,
                 metrics,
                 seconds_collect=time.perf_counter() - t_collect,
@@ -398,7 +398,6 @@ def _actor_loop(
 
             # Update played version
             version_rolled = version
-            
 
 
 def _collect_rollout(
@@ -409,7 +408,7 @@ def _collect_rollout(
     device: torch.device,
     ascension_current: float,
     generator: torch.Generator,
-) -> tuple[X_Rollout, list[EpisodeStats], dict[str, float]]:
+) -> tuple[Rollout, list[EpisodeStats], dict[str, float]]:
     """Play a rollout's T lockstep steps of its E games with `model`, sampling from `generator`.
 
     Each step runs one forward over all games, then the workers step them. GAE is the Learner's.
@@ -433,7 +432,7 @@ def _collect_rollout(
 
     Returns
     -------
-    x_rollout : X_Rollout
+    rollout : Rollout
         The T steps of the E games, before GAE.
     episodes : list[EpisodeStats]
         The finished episodes, drained from the workers' queue.
@@ -447,7 +446,7 @@ def _collect_rollout(
     x_game_states: list[StateBatch] = []  # Per step, in state order
     x_count_cpus: list[torch.Tensor] = []  # Their counts, on the CPU
     x_actions = torch.empty(
-        rollout_config.rollout_length * rollout_config.num_envs, 4, dtype=torch.long, device=device
+        rollout_config.rollout_length * rollout_config.num_envs, 3, dtype=torch.long, device=device
     )
     x_log_probs_behavior = torch.empty(
         rollout_config.rollout_length * rollout_config.num_envs, device=device
@@ -466,29 +465,21 @@ def _collect_rollout(
     with torch.no_grad():
         x_game_state, x_count_cpu = snapshot_to_device(step_buffer, device)
         for t in range(rollout_config.rollout_length):
-            x_action = model.act(x_game_state, generator=generator)
+            policy = model.act(x_game_state, generator=generator)
             x_game_states.append(x_game_state)
             x_count_cpus.append(x_count_cpu)
             step_rows = slice(t * rollout_config.num_envs, (t + 1) * rollout_config.num_envs)
-            x_actions[step_rows] = torch.stack(
-                [
-                    x_action.x_action_type,
-                    x_action.x_token_kind,
-                    x_action.x_rank,
-                    x_action.x_target,
-                ],
-                dim=1,
-            )
-            x_log_probs_behavior[step_rows] = x_action.x_log_prob.sum(-1)
+            x_actions[step_rows] = policy.actions
+            x_log_probs_behavior[step_rows] = policy.log_prob.sum(-1)
 
             # Campfire decision: both Rest and RestSmith legal — which was chosen?
             x_both = (
                 x_game_state.legal_action_type[:, _ACTION_TYPE_REST]
                 & x_game_state.legal_action_type[:, _ACTION_TYPE_SMITH]
             )
-            x_rest_selections.add_((x_both & (x_action.x_action_type == _ACTION_TYPE_REST)).sum())
+            x_rest_selections.add_((x_both & (policy.actions[:, 0] == _ACTION_TYPE_REST)).sum())
             x_upgrade_selections.add_(
-                (x_both & (x_action.x_action_type == _ACTION_TYPE_SMITH)).sum()
+                (x_both & (policy.actions[:, 0] == _ACTION_TYPE_SMITH)).sum()
             )
 
             step_buffer.x_actions.copy_(x_actions[step_rows])
@@ -513,14 +504,14 @@ def _collect_rollout(
     }
 
     return (
-        X_Rollout(
-            x_game_state=cat_states(x_game_states),
-            x_count_cpu=torch.cat(x_count_cpus),
-            x_actions=x_actions,
-            x_log_probs_behavior=x_log_probs_behavior,
-            x_rewards=x_rewards,
-            x_dones=x_dones,
-            x_game_state_final=x_game_state,
+        Rollout(
+            states=cat_states(x_game_states),
+            counts_cpu=torch.cat(x_count_cpus),
+            actions=x_actions,
+            log_probs_behavior=x_log_probs_behavior,
+            rewards=x_rewards,
+            dones=x_dones,
+            final_states=x_game_state,
         ),
         drain_episodes(step_buffer.episodes),
         metrics,
@@ -544,11 +535,11 @@ def _wait_for_version(sph_new_version: Semaphore, x_stop: torch.Tensor) -> bool:
     """
     while not sph_new_version.acquire(timeout=1.0):
         if bool(x_stop):
-            # Stopped while it waits: stop_actor doesn't wake it  
+            # Stopped while it waits: stop_actor doesn't wake it
             return False
-        
+
         if not parent_alive():
-            # The Learner died without stopping this Actor  
+            # The Learner died without stopping this Actor
             return False
-        
+
     return not x_stop

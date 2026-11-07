@@ -38,7 +38,7 @@ class StepBuffer:
     tensors. The slot publishes the live shapes of its reusable storage with each reply.
     """
 
-    x_actions: torch.Tensor  # (E, 4) long: action type, token kind, rank, target
+    x_actions: torch.Tensor  # (E, 3) long: action type, state-local token offset, Monster target rank
     x_rewards: torch.Tensor  # (E, K)
     x_dones: torch.Tensor  # (E,)
     slots: list[_StateSlot]  # One per worker, in game order
@@ -89,7 +89,7 @@ def start_workers(
     envs_per_worker = num_envs // rollout_workers
     ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
     step_buffer = StepBuffer(
-        x_actions=torch.zeros(num_envs, 4, dtype=torch.long).share_memory_(),
+        x_actions=torch.zeros(num_envs, 3, dtype=torch.long).share_memory_(),
         x_rewards=torch.zeros(num_envs, len(RewardStream)).share_memory_(),
         x_dones=torch.zeros(num_envs).share_memory_(),
         slots=allocate_slots(rollout_workers, envs_per_worker),
@@ -254,10 +254,10 @@ def _worker_loop(
     while _wait_for_request(sph_request, x_stop):
         batch_ascension = step_buffer_region.x_ascensions.tolist()  # Promotions apply on reset
 
-        for j, (action_type, token_kind, rank, target) in enumerate(
+        for j, (action_type, token_offset, target) in enumerate(
             step_buffer_region.x_actions.tolist()
         ):
-            action = engine_action(action_type, token_kind, rank, target, batch_game_state[j])
+            action = engine_action(action_type, token_offset, target, batch_game_state[j])
             game_state_next, reward, done = step_env(
                 batch_env[j], batch_game_state[j], batch_stats[j], action, gamma
             )

@@ -7,8 +7,9 @@ from torch.nn.attention.flex_attention import BlockMask
 from torch.nn.attention.flex_attention import flex_attention
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
+from src.rl.types import Jagged
+from src.rl.types import TokenIndex
 from src.rl.types import TokenKind
-from src.rl.types import X_Window
 
 
 # FlexAttention's block: on the GPU, each side of an attention is padded to a multiple of it
@@ -262,48 +263,50 @@ class EntityTransformer(nn.Module):
         nn.init.normal_(self._x_entity_global, std=0.02)
 
     def forward(
-        self, x_projected: torch.Tensor, x_window: X_Window
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, x_projected: Jagged[torch.Tensor], x_state: torch.Tensor
+    ) -> tuple[Jagged[torch.Tensor], torch.Tensor]:
         """Refine the packed window's rows together with each state's global token.
 
         Each state's global token joins the sequence at the end of its state's rows.
 
         Parameters
         ----------
-        x_projected : torch.Tensor
-            (N, D). The packed window's rows, every state's after the previous state's.
-        x_window : X_Window
-            The packed window's X_Window.
+        x_projected : Jagged[torch.Tensor]
+            (B,) lengths and (N, D) rows, one segment per state.
+        x_state : torch.Tensor
+            (N,) long. The cached state index for each row.
 
         Returns
         -------
-        x_refined : torch.Tensor
-            (N, D). The refined rows, in the window's order.
+        x_refined : Jagged[torch.Tensor]
+            The refined rows, with the same lengths and order as the input.
         x_global_token : torch.Tensor
             (B, D). The global tokens.
         """
-        num_rows, dim = x_projected.shape
-        batch_size = x_window.x_count.shape[0]
+        x_rows = x_projected.rows
+        num_rows, dim = x_rows.shape
+        batch_size = x_projected.lengths.shape[0]
 
         # The sequence: each state's rows, then its global token, state after state. Each state's
         # first place in it, then the end; each row's place, past one global token per state before
         # its own, and each global token's
-        x_offsets = F.pad((x_window.x_count + 1).cumsum(0), (1, 0))  # (B + 1,)
-        x_place_row = torch.arange(num_rows, device=x_projected.device) + x_window.x_state  # (N,)
+        x_offsets = F.pad((x_projected.lengths + 1).cumsum(0), (1, 0))  # (B + 1,)
+        x_place_row = torch.arange(num_rows, device=x_rows.device) + x_state  # (N,)
         x_place_global = x_offsets[1:] - 1  # (B,)
 
         # On the GPU, a tail of zero rows pads it to FlexAttention's block. Zeros, not empty: a
         # key's NaN would reach every query through its zero attention weight (0 * NaN = NaN)
-        num_places = _padded(num_rows + batch_size, x_projected.device)
-        x_sequence = torch.zeros(
-            num_places, dim, dtype=x_projected.dtype, device=x_projected.device
-        )
-        x_sequence[x_place_row] = x_projected
+        num_places = _padded(num_rows + batch_size, x_rows.device)
+        x_sequence = torch.zeros(num_places, dim, dtype=x_rows.dtype, device=x_rows.device)
+        x_sequence[x_place_row] = x_rows
         x_sequence[x_place_global] = self._x_entity_global
         x_refined = self._refine(
             x_sequence, _same_state_mask(x_offsets, x_offsets, num_places, num_places)
         )
-        return x_refined[x_place_row], x_refined[x_place_global]
+        return (
+            Jagged(lengths=x_projected.lengths, rows=x_refined[x_place_row]),
+            x_refined[x_place_global],
+        )
 
     def _refine(
         self, x_packed: torch.Tensor, mask: BlockMask | torch.Tensor | None
@@ -412,9 +415,9 @@ class DrawOrderLayer(nn.Module):
 
     def forward(
         self,
-        x_refined: torch.Tensor,
+        x_refined: Jagged[torch.Tensor],
         x_global_token: torch.Tensor,
-        x_window: X_Window,
+        index: TokenIndex,
         x_states: torch.Tensor,
         num_rows: int,
         num_pile: int,
@@ -423,12 +426,12 @@ class DrawOrderLayer(nn.Module):
 
         Parameters
         ----------
-        x_refined : torch.Tensor
-            (N, D). The transformer's refined rows, in the window's order.
+        x_refined : Jagged[torch.Tensor]
+            The transformer's refined rows, one segment per state.
         x_global_token : torch.Tensor
             (B, D). The transformer's global tokens.
-        x_window : X_Window
-            The packed window's X_Window.
+        index : TokenIndex
+            The cached token lookups.
         x_states : torch.Tensor
             (S,) long. The states, each with an ordered draw pile.
         num_rows : int
@@ -450,29 +453,29 @@ class DrawOrderLayer(nn.Module):
 
         # The states' rows, state after state: each state's first among them, then the end. Each
         # is its state's first row in the window plus its rank
-        x_offsets = F.pad(x_window.x_count[x_states].cumsum(0), (1, 0))  # (S + 1,)
+        x_offsets = F.pad(x_refined.lengths[x_states].cumsum(0), (1, 0))  # (S + 1,)
         x_state_layer, x_rank = _states_and_ranks(x_offsets, num_rows)  # (num_rows,)
-        x_first_row = x_window.x_count.cumsum(0) - x_window.x_count  # (B,)
+        x_first_row = x_refined.lengths.cumsum(0) - x_refined.lengths  # (B,)
         x_rows = x_first_row[x_states][x_state_layer] + x_rank
 
         # Their piles' rows the same way, each pile's first row plus its rank, bottom first; a draw
         # token's depth is the Cards above it, its pile's count - 1 - its rank
-        x_count_pile = x_window.x_token_kind_count[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
+        x_count_pile = index.kind_count[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
         x_offsets_pile = F.pad(x_count_pile.cumsum(0), (1, 0))  # (S + 1,)
         x_state_layer_pile, x_rank_pile = _states_and_ranks(x_offsets_pile, num_pile)
-        x_first_row_pile = x_window.x_token_kind_row[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
+        x_first_row_pile = index.kind_row[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
         x_rows_pile = x_first_row_pile[x_state_layer_pile] + x_rank_pile
         x_depth = x_count_pile[x_state_layer_pile] - 1 - x_rank_pile
 
         # On the GPU, each side padded to FlexAttention's block; a global token is its state's one
         # query
-        num_places = _padded(num_rows, x_refined.device)
-        num_places_pile = _padded(num_pile, x_refined.device)
-        num_places_global = _padded(batch_size, x_refined.device)
+        num_places = _padded(num_rows, x_refined.rows.device)
+        num_places_pile = _padded(num_pile, x_refined.rows.device)
+        num_places_global = _padded(batch_size, x_refined.rows.device)
         x_offsets_global = torch.arange(batch_size + 1, device=x_states.device)
         x_out, x_out_global = self._draw_order_block(
-            F.pad(x_refined[x_rows], (0, 0, 0, num_places - num_rows)),
-            F.pad(x_refined[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
+            F.pad(x_refined.rows[x_rows], (0, 0, 0, num_places - num_rows)),
+            F.pad(x_refined.rows[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
             F.pad(x_depth, (0, num_places_pile - num_pile)),
             F.pad(x_global_token[x_states], (0, 0, 0, num_places_global - batch_size)),
             _same_state_mask(x_offsets, x_offsets_pile, num_places, num_places_pile),

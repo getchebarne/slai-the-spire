@@ -235,12 +235,13 @@ class Tag(IntEnum):
 @final
 @dataclass
 class Jagged[T]:
-    """Consecutive variable-length segments of a row record.
+    """Consecutive variable-length segments of a tensor or row record.
 
-    `lengths[i]` is the number of logical rows in segment i. A Tokens record has one value per
-    token in its direct tensors and one row or segment per token in its nested records. A
-    Sparse record has one length per logical row, with columns and values on its entry axis.
-    Only populated rows belong here; shared storage capacity is a separate concern.
+    `lengths[i]` is the number of logical rows in segment i. A tensor has one value per row on
+    its leading axis. A Tokens record has one value per token in its direct tensors and one
+    row or segment per token in its nested records. A Sparse record has one length per logical
+    row, with columns and values on its entry axis. Only populated rows belong here; shared
+    storage capacity is a separate concern.
     """
 
     lengths: torch.Tensor  # (number of segments,) integer, nonnegative
@@ -339,119 +340,70 @@ class BatchLayout:
 
 
 @dataclass
-class X_Window:
-    """The window packed for the model.
+class TokenIndex:
+    """Cached lookups for the model's token rows, built once by the projector.
 
-    Only its tokens, every state's in window order, state after state, as Tokens holds them.
-    Per row: its token kind and Entity kind, its masks and its state. Per state: its tokens, and
-    per token kind its first row and its tokens; a token kind's tokens sit in consecutive rows.
-    Per Entity kind: its tokens, from the projector's one read.
+    Token rows stay in the encoded batch's order through projection and attention, so these
+    indices remain valid throughout the model pass. State boundaries belong to Jagged.lengths;
+    action masks belong to StateBatch.tokens.rows. Host entity counts share the projector's
+    one device read with the draw-order sizes.
     """
 
-    x_token_kind: torch.Tensor  # (N,) long
-    x_entity_kind: torch.Tensor  # (N,) long
-    x_legal: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
-    x_needs_target: torch.Tensor  # (N,) bool
-    x_state: torch.Tensor  # (N,) long
-    x_count: torch.Tensor  # (B,) long
-    x_token_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
-    x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) long
-    num_tokens_entity_kind: list[int]  # One per Entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
+    kind: torch.Tensor  # (N,) long, token kind widened for indexing and engine-facing actions
+    entity_kind: torch.Tensor  # (N,) long
+    state: torch.Tensor  # (N,) long, the state owning each token
+    kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
+    kind_count: torch.Tensor  # (B, len(TokenKind)) long
+    entity_counts: list[int]  # One per Entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
 
 
 @dataclass
-class X_DrawOrderStates:
-    """The states the draw-order layer reads.
+class CoreOutput:
+    """Refined token embeddings, cached indices, and per-state policy/value contexts.
 
-    Those whose draw pile shows an order (2 or more draw tokens): the ones under Frozen Eye
-    (visible) first. With, from the projector's one read, how many are visible, and their rows and
-    pile rows (their draw tokens), visible and in all.
+    The policy's tokens and context include draw order only where Frozen Eye makes it visible.
+    The value context includes draw order on every state whose pile shows an order. Both
+    contexts have one row per state; tokens have a variable number of rows per state.
     """
 
-    x_states: torch.Tensor  # (S,) long
-    num_states_visible: int
-    num_rows_visible: int
-    num_rows: int
-    num_pile_visible: int
-    num_pile: int
+    tokens: Jagged[torch.Tensor]  # (B,) lengths; (N, dim_entity) refined token rows
+    index: TokenIndex
+    policy_context: torch.Tensor  # (B, dim_global)
+    value_context: torch.Tensor  # (B, dim_global)
 
 
 @dataclass
-class X_CoreOutput:
-    """The core's output.
+class PolicyOutput:
+    """One sampled action per state, with the policy statistics for its three levels.
 
-    `x_global` and `x_refined` are the policy heads': the transformer's, but the draw-order
-    layer's on the states under Frozen Eye whose draw pile shows an order. `x_global_value` is the
-    value head's: the layer's on every state whose draw pile shows an order, the transformer's
-    elsewhere. `x_window` is the packed window's X_Window.
+    Each action row holds [action type, token offset, target rank]. The token offset indexes
+    that state's encoded tokens, across all token kinds; it stays valid when whole states are
+    reordered or joined into a new batch. The target is a Monster's rank. A selection or target
+    that did not apply holds -1. `actions.engine_action` resolves these coordinates to engine
+    Entity ids using the encoder's token ordering.
     """
 
-    x_global: torch.Tensor  # (B, dim_global)
-    x_global_value: torch.Tensor  # (B, dim_global)
-    x_refined: torch.Tensor  # (N, dim_entity) the refined rows
-    x_window: X_Window
+    actions: torch.Tensor  # (B, 3) long; action type, state-local token offset, Monster rank
+    log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
+    entropy: torch.Tensor  # (B, 3) float, 0 where N/A
+    kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
 
 
 @dataclass
-class X_Action:
-    """The sampled hierarchy per row, engine-facing.
-
-    `x_token_kind` and `x_rank` name the L2 selection as the rank-th token of its token kind,
-    `x_target` the L3 selection as the target-th Monster token, and `actions.engine_action` names
-    their Entities by id. A level that didn't apply holds -1.
-    """
-
-    x_action_type: torch.Tensor  # (B,) long
-    x_token_kind: torch.Tensor  # (B,) long — TokenKind of the L2 selection
-    x_rank: torch.Tensor  # (B,) long
-    x_target: torch.Tensor  # (B,) long
-    x_log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
-    x_entropy: torch.Tensor  # (B, 3) float, 0 where N/A
-    x_kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
-
-
-@dataclass
-class X_Rollout:
+class Rollout:
     """What the Actor collected, before GAE.
 
-    T steps of E games, state t * E + e of the N = T * E states. The `x_game_state_final`
-    field is each game's state after the last step, for the bootstrap value.
+    T steps of E games, state t * E + e of the N = T * E states. `final_states` holds each
+    game's state after the last step, for the bootstrap value.
     """
 
-    x_game_state: StateBatch  # N states
-
-    # x_game_state's counts on the CPU, where minibatches sum their sizes
-    x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
-
-    x_actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
-    x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
-    x_rewards: torch.Tensor  # (T, E, K)
-    x_dones: torch.Tensor  # (T, E)
-    x_game_state_final: StateBatch  # E states
-
-
-@dataclass
-class X_TrainingBatch:
-    """Columnar rollout (N = rollout_length * num_envs states).
-
-    The full-batch states, masks included, are stored once and taken per minibatch; GAE
-    returns/advantages are precomputed. Values/returns are per reward stream
-    (K = len(RewardStream)); the policy advantage is the per-stream advantages summed, then
-    normalized.
-    """
-
-    x_game_state: StateBatch  # N states — taken per minibatch (take_states)
-    layout: BatchLayout  # Built once for this immutable rollout, reused throughout the update
-
-    # x_game_state's counts on the CPU, where minibatches sum their sizes
-    x_count_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
-
-    x_actions: torch.Tensor  # (N, 4): action type, token kind, rank, target
-    x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
-    x_log_probs_prox: torch.Tensor  # (N,) the PPO anchor: the clip and the KL measure from it
-    x_values_prox: torch.Tensor  # (N, K) the values that go with π_prox
-    x_returns: torch.Tensor  # (N, K)
-    x_advantages: torch.Tensor  # (N, 1), summed over streams, normalized
+    states: StateBatch  # N states
+    counts_cpu: torch.Tensor  # (N, number of blocks) long, in count_blocks' order
+    actions: torch.Tensor  # (N, 3): action type, state-local token offset, Monster rank
+    log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    rewards: torch.Tensor  # (T, E, K)
+    dones: torch.Tensor  # (T, E)
+    final_states: StateBatch  # E states
 
 
 # members() is declaration order == int() order, which is what masks and heads index by

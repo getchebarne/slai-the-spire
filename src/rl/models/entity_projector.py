@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -12,11 +13,10 @@ from src.rl.encoding.state import ENCODING_DIM_TOKEN
 from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.types import Jagged
+from src.rl.types import TokenIndex
 from src.rl.types import TokenKind
-from src.rl.types import X_DrawOrderStates
 from src.rl.types import StateBatch
 from src.rl.types import Sparse
-from src.rl.types import X_Window
 
 
 # Each token kind's Entity kind: its index in `TOKEN_KINDS_OF_ENTITY_KIND`
@@ -27,14 +27,29 @@ _MAP_TOKEN_KIND_TO_ENTITY_KIND = {
 }
 
 
+@dataclass
+class _DrawOrderPlan:
+    """States with ordered draw piles, visible ones first, and their cached host sizes.
+
+    The projector reads these sizes together with the entity counts. Core uses the visible
+    prefix for policy context and the entire plan for value context.
+    """
+
+    states: torch.Tensor  # (S,) long
+    num_states_visible: int
+    num_rows_visible: int
+    num_rows: int
+    num_pile_visible: int
+    num_pile: int
+
+
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) Entity embedder.
 
     One first layer over the shared columns plus each token's Entity kind bias, the Rooms' Map
     nodes through their own, the owned row kinds (Effects, Modifiers) added into their owners,
-    then one shared second layer + LayerNorm. Returns the window packed: its tokens, every
-    state's in window order, state after state, and their X_Window; then the draw-order layer's
-    states, and the embedded pending halt.
+    then one shared second layer + LayerNorm. Returns the token embeddings grouped by state,
+    their cached index, the draw-order layer's states, and the embedded pending halt.
 
     Parameters
     ----------
@@ -92,7 +107,7 @@ class EntityProjector(nn.Module):
 
     def forward(
         self, x_game_state: StateBatch, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
-    ) -> tuple[torch.Tensor, X_Window, X_DrawOrderStates, torch.Tensor]:
+    ) -> tuple[Jagged[torch.Tensor], TokenIndex, _DrawOrderPlan, torch.Tensor]:
         """Embed `x_game_state`'s window.
 
         Parameters
@@ -107,11 +122,11 @@ class EntityProjector(nn.Module):
 
         Returns
         -------
-        x_projected : torch.Tensor
-            (N_tok, D). The window's tokens, every state's in window order, state after state.
-        x_window : X_Window
-            The tokens' X_Window.
-        x_draw_order : X_DrawOrderStates
+        x_projected : Jagged[torch.Tensor]
+            The (N_tok, D) token embeddings, grouped by state in window order.
+        index : TokenIndex
+            Cached token kinds, owners, and lookup tables for the model.
+        x_draw_order : _DrawOrderPlan
             The draw-order layer's states.
         x_pending : torch.Tensor
             (B, D). Each state's embedded pending halt, zero where none is pending.
@@ -175,8 +190,8 @@ class EntityProjector(nn.Module):
             ]
         ).tolist()
 
-        x_draw_order = X_DrawOrderStates(
-            x_states=torch.cat(
+        x_draw_order = _DrawOrderPlan(
+            states=torch.cat(
                 [
                     torch.nonzero_static(x_ordered[0], size=num_states_visible),
                     torch.nonzero_static(x_ordered[1], size=num_states_hidden),
@@ -222,20 +237,17 @@ class EntityProjector(nn.Module):
         # Shared second layer + norm on the rows
         x_hidden = self._layer_norm(self._post_shared(F.relu(x_first)))  # (N_tok, D)
 
-        x_window = X_Window(
-            x_token_kind=x_token_kind,
-            x_entity_kind=x_entity_kind,
-            x_legal=x_tokens.legal,
-            x_needs_target=x_tokens.needs_target,
-            x_state=x_state,
-            x_count=x_count_window,
-            x_token_kind_row=x_token_kind_row,
-            x_token_kind_count=x_token_kind_count,
-            num_tokens_entity_kind=num_tokens_entity_kind,
+        index = TokenIndex(
+            kind=x_token_kind,
+            entity_kind=x_entity_kind,
+            state=x_state,
+            kind_row=x_token_kind_row,
+            kind_count=x_token_kind_count,
+            entity_counts=num_tokens_entity_kind,
         )
         return (
-            x_hidden,
-            x_window,
+            Jagged(lengths=x_count_window, rows=x_hidden),
+            index,
             x_draw_order,
             x_pending,
         )

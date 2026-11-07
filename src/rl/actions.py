@@ -1,53 +1,52 @@
+from itertools import islice
+
 import slai
 from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.encoding.state import get_entities_for_token_kind
+from src.rl.encoding.state import iter_tokens
 from src.rl.types import ACTION_TYPE_BY_INT
+from src.rl.types import PolicyOutput
 from src.rl.types import TokenKind
-from src.rl.types import X_Action
 
 
 def engine_action(
-    action_type: int, token_kind: int, rank: int, target: int, game_state: slai.GameState
+    action_type: int, token_offset: int, target: int, game_state: slai.GameState
 ) -> slai.Action:
-    """Build a `slai.Action` from the sampled hierarchy [ActionType, token kind, rank, target].
+    """Decode [action type, state-local token offset, Monster target rank].
 
-    The token kind and rank name a token and the target the target-th Monster token; the action
-    carries their Entities' ids (`get_entities_for_token_kind`).
-
-    Parameters
-    ----------
-    action_type : int
-        The ActionType, as its int.
-    token_kind : int
-        The token's token kind, as its int; -1 when the type takes no id.
-    rank : int
-        The token's rank among its token kind's tokens; -1 when the type takes no id.
-    target : int
-        The target's rank among the Monster tokens; -1 when the type takes no Monster target.
-    game_state : slai.GameState
-        The state the hierarchy was sampled on.
-
-    Returns
-    -------
-    slai.Action
-        The engine's action.
+    The token offset indexes this state's entire token sequence, using the encoder's order.
+    It remains valid when states are concatenated or reordered in a minibatch. The target is
+    the rank among this state's Monster tokens; -1 means the action takes no Monster target.
     """
-    if ACTION_SPEC_REGISTRY[ACTION_TYPE_BY_INT[action_type]].arity == (0, 0):
-        return slai.Action(ACTION_TYPE_BY_INT[action_type], [])
+    action_kind = ACTION_TYPE_BY_INT[action_type]
+    if ACTION_SPEC_REGISTRY[action_kind].arity == (0, 0):
+        return slai.Action(action_kind, [])
+    if token_offset < 0:
+        raise ValueError("An action with a selection requires a nonnegative token offset")
 
-    ids = [get_entities_for_token_kind(TokenKind(token_kind), game_state)[rank].id]
-    if target >= 0:  # CardPlay / PotionUse with a Monster target
-        ids.append(get_entities_for_token_kind(TokenKind.MONSTERS, game_state)[target].id)
-    return slai.Action(ACTION_TYPE_BY_INT[action_type], ids)
+    token = next(islice(iter_tokens(game_state), token_offset, token_offset + 1), None)
+    if token is None:
+        raise IndexError(f"Token offset {token_offset} is outside this state's token sequence")
+    ids = [token[1].id]
+    if target >= 0:
+        monsters = get_entities_for_token_kind(TokenKind.MONSTERS, game_state)
+        if target >= len(monsters):
+            raise IndexError(
+                f"Monster target rank {target} is outside this state's Monster tokens"
+            )
+        ids.append(monsters[target].id)
+    return slai.Action(action_kind, ids)
 
 
-def action_from_actiontype(x_action: X_Action, i: int, game_state: slai.GameState) -> slai.Action:
-    """Decode row `i` of a batched `X_Action` into a `slai.Action`.
+def action_from_actiontype(
+    output: PolicyOutput, i: int, game_state: slai.GameState
+) -> slai.Action:
+    """Decode action row `i` of a PolicyOutput into a `slai.Action`.
 
     Parameters
     ----------
-    x_action : X_Action
+    output : PolicyOutput
         The batched actions.
     i : int
         The row to decode.
@@ -59,10 +58,4 @@ def action_from_actiontype(x_action: X_Action, i: int, game_state: slai.GameStat
     slai.Action
         The engine's action.
     """
-    return engine_action(
-        int(x_action.x_action_type[i]),
-        int(x_action.x_token_kind[i]),
-        int(x_action.x_rank[i]),
-        int(x_action.x_target[i]),
-        game_state,
-    )
+    return engine_action(*output.actions[i].tolist(), game_state)
