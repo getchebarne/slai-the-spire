@@ -5,17 +5,8 @@ import torch
 import torch.nn as nn
 from slai import ACTION_SPEC_REGISTRY
 
+from src.rl.constants import ACTION_TYPE_BY_INT
 from src.rl.constants import NUM_ACTION_TYPES
-from src.rl.encoding.context import focus_view
-from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.state import COL_START_CHARACTER
-from src.rl.encoding.state import COL_START_HEALTH_BLOCK
-from src.rl.encoding.state import COL_START_MONSTER
-from src.rl.encoding.state import COL_START_POTION
-from src.rl.encoding.state import COL_START_PRICE
-from src.rl.encoding.state import COL_START_RELIC
-from src.rl.encoding.state import COL_START_STASIS_SLOT
-from src.rl.encoding.state import COL_START_TAG
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -23,7 +14,8 @@ from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
 from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
-from src.rl.types import ACTION_TYPE_BY_INT
+from src.rl.schema.context import focus_view
+from src.rl.schema.focus import ENCODING_DIM_FOCUS
 from src.rl.types import CoreOutput
 from src.rl.types import Jagged
 from src.rl.types import PolicyOutput
@@ -321,25 +313,7 @@ class ActorCritic(nn.Module):
                 if m.bias is not None:  # Some projector layers are bias-free
                     nn.init.zeros_(m.bias)
 
-        # The shared first layer per column range, each Entity kind's then the health/block, price,
-        # slot and Tag ones, as its own layer: orthogonal over all of them would shrink each
-        # column's scale
-        with torch.no_grad():
-            for x_weight_range in torch.tensor_split(
-                self.core._entity_projector._pre_token.weight,
-                (
-                    COL_START_RELIC,
-                    COL_START_POTION,
-                    COL_START_MONSTER,
-                    COL_START_CHARACTER,
-                    COL_START_HEALTH_BLOCK,
-                    COL_START_PRICE,
-                    COL_START_STASIS_SLOT,
-                    COL_START_TAG,
-                ),
-                dim=1,
-            ):
-                nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
+        self.core.init_token_weights()
         nn.init.orthogonal_(self._head_action_type._scorer[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_2._query_net[-1].weight, gain=0.01)
         nn.init.orthogonal_(self._head_level_3._query_net[-1].weight, gain=0.01)

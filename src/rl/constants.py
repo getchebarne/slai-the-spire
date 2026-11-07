@@ -9,7 +9,8 @@ from src.rl.types import TokenKind
 
 
 # The policy's action types are exactly the engine's
-NUM_ACTION_TYPES = len(_slai.ActionType.members())
+ACTION_TYPE_BY_INT = _slai.ActionType.members()
+NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
 
 # The top Ascension, which GameEnv doesn't expose; it sizes the ascension thermometer
 # (a checkpoint shape) and every catalog fold
@@ -180,7 +181,7 @@ SHOP_PRICE_CAP = max(
 EVENT_STAGE_CAP = 10
 
 
-TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (card.py owns their packing)
+TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (tokens.py owns their packing)
     TokenKind.CARD_REWARD_0,
     TokenKind.CARD_REWARD_1,
     TokenKind.CARD_REWARD_2,
@@ -234,7 +235,7 @@ TOKEN_KINDS_OF_ENTITY_KIND = (
     (TokenKind.ROOMS,),
 )
 
-# Each token kind's token cap: the slice its encoder applies to that collection
+# Each token kind's token cap: the slice token traversal applies to that collection
 MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
     TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,

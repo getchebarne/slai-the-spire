@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -6,17 +7,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
-from src.rl.encoding.context import focus_view
-from src.rl.encoding.effect import ENCODING_DIM_EFFECT
-from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
-from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
-from src.rl.encoding.state import ENCODING_DIM_TOKEN
 from src.rl.models.spread_embedding import SpreadEmbedding
+from src.rl.schema.context import focus_view
+from src.rl.schema.effect import ENCODING_DIM_EFFECT
+from src.rl.schema.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
+from src.rl.schema.modifier import ENCODING_DIM_MODIFIER
+from src.rl.schema.state import COL_START_CHARACTER
+from src.rl.schema.state import COL_START_HEALTH_BLOCK
+from src.rl.schema.state import COL_START_MONSTER
+from src.rl.schema.state import COL_START_POTION
+from src.rl.schema.state import COL_START_PRICE
+from src.rl.schema.state import COL_START_RELIC
+from src.rl.schema.state import COL_START_STASIS_SLOT
+from src.rl.schema.state import COL_START_TAG
+from src.rl.schema.state import ENCODING_DIM_TOKEN
 from src.rl.types import Jagged
+from src.rl.types import Sparse
+from src.rl.types import StateBatch
 from src.rl.types import TokenIndex
 from src.rl.types import TokenKind
-from src.rl.types import StateBatch
-from src.rl.types import Sparse
 
 
 # Each token kind's Entity kind: its index in `TOKEN_KINDS_OF_ENTITY_KIND`
@@ -104,6 +113,32 @@ class EntityProjector(nn.Module):
             torch.tensor([_MAP_TOKEN_KIND_TO_ENTITY_KIND[token_kind] for token_kind in TokenKind]),
             persistent=False,
         )
+
+    def init_token_weights(self) -> None:
+        """Initialize each token feature range independently after the general linear init.
+
+        Each range receives an orthogonal initialization with gain sqrt(2), preserving its
+        scale regardless of the total number of token columns.
+        """
+        # The shared first layer per column range, each Entity kind's then the health/block, price,
+        # slot and Tag ones, as its own layer: orthogonal over all of them would shrink each
+        # column's scale
+        with torch.no_grad():
+            for x_weight_range in torch.tensor_split(
+                self._pre_token.weight,
+                (
+                    COL_START_RELIC,
+                    COL_START_POTION,
+                    COL_START_MONSTER,
+                    COL_START_CHARACTER,
+                    COL_START_HEALTH_BLOCK,
+                    COL_START_PRICE,
+                    COL_START_STASIS_SLOT,
+                    COL_START_TAG,
+                ),
+                dim=1,
+            ):
+                nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
 
     def forward(
         self, game_state: StateBatch, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor

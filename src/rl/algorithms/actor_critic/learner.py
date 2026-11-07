@@ -9,12 +9,10 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.rl.algorithms.actor_critic import distributed
 from src.rl.algorithms.actor_critic.actor import RolloutConfig
-from src.rl.algorithms.actor_critic.actor import make_weight_buffer
 from src.rl.algorithms.actor_critic.actor import publish
 from src.rl.algorithms.actor_critic.actor import receive_rollout
 from src.rl.algorithms.actor_critic.actor import start_actor
 from src.rl.algorithms.actor_critic.actor import stop_actor
-from src.rl.algorithms.actor_critic.checkpoint import RunState
 from src.rl.algorithms.actor_critic.checkpoint import experiment_dir
 from src.rl.algorithms.actor_critic.checkpoint import load_checkpoint
 from src.rl.algorithms.actor_critic.checkpoint import save_checkpoint
@@ -27,7 +25,6 @@ from src.rl.algorithms.actor_critic.evals import EVAL_ACT4_RATE
 from src.rl.algorithms.actor_critic.evals import EVAL_FLOOR_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_RETURN_AVG
 from src.rl.algorithms.actor_critic.evals import EVAL_WIN_RATE
-from src.rl.algorithms.actor_critic.evals import Evaluator
 from src.rl.algorithms.actor_critic.evals import poll_eval
 from src.rl.algorithms.actor_critic.evals import start_eval
 from src.rl.algorithms.actor_critic.evals import stop_evaluator
@@ -35,6 +32,7 @@ from src.rl.algorithms.actor_critic.evals import submit_eval
 from src.rl.algorithms.actor_critic.ppo import PPOConfig
 from src.rl.algorithms.actor_critic.ppo import adapt_lr_scale
 from src.rl.algorithms.actor_critic.ppo import update_ppo
+from src.rl.algorithms.actor_critic.progress import RunState
 from src.rl.algorithms.actor_critic.stats import episode_scalars
 from src.rl.models import ActorCritic
 from src.rl.models.actor_critic import compile_hot_paths
@@ -117,13 +115,9 @@ def train(
             evaluator = start_eval(model_config, gamma)
             stack.callback(stop_evaluator, evaluator)
 
-        # The weights the Actor plays: the Learner publishes them, the Actor reads them
-        weight_buffer = make_weight_buffer(model)
-        publish(weight_buffer, model, iteration_start, run_state.ascension_current)
-
         # The Actor process plays one update behind; the Learner's own RNG keeps runs reproducible
         actor_handle = start_actor(
-            weight_buffer,
+            model,
             model_config=model_config,
             rollout_config=rollout_config,
             device=rank_info.device,
@@ -132,6 +126,9 @@ def train(
 
         # A failure must still stop the Actor: this process's exit would wait for it
         stack.callback(stop_actor, actor_handle)
+
+        # The weights the Actor plays: the Learner publishes them, the Actor reads them
+        publish(actor_handle, model, iteration_start, run_state.ascension_current)
 
         # Compile Learner's model only iff training on GPU: the Actor's model stays eager
         if rank_info.device.type == _DEVICE_TYPE_CUDA:
@@ -174,7 +171,7 @@ def train(
             run_state.ascension_current = distributed.broadcast_float(
                 run_state.ascension_current, rank_info.device
             )
-            publish(weight_buffer, model, iteration + 1, run_state.ascension_current)
+            publish(actor_handle, model, iteration + 1, run_state.ascension_current)
             t_now = time.perf_counter()
             samples_per_s = steps_per_iteration / (t_now - t_iteration)
             t_iteration = t_now

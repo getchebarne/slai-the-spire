@@ -1,86 +1,35 @@
 import numpy as np
-from slai import EventName
-from slai import GameEnv
 from slai import GameState
-from slai import MonsterEncounter
-from slai import RelicName
 from slai import Room
-from slai import RoomKind
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.types import make_channel_allocator
+from src.rl.schema.map_ import EDGE_DELTAS
+from src.rl.schema.map_ import MAP_EVENT_NAME
+from src.rl.schema.map_ import MAP_MONSTER_ENCOUNTER_BOSS
+from src.rl.schema.map_ import MAP_NUM_ROOM_KINDS
+from src.rl.schema.map_ import MAP_ROOM_KIND
+from src.rl.schema.map_ import NUM_CHANNELS
+from src.rl.schema.map_ import OFF_MAP_ACT
+from src.rl.schema.map_ import OFF_MAP_BOSS
+from src.rl.schema.map_ import OFF_MAP_BOSS_FIGHTS_AFTER
+from src.rl.schema.map_ import OFF_MAP_BURNING
+from src.rl.schema.map_ import OFF_MAP_CURRENT_ROOM_KIND
+from src.rl.schema.map_ import OFF_MAP_EDGES
+from src.rl.schema.map_ import OFF_MAP_FLOOR_DEPTH
+from src.rl.schema.map_ import OFF_MAP_KEYS
+from src.rl.schema.map_ import OFF_MAP_NEXT_ROOM_KINDS
+from src.rl.schema.map_ import OFF_MAP_ON_MAP
+from src.rl.schema.map_ import OFF_MAP_POOL_EVENT_SPECIAL
+from src.rl.schema.map_ import OFF_MAP_POOL_EVENTS
+from src.rl.schema.map_ import OFF_MAP_POSITION
+from src.rl.schema.map_ import OFF_MAP_ROOM_KIND
+from src.rl.schema.map_ import OFF_MAP_ROOM_KIND_RESOLVED
+from src.rl.schema.map_ import OFF_MAP_UNKNOWN_CHANCE_MONSTER
+from src.rl.schema.map_ import OFF_MAP_UNKNOWN_CHANCE_SHOP
+from src.rl.schema.map_ import OFF_MAP_UNKNOWN_CHANCE_TREASURE
+from src.rl.tokens import get_room_entities
 
-
-_MAP_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
-_MAP_MONSTER_ENCOUNTER_BOSS = {
-    MonsterEncounter.TheGuardian: 0,
-    MonsterEncounter.Hexaghost: 1,
-    MonsterEncounter.SlimeBoss: 2,
-    MonsterEncounter.BronzeAutomaton: 3,
-    MonsterEncounter.TheCollector: 4,
-    MonsterEncounter.Champ: 5,
-    MonsterEncounter.AwakenedOne: 6,
-    MonsterEncounter.DonuAndDeca: 7,
-    MonsterEncounter.TimeEater: 8,
-    MonsterEncounter.CorruptHeart: 9,
-}
-_MAP_NUM_ROOM_KINDS = len(_MAP_ROOM_KIND)
-_MAP_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.members()}
-
-# Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
-EDGE_DELTAS = (-1, 0, 1)
-NUM_EDGE_CHANNELS = len(EDGE_DELTAS)
-
-
-# Every cell must be 0 or 1: `map_encoder.py`'s dedup packs the grid one bit per cell
-CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
-OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
-OFF_MAP_EDGES = _alloc("edges", NUM_EDGE_CHANNELS)
-OFF_MAP_BURNING = _alloc("burning")
-OFF_MAP_POSITION = _alloc("position")
-
-NUM_CHANNELS = sum(w for _, w in CHANNEL_LAYOUT_MAP_GRID)
-
-# GNN-facing view of the edge block (read by `map_encoder.py`)
-SLICE_MAP_EDGES = slice(OFF_MAP_EDGES, OFF_MAP_EDGES + NUM_EDGE_CHANNELS)
-
-SLICE_MAP_ROOM_KIND = slice(OFF_MAP_ROOM_KIND, OFF_MAP_ROOM_KIND + _MAP_NUM_ROOM_KINDS)
-
-
-# Flat Map-global meta — position-anchored facts the pooled GNN readout can't carry
-
-
-CHANNEL_LAYOUT_MAP_META, _alloc = make_channel_allocator()
-OFF_MAP_FLOOR_DEPTH = _alloc("floor_depth")  # y_current / MAP_HEIGHT
-OFF_MAP_ON_MAP = _alloc("on_map")  # y_current is not None
-OFF_MAP_BOSS = _alloc("boss", len(_MAP_MONSTER_ENCOUNTER_BOSS))  # Act-boss identity OHE
-OFF_MAP_BOSS_FIGHTS_AFTER = _alloc(
-    "boss_fights_after"
-)  # Boss fights after the boss's: 1 at A20 in Act 3 until the second
-OFF_MAP_CURRENT_ROOM_KIND = _alloc("current_room_kind", _MAP_NUM_ROOM_KINDS)
-OFF_MAP_NEXT_ROOM_KINDS = _alloc(
-    "next_room_kinds", MAP_WIDTH * _MAP_NUM_ROOM_KINDS
-)  # RoomKind OHE per next-row column
-OFF_MAP_ACT = _alloc(
-    "act", GameEnv.ACT_FINAL
-)  # Each act is a fresh 15-row Map; depth alone is ambiguous
-OFF_MAP_KEYS = _alloc("keys", 3)  # The keys held: Emerald, Ruby, Sapphire
-# "?" Rooms
-OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc(
-    "unknown_chance_monster"
-)  # The Event chance is what the three odds leave
-OFF_MAP_UNKNOWN_CHANCE_SHOP = _alloc("unknown_chance_shop")
-OFF_MAP_UNKNOWN_CHANCE_TREASURE = _alloc("unknown_chance_treasure")
-OFF_MAP_ROOM_KIND_RESOLVED = _alloc(
-    "room_kind_resolved", _MAP_NUM_ROOM_KINDS
-)  # A "?" stays Unknown in `rooms`; no Shop right after a Shop
-OFF_MAP_POOL_EVENTS = _alloc(
-    "pool_events", len(_MAP_EVENT_NAME)
-)  # Events a "?" can still become, each drawn once
-OFF_MAP_POOL_EVENT_SPECIAL = _alloc("pool_event_special", len(_MAP_EVENT_NAME))
-
-ENCODING_DIM_MAP_META = sum(w for _, w in CHANNEL_LAYOUT_MAP_META)
 
 # Static Map-grid cache keyed by map.identity_hash: Room kinds + edges + burning are fixed per Map
 _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
@@ -101,7 +50,7 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
             if room is None:
                 continue
 
-            grid[y, x, OFF_MAP_ROOM_KIND + _MAP_ROOM_KIND[room.room_kind]] = 1.0
+            grid[y, x, OFF_MAP_ROOM_KIND + MAP_ROOM_KIND[room.room_kind]] = 1.0
             for x_next in room.edges:
                 delta = x_next - x  # -1, 0, or 1
                 if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
@@ -119,73 +68,6 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
     return grid
 
 
-def _wing_boots_charged(game_state: GameState) -> bool:
-    """Return whether the Character holds Wing Boots with charges left.
-
-    With charges left, the engine offers every next-row Room, not just the edges.
-
-    Parameters
-    ----------
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    bool
-        True when a Wing Boots Relic's counter is above 0.
-    """
-    return any(r.name == RelicName.WingBoots and r.counter > 0 for r in game_state.relics)
-
-
-def _next_row_candidate_cols(
-    rooms: list[list[Room | None]], y_current: int | None, x_current: int | None, winged: bool
-) -> list[int]:
-    y_next = 0 if y_current is None else y_current + 1
-    if y_next >= MAP_HEIGHT:
-        return []
-
-    if y_current is None or winged:
-        return [x for x in range(MAP_WIDTH) if rooms[y_next][x] is not None]
-
-    # Agent always stands on a real Room; cur is never None here, so fail loud if it is
-    room_curr = rooms[y_current][x_current]
-    if room_curr is None:
-        raise ValueError(f"Current room ({y_current}, {x_current}) is None")
-
-    for x_next in room_curr.edges:
-        if not (0 <= x_next < MAP_WIDTH and rooms[y_next][x_next] is not None):
-            raise ValueError(f"Edge ({y_current}, {x_current})->({y_next}, {x_next}) has no room")
-
-    return list(room_curr.edges)
-
-
-def get_room_entities(game_state: GameState) -> list[Room]:
-    """Return the Rooms a RoomSelect can name, in column order: the Room tokens' rank order.
-
-    Parameters
-    ----------
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    list[Room]
-        The next Map row's Rooms the Character can move to: all of them before the first Room
-        or with charged Wing Boots, else the ones the current Room's edges lead to; empty when
-        there is no next row.
-    """
-    map_ = game_state.map
-    rooms = map_.rooms
-    y_current = map_.y_current
-    winged = _wing_boots_charged(game_state)
-    cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
-    if not cols:
-        return []
-
-    y_next = 0 if y_current is None else y_current + 1
-    return [room for x, room in enumerate(rooms[y_next]) if x in cols and room is not None]
-
-
 def encode_map_meta_into(game_state: GameState, out: np.ndarray) -> None:
     """Write map position, boss, keys, room probabilities and event-pool features."""
     map_ = game_state.map
@@ -193,16 +75,15 @@ def encode_map_meta_into(game_state: GameState, out: np.ndarray) -> None:
     y_current, x_current = map_.y_current, map_.x_current
     boss, boss_fights_after = map_.boss, map_.boss_fights_after
     act = game_state.act
-    winged = _wing_boots_charged(game_state)
     # Floor depth + on-map sentinel
     if y_current is not None:
         out[OFF_MAP_FLOOR_DEPTH] = y_current / MAP_HEIGHT
         out[OFF_MAP_ON_MAP] = 1.0
 
     # Act-boss identity OHE — fail loudly on a boss we haven't mapped (new act)
-    idx_boss = _MAP_MONSTER_ENCOUNTER_BOSS.get(boss)
+    idx_boss = MAP_MONSTER_ENCOUNTER_BOSS.get(boss)
     if idx_boss is None:
-        raise ValueError(f"Unknown act boss {boss!r}; add it to _MAP_MONSTER_ENCOUNTER_BOSS")
+        raise ValueError(f"Unknown act boss {boss!r}; add it to MAP_MONSTER_ENCOUNTER_BOSS")
 
     out[OFF_MAP_BOSS + idx_boss] = 1.0
     out[OFF_MAP_BOSS_FIGHTS_AFTER] = boss_fights_after
@@ -211,13 +92,12 @@ def encode_map_meta_into(game_state: GameState, out: np.ndarray) -> None:
     if y_current is not None and y_current < MAP_HEIGHT:
         room = rooms[y_current][x_current]
         if room is not None:
-            out[OFF_MAP_CURRENT_ROOM_KIND + _MAP_ROOM_KIND[room.room_kind]] = 1.0
+            out[OFF_MAP_CURRENT_ROOM_KIND + MAP_ROOM_KIND[room.room_kind]] = 1.0
 
     # Next-row `RoomKind`s per column
-    y_next = 0 if y_current is None else y_current + 1
-    for x in _next_row_candidate_cols(rooms, y_current, x_current, winged):
-        idx_room_kind = _MAP_ROOM_KIND[rooms[y_next][x].room_kind]
-        out[OFF_MAP_NEXT_ROOM_KINDS + x * _MAP_NUM_ROOM_KINDS + idx_room_kind] = 1.0
+    for room in get_room_entities(game_state):
+        idx_room_kind = MAP_ROOM_KIND[room.room_kind]
+        out[OFF_MAP_NEXT_ROOM_KINDS + room.x * MAP_NUM_ROOM_KINDS + idx_room_kind] = 1.0
 
     # Act OHE (1-based)
     out[OFF_MAP_ACT + (act - 1)] = 1.0
@@ -239,12 +119,12 @@ def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
     # None before the first Room
     room_kind_resolved = game_state.map.room_kind_resolved
     if room_kind_resolved is not None:
-        out[OFF_MAP_ROOM_KIND_RESOLVED + _MAP_ROOM_KIND[room_kind_resolved]] = 1.0
+        out[OFF_MAP_ROOM_KIND_RESOLVED + MAP_ROOM_KIND[room_kind_resolved]] = 1.0
 
     for event_name in game_state.pool_events:
-        out[OFF_MAP_POOL_EVENTS + _MAP_EVENT_NAME[event_name]] = 1.0
+        out[OFF_MAP_POOL_EVENTS + MAP_EVENT_NAME[event_name]] = 1.0
     for event_name in game_state.pool_event_special:
-        out[OFF_MAP_POOL_EVENT_SPECIAL + _MAP_EVENT_NAME[event_name]] = 1.0
+        out[OFF_MAP_POOL_EVENT_SPECIAL + MAP_EVENT_NAME[event_name]] = 1.0
 
 
 def encode_map_grid_into(game_state: GameState, out: np.ndarray) -> None:

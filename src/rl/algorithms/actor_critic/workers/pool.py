@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from multiprocessing.process import BaseProcess
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Semaphore
+from queue import Empty
 
 import torch
 import torch.multiprocessing as mp
@@ -14,22 +15,22 @@ from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.envs import new_env
 from src.rl.algorithms.actor_critic.envs import step_env
 from src.rl.algorithms.actor_critic.stats import EpisodeStats
-from src.rl.encoding.state import encode_batch_game_state
-from src.rl.packed import cat_states
-from src.rl.packed import count_blocks
-from src.rl.packed import to_device
+from src.rl.algorithms.actor_critic.workers.storage import _StateSlot
+from src.rl.algorithms.actor_critic.workers.storage import allocate_slots
+from src.rl.algorithms.actor_critic.workers.storage import read_slot
+from src.rl.algorithms.actor_critic.workers.storage import write_slot
+from src.rl.batches import cat_states
+from src.rl.batches import count_blocks
+from src.rl.batches import to_device
+from src.rl.encoding import encode_batch_game_state
 from src.rl.reward import RewardStream
-from src.rl.shared import _StateSlot
-from src.rl.shared import allocate_slots
-from src.rl.shared import read_slot
-from src.rl.shared import write_slot
 from src.rl.types import StateBatch
 from src.rl.utils import parent_alive
 from src.rl.utils import set_rng_seeds
 
 
 @dataclass
-class StepBuffer:
+class _StepBuffer:
     """What the Actor and its workers exchange: one step of every game, their ascensions and
     finished episodes.
 
@@ -47,7 +48,7 @@ class StepBuffer:
 
 
 @dataclass
-class WorkerHandle:
+class _WorkerHandle:
     """One worker process, its semaphores (the step loop's request, its reply) and stop flag."""
 
     process: BaseProcess
@@ -56,9 +57,22 @@ class WorkerHandle:
     x_stop: torch.Tensor  # A lock-free flag: a worker killed holding an Event's lock would hang it
 
 
+@dataclass
+class Workers:
+    """The Actor's handle on its environment workers.
+
+    Pass it to `step_workers`, `snapshot_to_device` and `stop_workers`. The worker package
+    owns its shared storage, processes and current curriculum position.
+    """
+
+    _buffer: _StepBuffer
+    _handles: list[_WorkerHandle]
+    _ascension_current: float
+
+
 def start_workers(
     num_envs: int, rollout_workers: int, ascension_current: float, gamma: float, seed: int
-) -> tuple[StepBuffer, list[WorkerHandle]]:
+) -> Workers:
     """Start `rollout_workers` processes, each stepping an equal share of the `num_envs` games.
 
     It then waits until every one has written its games' first states.
@@ -78,17 +92,17 @@ def start_workers(
 
     Returns
     -------
-    step_buffer : StepBuffer
-        What the Actor and its workers exchange.
-    worker_handles : list[WorkerHandle]
-        The worker processes and their semaphores.
+    Workers
+        The handle to pass to the worker operations, with the initial states ready to snapshot.
     """
+    if num_envs <= 0 or rollout_workers <= 0:
+        raise ValueError("`num_envs` and `rollout_workers` must be positive")
     if num_envs % rollout_workers != 0:
         raise RuntimeError("`num_envs` must divide evenly across workers")
 
     envs_per_worker = num_envs // rollout_workers
     ctx = mp.get_context("spawn")  # CUDA is live in this process; fork is unsafe
-    step_buffer = StepBuffer(
+    step_buffer = _StepBuffer(
         x_actions=torch.zeros(num_envs, 3, dtype=torch.long).share_memory_(),
         x_rewards=torch.zeros(num_envs, len(RewardStream)).share_memory_(),
         x_dones=torch.zeros(num_envs).share_memory_(),
@@ -98,7 +112,7 @@ def start_workers(
         ).share_memory_(),
         episodes=ctx.Queue(),
     )
-    worker_handles = []
+    workers = Workers(step_buffer, [], ascension_current)
     try:
         for w in range(rollout_workers):
             games = range(w * envs_per_worker, (w + 1) * envs_per_worker)
@@ -119,47 +133,108 @@ def start_workers(
                 daemon=True,
             )
             process.start()
-            worker_handles.append(WorkerHandle(process, sph_request, sph_reply, x_stop))
+            workers._handles.append(_WorkerHandle(process, sph_request, sph_reply, x_stop))
 
         # Wait for all Workers to reply
-        _wait_for_replies(worker_handles)
+        _wait_for_replies(workers._handles)
 
     except BaseException:
-        stop_workers(worker_handles)
+        stop_workers(workers)
         raise
 
-    return step_buffer, worker_handles
+    return workers
 
 
-def step_workers(worker_handles: list[WorkerHandle]) -> None:
+def step_workers(
+    workers: Workers, x_actions: torch.Tensor, ascension_current: float
+) -> tuple[torch.Tensor, torch.Tensor, list[EpisodeStats]]:
     """Have every worker step its games and write the new states, and wait for every reply.
 
     Parameters
     ----------
-    worker_handles : list[WorkerHandle]
-        The worker processes and their semaphores.
+    workers : Workers
+        The handle returned by `start_workers`.
+    x_actions : torch.Tensor
+        (E, 3) long. Each game's action type, state-local token offset and Monster target rank.
+        The actions are copied to shared CPU storage before any worker is woken.
+    ascension_current : float
+        The soft-curriculum position to use when a game resets after this step.
+
+    Returns
+    -------
+    x_rewards : torch.Tensor
+        (E, K) float32 on the CPU. The rewards, independent of the workers' reusable storage.
+    x_dones : torch.Tensor
+        (E,) float32 on the CPU. The done flags, independent of the workers' reusable storage.
+    episodes : list[EpisodeStats]
+        The episodes finished on this step, in queue order across workers.
     """
-    for worker_handle in worker_handles:
+    if not workers._handles:
+        raise RuntimeError("The workers have been stopped")
+    step_buffer = workers._buffer
+    if x_actions.shape != step_buffer.x_actions.shape or x_actions.dtype != torch.long:
+        raise ValueError("Worker actions must have shape (num_envs, 3) and dtype torch.long")
+
+    if ascension_current != workers._ascension_current:
+        step_buffer.x_ascensions.copy_(
+            torch.tensor(ascensions(ascension_current, len(step_buffer.x_ascensions)))
+        )
+        workers._ascension_current = ascension_current
+    step_buffer.x_actions.copy_(x_actions)
+
+    for worker_handle in workers._handles:
         worker_handle.sph_request.release()
 
-    _wait_for_replies(worker_handles)
+    _wait_for_replies(workers._handles)
+
+    x_rewards = step_buffer.x_rewards.clone()
+    x_dones = step_buffer.x_dones.clone()
+
+    # Each done enqueues one episode before replying; the queue's feeder may still be writing it
+    episodes = []
+    for _ in range(int(x_dones.sum())):
+        while True:
+            try:
+                episodes.append(step_buffer.episodes.get(timeout=1.0))
+                break
+            except Empty:
+                _check_workers_alive(workers._handles)
+
+    return x_rewards, x_dones, episodes
 
 
-def _wait_for_replies(worker_handles: list[WorkerHandle]) -> None:
-    for worker_idx, worker_handle in enumerate(worker_handles):
+def _wait_for_replies(worker_handles: list[_WorkerHandle]) -> None:
+    """Wait for every worker's reply, checking that it and the Learner are still alive.
+
+    Parameters
+    ----------
+    worker_handles : list[_WorkerHandle]
+        The worker processes and their reply semaphores.
+    """
+    for worker_handle in worker_handles:
         while not worker_handle.sph_reply.acquire(timeout=10.0):
-            if not worker_handle.process.is_alive():
-                raise RuntimeError(
-                    f"Rollout worker {worker_idx} died (exitcode {worker_handle.process.exitcode})"
-                )
-
-            if not parent_alive():
-                raise RuntimeError(f"The learner died while rollout worker {worker_idx} stepped")
+            _check_workers_alive(worker_handles)
 
 
-def snapshot_to_device(
-    step_buffer: StepBuffer, device: torch.device
-) -> tuple[StateBatch, torch.Tensor]:
+def _check_workers_alive(worker_handles: list[_WorkerHandle]) -> None:
+    """Check that every worker and the Learner are still alive while waiting for a reply.
+
+    Parameters
+    ----------
+    worker_handles : list[_WorkerHandle]
+        The worker processes whose replies or episode records are pending.
+    """
+    for worker_idx, worker_handle in enumerate(worker_handles):
+        if not worker_handle.process.is_alive():
+            raise RuntimeError(
+                f"Rollout worker {worker_idx} died (exitcode {worker_handle.process.exitcode})"
+            )
+
+    if not parent_alive():
+        raise RuntimeError("The Learner died while waiting for rollout workers")
+
+
+def snapshot_to_device(workers: Workers, device: torch.device) -> tuple[StateBatch, torch.Tensor]:
     """Copy every game's state out of the step buffer onto the device.
 
     The workers' rows are joined on the CPU and copied onto the device in one copy, with the
@@ -168,8 +243,8 @@ def snapshot_to_device(
 
     Parameters
     ----------
-    step_buffer : StepBuffer
-        The step buffer, as the workers wrote it.
+    workers : Workers
+        The handle returned by `start_workers`, after startup or a completed step.
     device : torch.device
         The device to copy onto.
 
@@ -180,37 +255,38 @@ def snapshot_to_device(
     x_count_cpu : torch.Tensor
         (E, number of blocks) long. Each of the E games' rows in each block, on the CPU.
     """
-    batch = cat_states([read_slot(slot) for slot in step_buffer.slots])
+    if not workers._handles:
+        raise RuntimeError("The workers have been stopped")
+    batch = cat_states([read_slot(slot) for slot in workers._buffer.slots])
     return to_device(batch, device), count_blocks(batch)
 
 
-def drain_episodes(queue: Queue[EpisodeStats]) -> list[EpisodeStats]:
-    episodes = []
-    while not queue.empty():
-        episodes.append(queue.get())
-    return episodes
-
-
-def stop_workers(worker_handles: list[WorkerHandle]) -> None:
+def stop_workers(workers: Workers) -> None:
     """Set every worker's stop flag, wake it to see it, and kill any still running after 5 s.
+
+    Reap the processes and close the episode queue. Calling it again has no effect.
 
     Parameters
     ----------
-    worker_handles : list[WorkerHandle]
-        The worker processes, their semaphores and stop flags.
+    workers : Workers
+        The handle returned by `start_workers`; it cannot be stepped or snapshotted afterward.
     """
-    for worker_handle in worker_handles:
+    for worker_handle in workers._handles:
         worker_handle.x_stop.fill_(True)
         worker_handle.sph_request.release()
 
-    for worker_handle in worker_handles:
+    for worker_handle in workers._handles:
         worker_handle.process.join(timeout=5)
         if worker_handle.process.is_alive():
             worker_handle.process.kill()
+            worker_handle.process.join()
+
+    workers._handles.clear()
+    workers._buffer.episodes.close()
 
 
 def _worker_loop(
-    step_buffer_region: StepBuffer,
+    step_buffer_region: _StepBuffer,
     sph_request: Semaphore,
     sph_reply: Semaphore,
     x_stop: torch.Tensor,
@@ -225,7 +301,7 @@ def _worker_loop(
 
     Parameters
     ----------
-    step_buffer_region : StepBuffer
+    step_buffer_region : _StepBuffer
         This worker's state slot and its slices of the Actor's per-game tensors.
     sph_request : Semaphore
         The step loop's request, released once per step.
@@ -295,7 +371,7 @@ def _wait_for_request(sph_request: Semaphore, x_stop: torch.Tensor) -> bool:
     return not x_stop
 
 
-def _worker_region(step_buffer: StepBuffer, games: range, worker_index: int) -> StepBuffer:
+def _worker_region(step_buffer: _StepBuffer, games: range, worker_index: int) -> _StepBuffer:
     """Return the worker's region of the step buffer, one region of its own.
 
     The region holds its games' actions, rewards, done flags and ascensions, their counts,
@@ -303,7 +379,7 @@ def _worker_region(step_buffer: StepBuffer, games: range, worker_index: int) -> 
 
     Parameters
     ----------
-    step_buffer : StepBuffer
+    step_buffer : _StepBuffer
         The step buffer.
     games : range
         The worker's games, by their indices among the run's games.
@@ -312,10 +388,10 @@ def _worker_region(step_buffer: StepBuffer, games: range, worker_index: int) -> 
 
     Returns
     -------
-    StepBuffer
+    _StepBuffer
         The worker's region, views of the step buffer's tensors.
     """
-    return StepBuffer(
+    return _StepBuffer(
         x_actions=step_buffer.x_actions[games.start : games.stop],
         x_rewards=step_buffer.x_rewards[games.start : games.stop],
         x_dones=step_buffer.x_dones[games.start : games.stop],
@@ -326,13 +402,13 @@ def _worker_region(step_buffer: StepBuffer, games: range, worker_index: int) -> 
 
 
 def _write_states(
-    step_buffer_region: StepBuffer, batch_env: list[GameEnv], batch_game_state: list[GameState]
+    step_buffer_region: _StepBuffer, batch_env: list[GameEnv], batch_game_state: list[GameState]
 ) -> None:
     """Encode the worker's games and their masks into its region of the step buffer.
 
     Parameters
     ----------
-    step_buffer_region : StepBuffer
+    step_buffer_region : _StepBuffer
         The worker's region of the step buffer.
     batch_env : list[GameEnv]
         The worker's games.

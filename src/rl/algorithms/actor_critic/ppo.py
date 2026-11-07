@@ -7,12 +7,12 @@ import torch.nn.functional as F
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.models import ActorCritic
-from src.rl.packed import build_batch_layout
-from src.rl.packed import plan_minibatches
-from src.rl.packed import slice_states
-from src.rl.packed import take_states
+from src.rl.batches import build_batch_layout
+from src.rl.batches import slice_states
+from src.rl.batches import take_states
 from src.rl.reward import RewardStream
 from src.rl.types import BatchLayout
+from src.rl.types import MinibatchPlan
 from src.rl.types import Rollout
 
 
@@ -29,6 +29,60 @@ class PPOConfig:
     is_clip: float
     max_grad_norm: float
     target_kl: float | None
+
+
+def plan_minibatches(
+    x_counts_cpu: torch.Tensor,
+    minibatch_size: int,
+    num_epochs: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> list[list[MinibatchPlan]]:
+    """Plan every epoch before training, transferring all shuffled state IDs together.
+
+    Parameters
+    ----------
+    x_counts_cpu : torch.Tensor
+        (N, 8) on the CPU. Each rollout state's row and entry totals, in `count_blocks` order.
+    minibatch_size : int
+        The maximum number of states per minibatch.
+    num_epochs : int
+        The number of independently shuffled passes over the rollout.
+    device : torch.device
+        The device on which the minibatches will select their state rows.
+    generator : torch.Generator
+        The CPU generator used to shuffle each epoch's state order.
+
+    Returns
+    -------
+    list[list[MinibatchPlan]]
+        The minibatches for each epoch, with device state indices and CPU row and entry totals.
+    """
+    if x_counts_cpu.device.type != "cpu" or x_counts_cpu.ndim != 2 or x_counts_cpu.shape[1] != 8:
+        raise ValueError("Minibatch counts must be a CPU tensor with eight totals per state")
+    if minibatch_size <= 0 or num_epochs <= 0:
+        raise ValueError("Minibatch size and epoch count must be positive")
+    starts = range(0, len(x_counts_cpu), minibatch_size)
+    x_order = torch.stack(
+        [torch.randperm(len(x_counts_cpu), generator=generator) for _ in range(num_epochs)]
+    )
+    totals = [
+        [
+            x_counts_cpu[x_epoch[start : start + minibatch_size]].sum(0, dtype=torch.long).tolist()
+            for start in starts
+        ]
+        for x_epoch in x_order
+    ]
+    x_order = (x_order.pin_memory() if device.type == "cuda" else x_order).to(
+        device, non_blocking=True
+    )
+    return [
+        [
+            MinibatchPlan(x_epoch[start : start + minibatch_size], *total)
+            for start, total in zip(starts, epoch_totals)
+        ]
+        for x_epoch, epoch_totals in zip(x_order, totals)
+    ]
 
 
 def _compute_gae(

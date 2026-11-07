@@ -7,7 +7,7 @@ battery's wins at those same levels.
 import math
 from dataclasses import dataclass
 
-from src.rl.algorithms.actor_critic.checkpoint import RunState
+from src.rl.algorithms.actor_critic.progress import RunState
 
 
 @dataclass
