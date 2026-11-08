@@ -15,31 +15,31 @@ from slai import Potion
 from slai import Relic
 from slai import Room
 
-from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
+from src.rl.encoding.buffers import StateBuffer
+from src.rl.encoding.buffers import allocate_buffer
+from src.rl.encoding.buffers import read_buffer
 from src.rl.encoding.card import encode_card_into_w_cache
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
-from src.rl.encoding.effect import encode_batch_effect_pending
+from src.rl.encoding.effect import encode_batch_effect_pending_into
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.map_ import encode_map_grid_into
-from src.rl.encoding.mask import encode_batch_masks
+from src.rl.encoding.mask import encode_batch_masks_into
 from src.rl.encoding.modifier import encode_modifier_row_into
 from src.rl.encoding.monster import encode_monster_into
 from src.rl.encoding.monster import get_outgoing_damage
 from src.rl.encoding.potion import encode_potion_into_w_cache
 from src.rl.encoding.relic import encode_relic_into_w_cache
 from src.rl.encoding.shop import encode_price_into
-from src.rl.encoding.sparse import encode_sparse
+from src.rl.encoding.sparse import encode_sparse_into
 from src.rl.schema.card import TAGS_OF_CARD_NAME
-from src.rl.schema.context import ENCODING_DIM_CONTEXT
 from src.rl.schema.effect import ENCODING_DIM_EFFECT
 from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.schema.map_ import NUM_CHANNELS
 from src.rl.schema.modifier import ENCODING_DIM_MODIFIER
 from src.rl.schema.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.schema.monster import moveset_effects
@@ -58,13 +58,12 @@ from src.rl.schema.state import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.schema.state import ENCODING_DIM_TOKEN
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
+from src.rl.tensor_ops import map_tensors
 from src.rl.types import EffectSource
-from src.rl.types import Jagged
 from src.rl.types import ModifierOwner
 from src.rl.types import StateBatch
 from src.rl.types import Token
 from src.rl.types import TokenKind
-from src.rl.types import Tokens
 
 
 type EffectRow = tuple[int, Effect, EffectSource]
@@ -106,35 +105,7 @@ def encode_batch_game_state(
     batch_legal_actions: list[list[Action]],
     device: torch.device,
 ) -> StateBatch:
-    # Tokens
-    tokens, x_legal_action_type = _encode_batch_tokens(
-        batch_game_state, batch_legal_actions, device
-    )
-
-    # Context and Map
-    context = np.zeros((len(batch_game_state), ENCODING_DIM_CONTEXT), dtype=np.float32)
-    map_grid = np.zeros(
-        (len(batch_game_state), MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32
-    )
-    for game_state, context_row, grid in zip(batch_game_state, context, map_grid):
-        encode_context_into(game_state, context_row)
-        encode_map_grid_into(game_state, grid)
-
-    return StateBatch(
-        tokens=tokens,
-        pending=encode_batch_effect_pending(batch_game_state, device),
-        x_context=torch.from_numpy(context).to(device),
-        x_map_grid=torch.from_numpy(map_grid).to(device),
-        x_legal_action_type=x_legal_action_type,
-    )
-
-
-def _encode_batch_tokens(
-    batch_game_state: list[GameState],
-    batch_legal_actions: list[list[Action]],
-    device: torch.device,
-) -> tuple[Jagged[Tokens], torch.Tensor]:
-    """Encode the tokens and each state's legal action types.
+    """Allocate and encode an owned compact batch through the destination-writing path.
 
     Parameters
     ----------
@@ -143,33 +114,109 @@ def _encode_batch_tokens(
     batch_legal_actions : list[list[Action]]
         Each state's legal actions.
     device : torch.device
-        The device of the returned tensors.
+        The device on which to place the returned tensors.
 
     Returns
     -------
-    tokens : Jagged[Tokens]
-        The tokens, each state's in window order, state after state, with their masks from each
-        state's legal actions, and the Effect and Modifier rows they own.
-    x_legal_action_type : torch.Tensor
-        (B, NUM_ACTION_TYPES) bool. Each state's legal action types.
+    StateBatch
+        The encoded states with compact tensor storage, independent of reusable capacity.
+    """
+    destination = allocate_buffer(1, len(batch_game_state))
+    encode_into(destination, 0, batch_game_state, batch_legal_actions)
+    return map_tensors(
+        read_buffer(destination, 0), lambda x_tensor: x_tensor.to(device, copy=True)
+    )
+
+
+def encode_into(
+    destination: StateBuffer,
+    slot: int,
+    batch_game_state: list[GameState],
+    batch_legal_actions: list[list[Action]],
+) -> None:
+    """Encode observations into reserved CPU arrays and publish the completed slot.
+
+    The slot is invalid while writing. An exception leaves it invalid, including if some
+    payload arrays or live sizes have already changed. The caller owns exclusive access
+    until the write completes and readers have finished with their views.
+
+    Parameters
+    ----------
+    destination : StateBuffer
+        The reusable CPU capacity, either local or shared with readers.
+    slot : int
+        The destination's zero-based slot index.
+    batch_game_state : list[GameState]
+        The states to encode, exactly the destination's number of states per slot.
+    batch_legal_actions : list[list[Action]]
+        Each state's legal actions, in the same order.
+    """
+    if not 0 <= slot < len(destination.x_ready):
+        raise IndexError("Slot index is outside the state buffer")
+    destination.x_ready[slot] = False
+    if len(batch_game_state) != destination.x_token_lengths.shape[1]:
+        raise ValueError("An encoded batch must contain exactly its slot's number of states")
+    if len(batch_legal_actions) != len(batch_game_state):
+        raise ValueError("Each encoded state must have its own legal-action list")
+
+    # Tokens
+    _encode_batch_tokens_into(destination, slot, batch_game_state, batch_legal_actions)
+
+    # Context and Map
+    np_context = destination.x_context[slot].numpy()
+    np_map_grid = destination.x_map_grid[slot].numpy()
+    np_context.fill(0)
+    np_map_grid.fill(0)
+    for game_state, np_context_row, np_grid in zip(batch_game_state, np_context, np_map_grid):
+        encode_context_into(game_state, np_context_row)
+        encode_map_grid_into(game_state, np_grid)
+
+    encode_batch_effect_pending_into(
+        destination.pending, slot, destination.x_pending_lengths[slot], batch_game_state
+    )
+    destination.x_ready[slot] = True
+
+
+def _encode_batch_tokens_into(
+    destination: StateBuffer,
+    slot: int,
+    batch_game_state: list[GameState],
+    batch_legal_actions: list[list[Action]],
+) -> None:
+    """Write the tokens, their owned rows and each state's legal action types.
+
+    Parameters
+    ----------
+    destination : StateBuffer
+        The reserved token arrays and sparse feature, Effect and Modifier capacity.
+    slot : int
+        The destination's zero-based slot index.
+    batch_game_state : list[GameState]
+        The states to encode, B of them.
+    batch_legal_actions : list[list[Action]]
+        Each state's legal actions.
     """
     # Each state's tokens, as (token kind, Entity) in window order
     batch_tokens = [list(iter_tokens(game_state)) for game_state in batch_game_state]
 
     # Number of tokens for each state in the batch
-    np_count_tokens = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
+    np_count_tokens = destination.x_token_lengths[slot].numpy()  # (B,)
+    np_count_tokens[:] = [len(tokens) for tokens in batch_tokens]
 
     # Number of total tokens across all states
     num_tokens = int(np_count_tokens.sum())
+    if num_tokens > destination.x_token_kind.shape[1]:
+        raise IndexError("Token count exceeds the destination's capacity")
 
     # Initialize arrays to store dense token encodings and their kinds
     np_token = np.zeros(
         (num_tokens, ENCODING_DIM_TOKEN), dtype=np.float32
     )  # (N_tok, ENCODING_DIM_TOKEN)
-    np_token_kind = np.empty(num_tokens, dtype=np.int16)
+    np_token_kind = destination.x_token_kind[slot, :num_tokens].numpy()
 
     # Initialize an array to store each Room token's Map node; 0 on every other token
-    np_node_idx = np.zeros(num_tokens, dtype=np.int16)
+    np_node_idx = destination.x_node_idx[slot, :num_tokens].numpy()
+    np_node_idx.fill(0)
 
     # Initialize lists to store owned rows (Effects, Modifiers)
     batch_effect_rows: list[EffectRow] = []
@@ -211,39 +258,23 @@ def _encode_batch_tokens(
     )
 
     # The masks, from each state's legal actions
-    (
-        np_legal_selection,
-        np_legal_target,
-        np_needs_target,
-        np_legal_action_type,
-    ) = encode_batch_masks(
+    encode_batch_masks_into(
         batch_game_state,
         batch_legal_actions,
         batch_tokens,
         batch_row_of_entity_id,
+        destination.x_legal_selection[slot, :num_tokens].numpy(),
+        destination.x_legal_target[slot, :num_tokens].numpy(),
+        destination.x_needs_target[slot, :num_tokens].numpy(),
+        destination.x_legal_action_type[slot].numpy(),
     )
 
     # Keep ownership boundaries separate from each sparse row's feature-entry lengths.
-    tokens = Jagged(
-        torch.from_numpy(np_count_tokens).to(device),
-        Tokens(
-            features=encode_sparse(np_token, ENCODING_DIM_SPARSE_TOKEN, device),
-            x_kind=torch.from_numpy(np_token_kind).to(device),
-            x_legal_selection=torch.from_numpy(np_legal_selection).to(device),
-            x_legal_target=torch.from_numpy(np_legal_target).to(device),
-            x_needs_target=torch.from_numpy(np_needs_target).to(device),
-            x_node_idx=torch.from_numpy(np_node_idx).to(device),
-            effects=Jagged(
-                torch.from_numpy(np_count_eff.astype(np.int16)).to(device),
-                encode_sparse(np_eff_rows, ENCODING_DIM_SPARSE_EFFECT, device),
-            ),
-            modifiers=Jagged(
-                torch.from_numpy(np_count_mod.astype(np.int16)).to(device),
-                encode_sparse(np_mod_rows, ENCODING_DIM_SPARSE_MODIFIER, device),
-            ),
-        ),
-    )
-    return tokens, torch.from_numpy(np_legal_action_type).to(device)
+    destination.x_effect_lengths[slot, :num_tokens].numpy()[:] = np_count_eff
+    destination.x_modifier_lengths[slot, :num_tokens].numpy()[:] = np_count_mod
+    encode_sparse_into(destination.token_features, slot, np_token, ENCODING_DIM_SPARSE_TOKEN)
+    encode_sparse_into(destination.effects, slot, np_eff_rows, ENCODING_DIM_SPARSE_EFFECT)
+    encode_sparse_into(destination.modifiers, slot, np_mod_rows, ENCODING_DIM_SPARSE_MODIFIER)
 
 
 def _encode_tokens_into(

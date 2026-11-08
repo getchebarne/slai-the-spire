@@ -342,6 +342,55 @@ def encode_batch_masks(
     np_legal_action_type = np.zeros((len(batch_game_state), NUM_ACTION_TYPES), dtype=np.bool_)
     np_needs_target = np.zeros(num_tokens, dtype=np.bool_)
 
+    encode_batch_masks_into(
+        batch_game_state,
+        batch_legal_actions,
+        batch_tokens,
+        batch_row_of_entity_id,
+        np_legal_selection,
+        np_legal_target,
+        np_needs_target,
+        np_legal_action_type,
+    )
+    return np_legal_selection, np_legal_target, np_needs_target, np_legal_action_type
+
+
+def encode_batch_masks_into(
+    batch_game_state: list[slai.GameState],
+    batch_legal_actions: list[list[slai.Action]],
+    batch_tokens: list[list[Token]],
+    batch_row_of_entity_id: list[dict[int, int]],
+    np_legal_selection: np.ndarray,
+    np_legal_target: np.ndarray,
+    np_needs_target: np.ndarray,
+    np_legal_action_type: np.ndarray,
+) -> None:
+    """Reset and write the masks into the supplied token and state rows.
+
+    Parameters
+    ----------
+    batch_game_state : list[slai.GameState]
+        The states, B of them.
+    batch_legal_actions : list[list[slai.Action]]
+        Each state's legal actions.
+    batch_tokens : list[list[Token]]
+        Each state's tokens, as (token kind, Entity) in window order.
+    batch_row_of_entity_id : list[dict[int, int]]
+        Each state's Entity ids, each mapped to its first state-local token row.
+    np_legal_selection : np.ndarray
+        (N, NUM_ACTION_TYPES) bool. The selectable tokens, written in place.
+    np_legal_target : np.ndarray
+        (N, NUM_ACTION_TYPES) bool. The legal Monster targets, written in place.
+    np_needs_target : np.ndarray
+        (N,) bool. The tokens whose selection requires a Monster target, written in place.
+    np_legal_action_type : np.ndarray
+        (B, NUM_ACTION_TYPES) bool. Each state's legal action types, written in place.
+    """
+    np_legal_selection.fill(False)
+    np_legal_target.fill(False)
+    np_needs_target.fill(False)
+    np_legal_action_type.fill(False)
+
     start = 0
     for b, game_state in enumerate(batch_game_state):
         tokens = batch_tokens[b]
@@ -412,5 +461,3 @@ def encode_batch_masks(
 
         # Increment `start` index w/ the number of tokens processed for this state
         start += len(tokens)
-
-    return np_legal_selection, np_legal_target, np_needs_target, np_legal_action_type

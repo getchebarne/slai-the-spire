@@ -29,7 +29,8 @@ from slai import CostScope
 from slai import Effect
 from slai import GameState
 
-from src.rl.encoding.sparse import encode_sparse
+from src.rl.encoding.buffers import SparseBuffer
+from src.rl.encoding.sparse import encode_sparse_into
 from src.rl.schema.effect import BUCKET_META
 from src.rl.schema.effect import ENCODING_DIM_EFFECT
 from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
@@ -116,8 +117,6 @@ from src.rl.schema.effect import VOCAB_MONSTER
 from src.rl.schema.effect import VOCAB_RELIC
 from src.rl.schema.effect import amount_parts
 from src.rl.types import EffectSource
-from src.rl.types import Jagged
-from src.rl.types import Sparse
 
 
 # Per-effect-kind encoders
@@ -620,29 +619,30 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
     rows[..., IDXS_SCALED] = rows_gather
 
 
-def encode_batch_effect_pending(
-    batch_game_state: list[GameState], device: torch.device
-) -> Jagged[Sparse]:
-    """Encode the pending Effect rows as one (P, D) block, held sparse.
+def encode_batch_effect_pending_into(
+    destination: SparseBuffer,
+    slot: int,
+    x_lengths: torch.Tensor,
+    batch_game_state: list[GameState],
+) -> None:
+    """Write the pending Effect rows into sparse capacity and their per-state lengths.
 
     One row per state with a halt pending, every state's after the previous state's.
 
     Parameters
     ----------
+    destination : SparseBuffer
+        The reserved pending Effect rows and entries.
+    slot : int
+        The destination's zero-based slot index.
+    x_lengths : torch.Tensor
+        (B,) long on the CPU. The selected slot's per-state pending row counts, written in place.
     batch_game_state : list[GameState]
         The states to encode, B of them.
-    device : torch.device
-        The device of the returned tensors.
-
-    Returns
-    -------
-    Jagged[Sparse]
-        The pending Effect rows, held sparse, and each state's (B,) row count, 1 or 0.
     """
     batch_effect_pending = [game_state.effect_pending for game_state in batch_game_state]
-    np_count = np.array(
-        [effect_pending is not None for effect_pending in batch_effect_pending], dtype=np.int64
-    )
+    np_count = x_lengths.numpy()
+    np_count[:] = [effect_pending is not None for effect_pending in batch_effect_pending]
     np_effect_rows = np.zeros((np_count.sum(), ENCODING_DIM_EFFECT), dtype=np.float32)
     row = 0
     for effect_pending in batch_effect_pending:
@@ -653,7 +653,4 @@ def encode_batch_effect_pending(
             row += 1
 
     normalize_effect_rows(np_effect_rows)
-    return Jagged(
-        torch.from_numpy(np_count).to(device),
-        encode_sparse(np_effect_rows, ENCODING_DIM_SPARSE_EFFECT, device),
-    )
+    encode_sparse_into(destination, slot, np_effect_rows, ENCODING_DIM_SPARSE_EFFECT)
