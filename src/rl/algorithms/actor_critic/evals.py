@@ -23,7 +23,9 @@ from src.rl.algorithms.actor_critic.stats import KEY_WIN_RATE
 from src.rl.algorithms.actor_critic.stats import PREFIX_EVAL
 from src.rl.algorithms.actor_critic.stats import EpisodeStats
 from src.rl.algorithms.actor_critic.stats import aggregate_episode_stats
-from src.rl.encoding import encode_batch_game_state
+from src.rl.encoding import allocate_buffer
+from src.rl.encoding import encode_into
+from src.rl.encoding import read_buffer
 from src.rl.models import ActorCritic
 from src.rl.utils import parent_alive
 
@@ -44,6 +46,7 @@ EVAL_ACT4_RATE = PREFIX_EVAL + KEY_ACT4_RATE
 def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:
     env, game_state = new_env(ascension, seed)
     stats = EpisodeStats()
+    buffer = allocate_buffer(1, 1)
     done = False
     while not done:
         legal_actions = env.get_legal_actions()
@@ -53,7 +56,8 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        batch = encode_batch_game_state([game_state], [legal_actions], torch.device("cpu"))
+        encode_into(buffer, 0, [game_state], [legal_actions])
+        batch = read_buffer(buffer, 0)
         policy = model.act(batch, greedy=True)
 
         # Game step
