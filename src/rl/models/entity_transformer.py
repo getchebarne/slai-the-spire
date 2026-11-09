@@ -152,8 +152,9 @@ def _same_state_mask(
 class _Attention(nn.Module):
     """Multi-head attention over packed rows.
 
-    The query and key/value projections, the attention kernel, the output projection.
-    FlexAttention, compiled, on the GPU; SDPA on the CPU.
+    The query and key/value projections, a LayerNorm over the head dim on the queries and one on
+    the keys (QK-norm), the attention kernel, the output projection. FlexAttention, compiled, on
+    the GPU; SDPA on the CPU.
 
     Parameters
     ----------
@@ -168,6 +169,8 @@ class _Attention(nn.Module):
 
         self._projection_query = nn.Linear(dim_entity, dim_entity)
         self._projection_key_value = nn.Linear(dim_entity, 2 * dim_entity)
+        self._norm_query = nn.LayerNorm(dim_entity // num_heads)
+        self._norm_key = nn.LayerNorm(dim_entity // num_heads)
         self._projection_out = nn.Linear(dim_entity, dim_entity)
         self._num_heads = num_heads
 
@@ -193,12 +196,13 @@ class _Attention(nn.Module):
         """
         x_q = self._projection_query(x_query)
         x_k, x_v = self._projection_key_value(x_key).chunk(2, dim=1)
+        x_q, x_k, x_v = (x.unflatten(1, (self._num_heads, -1)) for x in (x_q, x_k, x_v))
+
+        # QK-norm (Dehghani et al. 2023): each head's queries and keys normalized over the head dim
+        x_q, x_k = self._norm_query(x_q), self._norm_key(x_k)
 
         # Both kernels' layout: (1, heads, rows, head dim)
-        x_q, x_k, x_v = (
-            x.unflatten(1, (self._num_heads, -1)).transpose(0, 1).unsqueeze(0)
-            for x in (x_q, x_k, x_v)
-        )
+        x_q, x_k, x_v = (x.transpose(0, 1).unsqueeze(0) for x in (x_q, x_k, x_v))
 
         # One tensor, (1, H, N_q, D / H): no log-sum-exp is asked for
         if isinstance(mask, BlockMask):
