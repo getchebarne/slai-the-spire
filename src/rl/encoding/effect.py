@@ -15,7 +15,6 @@ Two rules the layout depends on:
 - **Normalization is vectorized and scoped** — see `normalize_effect_rows`.
 """
 
-import math
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
@@ -58,6 +57,8 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.sparse import encode_sparse_rows_into
 from src.rl.types import EffectSource
 from src.rl.types import Reserved
@@ -369,8 +370,12 @@ _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
 # Contiguous groups; every column carries a cap and a mode
 
 
+# Each magnitude's bucket block: exact up to here, one per floor(sqrt(value)) past it
+_LINEAR_SQRT_THRESHOLD = 25
+
+
 def _bucket_width(cap: float) -> int:
-    """Return the number of square-root buckets through the channel's cap.
+    """Return the number of linear-then-square-root buckets through the channel's cap.
 
     Parameters
     ----------
@@ -380,9 +385,9 @@ def _bucket_width(cap: float) -> int:
     Returns
     -------
     int
-        One column per integer bucket, including zero.
+        One column per integer up to _LINEAR_SQRT_THRESHOLD, then one per square-root step.
     """
-    return int(math.sqrt(cap)) + 1
+    return get_piecewise_dim(0, int(cap), _LINEAR_SQRT_THRESHOLD)
 
 
 _CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
@@ -396,6 +401,7 @@ _OFF_TARGETED = _alloc("targeted")
 _OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
+_OFF_SELECT_COUNT_BUCKETS = _alloc("select_count_buckets", _bucket_width(_CAP_SELECT_COUNT))
 _OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
 _OFF_EFFECT_SOURCE = _alloc(
     "effect_source", len(EffectSource)
@@ -428,6 +434,7 @@ _OFF_DAMAGE = _alloc("damage")
 _OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE))
 _OFF_INSTANCES = _alloc("instances")
 _OFF_BLOCK = _alloc("block")
+_OFF_BLOCK_BUCKETS = _alloc("block_buckets", _bucket_width(_CAP_BLOCK))
 _OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
 _OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
 _OFF_HEALTH_RELATIVE = _alloc("health_relative")
@@ -467,7 +474,9 @@ _OFF_UPGRADED = _alloc("upgraded")
 
 # (float channel, bucket block, cap) — buckets derive from the final raw floats
 _BUCKET_META: tuple[tuple[int, int, float], ...] = (
+    (_OFF_SELECT_COUNT, _OFF_SELECT_COUNT_BUCKETS, _CAP_SELECT_COUNT),
     (_OFF_DAMAGE, _OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
+    (_OFF_BLOCK, _OFF_BLOCK_BUCKETS, _CAP_BLOCK),
     (_OFF_HEALTH_ABSOLUTE, _OFF_HEALTH_BUCKETS, _CAP_HEALTH),
     (_OFF_GOLD_ABSOLUTE, _OFF_GOLD_BUCKETS, _CAP_GOLD),
     (_OFF_STACKS, _OFF_STACKS_BUCKETS, _CAP_STACKS),
@@ -501,7 +510,7 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (_OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
     (_OFF_DAMAGE, _CAP_DAMAGE, _NormMode.SQRT),
     (_OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
-    (_OFF_BLOCK, _CAP_BLOCK, _NormMode.LINEAR),
+    (_OFF_BLOCK, _CAP_BLOCK, _NormMode.SQRT),
     (_OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, _NormMode.SQRT),
     (_OFF_GOLD_ABSOLUTE, _CAP_GOLD, _NormMode.SQRT),
     (_OFF_ENERGY, _CAP_ENERGY, _NormMode.LINEAR),
@@ -962,7 +971,8 @@ def encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     for off_float, off_bucket, cap in _BUCKET_META:
         value = np_out[off_float]
         if value:
-            np_out[off_bucket + int(math.sqrt(min(abs(value), cap)))] = 1.0
+            bucket = get_piecewise_bucket(int(abs(value)), 0, int(cap), _LINEAR_SQRT_THRESHOLD)
+            np_out[off_bucket + bucket] = 1.0
 
     # Buckets are magnitude-only; keep negative stacks (Malaise) linearly separable
     np_out[_OFF_STACKS_NEGATIVE] = float(np_out[_OFF_STACKS] < 0)

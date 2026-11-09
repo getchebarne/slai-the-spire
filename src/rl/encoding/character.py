@@ -2,24 +2,32 @@ import math
 
 import numpy as np
 from slai import CardCostKindMinusDiscardsThisTurn
+from slai import CardName
+from slai import Combat
 from slai import GameEnv
 from slai import GameState
+from slai import RelicName
 from slai import get_card_templates
 
 from src.rl.constants import CHARACTER_HEALTH_CAP
 from src.rl.constants import FACTOR_VULN
 from src.rl.constants import GOLD_STOLEN_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
+from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import SHOP_PRICE_CAP
+from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.tokens import relic_held
 
 
 # Widest catalog turn (damage x instances), Vulnerable-scaled; Strength ramps clamp
 _INCOMING_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)
+_INCOMING_LINEAR_SQRT_THRESHOLD = 25
+_INCOMING_DIM = get_piecewise_dim(0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD)
 _HEALTH_MAX_CAP = CHARACTER_HEALTH_CAP
 _GOLD_MIN = 0
 _GOLD_MAX = 999
@@ -59,19 +67,28 @@ _OFF_CHARACTER_POTION_DROP_CHANCE = _alloc(
 _OFF_CHARACTER_SHOP_PURGE_COST_RUN = _alloc(
     "shop_purge_cost_run"
 )  # Card removal price before Relic discounts
+_OFF_CHARACTER_POTION_SLOTS_LEFT = _alloc("potion_slots_left")
 # Combat only: 0 outside it
-_OFF_CHARACTER_INCOMING_DAMAGE = _alloc("incoming_damage")
-_OFF_CHARACTER_BLOCK_COVERS_INCOMING = _alloc("block_covers_incoming")
+_OFF_CHARACTER_INCOMING_DAMAGE = _alloc(
+    "incoming_damage"
+)  # What ending the turn now lands on block and HP (incoming.py)
+_OFF_CHARACTER_INCOMING_DAMAGE_OHE = _alloc("incoming_damage_ohe", _INCOMING_DIM)
+_OFF_CHARACTER_INCOMING_HEALTH_LOST = _alloc(
+    "incoming_health_lost"
+)  # What ending the turn now costs in HP
+_OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE = _alloc("incoming_health_lost_ohe", _INCOMING_DIM)
 _OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc("incoming_is_lethal")
 _OFF_CHARACTER_INCOMING_HIDDEN = _alloc(
     "incoming_hidden"
-)  # Runic Dome: the four incoming-damage channels read 0
-_OFF_CHARACTER_NET_UNBLOCKED_DAMAGE = _alloc("net_unblocked_damage")
+)  # Runic Dome: the incoming-damage channels read 0
 _OFF_CHARACTER_THIS_TURN_DISCARDS = _alloc("this_turn_discards")
 _OFF_CHARACTER_THIS_TURN_ATTACKS = _alloc("this_turn_attacks")  # Finisher hits once per Attack
 _OFF_CHARACTER_THIS_TURN_CARDS_PLAYED = _alloc(
     "this_turn_cards_played"
 )  # Normality caps the turn at 3
+_OFF_CHARACTER_THIS_TURN_PLAYS_LEFT = _alloc(
+    "this_turn_plays_left", GameEnv.VELVET_CHOKER_PLAYS_MAX + 1
+)  # Under Normality's or Velvet Choker's cap; none without a cap
 _OFF_CHARACTER_PANACHE_COUNTDOWN = _alloc("panache_countdown")  # Plays left until Panache's hit
 _OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK = _alloc(
     "orange_pellets_played_attack"
@@ -104,8 +121,33 @@ ENCODING_DIM_CHARACTER = sum(w for _, w in _CHANNEL_LAYOUT_CHARACTER)
 ENCODING_DIM_SPARSE_CHARACTER = len(_CHANNEL_LAYOUT_CHARACTER)
 
 
+def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | None:
+    """Return how many more Cards the turn's play cap allows.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state, for its Relics.
+    combat : Combat
+        The Combat, for the hand and the turn's plays.
+
+    Returns
+    -------
+    int | None
+        The plays left under the tightest cap, Normality's while it's in hand, else Velvet
+        Choker's; None with neither.
+    """
+    if any(card.name == CardName.Normality for card in combat.card_pile_hand):
+        plays_max = GameEnv.NORMALITY_PLAYS_MAX
+    elif relic_held(game_state, RelicName.VelvetChoker):
+        plays_max = GameEnv.VELVET_CHOKER_PLAYS_MAX
+    else:
+        return None
+    return max(plays_max - combat.this_turn_cards_played, 0)
+
+
 def encode_character_into(
-    game_state: GameState, incoming_damage: int | None, np_out: np.ndarray
+    game_state: GameState, incoming: Incoming | None, np_out: np.ndarray
 ) -> None:
     character = game_state.character
     deck = game_state.card_pile_deck
@@ -132,23 +174,29 @@ def encode_character_into(
     np_out[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = (
         min(game_state.shop_purge_cost_run, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
     )
+    np_out[_OFF_CHARACTER_POTION_SLOTS_LEFT] = (
+        game_state.potion_slots_max - len(game_state.potions)
+    ) / MAX_POTION_SLOTS
     combat = game_state.combat
     if combat is not None:
-        if incoming_damage is None:
+        if incoming is None:
             np_out[_OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
         else:
             np_out[_OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
-                incoming_damage, _INCOMING_DAMAGE_MAX
+                incoming.damage, _INCOMING_DAMAGE_MAX
             )
-            np_out[_OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(
-                character.block >= incoming_damage
+            incoming_damage_bucket = get_piecewise_bucket(
+                incoming.damage, 0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD
             )
-            np_out[_OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
-                incoming_damage >= character.health + character.block
+            np_out[_OFF_CHARACTER_INCOMING_DAMAGE_OHE + incoming_damage_bucket] = 1.0
+            np_out[_OFF_CHARACTER_INCOMING_HEALTH_LOST] = get_sqrt_norm(
+                incoming.health_lost, _INCOMING_DAMAGE_MAX
             )
-            np_out[_OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
-                max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX
+            incoming_health_lost_bucket = get_piecewise_bucket(
+                incoming.health_lost, 0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD
             )
+            np_out[_OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE + incoming_health_lost_bucket] = 1.0
+            np_out[_OFF_CHARACTER_INCOMING_IS_LETHAL] = float(incoming.is_lethal)
         np_out[_OFF_CHARACTER_THIS_TURN_DISCARDS] = (
             min(combat.this_turn_discards, _THIS_TURN_DISCARDS_MAX) / _THIS_TURN_DISCARDS_MAX
         )
@@ -158,6 +206,9 @@ def encode_character_into(
         np_out[_OFF_CHARACTER_THIS_TURN_CARDS_PLAYED] = get_sqrt_norm(
             combat.this_turn_cards_played, MAX_SIZE_CARD_PILE_DECK
         )
+        this_turn_plays_left = _get_this_turn_plays_left(game_state, combat)
+        if this_turn_plays_left is not None:
+            np_out[_OFF_CHARACTER_THIS_TURN_PLAYS_LEFT + this_turn_plays_left] = 1.0
         np_out[_OFF_CHARACTER_PANACHE_COUNTDOWN] = combat.panache_countdown / _PANACHE_PLAYS
         np_out[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK] = float(
             combat.orange_pellets_played_attack
