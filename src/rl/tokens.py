@@ -66,6 +66,7 @@ __all__ = [
     "get_y_x_current",
     "get_rooms",
     "get_room_entities",
+    "next_row_candidate_cols",
     "get_room_burning",
     "get_burning_path",
 ]
@@ -486,7 +487,7 @@ def get_rooms(game_state: GameState) -> list[list[Room | None]]:
     )
 
 
-def _next_row_candidate_cols(
+def next_row_candidate_cols(
     game_state: GameState, y_current: int | None, x_current: int | None, winged: bool
 ) -> list[int]:
     """Return the columns of reachable Rooms in the next Map row.
@@ -562,7 +563,7 @@ def _get_id_rooms_next(game_state: GameState) -> list[int]:
     map_ = game_state.map
     y_current, x_current = get_y_x_current(map_)
     winged = _get_wing_boots_charges(game_state) > 0
-    cols = _next_row_candidate_cols(game_state, y_current, x_current, winged)
+    cols = next_row_candidate_cols(game_state, y_current, x_current, winged)
     if not cols:
         return []
 
