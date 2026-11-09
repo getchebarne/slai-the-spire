@@ -160,7 +160,7 @@ MAX_SIZE_CARD_PLAY_QUEUE = MAX_SIZE_CARD_PILE_HAND
 MAX_SIZE_CARD_PILE_NIGHTMARE = MAX_SIZE_CARD_PILE_HAND
 
 # Owned Relics: no duplicates, so the true ceiling is the catalog; sized with headroom
-MAX_RELICS = 24
+MAX_RELICS = 35
 
 # Reward bundle widths: bundle 0 must hold The Library's single wide roll, the
 # rest hold Combat rolls

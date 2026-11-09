@@ -1,8 +1,9 @@
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from enum import StrEnum
-from typing import final
+from typing import TypeVar, final
 
 import torch
 from slai import ActionType
@@ -193,6 +194,42 @@ def make_channel_allocator() -> tuple[list[tuple[StrEnum, int]], Callable[..., i
         return offset
 
     return layout, alloc
+
+
+# The token kinds that have already warned about overflow
+_WARNED_OVERFLOW: set[TokenKind] = set()
+
+_E = TypeVar("_E")
+
+
+def capped(
+    token_kind: TokenKind, entities: list[_E], cap: int, keep_last: bool = False
+) -> list[_E]:
+    """Cut `entities` to `cap`, warning once per token kind when that drops any.
+
+    Parameters
+    ----------
+    token_kind : TokenKind
+        The Entities' token kind.
+    entities : list[_E]
+        The Entities to cut.
+    cap : int
+        The token kind's cap.
+    keep_last : bool, default False
+        Keep the last `cap` Entities rather than the first.
+
+    Returns
+    -------
+    list[_E]
+        The first `cap` Entities, or the last `cap` with `keep_last`.
+    """
+    if len(entities) > cap and token_kind not in _WARNED_OVERFLOW:
+        _WARNED_OVERFLOW.add(token_kind)
+        warnings.warn(
+            f"{token_kind.name} holds {len(entities)} entities; the ones past its cap of {cap} "
+            "are dropped"
+        )
+    return entities[max(0, len(entities) - cap) :] if keep_last else entities[:cap]
 
 
 class EffectSource(IntEnum):

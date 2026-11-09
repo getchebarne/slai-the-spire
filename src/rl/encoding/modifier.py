@@ -1,13 +1,15 @@
-import math
 from enum import StrEnum
 from enum import auto
 
 import numpy as np
+from slai import GameEnv
 from slai import Modifier
 from slai import ModifierKind
 
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INVINCIBLE_STACKS_MAX
+from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.types import make_channel_allocator
 
@@ -21,8 +23,12 @@ _STACKS_MAX = 99
 _STACKS_MAX_OF_MODIFIER_KIND = {
     ModifierKind.Poison: HEALTH_MAX_ENTITY,
     ModifierKind.Invincible: INVINCIBLE_STACKS_MAX,  # The HP left to lose before its next turn
+    ModifierKind.TimeWarp: GameEnv.TIME_WARP_PLAYS - 1,  # The next Card played ends the turn
 }
-_STACKS_BUCKET_DIM = int(math.sqrt(max(_STACKS_MAX, *_STACKS_MAX_OF_MODIFIER_KIND.values()))) + 1
+_LINEAR_SQRT_THRESHOLD = 25
+_STACKS_BUCKET_DIM = get_piecewise_dim(
+    0, max(_STACKS_MAX, *_STACKS_MAX_OF_MODIFIER_KIND.values()), _LINEAR_SQRT_THRESHOLD
+)
 
 
 class ModifierChannel(StrEnum):
@@ -53,8 +59,11 @@ def encode_modifier_row_into(modifier: Modifier, out: np.ndarray) -> None:
     # Buff or debuff
     out[_OFF_MODIFIER_BUFF] = float(modifier.kind.is_buff)
 
-    # Stacks: signed float + sign bit + magnitude-only sqrt buckets
+    # Stacks: signed float + sign bit + magnitude-only linear-sqrt buckets
     stacks_max = _STACKS_MAX_OF_MODIFIER_KIND.get(modifier.kind, _STACKS_MAX)
     out[_OFF_MODIFIER_STACKS] = get_sqrt_norm(modifier.stacks, stacks_max)
     out[_OFF_MODIFIER_STACKS_NEGATIVE] = float(modifier.stacks < 0)
-    out[_OFF_MODIFIER_STACKS_OHE + int(math.sqrt(min(abs(modifier.stacks), stacks_max)))] = 1.0
+    stacks_bucket = get_piecewise_bucket(
+        abs(modifier.stacks), 0, stacks_max, _LINEAR_SQRT_THRESHOLD
+    )
+    out[_OFF_MODIFIER_STACKS_OHE + stacks_bucket] = 1.0

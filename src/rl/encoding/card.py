@@ -1,4 +1,3 @@
-import warnings
 from enum import StrEnum
 from enum import auto
 from typing import get_args
@@ -36,6 +35,7 @@ from src.rl.encoding.effect import catalog_effects
 from src.rl.types import TOKEN_KINDS_CARD_REWARDS
 from src.rl.types import Tag
 from src.rl.types import TokenKind
+from src.rl.types import capped
 from src.rl.types import make_channel_allocator
 
 
@@ -87,7 +87,7 @@ class CardChannel(StrEnum):
     RETAIN = auto()
     REQUIRES_TARGET = auto()
     PLAYABLE = auto()
-    ENERGY_DELTA = auto()  # Signed: energy_current - cost
+    ENERGY_DELTA = auto()  # Signed: energy_current - cost; outside Combat, max energy - cost
     COST_BASE = auto()
     BOTTLED = auto()
     COST_OFFSET = auto()  # X-Cost offset
@@ -183,7 +183,7 @@ def _cost_offset(card: Card) -> float:
     return float(card.cost_kind.offset if isinstance(card.cost_kind, CardCostKindXCost) else 0)
 
 
-def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
+def _encode_card_into(card: Card, energy: int, out: np.ndarray) -> None:
     out[OFF_CARD_NAME + _MAP_CARD_NAME[card.name]] = 1.0
     out[OFF_CARD_KIND + _MAP_CARD_KIND[card.kind]] = 1.0
     out[OFF_CARD_COLOR + _MAP_CARD_COLOR[card.color]] = 1.0
@@ -203,9 +203,7 @@ def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
     out[OFF_CARD_RETAIN] = float(card.retain)
     out[OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
     out[OFF_CARD_PLAYABLE] = float(card.playable)
-    out[OFF_CARD_ENERGY_DELTA] = (
-        max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
-    )
+    out[OFF_CARD_ENERGY_DELTA] = max(-_COST_MAX, min(energy - card.cost, _COST_MAX)) / _COST_MAX
     out[OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
     out[OFF_CARD_BOTTLED] = float(card.bottled)
     out[OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
@@ -258,16 +256,16 @@ def card_key(card: Card) -> tuple:
     )
 
 
-def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -> None:
+def encode_card_into_w_cache(card: Card, energy: int, out: np.ndarray) -> None:
     # Try cache hit
-    cache_key = (card_key(card), energy_current)
+    cache_key = (card_key(card), energy)
     row = _CARD_ROW_CACHE.get(cache_key)
 
     # Cache miss
     if row is None:
         # Encode Card
         row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
-        _encode_card_into(card, energy_current, row)
+        _encode_card_into(card, energy, row)
 
         # Write into cache
         row.flags.writeable = False
@@ -282,39 +280,6 @@ def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -
 _REWARD_BUNDLE_OF_TOKEN_KIND = {
     token_kind: bundle for bundle, token_kind in enumerate(TOKEN_KINDS_CARD_REWARDS)
 }
-
-# The token kinds that have already warned about overflow
-_WARNED_OVERFLOW: set[TokenKind] = set()
-
-
-def _capped(
-    token_kind: TokenKind, cards: list[Card], cap: int, keep_last: bool = False
-) -> list[Card]:
-    """Cut `cards` to `cap`, warning once per token kind when that drops any.
-
-    Parameters
-    ----------
-    token_kind : TokenKind
-        The Cards' token kind.
-    cards : list[Card]
-        The Cards to cut.
-    cap : int
-        The token kind's cap.
-    keep_last : bool, default False
-        Keep the last `cap` Cards rather than the first.
-
-    Returns
-    -------
-    list[Card]
-        The first `cap` Cards, or the last `cap` with `keep_last`.
-    """
-    if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
-        _WARNED_OVERFLOW.add(token_kind)
-        warnings.warn(
-            f"{token_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
-            "dropped"
-        )
-    return cards[max(0, len(cards) - cap) :] if keep_last else cards[:cap]
 
 
 def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
@@ -345,17 +310,17 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
                 return []
 
             # The top of the pile, still in engine order (bottom first)
-            return _capped(
+            return capped(
                 token_kind, combat.card_pile_draw, MAX_SIZE_CARD_PILE_DRAW, keep_last=True
             )
         case TokenKind.CARD_PILE_DISCARD:
             if combat is None:
                 return []
-            return _capped(token_kind, combat.card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD)
+            return capped(token_kind, combat.card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD)
         case TokenKind.CARD_PILE_EXHAUST:
-            return (
-                combat.card_pile_exhaust[:MAX_SIZE_CARD_PILE_EXHAUST] if combat is not None else []
-            )
+            if combat is None:
+                return []
+            return capped(token_kind, combat.card_pile_exhaust, MAX_SIZE_CARD_PILE_EXHAUST)
         case TokenKind.CARD_PILE_STASIS:
             if combat is None:
                 return []
@@ -364,7 +329,7 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             cards = [card for card in combat.card_pile_stasis if card is not None]
             return cards[:MAX_SIZE_CARD_PILE_STASIS]
         case TokenKind.CARD_PILE_DECK:
-            return _capped(token_kind, game_state.card_pile_deck, MAX_SIZE_CARD_PILE_DECK)
+            return capped(token_kind, game_state.card_pile_deck, MAX_SIZE_CARD_PILE_DECK)
         case TokenKind.CARD_PILE_DISCOVER:
             return (
                 combat.card_pile_discover[:MAX_SIZE_CARD_PILE_DISCOVER]
@@ -406,11 +371,11 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
         case TokenKind.CARD_PLAY_QUEUE:
             if combat is None:
                 return []
-            return _capped(token_kind, combat.card_play_queue, MAX_SIZE_CARD_PLAY_QUEUE)
+            return capped(token_kind, combat.card_play_queue, MAX_SIZE_CARD_PLAY_QUEUE)
         case TokenKind.CARD_PILE_NIGHTMARE:
             if combat is None:
                 return []
-            return _capped(token_kind, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE)
+            return capped(token_kind, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE)
         case TokenKind.CARD_PILE_SELECTED:
             return game_state.card_pile_selected[:MAX_SIZE_CARD_PILE_SELECTED]
         case _:

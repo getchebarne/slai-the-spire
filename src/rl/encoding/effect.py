@@ -15,7 +15,6 @@ Two rules the layout depends on:
 - **Normalization is vectorized and scoped** — see `normalize_effect_rows`.
 """
 
-import math
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
@@ -58,6 +57,8 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
+from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.sparse import compile_sparse_effect_pending
 from src.rl.types import EffectSource
 from src.rl.types import X_EffectPending
@@ -340,6 +341,7 @@ class EffectChannel(StrEnum):
     CANDIDATE_POOL = auto()
     SELECTION_KIND = auto()
     SELECT_COUNT = auto()
+    SELECT_COUNT_BUCKETS = auto()
     CANDIDATE_FILTER = auto()
     EFFECT_SOURCE = auto()  # Written by encode_effect_row_into_w_cache, outside the row cache
 
@@ -370,6 +372,7 @@ class EffectChannel(StrEnum):
     DAMAGE_BUCKETS = auto()
     INSTANCES = auto()
     BLOCK = auto()
+    BLOCK_BUCKETS = auto()
     HEALTH_ABSOLUTE = auto()
     HEALTH_BUCKETS = auto()
     HEALTH_RELATIVE = auto()
@@ -407,8 +410,12 @@ class EffectChannel(StrEnum):
     UPGRADED = auto()
 
 
+# Each magnitude's bucket block: exact up to here, one per floor(sqrt(value)) past it
+_LINEAR_SQRT_THRESHOLD = 25
+
+
 def _bucket_width(cap: float) -> int:
-    return int(math.sqrt(cap)) + 1
+    return get_piecewise_dim(0, int(cap), _LINEAR_SQRT_THRESHOLD)
 
 
 CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
@@ -422,6 +429,9 @@ OFF_TARGETED = _alloc(EffectChannel.TARGETED)
 OFF_CANDIDATE_POOL = _alloc(EffectChannel.CANDIDATE_POOL, len(_INDEX_CAND_POOL))
 OFF_SELECTION_KIND = _alloc(EffectChannel.SELECTION_KIND, len(_INDEX_SELECTION_KIND))
 OFF_SELECT_COUNT = _alloc(EffectChannel.SELECT_COUNT)
+OFF_SELECT_COUNT_BUCKETS = _alloc(
+    EffectChannel.SELECT_COUNT_BUCKETS, _bucket_width(_CAP_SELECT_COUNT)
+)
 OFF_CANDIDATE_FILTER = _alloc(EffectChannel.CANDIDATE_FILTER, len(_INDEX_CAND_FILTER))
 OFF_EFFECT_SOURCE = _alloc(EffectChannel.EFFECT_SOURCE, len(EffectSource))
 
@@ -454,6 +464,7 @@ OFF_DAMAGE = _alloc(EffectChannel.DAMAGE)
 OFF_DAMAGE_BUCKETS = _alloc(EffectChannel.DAMAGE_BUCKETS, _bucket_width(_CAP_DAMAGE))
 OFF_INSTANCES = _alloc(EffectChannel.INSTANCES)
 OFF_BLOCK = _alloc(EffectChannel.BLOCK)
+OFF_BLOCK_BUCKETS = _alloc(EffectChannel.BLOCK_BUCKETS, _bucket_width(_CAP_BLOCK))
 OFF_HEALTH_ABSOLUTE = _alloc(EffectChannel.HEALTH_ABSOLUTE)
 OFF_HEALTH_BUCKETS = _alloc(EffectChannel.HEALTH_BUCKETS, _bucket_width(_CAP_HEALTH))
 OFF_HEALTH_RELATIVE = _alloc(EffectChannel.HEALTH_RELATIVE)
@@ -492,7 +503,9 @@ OFF_UPGRADED = _alloc(EffectChannel.UPGRADED)
 
 # (float channel, bucket block, cap) — buckets derive from the final raw floats
 _BUCKET_META: tuple[tuple[int, int, float], ...] = (
+    (OFF_SELECT_COUNT, OFF_SELECT_COUNT_BUCKETS, _CAP_SELECT_COUNT),
     (OFF_DAMAGE, OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
+    (OFF_BLOCK, OFF_BLOCK_BUCKETS, _CAP_BLOCK),
     (OFF_HEALTH_ABSOLUTE, OFF_HEALTH_BUCKETS, _CAP_HEALTH),
     (OFF_GOLD_ABSOLUTE, OFF_GOLD_BUCKETS, _CAP_GOLD),
     (OFF_STACKS, OFF_STACKS_BUCKETS, _CAP_STACKS),
@@ -940,7 +953,8 @@ def encode_effect_row_into(effect: Effect, row: np.ndarray) -> None:
     for off_float, off_bucket, cap in _BUCKET_META:
         value = row[off_float]
         if value:
-            row[off_bucket + int(math.sqrt(min(abs(value), cap)))] = 1.0
+            bucket = get_piecewise_bucket(int(abs(value)), 0, int(cap), _LINEAR_SQRT_THRESHOLD)
+            row[off_bucket + bucket] = 1.0
 
     # Buckets are magnitude-only; keep negative stacks (Malaise) linearly separable
     row[OFF_STACKS_NEGATIVE] = float(row[OFF_STACKS] < 0)
@@ -992,7 +1006,7 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
     (OFF_DAMAGE, _CAP_DAMAGE, _NormMode.SQRT),
     (OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
-    (OFF_BLOCK, _CAP_BLOCK, _NormMode.LINEAR),
+    (OFF_BLOCK, _CAP_BLOCK, _NormMode.SQRT),
     (OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, _NormMode.SQRT),
     (OFF_GOLD_ABSOLUTE, _CAP_GOLD, _NormMode.SQRT),
     (OFF_ENERGY, _CAP_ENERGY, _NormMode.LINEAR),

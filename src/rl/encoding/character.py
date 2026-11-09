@@ -4,16 +4,21 @@ from enum import auto
 
 import numpy as np
 from slai import CardCostKindMinusDiscardsThisTurn
+from slai import CardName
+from slai import Combat
 from slai import GameEnv
 from slai import GameState
+from slai import RelicName
 from slai import get_card_templates
 
 from src.rl.constants import CHARACTER_HEALTH_CAP
 from src.rl.constants import FACTOR_VULN
 from src.rl.constants import GOLD_STOLEN_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
+from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import SHOP_PRICE_CAP
+from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
@@ -22,6 +27,8 @@ from src.rl.types import make_channel_allocator
 
 # Widest catalog turn (damage x instances), Vulnerable-scaled; Strength ramps clamp
 _INCOMING_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)
+_INCOMING_LINEAR_SQRT_THRESHOLD = 25
+_INCOMING_DIM = get_piecewise_dim(0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD)
 _HEALTH_MAX_CAP = CHARACTER_HEALTH_CAP
 _GOLD_MIN = 0
 _GOLD_MAX = 999
@@ -55,16 +62,19 @@ class CharacterChannel(StrEnum):
     REWARD_ROLL_OFFSET = auto()
     POTION_DROP_CHANCE = auto()  # Combat Potion odds, ignoring White Beast Statue's 100%
     SHOP_PURGE_COST_RUN = auto()  # Card removal price before Relic discounts
+    POTION_SLOTS_LEFT = auto()
 
     # Combat only: 0 outside it
-    INCOMING_DAMAGE = auto()
-    BLOCK_COVERS_INCOMING = auto()
+    INCOMING_DAMAGE = auto()  # What ending the turn now lands on block and HP (incoming.py)
+    INCOMING_DAMAGE_OHE = auto()
+    INCOMING_HEALTH_LOST = auto()  # What ending the turn now costs in HP
+    INCOMING_HEALTH_LOST_OHE = auto()
     INCOMING_IS_LETHAL = auto()
-    INCOMING_HIDDEN = auto()  # Runic Dome: the four incoming-damage channels read 0
-    NET_UNBLOCKED_DAMAGE = auto()
+    INCOMING_HIDDEN = auto()  # Runic Dome: the incoming-damage channels read 0
     THIS_TURN_DISCARDS = auto()
     THIS_TURN_ATTACKS = auto()  # Finisher hits once per Attack
     THIS_TURN_CARDS_PLAYED = auto()  # Normality caps the turn at 3
+    THIS_TURN_PLAYS_LEFT = auto()  # Under Normality's or Velvet Choker's cap; none without a cap
     PANACHE_COUNTDOWN = auto()  # Plays left until Panache's hit
     ORANGE_PELLETS_PLAYED_ATTACK = auto()  # Kinds played this turn since Orange Pellets fired
     ORANGE_PELLETS_PLAYED_SKILL = auto()
@@ -88,14 +98,21 @@ OFF_CHARACTER_DECK_UPGRADED_FRACTION = _alloc(CharacterChannel.DECK_UPGRADED_FRA
 OFF_CHARACTER_REWARD_ROLL_OFFSET = _alloc(CharacterChannel.REWARD_ROLL_OFFSET)
 OFF_CHARACTER_POTION_DROP_CHANCE = _alloc(CharacterChannel.POTION_DROP_CHANCE)
 OFF_CHARACTER_SHOP_PURGE_COST_RUN = _alloc(CharacterChannel.SHOP_PURGE_COST_RUN)
+OFF_CHARACTER_POTION_SLOTS_LEFT = _alloc(CharacterChannel.POTION_SLOTS_LEFT)
 OFF_CHARACTER_INCOMING_DAMAGE = _alloc(CharacterChannel.INCOMING_DAMAGE)
-OFF_CHARACTER_BLOCK_COVERS_INCOMING = _alloc(CharacterChannel.BLOCK_COVERS_INCOMING)
+OFF_CHARACTER_INCOMING_DAMAGE_OHE = _alloc(CharacterChannel.INCOMING_DAMAGE_OHE, _INCOMING_DIM)
+OFF_CHARACTER_INCOMING_HEALTH_LOST = _alloc(CharacterChannel.INCOMING_HEALTH_LOST)
+OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE = _alloc(
+    CharacterChannel.INCOMING_HEALTH_LOST_OHE, _INCOMING_DIM
+)
 OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc(CharacterChannel.INCOMING_IS_LETHAL)
 OFF_CHARACTER_INCOMING_HIDDEN = _alloc(CharacterChannel.INCOMING_HIDDEN)
-OFF_CHARACTER_NET_UNBLOCKED_DAMAGE = _alloc(CharacterChannel.NET_UNBLOCKED_DAMAGE)
 OFF_CHARACTER_THIS_TURN_DISCARDS = _alloc(CharacterChannel.THIS_TURN_DISCARDS)
 OFF_CHARACTER_THIS_TURN_ATTACKS = _alloc(CharacterChannel.THIS_TURN_ATTACKS)
 OFF_CHARACTER_THIS_TURN_CARDS_PLAYED = _alloc(CharacterChannel.THIS_TURN_CARDS_PLAYED)
+OFF_CHARACTER_THIS_TURN_PLAYS_LEFT = _alloc(
+    CharacterChannel.THIS_TURN_PLAYS_LEFT, GameEnv.VELVET_CHOKER_PLAYS_MAX + 1
+)
 OFF_CHARACTER_PANACHE_COUNTDOWN = _alloc(CharacterChannel.PANACHE_COUNTDOWN)
 OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK = _alloc(CharacterChannel.ORANGE_PELLETS_PLAYED_ATTACK)
 OFF_CHARACTER_ORANGE_PELLETS_PLAYED_SKILL = _alloc(CharacterChannel.ORANGE_PELLETS_PLAYED_SKILL)
@@ -114,8 +131,33 @@ ENCODING_DIM_CHARACTER = sum(w for _, w in CHANNEL_LAYOUT_CHARACTER)
 ENCODING_DIM_SPARSE_CHARACTER = len(CHANNEL_LAYOUT_CHARACTER)
 
 
+def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | None:
+    """Return how many more Cards the turn's play cap allows.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state, for its Relics.
+    combat : Combat
+        The Combat, for the hand and the turn's plays.
+
+    Returns
+    -------
+    int | None
+        The plays left under the tightest cap, Normality's while it's in hand, else Velvet
+        Choker's; None with neither.
+    """
+    if any(card.name == CardName.Normality for card in combat.card_pile_hand):
+        plays_max = GameEnv.NORMALITY_PLAYS_MAX
+    elif any(relic.name == RelicName.VelvetChoker for relic in game_state.relics):
+        plays_max = GameEnv.VELVET_CHOKER_PLAYS_MAX
+    else:
+        return None
+    return max(plays_max - combat.this_turn_cards_played, 0)
+
+
 def encode_character_into(
-    game_state: GameState, incoming_damage: int | None, out: np.ndarray
+    game_state: GameState, incoming: Incoming | None, out: np.ndarray
 ) -> None:
     character = game_state.character
     deck = game_state.card_pile_deck
@@ -140,21 +182,29 @@ def encode_character_into(
     out[OFF_CHARACTER_SHOP_PURGE_COST_RUN] = (
         min(game_state.shop_purge_cost_run, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
     )
+    out[OFF_CHARACTER_POTION_SLOTS_LEFT] = (
+        game_state.potion_slots_max - len(game_state.potions)
+    ) / MAX_POTION_SLOTS
     combat = game_state.combat
     if combat is not None:
-        if incoming_damage is None:
+        if incoming is None:
             out[OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
         else:
             out[OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
-                incoming_damage, _INCOMING_DAMAGE_MAX
+                incoming.damage, _INCOMING_DAMAGE_MAX
             )
-            out[OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(character.block >= incoming_damage)
-            out[OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
-                incoming_damage >= character.health + character.block
+            incoming_damage_bucket = get_piecewise_bucket(
+                incoming.damage, 0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD
             )
-            out[OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
-                max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX
+            out[OFF_CHARACTER_INCOMING_DAMAGE_OHE + incoming_damage_bucket] = 1.0
+            out[OFF_CHARACTER_INCOMING_HEALTH_LOST] = get_sqrt_norm(
+                incoming.health_lost, _INCOMING_DAMAGE_MAX
             )
+            incoming_health_lost_bucket = get_piecewise_bucket(
+                incoming.health_lost, 0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD
+            )
+            out[OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE + incoming_health_lost_bucket] = 1.0
+            out[OFF_CHARACTER_INCOMING_IS_LETHAL] = float(incoming.is_lethal)
         out[OFF_CHARACTER_THIS_TURN_DISCARDS] = (
             min(combat.this_turn_discards, _THIS_TURN_DISCARDS_MAX) / _THIS_TURN_DISCARDS_MAX
         )
@@ -164,6 +214,9 @@ def encode_character_into(
         out[OFF_CHARACTER_THIS_TURN_CARDS_PLAYED] = get_sqrt_norm(
             combat.this_turn_cards_played, MAX_SIZE_CARD_PILE_DECK
         )
+        this_turn_plays_left = _get_this_turn_plays_left(game_state, combat)
+        if this_turn_plays_left is not None:
+            out[OFF_CHARACTER_THIS_TURN_PLAYS_LEFT + this_turn_plays_left] = 1.0
         out[OFF_CHARACTER_PANACHE_COUNTDOWN] = combat.panache_countdown / _PANACHE_PLAYS
         out[OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK] = float(
             combat.orange_pellets_played_attack

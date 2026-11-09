@@ -42,6 +42,7 @@ class MapGridChannel(StrEnum):
     EDGES = auto()
     BURNING = auto()
     POSITION = auto()
+    NEXT_ROOM = auto()  # The next-row Rooms the current Room's edges reach, Wing Boots aside
 
 
 # Every cell must be 0 or 1: `map_encoder.py`'s dedup packs the grid one bit per cell
@@ -50,6 +51,7 @@ OFF_MAP_ROOM_KIND = _alloc(MapGridChannel.ROOM_KIND, _MAP_NUM_ROOM_KINDS)
 OFF_MAP_EDGES = _alloc(MapGridChannel.EDGES, NUM_EDGE_CHANNELS)
 OFF_MAP_BURNING = _alloc(MapGridChannel.BURNING)
 OFF_MAP_POSITION = _alloc(MapGridChannel.POSITION)
+OFF_MAP_NEXT_ROOM = _alloc(MapGridChannel.NEXT_ROOM)
 
 NUM_CHANNELS = sum(w for _, w in CHANNEL_LAYOUT_MAP_GRID)
 
@@ -69,6 +71,7 @@ class MapMetaChannel(StrEnum):
     NEXT_ROOM_KINDS = auto()  # RoomKind OHE per next-row column
     ACT = auto()  # Each act is a fresh 15-row Map; depth alone is ambiguous
     KEYS = auto()  # The keys held: Emerald, Ruby, Sapphire
+    ENCOUNTERS_EASY_LEFT = auto()  # Hallway fights left on the act's easy list
 
     # "?" Rooms
     UNKNOWN_CHANCE_MONSTER = auto()  # The Event chance is what the three odds leave
@@ -88,6 +91,7 @@ OFF_MAP_CURRENT_ROOM_KIND = _alloc(MapMetaChannel.CURRENT_ROOM_KIND, _MAP_NUM_RO
 OFF_MAP_NEXT_ROOM_KINDS = _alloc(MapMetaChannel.NEXT_ROOM_KINDS, MAP_WIDTH * _MAP_NUM_ROOM_KINDS)
 OFF_MAP_ACT = _alloc(MapMetaChannel.ACT, GameEnv.ACT_FINAL)
 OFF_MAP_KEYS = _alloc(MapMetaChannel.KEYS, 3)
+OFF_MAP_ENCOUNTERS_EASY_LEFT = _alloc(MapMetaChannel.ENCOUNTERS_EASY_LEFT)
 OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc(MapMetaChannel.UNKNOWN_CHANCE_MONSTER)
 OFF_MAP_UNKNOWN_CHANCE_SHOP = _alloc(MapMetaChannel.UNKNOWN_CHANCE_SHOP)
 OFF_MAP_UNKNOWN_CHANCE_TREASURE = _alloc(MapMetaChannel.UNKNOWN_CHANCE_TREASURE)
@@ -278,7 +282,7 @@ def encode_batch_map(
     -------
     x_map_grid : torch.Tensor
         (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) float32. Each state's Map grid: each cell's Room
-        kind, edges and burning mark, and the Character's position.
+        kind, edges and burning mark, the Character's position and the Rooms its edges reach.
     x_map_meta : torch.Tensor
         (B, ENCODING_DIM_MAP_META) float32. Each state's Map meta.
     """
@@ -299,6 +303,11 @@ def encode_batch_map(
         if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
             np_grid[b, y_current, x_current, OFF_MAP_POSITION] = 1.0
 
+        # Stamp what the position's edges reach, for the same reason
+        y_next = 0 if y_current is None else y_current + 1
+        for x_next in _next_row_candidate_cols(rooms, y_current, x_current, winged=False):
+            np_grid[b, y_next, x_next, OFF_MAP_NEXT_ROOM] = 1.0
+
         winged = _wing_boots_charged(game_state)
         _encode_map_meta_into(
             rooms,
@@ -311,6 +320,9 @@ def encode_batch_map(
             np_meta[b],
         )
         _encode_keys_into(game_state, np_meta[b])
+        np_meta[b, OFF_MAP_ENCOUNTERS_EASY_LEFT] = (
+            game_state.encounters_easy_left / GameEnv.NUM_ENCOUNTERS_EASY_ACT1
+        )
         _encode_unknown_room_into(game_state, np_meta[b])
 
     return (

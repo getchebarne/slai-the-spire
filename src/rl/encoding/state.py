@@ -36,6 +36,7 @@ from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.energy import ENCODING_DIM_ENERGY
 from src.rl.encoding.energy import encode_batch_energy
+from src.rl.encoding.energy import get_energy_max
 from src.rl.encoding.event import ENCODING_DIM_EVENT_META
 from src.rl.encoding.event import encode_batch_event_meta
 from src.rl.encoding.event import get_event_option_entities
@@ -44,6 +45,7 @@ from src.rl.encoding.focus import encode_batch_focus
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
+from src.rl.encoding.incoming import project_incoming
 from src.rl.encoding.map_ import ENCODING_DIM_MAP_META
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import encode_batch_map
@@ -57,7 +59,6 @@ from src.rl.encoding.monster import ENCODING_DIM_SPARSE_MONSTER
 from src.rl.encoding.monster import encode_monster_into
 from src.rl.encoding.monster import get_monster_entities
 from src.rl.encoding.monster import moveset_effects
-from src.rl.encoding.monster import outgoing_damage
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.potion import ENCODING_DIM_SPARSE_POTION
 from src.rl.encoding.potion import TAGS_OF_POTION_NAME
@@ -65,10 +66,12 @@ from src.rl.encoding.potion import encode_potion_into_w_cache
 from src.rl.encoding.potion import get_potion_entities
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
+from src.rl.encoding.relic import OFF_RELIC_ARMED
 from src.rl.encoding.relic import OFF_RELIC_LINKED
 from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into_w_cache
 from src.rl.encoding.relic import get_relic_entities
+from src.rl.encoding.relic import is_relic_armed
 from src.rl.encoding.reward import ENCODING_DIM_REWARD_META
 from src.rl.encoding.reward import encode_batch_rewards
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
@@ -378,9 +381,13 @@ def _encode_tokens_into(
         Character's, the selected pile's and the play queue's (`_TOKEN_KINDS_ID_LOOKUP`).
     """
     monsters = get_monster_entities(game_state)
-    damage = outgoing_damage(monsters)
-    energy_current = (
-        game_state.combat.energy.energy_current if game_state.combat is not None else 0
+    incoming = project_incoming(game_state)
+
+    # What the Card rows weigh their cost against: outside Combat, a turn's energy
+    energy = (
+        game_state.combat.energy.energy_current
+        if game_state.combat is not None
+        else get_energy_max(game_state)
     )
     relic_linked = game_state.reward.relic_linked if game_state.reward is not None else None
     effect_rows: list[tuple[int, Effect, EffectSource]] = []
@@ -409,7 +416,7 @@ def _encode_tokens_into(
             row_of_id.setdefault(entity.id, row)
         match entity:
             case Card():
-                encode_card_into_w_cache(entity, energy_current, np_tokens_card[row])
+                encode_card_into_w_cache(entity, energy, np_tokens_card[row])
 
                 # Tags. Shared w/ Relics and Potions
                 for tag in TAGS_OF_CARD_NAME.get(entity.name, ()):
@@ -447,6 +454,12 @@ def _encode_tokens_into(
                     and entity.id == relic_linked.id
                 ):
                     np_tokens_relic[row, OFF_RELIC_LINKED] = 1.0
+
+                # Whether what it waits for holds now. Outside the cached row
+                if token_kind is TokenKind.RELIC_OWNED:
+                    np_tokens_relic[row, OFF_RELIC_ARMED] = float(
+                        is_relic_armed(entity, game_state)
+                    )
 
                 # Tags. Shared w/ Cards and Potions
                 for tag in TAGS_OF_RELIC_NAME.get(entity.name, ()):
@@ -490,14 +503,7 @@ def _encode_tokens_into(
                     (row, effect, EffectSource.POTION_USE) for effect in entity.effects
                 ]
             case Monster():
-                encode_monster_into(
-                    entity,
-                    game_state.character.health,
-                    game_state.character.block,
-                    damage,
-                    game_state.ascension,
-                    np_tokens_monster[row],
-                )
+                encode_monster_into(entity, incoming, game_state.ascension, np_tokens_monster[row])
 
                 # Health & Block
                 encode_health_block_into(entity.health, entity.block, np_tokens_health_block[row])
@@ -522,7 +528,7 @@ def _encode_tokens_into(
                     (row, effect, EffectSource.EVENT_OPTION_SELECT) for effect in entity.effects
                 ]
             case Character():
-                encode_character_into(game_state, damage, np_tokens_character[row])
+                encode_character_into(game_state, incoming, np_tokens_character[row])
 
                 # Health & Block
                 encode_health_block_into(entity.health, entity.block, np_tokens_health_block[row])
