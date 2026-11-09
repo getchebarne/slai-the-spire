@@ -1,4 +1,5 @@
 import numpy as np
+from slai import GameState
 from slai import Relic
 from slai import RelicName
 from slai import RelicTier
@@ -8,12 +9,27 @@ from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_tag_into
 from src.rl.encoding.shared import get_record_key_price
+from src.rl.tokens import get_character
 from src.rl.types import Tag
 
 
 _IDX_OF_RELIC_NAME = {relic_name: int(relic_name) for relic_name in RelicName.members()}
 _IDX_OF_RELIC_TIER = {tier: int(tier) for tier in RelicTier.members()}
 _COUNTER_MAX = max(template.counter_reset for template in get_relic_templates())
+
+# The counter at which a counting Relic is armed
+_COUNTER_ARMED_OF_RELIC_NAME = {
+    RelicName.AncientTeaSet: 1,  # Primed at a Rest Site for the next Combat
+    RelicName.ArtOfWar: 0,  # No Attack played this turn: 1 energy next turn
+    RelicName.CentennialPuzzle: 0,  # The first HP lost this Combat draws 3
+    RelicName.HoveringKite: 0,  # The first discard this turn gives 1 energy
+    RelicName.Necronomicon: 0,  # The first Attack costing 2 or more this turn plays twice
+    RelicName.PenNib: 9,  # The next Attack deals double
+    RelicName.TinyChest: 3,  # The next "?" Room is a Treasure Room
+}
+
+# Pocketwatch: this many plays or fewer draw 3 next turn
+_POCKETWATCH_PLAYS_ARMED = 3
 
 
 _CHANNEL_LAYOUT_RELIC, _alloc = make_channel_allocator()
@@ -24,6 +40,7 @@ _OFF_RELIC_COUNTER = _alloc("counter")
 _OFF_RELIC_COUNTER_PROGRESS = _alloc("counter_progress")
 _OFF_RELIC_COUNTER_REMAINING = _alloc("counter_remaining", _COUNTER_MAX)
 _OFF_RELIC_LINKED = _alloc("linked")
+_OFF_RELIC_ARMED = _alloc("armed")
 
 ENCODING_DIM_RELIC = sum(w for _, w in _CHANNEL_LAYOUT_RELIC)
 
@@ -51,7 +68,7 @@ _TAGS_OF_RELIC_NAME: dict[RelicName, tuple[Tag, ...]] = {
 
 
 def encode_relic_into(
-    relic: Relic, linked: bool, gold: int, np_own: np.ndarray, np_shared: np.ndarray
+    relic: Relic, linked: bool, armed: bool, gold: int, np_own: np.ndarray, np_shared: np.ndarray
 ) -> None:
     """Write a Relic's token: its own columns, then its price and its Tags.
 
@@ -64,6 +81,9 @@ def encode_relic_into(
         The Relic.
     linked : bool
         Whether the Sapphire Key is linked to it.
+    armed : bool
+        Whether what an owned Relic waits for holds now (is_relic_armed); False for a Relic
+        not owned.
     gold : int
         The Character's gold, which its price is read against.
     np_own : np.ndarray
@@ -78,13 +98,15 @@ def encode_relic_into(
 
     counter_reset = relic.counter_reset
     if counter_reset > 0:
-        np_own[_OFF_RELIC_COUNTER_PROGRESS] = max(relic.counter, 0) / counter_reset
+        # Stone Calendar keeps counting the turns past its threshold
+        np_own[_OFF_RELIC_COUNTER_PROGRESS] = min(relic.counter / counter_reset, 1.0)
 
-        # None for a spent one-shot (-1) or past Stone Calendar's single firing
-        if 0 <= relic.counter < counter_reset:
+        # None from the threshold on: Horn Cleat and Captain's Wheel hold there once they fire
+        if relic.counter < counter_reset:
             np_own[_OFF_RELIC_COUNTER_REMAINING + counter_reset - relic.counter - 1] = 1.0
 
     np_own[_OFF_RELIC_LINKED] = float(linked)
+    np_own[_OFF_RELIC_ARMED] = float(armed)
 
     # Shop price
     encode_shared_price_into(relic.price, gold, np_shared)
@@ -93,7 +115,45 @@ def encode_relic_into(
     encode_shared_tag_into(_TAGS_OF_RELIC_NAME.get(relic.name, ()), np_shared)
 
 
-def get_record_key_relic(relic: Relic, linked: bool, gold: int) -> tuple[int, bool, int | None]:
+def is_relic_armed(relic: Relic, game_state: GameState) -> bool:
+    """Return whether what an owned Relic waits for holds now.
+
+    Parameters
+    ----------
+    relic : Relic
+        The owned Relic.
+    game_state : GameState
+        The state, whose Character and Combat some Relics read.
+
+    Returns
+    -------
+    bool
+        True when the Relic's condition holds; False for a Relic without one.
+    """
+    match relic.name:
+        case RelicName.MeatOnTheBone:  # Ending a Combat at half HP or less heals 12
+            character = get_character(game_state)
+
+            return character.health * 2 <= character.health_max
+        case RelicName.Orichalcum:  # Ending the turn with no block gains 6
+            return get_character(game_state).block == 0
+        case RelicName.Pocketwatch:
+            return relic.counter <= _POCKETWATCH_PLAYS_ARMED
+        case RelicName.StoneCalendar:  # This turn's end deals 52 to every Monster
+            combat = game_state.combat
+
+            return (
+                combat is not None
+                and relic.counter == relic.counter_reset
+                and not combat.turn_end_started
+            )
+
+    return _COUNTER_ARMED_OF_RELIC_NAME.get(relic.name) == relic.counter
+
+
+def get_record_key_relic(
+    relic: Relic, linked: bool, armed: bool, gold: int
+) -> tuple[int, bool, bool, int | None]:
     """Make a Relic's record key: its identity_hash and everything else its row reads.
 
     Parameters
@@ -102,13 +162,15 @@ def get_record_key_relic(relic: Relic, linked: bool, gold: int) -> tuple[int, bo
         The Relic.
     linked : bool
         Whether the Sapphire Key is linked to it.
+    armed : bool
+        Whether what an owned Relic waits for holds now (is_relic_armed).
     gold : int
         The Character's gold, which its price is read against.
 
     Returns
     -------
-    tuple[int, bool, int | None]
-        Its identity_hash, whether the Sapphire Key is linked to it, and the gold when it has a
-        price.
+    tuple[int, bool, bool, int | None]
+        Its identity_hash, whether the Sapphire Key is linked to it, whether it is armed, and the
+        gold when it has a price.
     """
-    return (relic.identity_hash, linked, get_record_key_price(relic.price, gold))
+    return (relic.identity_hash, linked, armed, get_record_key_price(relic.price, gold))

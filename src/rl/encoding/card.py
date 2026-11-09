@@ -146,7 +146,7 @@ def _cost_offset(card: Card) -> float:
 
 def encode_card_into(
     card: Card,
-    energy_current: int,
+    energy: int,
     draw_below: int | None,
     gold: int,
     slot_holder: int | None,
@@ -163,8 +163,8 @@ def encode_card_into(
     ----------
     card : Card
         The Card.
-    energy_current : int
-        The Character's energy; 0 outside Combat.
+    energy : int
+        What its cost weighs against: the Character's energy in Combat, a turn's outside it.
     draw_below : int | None
         The Cards below it in the draw pile; None when its draw depth doesn't show.
     gold : int
@@ -198,7 +198,7 @@ def encode_card_into(
     np_own[_OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
     np_own[_OFF_CARD_PLAYABLE] = float(card.playable)
     np_own[_OFF_CARD_ENERGY_DELTA] = (
-        max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
+        max(-_COST_MAX, min(energy - card.cost, _COST_MAX)) / _COST_MAX
     )
     np_own[_OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
     np_own[_OFF_CARD_BOTTLED] = float(card.bottled)
@@ -229,7 +229,7 @@ def encode_card_into(
 
 def get_record_key_card(
     card: Card,
-    energy_current: int,
+    energy: int,
     draw_below: int | None,
     gold: int,
     slot_holder: int | None,
@@ -241,8 +241,8 @@ def get_record_key_card(
     ----------
     card : Card
         The Card.
-    energy_current : int
-        The Character's energy; 0 outside Combat.
+    energy : int
+        What its cost weighs against: the Character's energy in Combat, a turn's outside it.
     draw_below : int | None
         The Cards below it in the draw pile; None when its draw depth doesn't show.
     gold : int
@@ -260,7 +260,7 @@ def get_record_key_card(
     """
     return (
         card.identity_hash,
-        energy_current,
+        energy,
         draw_below,
         get_record_key_price(card.price, gold),
         slot_holder,
