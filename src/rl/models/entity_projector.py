@@ -74,8 +74,6 @@ class EntityProjector(nn.Module):
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
 
-        self._dim_entity = dim_entity
-
         # Every Entity kind's first layer: one projection over the shared columns
         self._pre_token = nn.Linear(ENCODING_DIM_TOKEN, dim_entity, bias=False)
 
@@ -141,13 +139,13 @@ class EntityProjector(nn.Module):
                 nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
 
     def forward(
-        self, game_state: StateBatch, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
+        self, state_batch: StateBatch, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
     ) -> tuple[Jagged[torch.Tensor], TokenIndex, _DrawOrderPlan, torch.Tensor]:
-        """Embed `game_state`'s window.
+        """Embed `state_batch`'s window.
 
         Parameters
         ----------
-        game_state : StateBatch
+        state_batch : StateBatch
             The game states.
         x_hidden_map : torch.Tensor
             (U, H * W, dim_map). The Map GNN's per-node features of each Map it ran on (see
@@ -163,21 +161,20 @@ class EntityProjector(nn.Module):
             Cached token kinds, owners, and lookup tables for the model.
         draw_order : _DrawOrderPlan
             The draw-order layer's states.
-        x_pending : torch.Tensor
+        x_effect_pending : torch.Tensor
             (B, D). Each state's embedded pending halt, zero where none is pending.
         """
-        # Shapes: B = batch, D = embedding width, N_tok = the window's tokens, P = the states
-        # with a pending halt, A = the action types
-        tokens = game_state.tokens.rows
-        batch_size = game_state.tokens.x_lengths.shape[0]
-        num_tokens = tokens.x_kind.shape[0]
+        # Shapes: B = batch, D = embedding width, N_tok = the window's tokens
+        tokens = state_batch.tokens.rows
+        batch_size = state_batch.tokens.x_lengths.shape[0]
+        num_tokens = tokens.x_token_kind.shape[0]
 
         # Each token's token kind, Entity kind and state, and each state's tokens
-        x_token_kind = tokens.x_kind.long()  # (N_tok,)
+        x_token_kind = tokens.x_token_kind.long()  # (N_tok,)
         x_entity_kind = self._x_entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
 
         # Handy alias
-        x_count_window = game_state.tokens.x_lengths  # (B,)
+        x_count_window = state_batch.tokens.x_lengths  # (B,)
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
         x_first = _project_sparse(self._pre_token, tokens.features) + SpreadEmbedding.apply(
@@ -188,7 +185,7 @@ class EntityProjector(nn.Module):
         x_state = torch.repeat_interleave(x_count_window, output_size=num_tokens)  # (N_tok,)
 
         # `x_token_kind_count`:   Number of tokens of each `TokenKind` for each state
-        # `x_token_kind_index`:   Index of first token of each `TokenKind` for each state
+        # `x_token_kind_row`:     Index of first token of each `TokenKind` for each state
         # Both (B, `len(TokenKind)`)
         x_token_kind_count, x_token_kind_row = _token_kind_tables(
             x_state, x_token_kind, batch_size
@@ -198,7 +195,7 @@ class EntityProjector(nn.Module):
         # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
         x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
         x_draw_order_visible = (
-            focus_view(game_state.x_context)[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
+            focus_view(state_batch.x_context)[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
         )  # (B,)
         x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
             [x_draw_order_visible, ~x_draw_order_visible]
@@ -256,18 +253,11 @@ class EntityProjector(nn.Module):
         _add_owned(x_first, tokens.modifiers, self._modifiers_mlp)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
-        pending = game_state.pending
-        x_pending_state = torch.repeat_interleave(
-            pending.x_lengths, output_size=pending.rows.x_lengths.shape[0]
-        )  # (P,)
-        x_pending_valid = _project_sparse(self._effects_mlp, pending.rows)  # (P, D)
-        x_pending = torch.zeros(
-            batch_size,
-            self._dim_entity,
-            dtype=x_pending_valid.dtype,
-            device=x_pending_valid.device,
-        )
-        x_pending = x_pending.index_copy(0, x_pending_state, x_pending_valid)  # (B, D)
+        effect_pending = state_batch.effect_pending
+        x_effect_pending = _project_sparse(self._effects_mlp, effect_pending)  # (B, D)
+
+        # Zero the states with no halt pending, whose empty rows would keep the first layer's bias
+        x_effect_pending = x_effect_pending * (effect_pending.x_lengths > 0).unsqueeze(1)
 
         # Shared second layer + norm on the rows
         x_hidden = self._layer_norm(self._post_shared(F.relu(x_first)))  # (N_tok, D)
@@ -284,7 +274,7 @@ class EntityProjector(nn.Module):
             Jagged(x_lengths=x_count_window, rows=x_hidden),
             index,
             draw_order,
-            x_pending,
+            x_effect_pending,
         )
 
 
@@ -309,7 +299,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.T
     """
     linear = mapper if isinstance(mapper, nn.Linear) else mapper[0]
     x_rows = _SumSparseDenseBackward.apply(
-        block.x_lengths, block.x_columns, block.x_values, linear.weight
+        block.x_lengths, block.rows.x_columns, block.rows.x_values, linear.weight
     )
     if linear.bias is not None:
         x_rows = x_rows + linear.bias
@@ -440,13 +430,13 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         """
         ctx.save_for_backward(x_lengths, x_column, x_value)
         ctx.num_columns = x_weight.shape[1]
-        x_offsets = F.pad(x_lengths.cumsum(0, dtype=torch.long), (1, 0))  # (N + 1,)
+        x_off = F.pad(x_lengths.cumsum(0, dtype=torch.long), (1, 0))  # (N + 1,)
 
         # The transposed weight copied whole: as a strided view, a GPU reads its rows uncoalesced
         return F.embedding_bag(
             x_column.int(),
             x_weight.t().contiguous(),
-            offsets=x_offsets,
+            offsets=x_off,
             per_sample_weights=x_value,
             mode="sum",
             include_last_offset=True,

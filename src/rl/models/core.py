@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from src.rl.constants import MAP_TOKEN_KIND_CAP
+from src.rl.constants import MAP_TOKEN_KIND_MAX_TOKENS
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import DrawOrderLayer
@@ -82,7 +82,7 @@ class Core(nn.Module):
         self.register_buffer(
             "_x_count_norm",
             torch.tensor(
-                [float(MAP_TOKEN_KIND_CAP[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
+                [float(MAP_TOKEN_KIND_MAX_TOKENS[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
             ).view(1, -1),
             persistent=False,
         )
@@ -103,12 +103,12 @@ class Core(nn.Module):
         """Initialize the projector's token feature ranges after the general linear init."""
         self._entity_projector.init_token_weights()
 
-    def forward(self, game_state: StateBatch, with_value: bool = True) -> CoreOutput:
+    def forward(self, state_batch: StateBatch, with_value: bool = True) -> CoreOutput:
         """Compute the core's output.
 
         Parameters
         ----------
-        game_state : StateBatch
+        state_batch : StateBatch
             The game states.
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
@@ -122,12 +122,12 @@ class Core(nn.Module):
         """
 
         # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
-        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(game_state.x_map_grid)
+        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(state_batch.x_map_grid)
 
         # Token embeddings grouped by state, their index, the draw-order layer's states, and the
         # embedded pending halt
-        projected, index, draw_order, x_pending = self._entity_projector(
-            game_state, x_hidden_map, x_map_of_state
+        projected, index, draw_order, x_effect_pending = self._entity_projector(
+            state_batch, x_hidden_map, x_map_of_state
         )
 
         # One transformer pass over every state, without the draw depths
@@ -145,8 +145,8 @@ class Core(nn.Module):
             [
                 x_map_readout,
                 self._get_token_counts(index.x_kind_count),
-                game_state.x_context,
-                x_pending,
+                state_batch.x_context,
+                x_effect_pending,
             ],
             dim=1,
         )

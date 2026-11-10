@@ -44,14 +44,14 @@ def _padded(num_rows: int, device: torch.device) -> int:
     return -(-num_rows // _FLEX_BLOCK) * _FLEX_BLOCK
 
 
-def _states_and_ranks(x_offsets: torch.Tensor, num_rows: int) -> tuple[torch.Tensor, torch.Tensor]:
+def _states_and_ranks(x_off: torch.Tensor, num_rows: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Find each of `num_rows` rows' state and its rank in it.
 
     The states are laid out one after another; the rows past the end form state S.
 
     Parameters
     ----------
-    x_offsets : torch.Tensor
+    x_off : torch.Tensor
         (S + 1,) long. The states' first rows, then the end.
     num_rows : int
         The number of rows.
@@ -63,13 +63,13 @@ def _states_and_ranks(x_offsets: torch.Tensor, num_rows: int) -> tuple[torch.Ten
     x_rank : torch.Tensor
         (num_rows,) long. Each row's rank in its state.
     """
-    x_row = torch.arange(num_rows, device=x_offsets.device)
-    x_state = torch.searchsorted(x_offsets, x_row, right=True) - 1
-    return x_state, x_row - x_offsets[x_state]
+    x_row = torch.arange(num_rows, device=x_off.device)
+    x_state = torch.searchsorted(x_off, x_row, right=True) - 1
+    return x_state, x_row - x_off[x_state]
 
 
 def _block_mask(
-    x_offsets_query: torch.Tensor, x_offsets_key: torch.Tensor, num_query: int, num_key: int
+    x_off_query: torch.Tensor, x_off_key: torch.Tensor, num_query: int, num_key: int
 ) -> BlockMask:
     """Build FlexAttention's same-state mask on the device.
 
@@ -77,9 +77,9 @@ def _block_mask(
 
     Parameters
     ----------
-    x_offsets_query : torch.Tensor
+    x_off_query : torch.Tensor
         (S + 1,) long. The query side's state starts, then its end.
-    x_offsets_key : torch.Tensor
+    x_off_key : torch.Tensor
         (S + 1,) long. The key side's state starts, then its end.
     num_query : int
         The query side's rows, a multiple of _FLEX_BLOCK, which end in a tail that forms state S.
@@ -91,13 +91,13 @@ def _block_mask(
     BlockMask
         The same-state mask.
     """
-    x_state_query, _ = _states_and_ranks(x_offsets_query, num_query)
-    x_state_key, _ = _states_and_ranks(x_offsets_key, num_key)
+    x_state_query, _ = _states_and_ranks(x_off_query, num_query)
+    x_state_key, _ = _states_and_ranks(x_off_key, num_key)
 
     # A query block attends the key blocks from its first row's state's first key row to its last
     # row's state's last key row
     num_blocks_key = num_key // _FLEX_BLOCK
-    x_starts_key = F.pad(x_offsets_key, (0, 1), value=num_key)  # (S + 2,)
+    x_starts_key = F.pad(x_off_key, (0, 1), value=num_key)  # (S + 2,)
     x_first = x_starts_key[x_state_query[::_FLEX_BLOCK]] // _FLEX_BLOCK
     x_last = (x_starts_key[x_state_query[_FLEX_BLOCK - 1 :: _FLEX_BLOCK] + 1] - 1) // _FLEX_BLOCK
 
@@ -120,15 +120,15 @@ def _block_mask(
 
 
 def _same_state_mask(
-    x_offsets_query: torch.Tensor, x_offsets_key: torch.Tensor, num_query: int, num_key: int
+    x_off_query: torch.Tensor, x_off_key: torch.Tensor, num_query: int, num_key: int
 ) -> BlockMask | torch.Tensor | None:
     """Build the mask that lets each query row attend the key rows of its own state.
 
     Parameters
     ----------
-    x_offsets_query : torch.Tensor
+    x_off_query : torch.Tensor
         (S + 1,) long. The query side's state starts, then its end.
-    x_offsets_key : torch.Tensor
+    x_off_key : torch.Tensor
         (S + 1,) long. The key side's state starts, then its end.
     num_query : int
         The query side's rows, N_q.
@@ -141,12 +141,12 @@ def _same_state_mask(
         On the GPU FlexAttention's BlockMask; on the CPU SDPA's dense (N_q, N_k) bool mask, or
         None for a single state.
     """
-    if x_offsets_query.is_cuda:
-        return _block_mask(x_offsets_query, x_offsets_key, num_query, num_key)
-    if x_offsets_query.shape[0] == 2:
+    if x_off_query.is_cuda:
+        return _block_mask(x_off_query, x_off_key, num_query, num_key)
+    if x_off_query.shape[0] == 2:
         return None
-    x_state_query, _ = _states_and_ranks(x_offsets_query, num_query)
-    x_state_key, _ = _states_and_ranks(x_offsets_key, num_key)
+    x_state_query, _ = _states_and_ranks(x_off_query, num_query)
+    x_state_key, _ = _states_and_ranks(x_off_key, num_key)
     return x_state_query.unsqueeze(1) == x_state_key.unsqueeze(0)
 
 
@@ -290,9 +290,9 @@ class EntityTransformer(nn.Module):
         # The sequence: each state's rows, then its global token, state after state. Each state's
         # first place in it, then the end; each row's place, past one global token per state before
         # its own, and each global token's
-        x_offsets = F.pad((projected.x_lengths + 1).cumsum(0), (1, 0))  # (B + 1,)
+        x_off = F.pad((projected.x_lengths + 1).cumsum(0), (1, 0))  # (B + 1,)
         x_place_row = torch.arange(num_rows, device=x_rows.device) + x_state  # (N,)
-        x_place_global = x_offsets[1:] - 1  # (B,)
+        x_place_global = x_off[1:] - 1  # (B,)
 
         # On the GPU, a tail of zero rows pads it to FlexAttention's block. Zeros, not empty: a
         # key's NaN would reach every query through its zero attention weight (0 * NaN = NaN)
@@ -301,7 +301,7 @@ class EntityTransformer(nn.Module):
         x_sequence[x_place_row] = x_rows
         x_sequence[x_place_global] = self._x_entity_global
         x_refined = self._refine(
-            x_sequence, _same_state_mask(x_offsets, x_offsets, num_places, num_places)
+            x_sequence, _same_state_mask(x_off, x_off, num_places, num_places)
         )
         return (
             Jagged(x_lengths=projected.x_lengths, rows=x_refined[x_place_row]),
@@ -453,16 +453,16 @@ class DrawOrderLayer(nn.Module):
 
         # The states' rows, state after state: each state's first among them, then the end. Each
         # is its state's first row in the window plus its rank
-        x_offsets = F.pad(refined.x_lengths[x_states].cumsum(0), (1, 0))  # (S + 1,)
-        x_state_layer, x_rank = _states_and_ranks(x_offsets, num_rows)  # (num_rows,)
+        x_off = F.pad(refined.x_lengths[x_states].cumsum(0), (1, 0))  # (S + 1,)
+        x_state_layer, x_rank = _states_and_ranks(x_off, num_rows)  # (num_rows,)
         x_first_row = refined.x_lengths.cumsum(0) - refined.x_lengths  # (B,)
         x_rows = x_first_row[x_states][x_state_layer] + x_rank
 
         # Their piles' rows the same way, each pile's first row plus its rank, bottom first; a draw
         # token's depth is the Cards above it, its pile's count - 1 - its rank
         x_count_pile = index.x_kind_count[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
-        x_offsets_pile = F.pad(x_count_pile.cumsum(0), (1, 0))  # (S + 1,)
-        x_state_layer_pile, x_rank_pile = _states_and_ranks(x_offsets_pile, num_pile)
+        x_off_pile = F.pad(x_count_pile.cumsum(0), (1, 0))  # (S + 1,)
+        x_state_layer_pile, x_rank_pile = _states_and_ranks(x_off_pile, num_pile)
         x_first_row_pile = index.x_kind_row[x_states, TokenKind.CARD_PILE_DRAW]  # (S,)
         x_rows_pile = x_first_row_pile[x_state_layer_pile] + x_rank_pile
         x_depth = x_count_pile[x_state_layer_pile] - 1 - x_rank_pile
@@ -472,13 +472,13 @@ class DrawOrderLayer(nn.Module):
         num_places = _padded(num_rows, refined.rows.device)
         num_places_pile = _padded(num_pile, refined.rows.device)
         num_places_global = _padded(batch_size, refined.rows.device)
-        x_offsets_global = torch.arange(batch_size + 1, device=x_states.device)
+        x_off_global = torch.arange(batch_size + 1, device=x_states.device)
         x_out, x_out_global = self._draw_order_block(
             F.pad(refined.rows[x_rows], (0, 0, 0, num_places - num_rows)),
             F.pad(refined.rows[x_rows_pile], (0, 0, 0, num_places_pile - num_pile)),
             F.pad(x_depth, (0, num_places_pile - num_pile)),
             F.pad(x_global_token[x_states], (0, 0, 0, num_places_global - batch_size)),
-            _same_state_mask(x_offsets, x_offsets_pile, num_places, num_places_pile),
-            _same_state_mask(x_offsets_global, x_offsets, num_places_global, num_places),
+            _same_state_mask(x_off, x_off_pile, num_places, num_places_pile),
+            _same_state_mask(x_off_global, x_off, num_places_global, num_places),
         )
         return x_rows, x_out[:num_rows], x_out_global[:batch_size]

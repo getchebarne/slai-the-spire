@@ -5,11 +5,13 @@ from src.rl.algorithms.actor_critic.workers.pool import snapshot_to_device
 from src.rl.algorithms.actor_critic.workers.pool import start_workers
 from src.rl.algorithms.actor_critic.workers.pool import step_workers
 from src.rl.algorithms.actor_critic.workers.pool import stop_workers
+from src.rl.algorithms.actor_critic.workers.pool import write_ascensions
 
 
 __all__ = [
     "Workers",
     "start_workers",
+    "write_ascensions",
     "step_workers",
     "snapshot_to_device",
     "stop_workers",

@@ -1,331 +1,234 @@
-"""Selection, concatenation and device transfer of compact jagged game batches."""
+"""Operations on a batch of game states: allocate, read, join, copy, count and select."""
 
 from collections.abc import Callable
-from dataclasses import fields, replace
-from typing import Any
+from collections.abc import Iterator
+from dataclasses import fields
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
 
-from src.rl.tensor_ops import iter_tensors
-from src.rl.tensor_ops import map_tensors
-from src.rl.types import BatchLayout
+from src.rl.constants import MAP_HEIGHT
+from src.rl.constants import MAP_WIDTH
+from src.rl.constants import MAX_EFFECTS
+from src.rl.constants import MAX_MODIFIERS
+from src.rl.constants import MAX_TOKENS
+from src.rl.constants import NUM_ACTION_TYPES
+from src.rl.schema.context import ENCODING_DIM_CONTEXT
+from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.schema.map_ import NUM_CHANNELS
+from src.rl.schema.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.schema.state import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.types import Jagged
+from src.rl.types import JaggedReserved
 from src.rl.types import MinibatchPlan
-from src.rl.types import Sparse
+from src.rl.types import SparseEntries
+from src.rl.types import SparseReserved
 from src.rl.types import StateBatch
+from src.rl.types import StateBatchLayout
+from src.rl.types import StateBatchReserved
+from src.rl.types import States
 from src.rl.types import Tokens
 
 
 __all__ = [
-    "build_batch_layout",
+    "allocate_states",
+    "build_state_batch_layout",
     "cat_states",
-    "count_blocks",
-    "slice_states",
-    "take_states",
+    "count_jagged_rows",
+    "iter_tensors",
+    "map_tensors",
+    "read_states",
+    "slice_state_batch",
+    "take_minibatch_states",
     "to_device",
 ]
 
 
-def _offsets(x_lengths: torch.Tensor) -> torch.Tensor:
-    return F.pad(x_lengths.cumsum(0, dtype=torch.long), (1, 0))
-
-
-def build_batch_layout(batch: StateBatch, x_counts_cpu: torch.Tensor) -> BatchLayout:
-    """Cache boundaries once for an immutable batch, on the device and CPU as needed.
+def iter_tensors(value: Any) -> Iterator[torch.Tensor]:
+    """Walk the tensor leaves of the data records in declaration order.
 
     Parameters
     ----------
-    batch : StateBatch
-        The source states whose rows and entries the boundaries describe.
-    x_counts_cpu : torch.Tensor
-        (B, 8) on the CPU. Each state's row and entry totals, in `count_blocks` order.
+    value : Any
+        A tensor or nested dataclass record whose leaves are tensors.
 
-    Returns
-    -------
-    BatchLayout
-        The source boundaries, valid while the batch's lengths remain unchanged.
+    Yields
+    ------
+    torch.Tensor
+        Each tensor leaf, in field declaration order.
     """
-    if x_counts_cpu.device.type != "cpu" or x_counts_cpu.shape != (
-        len(batch.tokens.x_lengths),
-        8,
-    ):
-        raise ValueError(
-            "Batch counts must be a CPU tensor with one row and eight totals per state"
-        )
-    tokens = batch.tokens
-    return BatchLayout(
-        x_token_offsets=_offsets(tokens.x_lengths),
-        x_effect_offsets=_offsets(tokens.rows.effects.x_lengths),
-        x_modifier_offsets=_offsets(tokens.rows.modifiers.x_lengths),
-        x_pending_offsets=_offsets(batch.pending.x_lengths),
-        x_token_entry_offsets=_offsets(tokens.rows.features.x_lengths),
-        x_effect_entry_offsets=_offsets(tokens.rows.effects.rows.x_lengths),
-        x_modifier_entry_offsets=_offsets(tokens.rows.modifiers.rows.x_lengths),
-        x_pending_entry_offsets=_offsets(batch.pending.rows.x_lengths),
-        x_state_offsets_cpu=F.pad(x_counts_cpu.cumsum(0, dtype=torch.long), (0, 0, 1, 0)),
-    )
+    if isinstance(value, torch.Tensor):
+        yield value
+    else:
+        for field in fields(value):
+            yield from iter_tensors(getattr(value, field.name))
 
 
-def _select_segments(
-    x_lengths: torch.Tensor, x_offsets: torch.Tensor, x_parents: torch.Tensor, total_rows: int
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return selected lengths and child indices, preserving parent order and duplicates.
-
-    ``total_rows`` is planned on the CPU so the GPU gather needs no scalar readback.
-    Lengths may be int16; index arithmetic and repeat counts use int64.
+def map_tensors[T](value: T, fn: Callable[[torch.Tensor], torch.Tensor]) -> T:
+    """Rebuild data records with a function applied to each tensor leaf.
 
     Parameters
     ----------
-    x_lengths : torch.Tensor
-        (P,) integer. The number of child rows in each source segment.
-    x_offsets : torch.Tensor
-        (P + 1,) long. The source segments' cumulative row boundaries.
-    x_parents : torch.Tensor
-        (S,) long. The segments to select, in output order.
-    total_rows : int
-        The sum of the selected segments' lengths, including repeated selections.
+    value : T
+        A tensor or nested dataclass record whose leaves are tensors.
+    fn : Callable[[torch.Tensor], torch.Tensor]
+        The function to apply to each tensor leaf.
 
     Returns
     -------
-    x_selected : torch.Tensor
-        (S,). The selected segment lengths, preserving their dtype.
-    x_rows : torch.Tensor
-        (total_rows,) long. The source child rows, in selected segment order.
+    T
+        The transformed tensor or rebuilt record, preserving record types and nesting.
     """
-    x_starts = x_offsets[x_parents]
-    x_selected = x_lengths[x_parents]
-    x_shifts = x_starts - (x_selected.cumsum(0, dtype=torch.long) - x_selected)
-    x_rows = torch.arange(total_rows, device=x_lengths.device) + x_shifts.repeat_interleave(
-        x_selected.long(), output_size=total_rows
+    if isinstance(value, torch.Tensor):
+        return cast(T, fn(value))
+
+    record = cast(Any, value)
+    return type(record)(
+        **{field.name: map_tensors(getattr(record, field.name), fn) for field in fields(record)}
     )
-    return x_selected, x_rows
 
 
-def take_states(batch: StateBatch, plan: MinibatchPlan, layout: BatchLayout) -> StateBatch:
-    """Gather planned states and all their descendants using cached source boundaries.
+def allocate_states(num_buffers: int, buffer_size: int) -> StateBatchReserved:
+    """Allocate reusable CPU capacity for every buffer's states.
 
     Parameters
     ----------
-    batch : StateBatch
-        The source states.
-    plan : MinibatchPlan
-        The state indices in output order and the selected row and entry totals.
-    layout : BatchLayout
-        The source batch's cached boundaries.
+    num_buffers : int
+        The number of independent buffers.
+    buffer_size : int
+        The number of states written into each buffer.
 
     Returns
     -------
-    StateBatch
-        The selected states and their descendants, preserving order and duplicate selections.
+    StateBatchReserved
+        Ordinary CPU tensors with a leading buffer axis, sized for the maximum token, row and
+        feature-entry counts, with every length zero.
     """
-    x_state_ids = plan.x_state_ids
-    x_lengths, x_token_rows = _select_segments(
-        batch.tokens.x_lengths, layout.x_token_offsets, x_state_ids, plan.tokens
-    )
-    return replace(
-        _map_direct_tensors(batch, lambda x_tensor: x_tensor[x_state_ids]),
-        tokens=Jagged(
-            x_lengths=x_lengths,
-            rows=_take_tokens(batch.tokens.rows, x_token_rows, plan, layout),
-        ),
-        pending=_take_sparse_segments(
-            batch.pending,
-            layout.x_pending_offsets,
-            x_state_ids,
-            plan.pending,
-            layout.x_pending_entry_offsets,
-            plan.pending_entries,
-        ),
-    )
+    # Maximum number of tokens per buffer
+    num_tokens = buffer_size * MAX_TOKENS
 
-
-def _take_tokens(
-    tokens: Tokens, x_token_rows: torch.Tensor, plan: MinibatchPlan, layout: BatchLayout
-) -> Tokens:
-    """Gather token fields and the sparse rows owned by those tokens.
-
-    Parameters
-    ----------
-    tokens : Tokens
-        The source token rows.
-    x_token_rows : torch.Tensor
-        (N,) long. The token rows to select, in output order.
-    plan : MinibatchPlan
-        The selected row and entry totals.
-    layout : BatchLayout
-        The source batch's cached boundaries.
-
-    Returns
-    -------
-    Tokens
-        The selected tokens, with their feature entries and owned Effect and Modifier rows.
-    """
-    return replace(
-        _map_direct_tensors(tokens, lambda x_tensor: x_tensor[x_token_rows]),
-        features=_take_sparse_rows(
-            tokens.features, x_token_rows, layout.x_token_entry_offsets, plan.token_entries
-        ),
-        effects=_take_sparse_segments(
-            tokens.effects,
-            layout.x_effect_offsets,
-            x_token_rows,
-            plan.effects,
-            layout.x_effect_entry_offsets,
-            plan.effect_entries,
-        ),
-        modifiers=_take_sparse_segments(
-            tokens.modifiers,
-            layout.x_modifier_offsets,
-            x_token_rows,
-            plan.modifiers,
-            layout.x_modifier_entry_offsets,
-            plan.modifier_entries,
-        ),
-    )
-
-
-def _take_sparse_rows(
-    rows: Sparse, x_indices: torch.Tensor, x_offsets: torch.Tensor, total_entries: int
-) -> Sparse:
-    """Gather sparse rows and their entries in the selected row order.
-
-    Parameters
-    ----------
-    rows : Sparse
-        The source sparse rows.
-    x_indices : torch.Tensor
-        (R,) long. The source rows to select, in output order.
-    x_offsets : torch.Tensor
-        The source rows' cumulative entry boundaries.
-    total_entries : int
-        The number of entries in the selected rows, including repeated selections.
-
-    Returns
-    -------
-    Sparse
-        The selected rows, with their columns and values in row order.
-    """
-    x_lengths, x_entries = _select_segments(rows.x_lengths, x_offsets, x_indices, total_entries)
-    return Sparse(x_lengths, rows.x_columns[x_entries], rows.x_values[x_entries])
-
-
-def _take_sparse_segments(
-    jagged: Jagged[Sparse],
-    x_offsets: torch.Tensor,
-    x_parents: torch.Tensor,
-    total_rows: int,
-    x_entry_offsets: torch.Tensor,
-    total_entries: int,
-) -> Jagged[Sparse]:
-    x_lengths, x_rows = _select_segments(jagged.x_lengths, x_offsets, x_parents, total_rows)
-    return Jagged(
-        x_lengths, _take_sparse_rows(jagged.rows, x_rows, x_entry_offsets, total_entries)
-    )
-
-
-def slice_states(batch: StateBatch, start: int, stop: int, layout: BatchLayout) -> StateBatch:
-    """View consecutive states and their descendants using CPU boundaries; bounds clip as slices.
-
-    Parameters
-    ----------
-    batch : StateBatch
-        The source states.
-    start : int
-        The first state's index, inclusive.
-    stop : int
-        The last boundary, exclusive.
-    layout : BatchLayout
-        The source batch's cached boundaries.
-
-    Returns
-    -------
-    StateBatch
-        Views of the selected states and descendants, sharing the source tensors' storage.
-    """
-    start, stop, _ = slice(start, stop).indices(len(batch.tokens.x_lengths))
-    state_rows = slice(start, stop)
-    first, last = layout.x_state_offsets_cpu[[start, stop]].tolist()
-    slices = [slice(left, right) for left, right in zip(first, last)]
-    token_rows, effect_rows, modifier_rows, pending_rows = slices[:4]
-    token_entries, effect_entries, modifier_entries, pending_entries = slices[4:]
-    tokens = batch.tokens.rows
-
-    def sparse_view(rows: Sparse, indices: slice, entries: slice) -> Sparse:
-        return Sparse(rows.x_lengths[indices], rows.x_columns[entries], rows.x_values[entries])
-
-    return replace(
-        _map_direct_tensors(batch, lambda x_tensor: x_tensor[state_rows]),
-        tokens=Jagged(
-            batch.tokens.x_lengths[state_rows],
-            replace(
-                _map_direct_tensors(tokens, lambda x_tensor: x_tensor[token_rows]),
-                features=sparse_view(tokens.features, token_rows, token_entries),
-                effects=Jagged(
-                    tokens.effects.x_lengths[token_rows],
-                    sparse_view(tokens.effects.rows, effect_rows, effect_entries),
+    # Reserve memory for states
+    return States(
+        tokens=JaggedReserved(
+            x_lengths=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
+            rows=Tokens(
+                features=_allocate_sparse(num_buffers, num_tokens, ENCODING_DIM_SPARSE_TOKEN),
+                x_token_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+                x_legal_selection=torch.zeros(
+                    num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
                 ),
-                modifiers=Jagged(
-                    tokens.modifiers.x_lengths[token_rows],
-                    sparse_view(tokens.modifiers.rows, modifier_rows, modifier_entries),
+                x_legal_target=torch.zeros(
+                    num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
+                ),
+                x_needs_target=torch.zeros(num_buffers, num_tokens, dtype=torch.bool),
+                x_node_idx=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+                effects=JaggedReserved(
+                    x_lengths=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+                    rows=_allocate_sparse(
+                        num_buffers, buffer_size * MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT
+                    ),
+                ),
+                modifiers=JaggedReserved(
+                    x_lengths=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+                    rows=_allocate_sparse(
+                        num_buffers, buffer_size * MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER
+                    ),
                 ),
             ),
         ),
-        pending=Jagged(
-            batch.pending.x_lengths[state_rows],
-            sparse_view(batch.pending.rows, pending_rows, pending_entries),
+        effect_pending=_allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_SPARSE_EFFECT),
+        x_context=torch.zeros(num_buffers, buffer_size, ENCODING_DIM_CONTEXT, dtype=torch.float32),
+        x_map_grid=torch.zeros(
+            num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+        ),
+        x_legal_action_type=torch.zeros(
+            num_buffers, buffer_size, NUM_ACTION_TYPES, dtype=torch.bool
         ),
     )
 
 
-def count_blocks(batch: StateBatch) -> torch.Tensor:
-    """Per-state row totals, then entry totals: tokens, effects, modifiers, pending.
-
-    The actor keeps these small counts on the CPU for minibatch size planning.
+def _allocate_sparse(num_buffers: int, num_rows: int, entries_per_row: int) -> SparseReserved:
+    """Allocate one sparse table's rows and entries for every buffer.
 
     Parameters
     ----------
-    batch : StateBatch
-        The states whose row and entry totals to count.
+    num_buffers : int
+        The number of buffers sharing each array's leading axis.
+    num_rows : int
+        Each buffer's maximum number of sparse rows.
+    entries_per_row : int
+        The maximum number of nonzero entries in a row.
 
     Returns
     -------
-    torch.Tensor
-        (B, 8) long on the batch's device. Tokens, Effects, Modifiers and pending rows, followed
-        by the feature-entry totals of those same four blocks.
+    SparseReserved
+        Ordinary CPU arrays with a leading buffer axis and every length zero.
     """
-    tokens = batch.tokens
-    x_token_offsets = _offsets(tokens.x_lengths)
-
-    # Compose state -> token -> owned-row boundaries, then each row's entry boundaries.
-    effects = tokens.rows.effects
-    modifiers = tokens.rows.modifiers
-    pending = batch.pending
-    x_effect_offsets = _offsets(effects.x_lengths)[x_token_offsets]
-    x_modifier_offsets = _offsets(modifiers.x_lengths)[x_token_offsets]
-    x_pending_offsets = _offsets(pending.x_lengths)
-
-    return torch.stack(
-        [
-            tokens.x_lengths,
-            x_effect_offsets.diff(),
-            x_modifier_offsets.diff(),
-            pending.x_lengths,
-            _offsets(tokens.rows.features.x_lengths)[x_token_offsets].diff(),
-            _offsets(effects.rows.x_lengths)[x_effect_offsets].diff(),
-            _offsets(modifiers.rows.x_lengths)[x_modifier_offsets].diff(),
-            _offsets(pending.rows.x_lengths)[x_pending_offsets].diff(),
-        ],
-        dim=1,
+    num_entries = num_rows * entries_per_row
+    return JaggedReserved(
+        x_lengths=torch.zeros(num_buffers, num_rows, dtype=torch.int16),
+        rows=SparseEntries(
+            x_columns=torch.zeros(num_buffers, num_entries, dtype=torch.int16),
+            x_values=torch.zeros(num_buffers, num_entries, dtype=torch.float32),
+        ),
     )
 
 
-def cat_states(batches: list[StateBatch]) -> StateBatch:
+def read_states(states: StateBatchReserved) -> StateBatch:
+    """Generate the Jagged records of a completed buffer's written rows, as views.
+
+    Parameters
+    ----------
+    states : StateBatchReserved
+        One buffer's reserved states, its writer finished.
+
+    Returns
+    -------
+    StateBatch
+        Views of the written rows, sharing the buffer's storage. Retained observations must be
+        copied before the buffer is written again.
+    """
+    return _read_rows(states, len(states.x_context))
+
+
+def _read_rows(value: Any, num_rows: int) -> Any:
+    """View the first `num_rows` rows of every tensor under `value`.
+
+    Each reserved table comes out as the Jagged of its written rows.
+
+    Parameters
+    ----------
+    value : Any
+        A tensor, a reserved table or a nested dataclass record of them.
+    num_rows : int
+        The number of written rows in `value`'s tensors.
+
+    Returns
+    -------
+    Any
+        Views of the written rows, preserving nesting.
+    """
+    if isinstance(value, torch.Tensor):
+        return value[:num_rows]
+
+    # A table has as many written rows as its written lengths add up to
+    if isinstance(value, JaggedReserved):
+        x_lengths = value.x_lengths[:num_rows]
+        num_rows = int(x_lengths.sum())
+        return Jagged(x_lengths, _read_rows(value.rows, num_rows))
+
+    return type(value)(
+        **{field.name: _read_rows(getattr(value, field.name), num_rows) for field in fields(value)}
+    )
+
+
+def cat_states(state_batches: list[StateBatch]) -> StateBatch:
     """Concatenate compact worker batches or rollout steps field by field.
 
     Parameters
     ----------
-    batches : list[StateBatch]
+    state_batches : list[StateBatch]
         At least one batch, in output order, with matching field dtypes and trailing shapes.
 
     Returns
@@ -333,17 +236,17 @@ def cat_states(batches: list[StateBatch]) -> StateBatch:
     StateBatch
         The concatenated states and their descendants, preserving each batch's row order.
     """
-    if not batches:
-        raise ValueError("cat_states requires at least one batch")
-    return _cat_records(batches)
+    if not state_batches:
+        raise ValueError("`cat_states` requires at least one batch")
+    
+    return _cat_records(state_batches)
 
 
 def _cat_records(values: list[Any]) -> Any:
     first = values[0]
     if isinstance(first, torch.Tensor):
         return torch.cat(values)
-    # Records, including Jagged, concatenate their fields independently.
-    # Lengths need no rebasing, and each child table remains in its parents' order.
+    
     return type(first)(
         **{
             field.name: _cat_records([getattr(v, field.name) for v in values])
@@ -352,19 +255,7 @@ def _cat_records(values: list[Any]) -> Any:
     )
 
 
-def _map_direct_tensors(value: Any, fn: Callable[[torch.Tensor], torch.Tensor]) -> Any:
-    """Transform a record's direct tensor fields, leaving its nested records to the caller."""
-    return replace(
-        value,
-        **{
-            field.name: fn(x_tensor)
-            for field in fields(value)
-            if isinstance(x_tensor := getattr(value, field.name), torch.Tensor)
-        },
-    )
-
-
-def to_device(batch: StateBatch, device: torch.device) -> StateBatch:
+def to_device(state_batch: StateBatch, device: torch.device) -> StateBatch:
     """Make an independent snapshot, using one pinned transfer for CUDA.
 
     Every result tensor is a view of the copied byte buffer. On CPU, the staging
@@ -372,7 +263,7 @@ def to_device(batch: StateBatch, device: torch.device) -> StateBatch:
 
     Parameters
     ----------
-    batch : StateBatch
+    state_batch : StateBatch
         The source states to snapshot.
     device : torch.device
         The destination device.
@@ -381,21 +272,243 @@ def to_device(batch: StateBatch, device: torch.device) -> StateBatch:
     -------
     StateBatch
         The states on the destination device, with their shapes and dtypes preserved and
-        storage independent of the source batch.
+        storage independent of the source state_batch.
     """
-    tensors = list(iter_tensors(batch))
-    starts, end = [], 0
-    for x_tensor in tensors:
-        starts.append(end)
-        end += -(-x_tensor.numel() * x_tensor.element_size() // 8) * 8
-    x_staging = torch.empty(end, dtype=torch.uint8, pin_memory=device.type == "cuda")
-    for x_tensor, start in zip(tensors, starts):
-        _bytes_as(x_staging, start, x_tensor).copy_(x_tensor)
-    x_packed = x_staging.to(device, non_blocking=True) if device.type == "cuda" else x_staging
-    pieces = iter(_bytes_as(x_packed, start, x_tensor) for x_tensor, start in zip(tensors, starts))
-    return map_tensors(batch, lambda x_tensor: next(pieces))
+    # Get all leaf Tensors
+    x_leaves = list(iter_tensors(state_batch))
+
+    # Calculate total buffer size and start / end indexes of each leaf Tensor
+    idx_starts = []
+    idx_end = 0 
+    for x_leaf in x_leaves:
+        idx_starts.append(idx_end)
+        idx_end += (x_leaf.numel() * x_leaf.element_size() + 7) // 8 * 8
+
+    # Allocate buffer in CPU memory and fill it. Each element stores a byte
+    x_buffer = torch.empty(idx_end, dtype=torch.uint8, pin_memory=device.type == "cuda")
+    for x_leaf, idx_start in zip(x_leaves, idx_starts):
+        _bytes_as(x_buffer, x_leaf, idx_start).copy_(x_leaf)
+
+    # Send buffer to device 
+    x_buffer = x_buffer.to(device, non_blocking=True) if device.type == "cuda" else x_buffer
+
+    # Define an iterator to get back each leaf Tensor from the buffer, and map it to `state_batch`
+    iter_x_leaves = iter(_bytes_as(x_buffer, x_leaf, idx_start) for x_leaf, idx_start in zip(x_leaves, idx_starts))
+    return map_tensors(state_batch, lambda _: next(iter_x_leaves))
 
 
-def _bytes_as(x_buffer: torch.Tensor, start: int, x_like: torch.Tensor) -> torch.Tensor:
+def _bytes_as(x_buffer: torch.Tensor, x_like: torch.Tensor, idx_start: int) -> torch.Tensor:
     size = x_like.numel() * x_like.element_size()
-    return x_buffer[start : start + size].view(x_like.dtype).view(x_like.shape)
+    return x_buffer[idx_start : idx_start + size].view(x_like.dtype).view(x_like.shape)
+
+
+def count_jagged_rows(state_batch: StateBatch) -> torch.Tensor:
+    """Count the rows each state owns in every Jagged.
+
+    Parameters
+    ----------
+    state_batch : StateBatch
+        The states whose rows to count.
+
+    Returns
+    -------
+    torch.Tensor
+        (B, number_of_Jaggeds) long on the batch's device, in Jagged order.
+    """
+    x_token_lengths = state_batch.tokens.x_lengths
+    x_off_state = torch.arange(len(x_token_lengths) + 1, device=x_token_lengths.device)
+    return torch.stack(list(_iter_jagged_row_counts(state_batch, x_off_state)), dim=1)
+
+
+def _iter_jagged_row_counts(value: Any, x_off_state: torch.Tensor) -> Iterator[torch.Tensor]:
+    """Yield, depth first in field order, each Jagged's per-state row count under `value`.
+
+    Parameters
+    ----------
+    value : Any
+        A tensor, a table or a nested dataclass record of them.
+    x_off_state : torch.Tensor
+        (B + 1,) long. Where each state's rows start at `value`'s level.
+
+    Yields
+    ------
+    torch.Tensor
+        (B,) long. A Jagged's rows per state.
+    """
+    if isinstance(value, torch.Tensor):
+        return
+
+    if isinstance(value, Jagged):
+        # Calculate the start index of each row
+        x_off = F.pad(value.x_lengths.cumsum(0, dtype=torch.long), (1, 0))
+
+        # Take the previous level's state-start index; gives each state's start index at this level
+        x_off = x_off[x_off_state]
+
+        # Number of rows each state owns in this Jagged
+        yield x_off.diff()
+
+        # Continue the recursion
+        yield from _iter_jagged_row_counts(value.rows, x_off)
+
+    else:
+        for field in fields(value):
+            yield from _iter_jagged_row_counts(getattr(value, field.name), x_off_state)
+
+
+def build_state_batch_layout(x_counts_cpu: torch.Tensor, device: torch.device) -> StateBatchLayout:
+    """Cache offsets once for an immutable batch, on the device and CPU as needed.
+
+    Parameters
+    ----------
+    x_counts_cpu : torch.Tensor
+        (B, number_of_Jaggeds) on the CPU. Each state's row and entry counts, in Jagged order.
+    device : torch.device
+        The batch's device.
+
+    Returns
+    -------
+    StateBatchLayout
+        The source offsets, valid while the batch's lengths remain unchanged.
+    """
+    # The `F.pad` call puts an all-zeros row at the top
+    x_off_state_cpu = F.pad(x_counts_cpu.cumsum(0, dtype=torch.long), (0, 0, 1, 0))
+    x_off_state = (
+        x_off_state_cpu.pin_memory() if device.type == "cuda" else x_off_state_cpu
+    ).to(device, non_blocking=True)
+
+    return StateBatchLayout(x_off_state, x_off_state_cpu)
+
+
+def _select_jagged_rows(
+    value: Any, selectors_remaining: Iterator[slice | torch.Tensor], selector: slice | torch.Tensor
+) -> Any:
+    """Index every tensor under `value` with its rows' selector, depth first in field order.
+
+    A Jagged's lengths are indexed with `selector`, like the tensors beside it; its rows take
+    the next selector from `selectors_remaining`.
+
+    Parameters
+    ----------
+    value : Any
+        A tensor, or a table or nested dataclass record of tensors.
+    selectors_remaining : Iterator[slice | torch.Tensor]
+        The remaining Jaggeds' row selectors, each a slice or an index tensor, in Jagged order.
+    selector : slice | torch.Tensor
+        The rows to select at `value`'s level.
+
+    Returns
+    -------
+    Any
+        The selected rows, preserving record types and nesting.
+    """
+    if isinstance(value, torch.Tensor):
+        return value[selector]
+
+    if isinstance(value, Jagged):
+        return Jagged(
+            value.x_lengths[selector],
+            _select_jagged_rows(value.rows, selectors_remaining, next(selectors_remaining)),
+        )
+
+    return type(value)(
+        **{
+            field.name: _select_jagged_rows(
+                getattr(value, field.name), selectors_remaining, selector
+            )
+            for field in fields(value)
+        }
+    )
+
+
+def take_minibatch_states(
+    state_batch: StateBatch, minibatch_plan: MinibatchPlan, state_batch_layout: StateBatchLayout
+) -> StateBatch:
+    """Gather planned states and all their descendants using cached source offsets.
+
+    Parameters
+    ----------
+    state_batch : StateBatch
+        The source states.
+    minibatch_plan : MinibatchPlan
+        The state indices in output order and the selected states' total row and entry counts.
+    state_batch_layout : StateBatchLayout
+        The source batch's cached offsets.
+
+    Returns
+    -------
+    StateBatch
+        The selected states and their descendants, preserving order and duplicate selections.
+    """
+    x_state_ids = minibatch_plan.x_state_ids
+
+    x_starts = state_batch_layout.x_off_state[x_state_ids]  # (S, number_of_Jaggeds)
+    x_counts = state_batch_layout.x_off_state[x_state_ids + 1] - x_starts  # (S, number_of_Jaggeds)
+
+    # Each Jagged's source rows, in output order
+    jagged_rows = [
+        _expand_ranges(x_starts[:, idx_jagged], x_counts[:, idx_jagged], count_total)
+        for idx_jagged, count_total in enumerate(minibatch_plan.counts_total)
+    ]
+    return _select_jagged_rows(state_batch, iter(jagged_rows), x_state_ids)
+
+
+def _expand_ranges(
+    x_starts: torch.Tensor, x_counts: torch.Tensor, count_total: int
+) -> torch.Tensor:
+    """List the rows of consecutive ranges, one range after another.
+
+    Range i covers x_counts[i] rows from x_starts[i]: starts [4, 0] with counts [2, 3] give
+    [4, 5, 0, 1, 2]. It is a concatenation of `torch.arange(start, start + count)` without the
+    loop.
+
+    Parameters
+    ----------
+    x_starts : torch.Tensor
+        (num_ranges,) long. Each range's first row.
+    x_counts : torch.Tensor
+        (num_ranges,) long. Each range's number of rows.
+    count_total : int
+        The ranges' total number of rows.
+
+    Returns
+    -------
+    torch.Tensor
+        (count_total,) long. The rows, range after range.
+    """
+    # Where each range lands in the output: back to back
+    x_starts_output = x_counts.cumsum(0) - x_counts
+
+    # Every output row moves by its range's shift: source row = output row + shift
+    x_shifts = (x_starts - x_starts_output)
+
+    # Repeat the shift for each row in each state
+    x_shifts = x_shifts.repeat_interleave(x_counts, output_size=count_total)
+
+    # Sum each row's indexes in the minibatch to the shifts to get their source-batch indexes
+    return x_shifts + torch.arange(count_total, device=x_starts.device)
+
+
+def slice_state_batch(
+    state_batch: StateBatch, start: int, stop: int, state_batch_layout: StateBatchLayout
+) -> StateBatch:
+    """View consecutive states and their descendants using CPU offsets.
+
+    Parameters
+    ----------
+    state_batch : StateBatch
+        The source states.
+    start : int
+        The first state's index, inclusive.
+    stop : int
+        The last state's index, exclusive; at most the number of states.
+    state_batch_layout : StateBatchLayout
+        The source StateBatch's cached offsets.
+
+    Returns
+    -------
+    StateBatch
+        Views of the selected states and descendants, sharing the source tensors' storage.
+    """
+    first, last = state_batch_layout.x_off_state_cpu[[start, stop]].tolist()
+    return _select_jagged_rows(state_batch, map(slice, first, last), slice(start, stop))

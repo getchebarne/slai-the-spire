@@ -236,7 +236,7 @@ TOKEN_KINDS_OF_ENTITY_KIND = (
 )
 
 # Each token kind's token cap: the slice token traversal applies to that collection
-MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
+MAP_TOKEN_KIND_MAX_TOKENS: dict[TokenKind, int] = {
     TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
     TokenKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
@@ -271,7 +271,7 @@ MAP_TOKEN_KIND_CAP: dict[TokenKind, int] = {
 }
 
 # The cap of the block every collection packs into: the sum of the collections' caps
-CAP_TOKENS = sum(MAP_TOKEN_KIND_CAP.values())
+MAX_TOKENS = sum(MAP_TOKEN_KIND_MAX_TOKENS.values())
 
 
 def _check_tables() -> None:
@@ -281,10 +281,10 @@ def _check_tables() -> None:
             f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
             "add CARD_REWARD_<b> token kinds"
         )
-    if set(MAP_TOKEN_KIND_CAP) != set(TokenKind):
+    if set(MAP_TOKEN_KIND_MAX_TOKENS) != set(TokenKind):
         raise RuntimeError(
-            "A TokenKind has no entry in MAP_TOKEN_KIND_CAP: "
-            f"{set(TokenKind) - set(MAP_TOKEN_KIND_CAP)}"
+            "A TokenKind has no entry in MAP_TOKEN_KIND_MAX_TOKENS: "
+            f"{set(TokenKind) - set(MAP_TOKEN_KIND_MAX_TOKENS)}"
         )
 
     # TokenKind is declared in packing order, valued 0..len-1: the Entity kind tables, one after

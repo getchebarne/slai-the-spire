@@ -15,36 +15,33 @@ from multiprocessing.process import BaseProcess
 from multiprocessing.synchronize import Semaphore
 from typing import Any
 
-import slai
 import torch
 import torch.multiprocessing as mp
 
 from src.rl.algorithms.actor_critic.actor.storage import _WeightBuffer
 from src.rl.algorithms.actor_critic.actor.storage import allocate_buffer
 from src.rl.algorithms.actor_critic.actor.storage import write_weights
-from src.rl.algorithms.actor_critic.stats import EpisodeStats
+from src.rl.algorithms.actor_critic.envs import EpisodeResult
 from src.rl.algorithms.actor_critic.workers import Workers
 from src.rl.algorithms.actor_critic.workers import snapshot_to_device
 from src.rl.algorithms.actor_critic.workers import start_workers
 from src.rl.algorithms.actor_critic.workers import step_workers
 from src.rl.algorithms.actor_critic.workers import stop_workers
+from src.rl.algorithms.actor_critic.workers import write_ascensions
 from src.rl.batches import cat_states
 from src.rl.models import ActorCritic
-from src.rl.reward import RewardStream
 from src.rl.types import Rollout
 from src.rl.types import StateBatch
 from src.rl.utils import parent_alive
 
 
-_ACTION_TYPE_REST = int(slai.ActionType.Rest)
-_ACTION_TYPE_SMITH = int(slai.ActionType.RestSmith)
 _SPAWN = "spawn"
 
 
 @dataclass
 class RolloutConfig:
     num_envs: int
-    rollout_workers: int
+    num_workers: int
     rollout_length: int
 
 
@@ -53,10 +50,10 @@ class Delivery:
     """One collected rollout and how it was made."""
 
     rollout: Rollout
-    episodes: list[EpisodeStats]
-    metrics: dict[str, float]
+    episodes: list[EpisodeResult]
     seconds_collect: float
-    seconds_wait: float  # The Actor's idle time before it: waiting for weights or the Learner
+    seconds_wait_actor: float  # The Actor's idle time before it: waiting for weights or the Learner
+    bytes_reserved_peak: int  # The Actor's peak GPU memory; 0 on the CPU
 
 
 @dataclass
@@ -202,7 +199,7 @@ def receive_rollout(actor_handle: ActorHandle) -> tuple[Delivery, float]:
     -------
     delivery : Delivery
         The next rollout and how it was made.
-    seconds_learner_wait : float
+    seconds_wait_learner : float
         How long the Learner waited for it, in seconds.
     """
     if bool(actor_handle._x_stop):
@@ -289,6 +286,7 @@ def _actor_loop(
 
     # Instance model
     model = ActorCritic(**actor_config.model_config).to(device)
+    model.eval()
 
     # Its sampling continues the Learner's global stream, which the run seeds per rank and resume
     generator = torch.Generator(device)
@@ -302,10 +300,9 @@ def _actor_loop(
     version_first = int(weight_slot_first.x_version)
 
     with ExitStack() as stack:
-        # Start Workers
         workers = start_workers(
             actor_config.rollout_config.num_envs,
-            actor_config.rollout_config.rollout_workers,
+            actor_config.rollout_config.num_workers,
             float(weight_slot_first.x_ascension_current),
             actor_config.gamma,
             actor_config.seed,
@@ -330,25 +327,29 @@ def _actor_loop(
             )
             model.load_state_dict(weight_slot.weights)
 
+            # Write the version's ascensions, which a game takes when it resets
+            write_ascensions(workers, float(weight_slot.x_ascension_current))
+
             # Collect the rollout using the version's weights
             t_collect = time.perf_counter()
-            rollout, episodes, metrics = _collect_rollout(
+            rollout, episode_results = _collect_rollout(
                 model,
                 workers,
                 actor_config.rollout_config,
                 device,
-                float(weight_slot.x_ascension_current),
                 generator,
             )
+            bytes_reserved_peak = 0
             if device.type == "cuda":
                 torch.cuda.synchronize(device)  # The Learner reads the rollout in another process
-                metrics["memory/actor_gb"] = torch.cuda.max_memory_reserved(device) / 2**30
+                bytes_reserved_peak = torch.cuda.max_memory_reserved(device)
+            
             delivery = Delivery(
                 rollout,
-                episodes,
-                metrics,
+                episode_results,
                 seconds_collect=time.perf_counter() - t_collect,
-                seconds_wait=t_collect - t_idle,
+                seconds_wait_actor=t_collect - t_idle,
+                bytes_reserved_peak=bytes_reserved_peak,
             )
             t_idle = time.perf_counter()
 
@@ -369,9 +370,8 @@ def _collect_rollout(
     workers: Workers,
     rollout_config: RolloutConfig,
     device: torch.device,
-    ascension_current: float,
     generator: torch.Generator,
-) -> tuple[Rollout, list[EpisodeStats], dict[str, float]]:
+) -> tuple[Rollout, list[EpisodeResult]]:
     """Play a rollout's T lockstep steps of its E games with `model`, sampling from `generator`.
 
     Each step runs one forward over all games, then the workers step them. GAE is the Learner's.
@@ -379,15 +379,13 @@ def _collect_rollout(
     Parameters
     ----------
     model : ActorCritic
-        The Actor's model, in eval mode during the rollout and back in training mode after it.
+        The Actor's model.
     workers : Workers
         The handle to the workers that step the rollout's E games.
     rollout_config : RolloutConfig
         The rollout's games, E, and steps, T.
     device : torch.device
         The model's device.
-    ascension_current : float
-        The soft-curriculum position, which sets the ascension of a game that resets.
     generator : torch.Generator
         The generator the actions are sampled from.
 
@@ -395,87 +393,53 @@ def _collect_rollout(
     -------
     rollout : Rollout
         The T steps of the E games, before GAE.
-    episodes : list[EpisodeStats]
+    episode_results : list[EpisodeResult]
         The episodes finished during the rollout.
-    metrics : dict[str, float]
-        The rollout's scalars: its terminations (step-limit cuts included), boundary truncations and
-        Rest Site upgrade rate.
     """
     state_batches: list[StateBatch] = []  # Per step, in state order
-    count_batches: list[torch.Tensor] = []  # Their counts, on the CPU
-    episodes: list[EpisodeStats] = []
-    x_actions = torch.empty(
-        rollout_config.rollout_length * rollout_config.num_envs, 3, dtype=torch.long, device=device
-    )
-    x_log_probs_behavior = torch.empty(
-        rollout_config.rollout_length * rollout_config.num_envs, device=device
-    )
-    x_rewards = torch.empty(
-        rollout_config.rollout_length, rollout_config.num_envs, len(RewardStream), device=device
-    )
-    x_dones = torch.empty(rollout_config.rollout_length, rollout_config.num_envs, device=device)
+    x_count_cpus: list[torch.Tensor] = []  # Their counts, on the CPU
+    x_action_batches: list[torch.Tensor] = []  # Per step, (E, 3) on the device
+    x_log_prob_batches: list[torch.Tensor] = []  # Per step, (E,) on the device
+    x_reward_batches: list[torch.Tensor] = []  # Per step, (E, K) on the CPU
+    x_done_batches: list[torch.Tensor] = []  # Per step, (E,) on the CPU
+    episode_results: list[EpisodeResult] = []
 
-    # Rest-site preference: device-side counters, read once after the loop (no per-step sync)
-    x_rest_selections = torch.zeros((), device=device)
-    x_upgrade_selections = torch.zeros((), device=device)
-
-    # Set model to eval, turn off gradient computation
-    model.eval()
+    # Turn off gradient computation
     with torch.no_grad():
-        state_batch, x_count_cpu = snapshot_to_device(workers, device)
-        for t in range(rollout_config.rollout_length):
-            policy = model.act(state_batch, generator=generator)
+        state_batch, x_counts_cpu = snapshot_to_device(workers, device)
+        for _ in range(rollout_config.rollout_length):
+            # Forward pass, policy only
+            policy_output = model.act(state_batch, generator=generator)
+            x_step_actions = policy_output.x_actions
+
+            # Step the worker's environments
+            x_step_rewards, x_step_dones, step_episode_results = step_workers(
+                workers, x_step_actions
+            )
+
+            # Append the step's data
             state_batches.append(state_batch)
-            count_batches.append(x_count_cpu)
-            step_rows = slice(t * rollout_config.num_envs, (t + 1) * rollout_config.num_envs)
-            x_actions[step_rows] = policy.x_actions
-            x_log_probs_behavior[step_rows] = policy.x_log_prob.sum(-1)
+            x_count_cpus.append(x_counts_cpu)
+            x_action_batches.append(x_step_actions)
+            x_log_prob_batches.append(policy_output.x_log_prob.sum(-1))
+            x_reward_batches.append(x_step_rewards)
+            x_done_batches.append(x_step_dones)
+            episode_results.extend(step_episode_results)
 
-            # Campfire decision: both Rest and RestSmith legal — which was chosen?
-            x_both = (
-                state_batch.x_legal_action_type[:, _ACTION_TYPE_REST]
-                & state_batch.x_legal_action_type[:, _ACTION_TYPE_SMITH]
-            )
-            x_rest_selections.add_((x_both & (policy.x_actions[:, 0] == _ACTION_TYPE_REST)).sum())
-            x_upgrade_selections.add_(
-                (x_both & (policy.x_actions[:, 0] == _ACTION_TYPE_SMITH)).sum()
-            )
-
-            x_step_rewards, x_step_dones, step_episodes = step_workers(
-                workers, x_actions[step_rows], ascension_current
-            )
-            x_rewards[t] = x_step_rewards
-            x_dones[t] = x_step_dones
-            episodes.extend(step_episodes)
-            state_batch, x_count_cpu = snapshot_to_device(workers, device)
-
-    # Set model to training mode
-    model.train()
-
-    # Surface the termination vs rollout-boundary-bootstrap split (the GAE truncation
-    # path): how many envs were still mid-episode at T and relied on V(s_T).
-    n_campfire_selections = (x_rest_selections + x_upgrade_selections).item()
-    metrics = {
-        "rollout/terminations": x_dones.sum().item(),
-        "rollout/boundary_truncations": float(rollout_config.num_envs) - x_dones[-1].sum().item(),
-        # 0.0 also when no campfire was seen this rollout
-        "rollout/rest_upgrade_rate": x_upgrade_selections.item() / n_campfire_selections
-        if n_campfire_selections
-        else 0.0,
-    }
+            # Snapshot new state and Jagged counts for the next step
+            state_batch, x_counts_cpu = snapshot_to_device(workers, device)
 
     return (
         Rollout(
-            states=cat_states(state_batches),
-            x_counts_cpu=torch.cat(count_batches),
-            x_actions=x_actions,
-            x_log_probs_behavior=x_log_probs_behavior,
-            x_rewards=x_rewards,
-            x_dones=x_dones,
-            final_states=state_batch,
+            state_batch=cat_states(state_batches),
+            x_counts_cpu=torch.cat(x_count_cpus),
+            x_actions=torch.cat(x_action_batches),
+            x_log_probs_behavior=torch.cat(x_log_prob_batches),
+            x_rewards=torch.stack(x_reward_batches).to(device),
+            x_dones=torch.stack(x_done_batches).to(device),
+            state_batch_final=state_batch,
         ),
-        episodes,
-        metrics,
+        episode_results,
     )
 
 

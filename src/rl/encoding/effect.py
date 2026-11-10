@@ -22,15 +22,13 @@ from typing import Any
 
 import numpy as np
 import slai
-import torch
 from slai import Amount
 from slai import AmountRelative
 from slai import CostScope
 from slai import Effect
 from slai import GameState
 
-from src.rl.encoding.buffers import SparseBuffer
-from src.rl.encoding.sparse import encode_sparse_into
+from src.rl.encoding.sparse import encode_sparse_rows_into
 from src.rl.schema.effect import BUCKET_META
 from src.rl.schema.effect import ENCODING_DIM_EFFECT
 from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
@@ -117,6 +115,7 @@ from src.rl.schema.effect import VOCAB_MONSTER
 from src.rl.schema.effect import VOCAB_RELIC
 from src.rl.schema.effect import amount_parts
 from src.rl.types import EffectSource
+from src.rl.types import SparseReserved
 
 
 # Per-effect-kind encoders
@@ -620,37 +619,23 @@ def normalize_effect_rows(rows: np.ndarray) -> None:
 
 
 def encode_batch_effect_pending_into(
-    destination: SparseBuffer,
-    slot: int,
-    x_lengths: torch.Tensor,
+    effect_pending: SparseReserved,
     batch_game_state: list[GameState],
 ) -> None:
-    """Write the pending Effect rows into sparse capacity and their per-state lengths.
-
-    One row per state with a halt pending, every state's after the previous state's.
+    """Write each state's pending Effect as one sparse row, empty where no halt is pending.
 
     Parameters
     ----------
-    destination : SparseBuffer
-        The reserved pending Effect rows and entries.
-    slot : int
-        The destination's zero-based slot index.
-    x_lengths : torch.Tensor
-        (B,) long on the CPU. The selected slot's per-state pending row counts, written in place.
+    effect_pending : SparseReserved
+        The reserved per-state rows and their entries.
     batch_game_state : list[GameState]
         The states to encode, B of them.
     """
-    batch_effect_pending = [game_state.effect_pending for game_state in batch_game_state]
-    np_count = x_lengths.numpy()
-    np_count[:] = [effect_pending is not None for effect_pending in batch_effect_pending]
-    np_effect_rows = np.zeros((np_count.sum(), ENCODING_DIM_EFFECT), dtype=np.float32)
-    row = 0
-    for effect_pending in batch_effect_pending:
-        if effect_pending is not None:
-            encode_effect_row_into_w_cache(
-                effect_pending, EffectSource.PENDING, np_effect_rows[row]
-            )
-            row += 1
+    np_effect_rows = np.zeros((len(batch_game_state), ENCODING_DIM_EFFECT), dtype=np.float32)
+    for game_state, np_effect_row in zip(batch_game_state, np_effect_rows):
+        effect = game_state.effect_pending
+        if effect is not None:
+            encode_effect_row_into_w_cache(effect, EffectSource.PENDING, np_effect_row)
 
     normalize_effect_rows(np_effect_rows)
-    encode_sparse_into(destination, slot, np_effect_rows, ENCODING_DIM_SPARSE_EFFECT)
+    encode_sparse_rows_into(effect_pending, np_effect_rows, ENCODING_DIM_SPARSE_EFFECT)

@@ -42,7 +42,7 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
         return grid
 
     # Initialize empty grid
-    grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.float32)
+    grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.uint8)
 
     # Iterate over Rooms
     for y, row in enumerate(rooms):
@@ -50,14 +50,14 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
             if room is None:
                 continue
 
-            grid[y, x, OFF_MAP_ROOM_KIND + MAP_ROOM_KIND[room.room_kind]] = 1.0
+            grid[y, x, OFF_MAP_ROOM_KIND + MAP_ROOM_KIND[room.room_kind]] = 1
             for x_next in room.edges:
                 delta = x_next - x  # -1, 0, or 1
                 if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
-                    grid[y, x, OFF_MAP_EDGES + EDGE_DELTAS.index(delta)] = 1.0
+                    grid[y, x, OFF_MAP_EDGES + EDGE_DELTAS.index(delta)] = 1
 
             if room.burning:
-                grid[y, x, OFF_MAP_BURNING] = 1.0
+                grid[y, x, OFF_MAP_BURNING] = 1
 
     # Store in the cache. Guard the master copy against future writes
     grid.flags.writeable = False
@@ -133,4 +133,4 @@ def encode_map_grid_into(game_state: GameState, out: np.ndarray) -> None:
     out[:] = _get_static_grid(map_.identity_hash, map_.rooms)
     y_current, x_current = map_.y_current, map_.x_current
     if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
-        out[y_current, x_current, OFF_MAP_POSITION] = 1.0
+        out[y_current, x_current, OFF_MAP_POSITION] = 1
