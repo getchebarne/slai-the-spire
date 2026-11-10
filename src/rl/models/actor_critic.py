@@ -322,7 +322,7 @@ class ActorCritic(nn.Module):
     def _run_policy_heads(
         self,
         heads: Callable[..., tuple[torch.Tensor, ...]],
-        game_state: StateBatch,
+        state_batch: StateBatch,
         core_out: CoreOutput,
         greedy: bool,
         generator: torch.Generator | None = None,
@@ -330,25 +330,25 @@ class ActorCritic(nn.Module):
     ) -> tuple[torch.Tensor, ...]:
         return heads(
             self,
-            x_focus=focus_view(game_state.x_context),
+            x_focus=focus_view(state_batch.x_context),
             x_global=core_out.x_policy_context,
             refined=core_out.tokens,
             index=core_out.index,
-            x_legal_selection=game_state.tokens.rows.x_legal_selection,
-            x_legal_target=game_state.tokens.rows.x_legal_target,
-            x_needs_target=game_state.tokens.rows.x_needs_target,
-            x_legal_action_type=game_state.x_legal_action_type,
+            x_legal_selection=state_batch.tokens.rows.x_legal_selection,
+            x_legal_target=state_batch.tokens.rows.x_legal_target,
+            x_needs_target=state_batch.tokens.rows.x_needs_target,
+            x_legal_action_type=state_batch.x_legal_action_type,
             greedy=greedy,
             generator=generator,
             x_recorded_actions=x_recorded_actions,
         )
 
-    def forward(self, game_state: StateBatch) -> torch.Tensor:
+    def forward(self, state_batch: StateBatch) -> torch.Tensor:
         """Compute the values.
 
         Parameters
         ----------
-        game_state : StateBatch
+        state_batch : StateBatch
             The game states.
 
         Returns
@@ -356,11 +356,11 @@ class ActorCritic(nn.Module):
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(game_state).x_value_context)
+        return self._head_value(self.core(state_batch).x_value_context)
 
     def act(
         self,
-        game_state: StateBatch,
+        state_batch: StateBatch,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> PolicyOutput:
@@ -371,7 +371,7 @@ class ActorCritic(nn.Module):
 
         Parameters
         ----------
-        game_state : StateBatch
+        state_batch : StateBatch
             The game states.
         greedy : bool, default False
             Whether each level takes its argmax rather than a sample.
@@ -384,7 +384,7 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
-        core_out = self.core(game_state, with_value=False)
+        core_out = self.core(state_batch, with_value=False)
 
         # Sampling actions runs eager
         (
@@ -394,7 +394,7 @@ class ActorCritic(nn.Module):
             x_log_prob,
             x_entropy,
             x_kl_uniform,
-        ) = self._run_policy_heads(_policy_heads, game_state, core_out, greedy, generator)
+        ) = self._run_policy_heads(_policy_heads, state_batch, core_out, greedy, generator)
         return PolicyOutput(
             x_actions=torch.stack([x_action_type, x_token_offset, x_target], dim=1),
             x_log_prob=x_log_prob,
@@ -403,13 +403,13 @@ class ActorCritic(nn.Module):
         )
 
     def evaluate_actions(
-        self, game_state: StateBatch, x_recorded_actions: torch.Tensor
+        self, state_batch: StateBatch, x_recorded_actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
         Parameters
         ----------
-        game_state : StateBatch
+        state_batch : StateBatch
             The game states.
         x_recorded_actions : torch.Tensor
             (B, 3) long. Each state's recorded action: action type, token offset within that
@@ -426,13 +426,13 @@ class ActorCritic(nn.Module):
         x_values : torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        core_out = self.core(game_state)
+        core_out = self.core(state_batch)
         x_values = self._head_value(core_out.x_value_context)
 
         # Recorded actions run the attribute, compiled on the Learner
         _, _, _, x_log_prob, x_entropy, x_kl_uniform = self._run_policy_heads(
             self.policy_heads_recorded,
-            game_state,
+            state_batch,
             core_out,
             greedy=True,
             x_recorded_actions=x_recorded_actions,

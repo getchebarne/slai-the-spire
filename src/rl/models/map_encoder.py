@@ -36,7 +36,7 @@ def _build_child_idx() -> torch.Tensor:
 
 
 def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
-    """Pack each grid into int64 words that sort as the float grid does.
+    """Pack each grid into int64 words that sort as the grid does.
 
     This way unique() groups and orders them alike at a fraction of the cost: the 0/1 cells most
     significant first, every word non-negative.
@@ -44,7 +44,7 @@ def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
     Parameters
     ----------
     x_nodes : torch.Tensor
-        (B, H * W, C) float32. Each state's Map grid, flattened to nodes.
+        (B, H * W, C) uint8. Each state's Map grid, flattened to nodes.
 
     Returns
     -------
@@ -99,7 +99,7 @@ class MapGNN(nn.Module):
         Parameters
         ----------
         x_grid : torch.Tensor
-            (B, H, W, C) float32. Each state's Map.
+            (B, H, W, C) uint8. Each state's Map.
 
         Returns
         -------
@@ -197,7 +197,7 @@ def message_passing(gnn: MapGNN, x_nodes: torch.Tensor) -> tuple[torch.Tensor, t
     gnn : MapGNN
         The GNN to run.
     x_nodes : torch.Tensor
-        (U, H * W, C) float32. The Maps.
+        (U, H * W, C) uint8. The Maps.
 
     Returns
     -------
@@ -206,6 +206,7 @@ def message_passing(gnn: MapGNN, x_nodes: torch.Tensor) -> tuple[torch.Tensor, t
     x_readout : torch.Tensor
         (U, hidden). The readout: each Map's mean over its valid nodes, zero when it has none.
     """
+    x_nodes = x_nodes.float()
     x_valid = gnn._forward_valid(x_nodes)  # (U, H * W) / Forward Rooms only
     x_adj = gnn._adjacency(x_nodes)  # (U, H * W, H * W) / Row-normalized children
 

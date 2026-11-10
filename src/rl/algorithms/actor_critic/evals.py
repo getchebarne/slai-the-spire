@@ -12,20 +12,13 @@ import torch.multiprocessing as mp
 
 from src.rl.actions import action_from_actiontype
 from src.rl.algorithms.actor_critic.curriculum import ascensions
+from src.rl.algorithms.actor_critic.envs import EpisodeResult
 from src.rl.algorithms.actor_critic.envs import new_env
 from src.rl.algorithms.actor_critic.envs import step_env
-from src.rl.algorithms.actor_critic.stats import KEY_ACT2_RATE
-from src.rl.algorithms.actor_critic.stats import KEY_ACT3_RATE
-from src.rl.algorithms.actor_critic.stats import KEY_ACT4_RATE
-from src.rl.algorithms.actor_critic.stats import KEY_FLOOR_AVG
-from src.rl.algorithms.actor_critic.stats import KEY_RETURN_AVG
-from src.rl.algorithms.actor_critic.stats import KEY_WIN_RATE
-from src.rl.algorithms.actor_critic.stats import PREFIX_EVAL
-from src.rl.algorithms.actor_critic.stats import EpisodeStats
-from src.rl.algorithms.actor_critic.stats import aggregate_episode_stats
-from src.rl.encoding import allocate_buffer
-from src.rl.encoding import encode_into
-from src.rl.encoding import read_buffer
+from src.rl.batches import allocate_states
+from src.rl.batches import map_tensors
+from src.rl.batches import read_states
+from src.rl.encoding import encode_states_into
 from src.rl.models import ActorCritic
 from src.rl.utils import parent_alive
 
@@ -33,20 +26,13 @@ from src.rl.utils import parent_alive
 _EVAL_NUM_EPISODES = 64
 _EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # Fixed test set => low-variance trend
 
-# Full eval tags, composed from the shared prefix + key constants; imported by
-# train()'s eval print.
-EVAL_WIN_RATE = PREFIX_EVAL + KEY_WIN_RATE
-EVAL_FLOOR_AVG = PREFIX_EVAL + KEY_FLOOR_AVG
-EVAL_RETURN_AVG = PREFIX_EVAL + KEY_RETURN_AVG
-EVAL_ACT2_RATE = PREFIX_EVAL + KEY_ACT2_RATE
-EVAL_ACT3_RATE = PREFIX_EVAL + KEY_ACT3_RATE
-EVAL_ACT4_RATE = PREFIX_EVAL + KEY_ACT4_RATE
 
-
-def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: int) -> EpisodeStats:
+def _run_eval_episode(
+    model: ActorCritic, gamma: float, ascension: int, seed: int
+) -> EpisodeResult:
     env, game_state = new_env(ascension, seed)
-    stats = EpisodeStats()
-    buffer = allocate_buffer(1, 1)
+    stats = EpisodeResult()
+    states = map_tensors(allocate_states(1, 1), lambda x_tensor: x_tensor[0])
     done = False
     while not done:
         legal_actions = env.get_legal_actions()
@@ -56,9 +42,9 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        encode_into(buffer, 0, [game_state], [legal_actions])
-        batch = read_buffer(buffer, 0)
-        policy = model.act(batch, greedy=True)
+        encode_states_into(states, [game_state], [legal_actions])
+        state_batch = read_states(states)
+        policy = model.act(state_batch, greedy=True)
 
         # Game step
         action = action_from_actiontype(policy, 0, game_state)
@@ -68,7 +54,7 @@ def _run_eval_episode(model: ActorCritic, gamma: float, ascension: int, seed: in
 
 def run_eval_battery(
     model: ActorCritic, gamma: float, ascension_current: float
-) -> dict[str, float]:
+) -> list[EpisodeResult]:
     """Run the battery at curriculum position ascension_current, `model` on the CPU.
 
     The games play training's mix of levels at ascension_current: the first
@@ -86,8 +72,8 @@ def run_eval_battery(
 
     Returns
     -------
-    dict[str, float]
-        The battery's outcome metrics, keyed by their eval/* names.
+    list[EpisodeResult]
+        The battery's finished episodes, in seed order.
     """
     with torch.no_grad():
         episodes = [
@@ -97,7 +83,7 @@ def run_eval_battery(
             )
         ]
 
-    return {PREFIX_EVAL + key: value for key, value in aggregate_episode_stats(episodes).items()}
+    return episodes
 
 
 @dataclass
@@ -156,8 +142,8 @@ def submit_eval(
         evaluator.busy = True
 
 
-def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | None:
-    """Return a finished battery's (iteration, ascension_current, metrics), or None.
+def poll_eval(evaluator: Evaluator) -> tuple[int, float, list[EpisodeResult]] | None:
+    """Return a finished battery's (iteration, ascension_current, episode_results), or None.
 
     Parameters
     ----------
@@ -166,9 +152,9 @@ def poll_eval(evaluator: Evaluator) -> tuple[int, float, dict[str, float]] | Non
 
     Returns
     -------
-    tuple[int, float, dict[str, float]] | None
-        The battery's iteration, curriculum position and eval/* metrics; None while no battery
-        has finished.
+    tuple[int, float, list[EpisodeResult]] | None
+        The battery's iteration, curriculum position and finished episodes; None while no
+        battery has finished.
     """
     _check_alive(evaluator)
     if not evaluator.busy or not evaluator.conn.poll():
@@ -232,9 +218,9 @@ def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> 
         except (EOFError, OSError):  # The Learner is gone
             return
         model.load_state_dict(state_dict)
-        metrics = run_eval_battery(model, gamma, ascension_current)
+        episode_results = run_eval_battery(model, gamma, ascension_current)
         try:
-            conn.send((iteration, ascension_current, metrics))
+            conn.send((iteration, ascension_current, episode_results))
         except BrokenPipeError:  # The Learner is gone
             return
 

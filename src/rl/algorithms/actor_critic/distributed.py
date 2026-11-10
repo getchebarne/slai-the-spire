@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
-from src.rl.algorithms.actor_critic.stats import EpisodeStats
+from src.rl.algorithms.actor_critic.envs import EpisodeResult
 
 
 @dataclass
@@ -77,6 +77,7 @@ def average_gradients(model: nn.Module) -> None:
     """
     if not dist.is_initialized():
         return
+    
     params = list(model.parameters())
     x_flat = torch.cat(
         [
@@ -166,21 +167,21 @@ def broadcast_float(value: float, device: torch.device) -> float:
     return x_value.item()
 
 
-def gather_episodes(episodes: list[EpisodeStats]) -> list[EpisodeStats]:
+def gather_episodes(episodes: list[EpisodeResult]) -> list[EpisodeResult]:
     """Gather every rank's finished episodes, on every rank.
 
     Parameters
     ----------
-    episodes : list[EpisodeStats]
+    episodes : list[EpisodeResult]
         This rank's finished episodes.
 
     Returns
     -------
-    list[EpisodeStats]
+    list[EpisodeResult]
         Every rank's finished episodes, rank after rank.
     """
     if not dist.is_initialized():
         return episodes
-    gathered: list[list[EpisodeStats]] = [[] for _ in range(dist.get_world_size())]
+    gathered: list[list[EpisodeResult]] = [[] for _ in range(dist.get_world_size())]
     dist.all_gather_object(gathered, episodes)
     return [episode for rank_episodes in gathered for episode in rank_episodes]

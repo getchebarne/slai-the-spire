@@ -22,7 +22,6 @@ ppo:
   num_epochs: 4
   minibatch_size: 4096
   clip_eps: 0.20
-  clip_value_loss: false
   coef_value: 0.500
   coef_entropy: 0.010
   coef_kl_uniform: 0.020
@@ -33,7 +32,7 @@ ppo:
 rollout:
   num_envs: 256
   rollout_length: 32
-  rollout_workers: 16 # Must divide evenly across `num_envs`
+  num_workers: 16 # Must divide evenly across `num_envs`
 
 model:
   # Core encoder

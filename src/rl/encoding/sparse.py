@@ -1,30 +1,53 @@
 import numpy as np
+import torch
 
-from src.rl.encoding.buffers import SparseBuffer
+from src.rl.types import SparseReserved
 
 
 def encode_sparse_into(
-    destination: SparseBuffer, slot: int, np_dense: np.ndarray, max_entries: int
+    x_segment_lengths: torch.Tensor,
+    destination: SparseReserved,
+    np_segment_lengths: np.ndarray,
+    np_dense: np.ndarray,
+    max_entries: int,
 ) -> None:
-    """Write dense feature rows as flat nonzero entries, preserving empty rows.
+    """Write each segment's row count and the dense feature rows as flat nonzero entries.
 
-    Columns stay in increasing order within each row. The caller's Jagged groups these rows;
-    the sparse lengths count feature entries per row.
+    The segment lengths count rows per segment; the sparse lengths count feature entries per row.
 
     Parameters
     ----------
-    destination : SparseBuffer
-        The reserved row and entry arrays. Only the selected slot is written.
-    slot : int
-        The destination's zero-based slot index.
+    x_segment_lengths : torch.Tensor
+        (segment capacity,) integer. Each segment's row count, written in place.
+    destination : SparseReserved
+        The reserved row and entry arrays of one table.
+    np_segment_lengths : np.ndarray
+        (S,). The number of rows in each of the S segments.
     np_dense : np.ndarray
         (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
     max_entries : int
         The maximum number of nonzero feature entries allowed in one row.
     """
-    if not 0 <= slot < len(destination.x_sizes):
-        raise IndexError("Slot index is outside the sparse buffer")
+    encode_sparse_rows_into(destination, np_dense, max_entries)
+    x_segment_lengths[: len(np_segment_lengths)].numpy()[:] = np_segment_lengths
 
+
+def encode_sparse_rows_into(
+    destination: SparseReserved, np_dense: np.ndarray, max_entries: int
+) -> None:
+    """Write dense feature rows as flat nonzero entries.
+
+    Empty rows are preserved and columns stay in increasing order within each row.
+
+    Parameters
+    ----------
+    destination : SparseReserved
+        The reserved row and entry arrays of one table.
+    np_dense : np.ndarray
+        (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
+    max_entries : int
+        The maximum number of nonzero feature entries allowed in one row.
+    """
     num_cols = np_dense.shape[-1]
     num_rows = np_dense.size // num_cols
 
@@ -44,13 +67,11 @@ def encode_sparse_into(
     if max_nonzero_entries_of_row > np.iinfo(np.int16).max:
         raise ValueError("Sparse row np_lens exceed int16 capacity")
     num_entries = len(np_pos)
-    if num_rows > destination.x_lengths.shape[1]:
+    if num_rows > len(destination.x_lengths):
         raise IndexError("Sparse row count exceeds the destination's capacity")
-    if num_entries > destination.x_values.shape[1]:
+    if num_entries > len(destination.rows.x_values):
         raise IndexError("Sparse entry count exceeds the destination's capacity")
     
-    destination.x_lengths[slot, :num_rows].numpy()[:] = np_lens
-    destination.x_columns[slot, :num_entries].numpy()[:] = np_cols
-    np.take(np_dense.reshape(-1), np_pos, out=destination.x_values[slot, :num_entries].numpy())
-    destination.x_sizes[slot, 0] = num_rows
-    destination.x_sizes[slot, 1] = num_entries
+    destination.x_lengths[:num_rows].numpy()[:] = np_lens
+    destination.rows.x_columns[:num_entries].numpy()[:] = np_cols
+    np.take(np_dense.reshape(-1), np_pos, out=destination.rows.x_values[:num_entries].numpy())
