@@ -21,6 +21,7 @@ from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
 from src.rl.encoding.focus import derive_focus
 from src.rl.encoding.focus import draw_order_visible
+from src.rl.tokens import get_wing_boots_charges
 from src.rl.types import Token
 from src.rl.types import TokenKind
 
@@ -147,9 +148,7 @@ def _misses_room_burning(game_state: slai.GameState, action: slai.Action) -> boo
     )
 
     # Number of remaining Wing Boots charges
-    wb_charges_left = next(
-        (relic.counter for relic in game_state.relics if relic.name == RelicName.WingBoots), 0
-    )
+    wb_charges_left = get_wing_boots_charges(game_state)
 
     # The move itself: free from the Act's start, else off the current Room's edges it burns one
     edges = range(MAP_WIDTH) if room_current is None else room_current.edges

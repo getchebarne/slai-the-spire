@@ -167,12 +167,12 @@ def broadcast_float(value: float, device: torch.device) -> float:
     return x_value.item()
 
 
-def gather_episodes(episodes: list[EpisodeResult]) -> list[EpisodeResult]:
+def gather_episode_results(episode_results: list[EpisodeResult]) -> list[EpisodeResult]:
     """Gather every rank's finished episodes, on every rank.
 
     Parameters
     ----------
-    episodes : list[EpisodeResult]
+    episode_results : list[EpisodeResult]
         This rank's finished episodes.
 
     Returns
@@ -181,7 +181,7 @@ def gather_episodes(episodes: list[EpisodeResult]) -> list[EpisodeResult]:
         Every rank's finished episodes, rank after rank.
     """
     if not dist.is_initialized():
-        return episodes
+        return episode_results
     gathered: list[list[EpisodeResult]] = [[] for _ in range(dist.get_world_size())]
-    dist.all_gather_object(gathered, episodes)
-    return [episode for rank_episodes in gathered for episode in rank_episodes]
+    dist.all_gather_object(gathered, episode_results)
+    return [episode for rank_episode_results in gathered for episode in rank_episode_results]

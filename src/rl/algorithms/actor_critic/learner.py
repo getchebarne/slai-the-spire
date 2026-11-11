@@ -68,6 +68,40 @@ def train(
     rank_info: RankInfo,
     stop: threading.Event,
 ) -> None:
+    """Train the model with PPO on the Actor's rollouts, resuming the run's checkpoint if any.
+
+    Rank 0 alone logs, saves checkpoints and runs the eval batteries.
+
+    Parameters
+    ----------
+    exp_name : str
+        The run's name: its experiment directory holds the checkpoints and the TensorBoard logs.
+    num_iterations : int
+        The run's total iterations: a resumed run continues up to it.
+    seed : int
+        The run's seed; a resume and every rank but 0 offset it.
+    cadence_config : CadenceConfig
+        The run's cadences, in iterations: logs, checkpoints, evals and archives.
+    model_config : dict
+        ActorCritic's keyword arguments, for the Learner's, the Actor's and the evals' models.
+    optimizer_config : dict
+        The optimizer: its class name in `torch.optim` under `name`, its arguments under
+        `kwargs`.
+    gamma : float
+        The rewards' discount, in the update and in every episode's discounted returns.
+    curriculum : AscensionCurriculum
+        Where the curriculum position starts and stops, and what it takes to advance it.
+    ppo_config : PPOConfig
+        The PPO update's settings.
+    rollout_config : RolloutConfig
+        The Actor's number of games, of workers and of steps per rollout.
+    rank_info : RankInfo
+        This process's rank, the number of ranks and its device.
+    stop : threading.Event
+        Once set on any rank, every rank stops at the end of the iteration, after rank 0 saves
+        a checkpoint.
+    """
+
     # Set seeds
     set_rng_seeds(seed)
 
@@ -181,7 +215,7 @@ def train(
 
             # Log when due: every rank sends its finished episodes, rank 0 writes
             if iteration % cadence_config.log_every == 0:
-                episode_results = distributed.gather_episodes(delivery.episodes)
+                episode_results = distributed.gather_episode_results(delivery.episode_results)
                 if writer is not None:
                     log_iteration(
                         writer,

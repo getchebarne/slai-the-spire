@@ -68,7 +68,7 @@ class Workers:
 
     _step_buffers: list[_StepBuffer]  # One per worker, in game order
     _handles: list[_WorkerHandle]
-    _episodes: Queue[EpisodeResult]
+    _episode_result_queue: Queue[EpisodeResult]
     _x_stop: torch.Tensor  # () bool in shared memory
 
 
@@ -128,7 +128,7 @@ def start_workers(
                 target=_worker_loop,
                 args=(
                     step_buffer,
-                    workers._episodes,
+                    workers._episode_result_queue,
                     sph_request,
                     sph_reply,
                     x_stop,
@@ -234,12 +234,12 @@ def step_workers(
     x_rewards = torch.cat([step_buffer.x_rewards for step_buffer in step_buffers])
     x_dones = torch.cat([step_buffer.x_dones for step_buffer in step_buffers])
 
-    # Get `EpisodeResult` from finished workers
+    # Get `EpisodeResult`s from finished workers
     episode_results = []
     for _ in range(int(x_dones.sum())):
         while True:
             try:
-                episode_results.append(workers._episodes.get(timeout=1.0))
+                episode_results.append(workers._episode_result_queue.get(timeout=1.0))
                 break
             except Empty:
                 _check_workers_alive(workers._handles)
@@ -354,12 +354,12 @@ def stop_workers(workers: Workers) -> None:
             worker_handle.process.join()
 
     workers._handles.clear()
-    workers._episodes.close()
+    workers._episode_result_queue.close()
 
 
 def _worker_loop(
     step_buffer: _StepBuffer,
-    episodes: Queue[EpisodeResult],
+    episode_result_queue: Queue[EpisodeResult],
     sph_request: Semaphore,
     sph_reply: Semaphore,
     x_stop: torch.Tensor,
@@ -376,7 +376,7 @@ def _worker_loop(
     ----------
     step_buffer : _StepBuffer
         This worker's shared memory.
-    episodes : Queue[EpisodeResult]
+    episode_result_queue : Queue[EpisodeResult]
         Where finished episodes go, shared by every worker.
     sph_request : Semaphore
         The step loop's request, released once per step.
@@ -390,37 +390,53 @@ def _worker_loop(
         The discount the games' rewards and discounted returns use.
     """
     set_rng_seeds(seed)
-    torch.set_num_threads(1)  # Workers are the parallelism; don't oversubscribe
+    torch.set_num_threads(1)
 
-    # Each game's tally lives in `batch_stats`, not per rollout, so an episode that spans
-    # rollouts reports its true totals
-    batch_env, batch_game_state = [], []
+    # Initialize environments and gather initial observations
+    batch_env = []
+    batch_game_state = []
+    episode_results = []
     for ascension in step_buffer.x_ascensions.tolist():
         env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
         batch_env.append(env)
         batch_game_state.append(game_state)
-    batch_stats = [EpisodeResult() for _ in batch_env]
+        episode_results.append(EpisodeResult()) 
+
+    # Write initial encodings into the shared step buffer and signal the Actor
     encode_states_into(
         step_buffer.states, batch_game_state, [env.get_legal_actions() for env in batch_env]
     )
     sph_reply.release()
-    while _wait_for_request(sph_request, x_stop):
-        batch_ascension = step_buffer.x_ascensions.tolist()  # Promotions apply on reset
 
-        for j, (action_type, token_offset, target) in enumerate(step_buffer.x_actions.tolist()):
-            action = engine_action(action_type, token_offset, target, batch_game_state[j])
+    # Loop
+    while _wait_for_request(sph_request, x_stop):
+        batch_ascension = step_buffer.x_ascensions.tolist()
+
+        for idx_env, (idx_action_kind, idx_token, idx_target) in enumerate(step_buffer.x_actions.tolist()):
+            # Transform the model's numeric output into an engine Action
+            action = engine_action(idx_action_kind, idx_token, idx_target, batch_game_state[idx_env])
+
+            # Step the environment
             game_state_next, reward, done = step_env(
-                batch_env[j], batch_game_state[j], batch_stats[j], action, gamma
+                batch_env[idx_env], batch_game_state[idx_env], episode_results[idx_env], action, gamma
             )
-            step_buffer.x_rewards[j] = torch.from_numpy(reward)
-            step_buffer.x_dones[j] = float(done)
+
+            # Write reward and done status into the shared step buffer 
+            step_buffer.x_rewards[idx_env] = torch.from_numpy(reward)
+            step_buffer.x_dones[idx_env] = float(done)
+
+            # If done, put the episode's results into the queue and reset the environment
             if done:
-                episodes.put(batch_stats[j])
-                batch_stats[j] = EpisodeResult()
-                batch_env[j], game_state_next = new_env(
-                    batch_ascension[j], random.randint(0, 2**31 - 1)
+                episode_result_queue.put(episode_results[idx_env])
+                episode_results[idx_env] = EpisodeResult()
+                batch_env[idx_env], game_state_next = new_env(
+                    batch_ascension[idx_env], random.randint(0, 2**31 - 1)
                 )
-            batch_game_state[j] = game_state_next
+
+            # Overwrite current game state
+            batch_game_state[idx_env] = game_state_next
+
+        # Write the step's encoded game states into the shared step buffer and singal the Actor
         encode_states_into(
             step_buffer.states, batch_game_state, [env.get_legal_actions() for env in batch_env]
         )
