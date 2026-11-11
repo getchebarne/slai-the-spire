@@ -282,7 +282,7 @@ def get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list[Rel
             event = game_state.event
             return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL] if event is not None else []
         case _:
-            raise ValueError(f"not a relic token kind: {token_kind}")
+            raise ValueError(f"Not a Relic token kind: {token_kind}")
 
 
 def get_potion_entities(token_kind: TokenKind, game_state: GameState) -> list[Potion]:
@@ -316,7 +316,7 @@ def get_potion_entities(token_kind: TokenKind, game_state: GameState) -> list[Po
                 event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL] if event is not None else []
             )
         case _:
-            raise ValueError(f"not a potion token kind: {token_kind}")
+            raise ValueError(f"Not a Potion token kind: {token_kind}")
 
 
 def get_event_option_entities(game_state: GameState) -> list[EventOption]:

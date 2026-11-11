@@ -41,7 +41,7 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
-from src.rl.schema.layout import make_channel_allocator
+from src.rl.encoding.layout import make_channel_allocator
 from src.rl.types import EffectSource
 
 
@@ -354,7 +354,7 @@ def _bucket_width(cap: float) -> int:
     return int(math.sqrt(cap)) + 1
 
 
-CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
+_CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
 
 
 # Effect's kind: one-hot over the Effect union
@@ -394,20 +394,20 @@ OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
 
 # Magnitudes, one per physical unit
 OFF_DAMAGE = _alloc("damage")
-OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE))
+_OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE))
 OFF_INSTANCES = _alloc("instances")
 OFF_BLOCK = _alloc("block")
 OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
-OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
+_OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
 OFF_HEALTH_RELATIVE = _alloc("health_relative")
 OFF_GOLD_ABSOLUTE = _alloc("gold_absolute")
-OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD))
+_OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD))
 OFF_GOLD_RELATIVE = _alloc("gold_relative")
 OFF_AMOUNT_IS_RANGE = _alloc("amount_is_range")
 OFF_ENERGY = _alloc("energy")
 OFF_STACKS = _alloc("stacks")
 OFF_STACKS_NEGATIVE = _alloc("stacks_negative")
-OFF_STACKS_BUCKETS = _alloc("stacks_buckets", _bucket_width(_CAP_STACKS))
+_OFF_STACKS_BUCKETS = _alloc("stacks_buckets", _bucket_width(_CAP_STACKS))
 OFF_COUNT = _alloc("count")
 OFF_DELTA = _alloc("delta")
 OFF_CHANCE = _alloc("chance")
@@ -436,14 +436,14 @@ OFF_UPGRADED = _alloc("upgraded")
 
 # (float channel, bucket block, cap) — buckets derive from the final raw floats
 BUCKET_META: tuple[tuple[int, int, float], ...] = (
-    (OFF_DAMAGE, OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
-    (OFF_HEALTH_ABSOLUTE, OFF_HEALTH_BUCKETS, _CAP_HEALTH),
-    (OFF_GOLD_ABSOLUTE, OFF_GOLD_BUCKETS, _CAP_GOLD),
-    (OFF_STACKS, OFF_STACKS_BUCKETS, _CAP_STACKS),
+    (OFF_DAMAGE, _OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
+    (OFF_HEALTH_ABSOLUTE, _OFF_HEALTH_BUCKETS, _CAP_HEALTH),
+    (OFF_GOLD_ABSOLUTE, _OFF_GOLD_BUCKETS, _CAP_GOLD),
+    (OFF_STACKS, _OFF_STACKS_BUCKETS, _CAP_STACKS),
 )
 
 # Total
-ENCODING_DIM_EFFECT = sum(w for _, w in CHANNEL_LAYOUT_EFFECT)
+ENCODING_DIM_EFFECT = sum(w for _, w in _CHANNEL_LAYOUT_EFFECT)
 
 # The channels that set several of a row's columns
 _MULTI_HOT_CHANNELS = (
@@ -455,7 +455,7 @@ _MULTI_HOT_CHANNELS = (
 # Most nonzero columns an Effect row holds: one per one-hot or scalar channel, and every column
 # of the multi-hot ones
 ENCODING_DIM_SPARSE_EFFECT = sum(
-    width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in CHANNEL_LAYOUT_EFFECT
+    width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in _CHANNEL_LAYOUT_EFFECT
 )
 
 

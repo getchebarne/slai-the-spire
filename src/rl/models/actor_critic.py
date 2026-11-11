@@ -7,6 +7,8 @@ from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.constants import ACTION_TYPE_BY_INT
 from src.rl.constants import NUM_ACTION_TYPES
+from src.rl.encoding import ENCODING_DIM_FOCUS
+from src.rl.encoding import focus_view
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
@@ -14,8 +16,6 @@ from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
 from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
-from src.rl.schema.context import focus_view
-from src.rl.schema.focus import ENCODING_DIM_FOCUS
 from src.rl.types import CoreOutput
 from src.rl.types import Jagged
 from src.rl.types import PolicyOutput

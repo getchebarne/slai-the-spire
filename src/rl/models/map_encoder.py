@@ -4,12 +4,12 @@ import torch.nn.functional as F
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.schema.map_ import EDGE_DELTAS
-from src.rl.schema.map_ import NUM_CHANNELS
-from src.rl.schema.map_ import NUM_EDGE_CHANNELS
-from src.rl.schema.map_ import OFF_MAP_POSITION
-from src.rl.schema.map_ import SLICE_MAP_EDGES
-from src.rl.schema.map_ import SLICE_MAP_ROOM_KIND
+from src.rl.encoding import EDGE_DELTAS
+from src.rl.encoding import NUM_CHANNELS
+from src.rl.encoding import NUM_EDGE_CHANNELS
+from src.rl.encoding import OFF_MAP_POSITION
+from src.rl.encoding import SLICE_MAP_EDGES
+from src.rl.encoding import SLICE_MAP_ROOM_KIND
 
 
 _NUM_NODES = MAP_HEIGHT * MAP_WIDTH

@@ -14,11 +14,11 @@ from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
 from src.rl.constants import MAX_TOKENS
 from src.rl.constants import NUM_ACTION_TYPES
-from src.rl.schema.context import ENCODING_DIM_CONTEXT
-from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.schema.map_ import NUM_CHANNELS
-from src.rl.schema.modifier import ENCODING_DIM_SPARSE_MODIFIER
-from src.rl.schema.state import ENCODING_DIM_SPARSE_TOKEN
+from src.rl.encoding import ENCODING_DIM_CONTEXT
+from src.rl.encoding import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.encoding import ENCODING_DIM_SPARSE_TOKEN
+from src.rl.encoding import NUM_CHANNELS
 from src.rl.types import Jagged
 from src.rl.types import JaggedReserved
 from src.rl.types import MinibatchPlan

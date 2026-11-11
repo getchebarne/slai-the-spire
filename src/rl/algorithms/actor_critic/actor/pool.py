@@ -486,6 +486,6 @@ def _died(actor_handle: ActorHandle) -> RuntimeError:
     actor_handle._process.join(timeout=5.0)
 
     return RuntimeError(
-        f"The actor process died (exitcode {actor_handle._process.exitcode}); "
+        f"The Actor process died (exitcode {actor_handle._process.exitcode}); "
         "see its traceback above"
     )

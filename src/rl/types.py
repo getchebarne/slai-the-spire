@@ -185,7 +185,7 @@ class States[TTokens, TEffectPending]:
 
     tokens: TTokens  # (B,) long lengths
     effect_pending: TEffectPending  # (B,) int16 lengths, 0 where no halt is pending
-    x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; schema.context owns its layout
+    x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
     x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
 
@@ -284,3 +284,13 @@ class Rollout:
     x_rewards: torch.Tensor  # (T, E, K)
     x_dones: torch.Tensor  # (T, E)
     state_batch_final: StateBatch  # E states
+
+
+@dataclass
+class RunState:
+    """What a checkpoint resumes besides the weights, the optimizer and the iteration."""
+
+    total_steps: int  # Steps played so far, every rank's games counted
+    ascension_current: float  # The soft-curriculum position
+    streak: int  # The consecutive passes at ascension_current so far
+    lr_scale: float  # The Adaptive-KL learning rate scale

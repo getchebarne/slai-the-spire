@@ -8,8 +8,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.rl.algorithms.actor_critic.actor import Delivery
 from src.rl.algorithms.actor_critic.envs import EpisodeResult
-from src.rl.algorithms.actor_critic.progress import RunState
 from src.rl.reward import RewardStream
+from src.rl.types import RunState
 
 
 class MetricKey(StrEnum):
