@@ -29,8 +29,7 @@ class EpisodeResult:
     act: int = 0  # The last act reached
     boss_reached: bool = False  # Reached the Heart's Room
 
-    # (K,) per-stream DISCOUNTED returns (γ^t·r_t sums)
-    stream_returns: np.ndarray = field(default_factory=lambda: np.zeros(len(RewardStream)))
+    reward_stream_rets: np.ndarray = field(default_factory=lambda: np.zeros(len(RewardStream)))
     gold_gained: int = 0  # Sum of positive gold deltas over the episode
     gold_spent: int = 0  # Gold spent at Shops (reward.shop_gold_spent) over the episode
     deck_size: int = 0  # Deck size at episode end
@@ -44,6 +43,22 @@ class EpisodeResult:
 
 
 def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
+    """Start a game at `ascension` from `seed`.
+
+    Parameters
+    ----------
+    ascension : int
+        The game's ascension.
+    seed : int
+        The game's seed.
+
+    Returns
+    -------
+    env : GameEnv
+        The game, with the run's `FAST_MODE` and `NEOW` settings.
+    game_state : GameState
+        Its first state.
+    """
     env = GameEnv(ascension=ascension, fast_mode=FAST_MODE, neow=NEOW)
     return env, env.reset(seed=seed)
 
@@ -154,7 +169,7 @@ def _tally_step(
     truncated : bool
         Whether the step cut the episode at the step limit while the game still ran.
     """
-    stats.stream_returns += gamma**stats.length * reward
+    stats.reward_stream_rets += gamma**stats.length * reward
     stats.length += 1
     stats.gold_gained += max(0, game_state_next.character.gold - game_state.character.gold)
     stats.gold_spent += shop_gold_spent(game_state, game_state_next, action)
@@ -198,5 +213,6 @@ def _heart_damage(game_state: GameState) -> float:
     monsters = [] if game_state.combat is None else game_state.combat.monsters
     if not monsters:
         return 1.0
+    
     heart = monsters[0]
     return 1.0 - heart.health / heart.health_max

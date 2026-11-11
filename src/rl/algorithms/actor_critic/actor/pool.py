@@ -50,7 +50,7 @@ class Delivery:
     """One collected rollout and how it was made."""
 
     rollout: Rollout
-    episodes: list[EpisodeResult]
+    episode_results: list[EpisodeResult]
     seconds_collect: float
     seconds_wait_actor: float  # The Actor's idle time before it: waiting for weights or the Learner
     bytes_reserved_peak: int  # The Actor's peak GPU memory; 0 on the CPU

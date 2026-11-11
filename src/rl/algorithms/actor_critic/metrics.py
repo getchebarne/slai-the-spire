@@ -343,7 +343,7 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
         there.
     """
     num_episodes = len(episode_results)
-    returns = [float(episode.stream_returns.sum()) for episode in episode_results]
+    returns = [float(episode.reward_stream_rets.sum()) for episode in episode_results]
     keys_at_death = [
         episode.keys_at_death for episode in episode_results if episode.keys_at_death is not None
     ]
@@ -376,7 +376,7 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
         # Discounted per-stream returns, the optimizer's actual objective:
         # undiscounted sums shift with episode length
         metrics[f"{MetricKey.RETURN_AVG}_{name}"] = (
-            sum(episode.stream_returns[k] for episode in episode_results) / num_episodes
+            sum(episode.reward_stream_rets[k] for episode in episode_results) / num_episodes
         )
 
     return metrics

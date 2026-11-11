@@ -56,6 +56,7 @@ __all__ = [
     "get_potion_entities",
     "get_event_option_entities",
     "get_monster_entities",
+    "get_wing_boots_charges",
     "get_room_entities",
 ]
 
@@ -353,8 +354,8 @@ def get_monster_entities(game_state: GameState) -> list[Monster]:
     return combat.monsters if combat is not None else []
 
 
-def _wing_boots_charged(game_state: GameState) -> bool:
-    """Return whether the Character holds Wing Boots with charges left.
+def get_wing_boots_charges(game_state: GameState) -> int:
+    """Return the charges left on the Character's Wing Boots.
 
     With charges left, the engine offers every next-row Room, not just the edges.
 
@@ -365,10 +366,12 @@ def _wing_boots_charged(game_state: GameState) -> bool:
 
     Returns
     -------
-    bool
-        True when a Wing Boots Relic's counter is above 0.
+    int
+        The Wing Boots Relic's counter; 0 without the Relic.
     """
-    return any(r.name == RelicName.WingBoots and r.counter > 0 for r in game_state.relics)
+    return next(
+        (relic.counter for relic in game_state.relics if relic.name == RelicName.WingBoots), 0
+    )
 
 
 def _next_row_candidate_cols(
@@ -429,7 +432,7 @@ def get_room_entities(game_state: GameState) -> list[Room]:
     map_ = game_state.map
     rooms = map_.rooms
     y_current = map_.y_current
-    winged = _wing_boots_charged(game_state)
+    winged = get_wing_boots_charges(game_state) > 0
     cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
     if not cols:
         return []

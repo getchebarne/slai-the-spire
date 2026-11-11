@@ -10,7 +10,7 @@ from typing import Any
 import torch
 import torch.multiprocessing as mp
 
-from src.rl.actions import action_from_actiontype
+from src.rl.actions import engine_action
 from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.envs import EpisodeResult
 from src.rl.algorithms.actor_critic.envs import new_env
@@ -24,32 +24,52 @@ from src.rl.utils import parent_alive
 
 
 _EVAL_NUM_EPISODES = 64
-_EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))  # Fixed test set => low-variance trend
+_EVAL_SEEDS = tuple(range(_EVAL_NUM_EPISODES))
 
 
 def _run_eval_episode(
     model: ActorCritic, gamma: float, ascension: int, seed: int
 ) -> EpisodeResult:
+    """Play one game greedily until it ends or reaches the step limit.
+
+    Parameters
+    ----------
+    model : ActorCritic
+        The model, which plays its most likely action at every step.
+    gamma : float
+        The discount the rewards and discounted returns use.
+    ascension : int
+        The game's ascension.
+    seed : int
+        The game's seed.
+
+    Returns
+    -------
+    EpisodeResult
+        The game's tally.
+    """
     env, game_state = new_env(ascension, seed)
-    stats = EpisodeResult()
-    states = map_tensors(allocate_states(1, 1), lambda x_tensor: x_tensor[0])
+    episode_result = EpisodeResult()
+    state_batch_reserved = map_tensors(allocate_states(1, 1), lambda x_tensor: x_tensor[0])
     done = False
     while not done:
         legal_actions = env.get_legal_actions()
         if not legal_actions:
             raise RuntimeError(
-                f"Non-terminal state has no legal action (seed={seed}, step={stats.length})"
+                f"Non-terminal state has no legal action (seed={seed}, step={episode_result.length})"
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        encode_states_into(states, [game_state], [legal_actions])
-        state_batch = read_states(states)
+        encode_states_into(state_batch_reserved, [game_state], [legal_actions])
+        state_batch = read_states(state_batch_reserved)
         policy = model.act(state_batch, greedy=True)
 
         # Game step
-        action = action_from_actiontype(policy, 0, game_state)
-        game_state, _, done = step_env(env, game_state, stats, action, gamma)
-    return stats
+        idx_action_kind, idx_token, idx_target = policy.x_actions[0].tolist()
+        action = engine_action(idx_action_kind, idx_token, idx_target, game_state)
+        game_state, _, done = step_env(env, game_state, episode_result, action, gamma)
+    
+    return episode_result
 
 
 def run_eval_battery(
@@ -76,14 +96,14 @@ def run_eval_battery(
         The battery's finished episodes, in seed order.
     """
     with torch.no_grad():
-        episodes = [
+        episode_results = [
             _run_eval_episode(model, gamma, ascension, seed)
             for ascension, seed in zip(
                 ascensions(ascension_current, len(_EVAL_SEEDS)), _EVAL_SEEDS
             )
         ]
 
-    return episodes
+    return episode_results
 
 
 @dataclass
@@ -159,11 +179,19 @@ def poll_eval(evaluator: Evaluator) -> tuple[int, float, list[EpisodeResult]] | 
     _check_alive(evaluator)
     if not evaluator.busy or not evaluator.conn.poll():
         return None
+    
     evaluator.busy = False
     return evaluator.conn.recv()
 
 
 def stop_evaluator(evaluator: Evaluator) -> None:
+    """Kill the eval process, mid-battery or not, and wait for it to exit.
+
+    Parameters
+    ----------
+    evaluator : Evaluator
+        The eval process to stop.
+    """
     evaluator.process.kill()  # It ignores SIGTERM, and an eval in progress has nothing to save
     evaluator.process.join()
 
@@ -202,26 +230,44 @@ def _cpu_state_dict(model: ActorCritic) -> dict[str, torch.Tensor]:
 
 
 def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> None:
-    # A Ctrl-C or torchrun's SIGTERM reaches the whole process group: ignore them, so the
-    # training loop can finish its iteration and checkpoint before it stops this process
+    """Play a battery on each set of weights that arrives and send back its result.
+
+    It ends once the Learner is gone.
+
+    Parameters
+    ----------
+    conn : Connection
+        The eval process's end of the pipe: the weights, their iteration and the curriculum
+        position come in, the battery's result goes out.
+    model_config : dict[str, Any]
+        ActorCritic's keyword arguments, for this process's own model.
+    gamma : float
+        The discount the batteries' rewards and discounted returns use.
+    """
+
+    # Wait for the Learner to finish the current iteration and save the checkpoint before exit
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     # A Learner killed outright can't stop this process
     threading.Thread(target=_exit_when_orphaned, daemon=True).start()
     torch.set_num_threads(1)  # Keeps the eval on the spare core, off the training critical path
+    
     model = ActorCritic(**model_config)
     model.eval()
     while True:
         try:
             state_dict, iteration, ascension_current = conn.recv()
-        except (EOFError, OSError):  # The Learner is gone
+        except (EOFError, OSError):
+            # The Learner is gone
             return
+        
         model.load_state_dict(state_dict)
         episode_results = run_eval_battery(model, gamma, ascension_current)
         try:
             conn.send((iteration, ascension_current, episode_results))
-        except BrokenPipeError:  # The Learner is gone
+        except BrokenPipeError:
+            # The Learner is gone
             return
 
 
@@ -229,4 +275,5 @@ def _exit_when_orphaned() -> None:
     """End this process, even mid-battery, once the Learner is gone."""
     while parent_alive():
         time.sleep(1.0)
+
     os._exit(0)
