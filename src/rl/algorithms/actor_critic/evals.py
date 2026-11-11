@@ -38,7 +38,7 @@ def _run_eval_episode(
         legal_actions = env.get_legal_actions()
         if not legal_actions:
             raise RuntimeError(
-                f"non-terminal state has no legal action (seed={seed}, step={stats.length})"
+                f"Non-terminal state has no legal action (seed={seed}, step={stats.length})"
             )
 
         # Greedy step: Encode (masks included) -> Forward
@@ -178,7 +178,7 @@ def _check_alive(evaluator: Evaluator) -> None:
     """
     if not evaluator.process.is_alive():
         raise RuntimeError(
-            f"the eval process died (exitcode {evaluator.process.exitcode}); "
+            f"The eval process died (exitcode {evaluator.process.exitcode}); "
             "see its traceback above"
         )
 

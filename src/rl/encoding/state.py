@@ -18,41 +18,45 @@ from slai import Room
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
+from src.rl.constants import MAX_MONSTERS
+from src.rl.encoding.card import ENCODING_DIM_CARD
+from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
+from src.rl.encoding.card import TAGS_OF_CARD_NAME
 from src.rl.encoding.card import encode_card_into_w_cache
+from src.rl.encoding.character import ENCODING_DIM_CHARACTER
+from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
 from src.rl.encoding.effect import encode_batch_effect_pending_into
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
+from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
+from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
+from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.map_ import encode_map_grid_into
 from src.rl.encoding.mask import encode_batch_masks_into
+from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
+from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.modifier import encode_modifier_row_into
+from src.rl.encoding.monster import ENCODING_DIM_MONSTER
+from src.rl.encoding.monster import ENCODING_DIM_SPARSE_MONSTER
 from src.rl.encoding.monster import encode_monster_into
 from src.rl.encoding.monster import get_outgoing_damage
+from src.rl.encoding.monster import moveset_effects
+from src.rl.encoding.potion import ENCODING_DIM_POTION
+from src.rl.encoding.potion import ENCODING_DIM_SPARSE_POTION
+from src.rl.encoding.potion import TAGS_OF_POTION_NAME
 from src.rl.encoding.potion import encode_potion_into_w_cache
+from src.rl.encoding.relic import ENCODING_DIM_RELIC
+from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
+from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into_w_cache
+from src.rl.encoding.shop import ENCODING_DIM_PRICE
+from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_price_into
 from src.rl.encoding.sparse import encode_sparse_into
-from src.rl.schema.card import TAGS_OF_CARD_NAME
-from src.rl.schema.effect import ENCODING_DIM_EFFECT
-from src.rl.schema.effect import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.schema.modifier import ENCODING_DIM_MODIFIER
-from src.rl.schema.modifier import ENCODING_DIM_SPARSE_MODIFIER
-from src.rl.schema.monster import moveset_effects
-from src.rl.schema.potion import TAGS_OF_POTION_NAME
-from src.rl.schema.relic import TAGS_OF_RELIC_NAME
-from src.rl.schema.state import COL_START_CARD
-from src.rl.schema.state import COL_START_CHARACTER
-from src.rl.schema.state import COL_START_HEALTH_BLOCK
-from src.rl.schema.state import COL_START_MONSTER
-from src.rl.schema.state import COL_START_POTION
-from src.rl.schema.state import COL_START_PRICE
-from src.rl.schema.state import COL_START_RELIC
-from src.rl.schema.state import COL_START_STASIS_SLOT
-from src.rl.schema.state import COL_START_TAG
-from src.rl.schema.state import ENCODING_DIM_SPARSE_TOKEN
-from src.rl.schema.state import ENCODING_DIM_TOKEN
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
@@ -60,6 +64,7 @@ from src.rl.types import JaggedReserved
 from src.rl.types import ModifierOwner
 from src.rl.types import SparseReserved
 from src.rl.types import StateBatchReserved
+from src.rl.types import Tag
 from src.rl.types import Token
 from src.rl.types import TokenKind
 
@@ -67,6 +72,44 @@ from src.rl.types import TokenKind
 type EffectRow = tuple[int, Effect, EffectSource]
 type ModifierRow = tuple[int, Modifier, ModifierOwner]
 
+
+# The stasis slot columns: a one-hot over the Monsters' roster posts (Monster.slot)
+_ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
+_ENCODING_DIM_SPARSE_SLOT = 1
+
+# The Tag columns: a Multi-Hot over the Tags
+_ENCODING_DIM_TAG = len(Tag)
+_ENCODING_DIM_SPARSE_TAG = _ENCODING_DIM_TAG
+
+# Each Entity kind's first column in the shared space; Event Options and Rooms have no columns
+_COL_START_CARD = 0
+COL_START_RELIC = _COL_START_CARD + ENCODING_DIM_CARD
+COL_START_POTION = COL_START_RELIC + ENCODING_DIM_RELIC
+COL_START_MONSTER = COL_START_POTION + ENCODING_DIM_POTION
+COL_START_CHARACTER = COL_START_MONSTER + ENCODING_DIM_MONSTER
+
+# The ranges shared across tokens of different Entity kinds
+COL_START_HEALTH_BLOCK = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
+COL_START_PRICE = COL_START_HEALTH_BLOCK + ENCODING_DIM_HEALTH_BLOCK
+COL_START_STASIS_SLOT = COL_START_PRICE + ENCODING_DIM_PRICE
+
+# The range Cards, Relics and Potions share, outside their cached rows
+COL_START_TAG = COL_START_STASIS_SLOT + _ENCODING_DIM_STASIS_SLOT
+
+# Total token encoding dimension
+ENCODING_DIM_TOKEN = COL_START_TAG + _ENCODING_DIM_TAG
+
+# Most nonzero columns a token row holds
+ENCODING_DIM_SPARSE_TOKEN = max(
+    ENCODING_DIM_SPARSE_CARD
+    + ENCODING_DIM_SPARSE_PRICE
+    + _ENCODING_DIM_SPARSE_SLOT
+    + _ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE + _ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + _ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_MONSTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK + _ENCODING_DIM_SPARSE_SLOT,
+    ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
+)
 
 # The owned row kinds that have already warned about overflow — truncation is never silent
 _WARNED_OVERFLOW: set[str] = set()
@@ -324,7 +367,7 @@ def _encode_tokens_into(
     row_of_entity_id: dict[int, int] = {}
 
     # The rows at each Entity kind's columns, then at the Health/Block, Price and Slot columns
-    np_token_card = np_token[:, COL_START_CARD:COL_START_RELIC]
+    np_token_card = np_token[:, _COL_START_CARD:COL_START_RELIC]
     np_token_relic = np_token[:, COL_START_RELIC:COL_START_POTION]
     np_token_potion = np_token[:, COL_START_POTION:COL_START_MONSTER]
     np_token_monster = np_token[:, COL_START_MONSTER:COL_START_CHARACTER]
@@ -476,8 +519,8 @@ def _encode_tokens_into(
     # Cap Effect and Modifier rows and return them
     if len(effect_rows) > MAX_EFFECTS:
         warning = (
-            f"effect rows exceeded {MAX_EFFECTS} in one state; "
-            "deep card piles dropped (constants.MAX_EFFECTS)"
+            f"Effect rows exceeded {MAX_EFFECTS} in one state; "
+            "deep Card piles dropped (constants.MAX_EFFECTS)"
         )
         if warning not in _WARNED_OVERFLOW:
             _WARNED_OVERFLOW.add(warning)
@@ -492,7 +535,7 @@ def _encode_tokens_into(
 
     if len(modifier_rows) > MAX_MODIFIERS:
         warning = (
-            f"modifier rows exceeded {MAX_MODIFIERS} in one state; "
+            f"Modifier rows exceeded {MAX_MODIFIERS} in one state; "
             "dropped (constants.MAX_MODIFIERS)"
         )
         if warning not in _WARNED_OVERFLOW:

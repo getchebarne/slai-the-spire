@@ -6,8 +6,8 @@ import shutil
 
 import torch
 
-from src.rl.algorithms.actor_critic.progress import RunState
 from src.rl.models import ActorCritic
+from src.rl.types import RunState
 
 
 def experiment_dir(exp_name: str) -> str:

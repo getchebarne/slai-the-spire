@@ -30,9 +30,9 @@ from src.rl.algorithms.actor_critic.metrics import log_iteration
 from src.rl.algorithms.actor_critic.ppo import PPOConfig
 from src.rl.algorithms.actor_critic.ppo import adapt_lr_scale
 from src.rl.algorithms.actor_critic.ppo import update_ppo
-from src.rl.algorithms.actor_critic.progress import RunState
 from src.rl.models import ActorCritic
 from src.rl.models.actor_critic import compile_hot_paths
+from src.rl.types import RunState
 from src.rl.utils import init_optimizer
 from src.rl.utils import set_rng_seeds
 

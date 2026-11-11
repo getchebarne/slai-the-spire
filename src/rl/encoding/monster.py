@@ -1,44 +1,98 @@
+import math
+
 import numpy as np
+from slai import Effect
+from slai import IntentKind
 from slai import ModifierKind
 from slai import Monster
+from slai import MonsterName
+from slai import get_monster_templates
 
+from src.rl.constants import FACTOR_VULN
 from src.rl.constants import GOLD_STOLEN_MAX
+from src.rl.constants import HEALTH_MAX_ENTITY
+from src.rl.constants import INTENT_DAMAGE_HIT_MAX
+from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
+from src.rl.constants import INTENT_INSTANCES_MAX
 from src.rl.constants import INVINCIBLE_STACKS_OF_ASCENSION
+from src.rl.constants import MONSTER_MOVESET_MAX
+from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
-from src.rl.schema.monster import DAMAGE_MAX
-from src.rl.schema.monster import DAMAGE_TOTAL_MAX
-from src.rl.schema.monster import HEALTH_MAX
-from src.rl.schema.monster import INSTANCES_MAX
-from src.rl.schema.monster import INTENT_BLOCK_KINDS
-from src.rl.schema.monster import INTENT_BUFF_KINDS
-from src.rl.schema.monster import INTENT_DEBUFF_KINDS
-from src.rl.schema.monster import LINEAR_SQRT_THRESHOLD
-from src.rl.schema.monster import MAP_INTENT_KIND
-from src.rl.schema.monster import MAP_MONSTER_NAME
-from src.rl.schema.monster import OFF_MONSTER_GOLD_STOLEN
-from src.rl.schema.monster import OFF_MONSTER_HALF_DEAD
-from src.rl.schema.monster import OFF_MONSTER_HEALTH_FRACTION
-from src.rl.schema.monster import OFF_MONSTER_HIT_FULLY_BLOCKED
-from src.rl.schema.monster import OFF_MONSTER_HIT_IS_LETHAL
-from src.rl.schema.monster import OFF_MONSTER_INTENT_DAMAGE
-from src.rl.schema.monster import OFF_MONSTER_INTENT_DAMAGE_SCALAR
-from src.rl.schema.monster import OFF_MONSTER_INTENT_DAMAGE_TOTAL
-from src.rl.schema.monster import OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR
-from src.rl.schema.monster import OFF_MONSTER_INTENT_HAS_BLOCK
-from src.rl.schema.monster import OFF_MONSTER_INTENT_HAS_BUFF
-from src.rl.schema.monster import OFF_MONSTER_INTENT_HAS_DEBUFF
-from src.rl.schema.monster import OFF_MONSTER_INTENT_HIDDEN
-from src.rl.schema.monster import OFF_MONSTER_INTENT_INSTANCES
-from src.rl.schema.monster import OFF_MONSTER_INTENT_KIND
-from src.rl.schema.monster import OFF_MONSTER_MAX_HEALTH_MAGNITUDE
-from src.rl.schema.monster import OFF_MONSTER_MOVE_CURRENT
-from src.rl.schema.monster import OFF_MONSTER_MOVE_PREV_1
-from src.rl.schema.monster import OFF_MONSTER_MOVE_PREV_2
-from src.rl.schema.monster import OFF_MONSTER_NAME
-from src.rl.schema.monster import OFF_MONSTER_POISON_IS_LETHAL
-from src.rl.schema.monster import OFF_MONSTER_REPLAY_TARGET
-from src.rl.schema.monster import OFF_MONSTER_ULTIMATE_USED
-from src.rl.schema.scalars import get_piecewise_bucket
+
+
+_MAP_MONSTER_NAME = {name: int(name) for name in MonsterName.members()}
+_MAP_INTENT_KIND = {intent_kind: int(intent_kind) for intent_kind in IntentKind.members()}
+_INTENT_BLOCK_KINDS = {
+    IntentKind.Block,
+    IntentKind.AttackBlock,
+    IntentKind.BlockBuff,
+    IntentKind.BlockDebuff,
+}
+_INTENT_BUFF_KINDS = {IntentKind.Buff, IntentKind.AttackBuff, IntentKind.BlockBuff}
+_INTENT_DEBUFF_KINDS = {
+    IntentKind.Debuff,
+    IntentKind.AttackDebuff,
+    IntentKind.DebuffPowerful,
+    IntentKind.BlockDebuff,
+}
+
+# Normalization caps, catalog-anchored
+_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_HIT_MAX * FACTOR_VULN)  # Widest hit, Vulnerable-scaled
+_DAMAGE_TOTAL_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)  # Widest turn, likewise
+_INSTANCES_MAX = INTENT_INSTANCES_MAX
+_HEALTH_MAX = HEALTH_MAX_ENTITY  # The Transient's 999
+
+_LINEAR_SQRT_THRESHOLD = 18
+_DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
+_DAMAGE_TOTAL_DIM = get_piecewise_dim(0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
+
+
+# Health/block is not here: it is the combatants' health/block columns (health_block.py)
+
+
+_CHANNEL_LAYOUT_MONSTER, _alloc = make_channel_allocator()
+_OFF_MONSTER_NAME = _alloc("name", len(_MAP_MONSTER_NAME))
+_OFF_MONSTER_INTENT_DAMAGE = _alloc("intent_damage", _DAMAGE_DIM)
+_OFF_MONSTER_INTENT_DAMAGE_SCALAR = _alloc("intent_damage_scalar")
+_OFF_MONSTER_INTENT_INSTANCES = _alloc("intent_instances")
+_OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc(
+    "intent_damage_total", _DAMAGE_TOTAL_DIM
+)  # Damage x instances
+_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR = _alloc("intent_damage_total_scalar")
+_OFF_MONSTER_INTENT_HAS_BLOCK = _alloc("intent_has_block")
+_OFF_MONSTER_INTENT_HAS_BUFF = _alloc("intent_has_buff")
+_OFF_MONSTER_INTENT_HAS_DEBUFF = _alloc("intent_has_debuff")
+_OFF_MONSTER_HIT_FULLY_BLOCKED = _alloc("hit_fully_blocked")
+_OFF_MONSTER_HIT_IS_LETHAL = _alloc("hit_is_lethal")
+_OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
+_OFF_MONSTER_HEALTH_FRACTION = _alloc("health_fraction")
+_OFF_MONSTER_POISON_IS_LETHAL = _alloc(
+    "poison_is_lethal"
+)  # Its next turn start's Poison tick kills it
+_OFF_MONSTER_GOLD_STOLEN = _alloc("gold_stolen")
+_OFF_MONSTER_INTENT_KIND = _alloc("intent_kind", len(_MAP_INTENT_KIND))
+_OFF_MONSTER_INTENT_HIDDEN = _alloc(
+    "intent_hidden"
+)  # Runic Dome: every intent channel and hit flag reads 0
+_OFF_MONSTER_MOVE_CURRENT = _alloc(
+    "move_current", MONSTER_MOVESET_MAX
+)  # Index into the spawn-rolled moveset
+_OFF_MONSTER_MOVE_PREV_1 = _alloc(
+    "move_prev_1", MONSTER_MOVESET_MAX
+)  # One move back (move_history's last entry is the current move)
+_OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MONSTER_MOVESET_MAX)
+_OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")  # A waiting replay aims at it
+_OFF_MONSTER_HALF_DEAD = _alloc(
+    "half_dead"
+)  # Health and block read 0, no Card can target it (Awakened One, Darkling)
+_OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")  # Its once-per-Combat move has executed
+
+ENCODING_DIM_MONSTER = sum(w for _, w in _CHANNEL_LAYOUT_MONSTER)
+
+# Most nonzero columns a Monster row holds: one per channel, each a one-hot or a scalar
+ENCODING_DIM_SPARSE_MONSTER = len(_CHANNEL_LAYOUT_MONSTER)
 
 
 def _intent_total_damage(monster: Monster) -> int:
@@ -56,12 +110,12 @@ def encode_monster_into(
     ascension: int,
     out: np.ndarray,
 ) -> None:
-    out[OFF_MONSTER_NAME + MAP_MONSTER_NAME[monster.name]] = 1.0
-    out[OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(monster.health_max, HEALTH_MAX)
-    out[OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
-    out[OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
-    out[OFF_MONSTER_HALF_DEAD] = float(monster.half_dead)
-    out[OFF_MONSTER_ULTIMATE_USED] = float(monster.ultimate_used)
+    out[_OFF_MONSTER_NAME + _MAP_MONSTER_NAME[monster.name]] = 1.0
+    out[_OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
+    out[_OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
+    out[_OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
+    out[_OFF_MONSTER_HALF_DEAD] = float(monster.half_dead)
+    out[_OFF_MONSTER_ULTIMATE_USED] = float(monster.ultimate_used)
 
     # Poison-is-lethal
     stacks_of_modifier_kind = {modifier.kind: modifier.stacks for modifier in monster.modifiers}
@@ -72,57 +126,57 @@ def encode_monster_into(
         poison_health_loss = min(poison_health_loss, 1)
     elif ModifierKind.Invincible in stacks_of_modifier_kind:
         poison_health_loss = min(poison_health_loss, INVINCIBLE_STACKS_OF_ASCENSION[ascension])
-    out[OFF_MONSTER_POISON_IS_LETHAL] = float(
+    out[_OFF_MONSTER_POISON_IS_LETHAL] = float(
         poison_health_loss > 0 and poison_health_loss >= monster.health
     )
 
     # Stolen gold
-    out[OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, GOLD_STOLEN_MAX)
+    out[_OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, GOLD_STOLEN_MAX)
 
     # Intent
     intent = monster.intent
     if intent is None:
-        out[OFF_MONSTER_INTENT_HIDDEN] = 1.0
+        out[_OFF_MONSTER_INTENT_HIDDEN] = 1.0
     else:
         damage = intent.damage or 0
-        damage_bucket = get_piecewise_bucket(damage, 0, DAMAGE_MAX, LINEAR_SQRT_THRESHOLD)
-        out[OFF_MONSTER_INTENT_DAMAGE + damage_bucket] = 1.0
+        damage_bucket = get_piecewise_bucket(damage, 0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
+        out[_OFF_MONSTER_INTENT_DAMAGE + damage_bucket] = 1.0
 
         total_damage = _intent_total_damage(monster)
-        out[OFF_MONSTER_INTENT_DAMAGE_SCALAR] = min(damage, DAMAGE_MAX) / DAMAGE_MAX
-        out[OFF_MONSTER_INTENT_INSTANCES] = (
-            min(intent.instances or 0, INSTANCES_MAX) / INSTANCES_MAX
+        out[_OFF_MONSTER_INTENT_DAMAGE_SCALAR] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
+        out[_OFF_MONSTER_INTENT_INSTANCES] = (
+            min(intent.instances or 0, _INSTANCES_MAX) / _INSTANCES_MAX
         )
         total_damage_bucket = get_piecewise_bucket(
-            total_damage, 0, DAMAGE_TOTAL_MAX, LINEAR_SQRT_THRESHOLD
+            total_damage, 0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD
         )
-        out[OFF_MONSTER_INTENT_DAMAGE_TOTAL + total_damage_bucket] = 1.0
-        out[OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = (
-            min(total_damage, DAMAGE_TOTAL_MAX) / DAMAGE_TOTAL_MAX
+        out[_OFF_MONSTER_INTENT_DAMAGE_TOTAL + total_damage_bucket] = 1.0
+        out[_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = (
+            min(total_damage, _DAMAGE_TOTAL_MAX) / _DAMAGE_TOTAL_MAX
         )
-        out[OFF_MONSTER_INTENT_HAS_BLOCK] = float(intent.kind in INTENT_BLOCK_KINDS)
-        out[OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in INTENT_BUFF_KINDS)
-        out[OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in INTENT_DEBUFF_KINDS)
-        out[OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
-        out[OFF_MONSTER_HIT_IS_LETHAL] = float(
+        out[_OFF_MONSTER_INTENT_HAS_BLOCK] = float(intent.kind in _INTENT_BLOCK_KINDS)
+        out[_OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in _INTENT_BUFF_KINDS)
+        out[_OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in _INTENT_DEBUFF_KINDS)
+        out[_OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
+        out[_OFF_MONSTER_HIT_IS_LETHAL] = float(
             get_outgoing_damage >= character_health + character_block
         )
 
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
-        out[OFF_MONSTER_INTENT_KIND + MAP_INTENT_KIND[intent.kind]] = 1.0
+        out[_OFF_MONSTER_INTENT_KIND + _MAP_INTENT_KIND[intent.kind]] = 1.0
 
     # Move identity: the current move + the two before it
     if monster.move_current is not None:
-        out[OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
+        out[_OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
 
     # Under Runic Dome the history holds only the executed moves: no current
     # entry ends it, so the previous ones sit at [-1] and [-2]
     shift = 0 if intent is None else 1
     move_history = monster.move_history
     if len(move_history) >= 1 + shift:
-        out[OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
+        out[_OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
     if len(move_history) >= 2 + shift:
-        out[OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
+        out[_OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
 
 
 def get_outgoing_damage(monsters: list[Monster]) -> int | None:
@@ -131,3 +185,36 @@ def get_outgoing_damage(monsters: list[Monster]) -> int | None:
         return None
 
     return sum(_intent_total_damage(monster) for monster in monsters)
+
+
+# Whole-moveset Effects per (ascension, MonsterName), collected once (one entry
+# per distinct move)
+_MOVESET_EFFECTS: dict[int, dict[MonsterName, tuple[Effect, ...]]] = {}
+
+
+def moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
+    """Return each Monster's catalog Effects at the requested ascension.
+
+    Repeated moves contribute their Effects once. The catalog is collected once per ascension.
+
+    Parameters
+    ----------
+    ascension : int
+        The ascension whose Monster templates supply the movesets.
+
+    Returns
+    -------
+    dict[MonsterName, tuple[Effect, ...]]
+        Each Monster name's Effects in moveset order, shared with the catalog cache.
+    """
+    by_name = _MOVESET_EFFECTS.get(ascension)
+    if by_name is None:
+        by_name = {
+            template.name: tuple(
+                effect for move in dict.fromkeys(template.moves) for effect in move.effects
+            )
+            for template in get_monster_templates(ascension)
+        }
+        _MOVESET_EFFECTS[ascension] = by_name
+
+    return by_name
