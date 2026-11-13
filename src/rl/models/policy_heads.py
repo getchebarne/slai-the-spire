@@ -78,7 +78,7 @@ class PolicyHeads(nn.Module):
         self._head_level_3 = HeadPointerSelect(dim_global, dim_entity, dim_key)
 
         # `ActionType` embedding for the L2 / L3 pointer selection
-        self._action_type_embedding = nn.Embedding(NUM_ACTION_TYPES, dim_op)
+        self._action_type_emb = nn.Embedding(NUM_ACTION_TYPES, dim_op)
 
         # One key net per selectable `EntityKind` (all but the Character)
         self._pointer_key_card = PointerKeys(dim_entity, dim_key)
@@ -140,7 +140,7 @@ class PolicyHeads(nn.Module):
         PolicyOutput
             Each state's action, selected or recorded, and each level's statistics.
         """
-        refined = core_output.tokens
+        jag_refined = core_output.tokens
         x_legal_action_type = state_batch.x_legal_action_type
 
         # The recorded actions' columns, or None when selecting
@@ -148,9 +148,9 @@ class PolicyHeads(nn.Module):
             x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 3
         )
 
-        # Select the `ActionType` for every row — one masked categorical, focus-gated.
+        # Select the `ActionType` for every row — one masked categorical, focus-gated
         x_logits = self._head_action_type(
-            core_output.x_policy_context, focus_view(state_batch.x_context), x_legal_action_type
+            core_output.x_global, focus_view(state_batch.x_context), x_legal_action_type
         )
         x_action_type, x_log_prob_l1, x_entropy_l1, x_kl_uniform_l1 = _categorical_step(
             x_logits, x_legal_action_type, x_recorded_action_type, greedy, generator
@@ -158,7 +158,7 @@ class PolicyHeads(nn.Module):
 
         # Each token's state
         x_state_window = torch.repeat_interleave(
-            refined.x_lengths, output_size=refined.rows.shape[0]
+            jag_refined.x_lengths, output_size=jag_refined.rows.shape[0]
         )  # (N,)
 
         # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's
@@ -168,7 +168,7 @@ class PolicyHeads(nn.Module):
         x_state = x_state_window[x_order]
 
         # The split hands each class its rows
-        x_rows_of_entity_kind = refined.rows[x_order].split(entity_counts)
+        x_rows_of_entity_kind = jag_refined.rows[x_order].split(entity_counts)
         grouped_rows = _GroupedRows(x_order, x_state, x_rows_of_entity_kind, entity_counts)
 
         # Compute the `Action`'s selections from the chosen `ActionType`
@@ -298,8 +298,8 @@ class PolicyHeads(nn.Module):
         # Calculate the rows' logits & select from each state's
         x_logits = self._head_level_2(
             x_keys,
-            core_output.x_policy_context,
-            self._action_type_embedding(x_action_type),
+            core_output.x_global,
+            self._action_type_emb(x_action_type),
             x_state,
             x_mask_rows,
         )
@@ -467,7 +467,7 @@ class PolicyHeads(nn.Module):
         # Calculate the choices' logits & select from each state's
         x_logits = self._head_level_3(
             x_keys,
-            core_output.x_policy_context,
+            core_output.x_global,
             core_output.tokens.rows[x_token_selected],
             x_choice_state,
             x_mask_l3,

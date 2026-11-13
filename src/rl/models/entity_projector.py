@@ -110,7 +110,7 @@ class EntityProjector(nn.Module):
 
         Returns
         -------
-        projected : Jagged[torch.Tensor]
+        jag_projected : Jagged[torch.Tensor]
             The (N_tok, D) token embeddings, grouped by state in window order.
         x_effect_pending : torch.Tensor
             (B, D). Each state's embedded pending halt, zero where none is pending.
@@ -124,7 +124,6 @@ class EntityProjector(nn.Module):
         )
 
         # Rooms: each Room token's node features, through _pre_room in place of the first layer
-        # (no entries, no Entity kind bias)
         num_rooms = x_room_hidden.shape[0]
         x_room_row = torch.nonzero_static(tokens.x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)

@@ -29,13 +29,11 @@ from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
-from src.rl.encoding.context import focus_view
 from src.rl.encoding.effect import encode_batch_effect_pending_into
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
@@ -61,6 +59,8 @@ from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_price_into
 from src.rl.encoding.sparse import encode_sparse_into
+from src.rl.tokens import draw_order_visible
+from src.rl.tokens import get_card_entities
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
@@ -241,10 +241,6 @@ def _encode_counts_into(states: StateBatchReserved) -> None:
     state_counts.x_jagged_count.numpy()[:] = np.stack(
         list(_iter_jagged_counts(states, np_count_state)), axis=1
     )
-
-    # Whether Frozen Eye shows its draw pile's order, as its context holds it
-    np_draw_order_visible = focus_view(states.x_context)[:, OFF_FOCUS_DRAW_ORDER_VISIBLE].numpy()
-    state_counts.x_draw_order_visible.numpy()[:] = np_draw_order_visible > 0
 
 
 def _iter_jagged_counts(value: Any, np_count_parent: np.ndarray) -> Iterator[np.ndarray]:
@@ -440,6 +436,14 @@ def _encode_tokens_into(
     modifier_rows: list[ModifierRow] = []
     row_of_entity_id: dict[int, int] = {}
 
+    # Under Frozen Eye, each draw pile Card's depth by its id: the Cards above it
+    draw_depth_of_card_id: dict[int, int] = {}
+    if draw_order_visible(game_state):
+        cards_draw = get_card_entities(TokenKind.CARD_PILE_DRAW, game_state)
+        draw_depth_of_card_id = {
+            card.id: draw_depth for draw_depth, card in enumerate(reversed(cards_draw))
+        }
+
     # The rows at each Entity kind's columns, then at the Health/Block, Price and Slot columns
     np_token_card = np_token[:, _COL_START_CARD:COL_START_RELIC]
     np_token_relic = np_token[:, COL_START_RELIC:COL_START_POTION]
@@ -464,7 +468,12 @@ def _encode_tokens_into(
 
         match entity:
             case Card():
-                encode_card_into_w_cache(entity, energy_current, np_token_card[row])
+                # Draw depth. Visible under Frozen Eye
+                draw_depth = None
+                if token_kind is TokenKind.CARD_PILE_DRAW:
+                    draw_depth = draw_depth_of_card_id.get(entity.id)
+
+                encode_card_into_w_cache(entity, energy_current, draw_depth, np_token_card[row])
 
                 # Tags. Shared w/ Relics and Potions
                 for tag in TAGS_OF_CARD_NAME.get(entity.name, ()):
