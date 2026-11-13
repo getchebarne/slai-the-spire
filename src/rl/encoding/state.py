@@ -1,5 +1,8 @@
 import warnings
+from collections.abc import Iterator
 from collections.abc import Sequence
+from dataclasses import fields
+from typing import Any
 
 import numpy as np
 import torch
@@ -13,12 +16,11 @@ from slai import Modifier
 from slai import Monster
 from slai import Potion
 from slai import Relic
-from slai import Room
 
-from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
 from src.rl.constants import MAX_MONSTERS
+from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
 from src.rl.encoding.card import TAGS_OF_CARD_NAME
@@ -27,11 +29,13 @@ from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
+from src.rl.encoding.context import focus_view
 from src.rl.encoding.effect import encode_batch_effect_pending_into
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
@@ -140,6 +144,18 @@ _TOKEN_KINDS_ID_LOOKUP = frozenset(TokenKind) - {
     TokenKind.CARD_PLAY_QUEUE,
 }
 
+# Each token kind's Entity kind
+_MAP_TOKEN_KIND_TO_ENTITY_KIND = {
+    token_kind: entity_kind
+    for entity_kind, token_kinds in TOKEN_KINDS_OF_ENTITY_KIND.items()
+    for token_kind in token_kinds
+}
+
+# The same, as the table the token writer indexes by token kind
+_ENTITY_KIND_OF_TOKEN_KIND = np.array(
+    [_MAP_TOKEN_KIND_TO_ENTITY_KIND[token_kind] for token_kind in TokenKind], dtype=np.int16
+)
+
 
 def encode_states_into(
     states: StateBatchReserved,
@@ -167,7 +183,7 @@ def encode_states_into(
     batch_tokens, batch_row_of_entity_id = _encode_batch_tokens_into(
         x_token_lengths=states.tokens.x_lengths,
         x_token_kind=tokens.x_token_kind,
-        x_node_idx=tokens.x_node_idx,
+        x_entity_kind=tokens.x_entity_kind,
         token_features=tokens.features,
         effects=tokens.effects,
         modifiers=tokens.modifiers,
@@ -198,11 +214,74 @@ def encode_states_into(
 
     encode_batch_effect_pending_into(states.effect_pending, batch_game_state)
 
+    # The counts last: they total the rows written above
+    _encode_counts_into(states)
+
+
+def _encode_counts_into(states: StateBatchReserved) -> None:
+    """Write each state's counts from the rows the pass has written.
+
+    Parameters
+    ----------
+    states : StateBatchReserved
+        The reusable CPU capacity, its rows written.
+    """
+    state_counts = states.state_counts
+
+    # Its tokens of each token kind
+    np_count_tokens = states.tokens.x_lengths.numpy()  # (B,)
+    np_token_state = np.repeat(np.arange(len(np_count_tokens)), np_count_tokens)  # (N_tok,)
+    np_token_kind = states.tokens.rows.x_token_kind[: len(np_token_state)].numpy()
+    np_token_kind_count = state_counts.x_token_kind_count.numpy()
+    np_token_kind_count.fill(0)
+    np.add.at(np_token_kind_count, (np_token_state, np_token_kind), 1)
+
+    # Its rows in each Jagged, in Jagged order: each state is one row at the top
+    np_count_state = np.ones(len(np_count_tokens), dtype=np.int64)
+    state_counts.x_jagged_count.numpy()[:] = np.stack(
+        list(_iter_jagged_counts(states, np_count_state)), axis=1
+    )
+
+    # Whether Frozen Eye shows its draw pile's order, as its context holds it
+    np_draw_order_visible = focus_view(states.x_context)[:, OFF_FOCUS_DRAW_ORDER_VISIBLE].numpy()
+    state_counts.x_draw_order_visible.numpy()[:] = np_draw_order_visible > 0
+
+
+def _iter_jagged_counts(value: Any, np_count_parent: np.ndarray) -> Iterator[np.ndarray]:
+    """Yield, depth first in field order, each Jagged's rows per state under `value`.
+
+    Parameters
+    ----------
+    value : Any
+        A tensor, a reserved table or a nested dataclass record of them.
+    np_count_parent : np.ndarray
+        (B,). Each state's rows at `value`'s level.
+
+    Yields
+    ------
+    np.ndarray
+        (B,) int64. A Jagged's rows per state.
+    """
+    if isinstance(value, torch.Tensor):
+        return
+
+    if isinstance(value, JaggedReserved):
+        # A state's rows in this Jagged: the lengths of its rows one level up, summed
+        np_off = np.concatenate(([0], np.cumsum(np_count_parent)))  # (B + 1,)
+        np_lengths = value.x_lengths[: np_off[-1]].numpy()
+        np_count = np.diff(np.concatenate(([0], np.cumsum(np_lengths, dtype=np.int64)))[np_off])
+        yield np_count
+        yield from _iter_jagged_counts(value.rows, np_count)
+
+    else:
+        for field in fields(value):
+            yield from _iter_jagged_counts(getattr(value, field.name), np_count_parent)
+
 
 def _encode_batch_tokens_into(
     x_token_lengths: torch.Tensor,
     x_token_kind: torch.Tensor,
-    x_node_idx: torch.Tensor,
+    x_entity_kind: torch.Tensor,
     token_features: SparseReserved,
     effects: JaggedReserved[SparseReserved],
     modifiers: JaggedReserved[SparseReserved],
@@ -216,8 +295,8 @@ def _encode_batch_tokens_into(
         (B,) long. Each state's number of tokens, written in place.
     x_token_kind : torch.Tensor
         (token capacity,) int16. Each token's kind, written in place.
-    x_node_idx : torch.Tensor
-        (token capacity,) int16. Each Room token's Map node, written in place.
+    x_entity_kind : torch.Tensor
+        (token capacity,) int16. Each token's Entity kind, written in place.
     token_features : SparseReserved
         One row per token.
     effects : JaggedReserved[SparseReserved]
@@ -251,10 +330,6 @@ def _encode_batch_tokens_into(
     )  # (N_tok, ENCODING_DIM_TOKEN)
     np_token_kind = x_token_kind[:num_tokens].numpy()
 
-    # Initialize an array to store each Room token's Map node; 0 on every other token
-    np_node_idx = x_node_idx[:num_tokens].numpy()
-    np_node_idx.fill(0)
-
     # Initialize lists to store owned rows (Effects, Modifiers)
     batch_effect_rows: list[EffectRow] = []
     batch_modifier_rows: list[ModifierRow] = []
@@ -267,7 +342,7 @@ def _encode_batch_tokens_into(
         batch_game_state, batch_tokens, np.cumsum(np_count_tokens) - np_count_tokens
     ):
         effect_rows, modifier_rows, row_of_entity_id = _encode_tokens_into(
-            game_state, tokens, start_idx, np_token, np_token_kind, np_node_idx
+            game_state, tokens, start_idx, np_token, np_token_kind
         )
 
         # Accumlate Effect and Modifier rows
@@ -276,6 +351,9 @@ def _encode_batch_tokens_into(
 
         # Accumulate the Entity ids
         batch_row_of_entity_id.append(row_of_entity_id)
+
+    # Each token's Entity kind, its token kind's
+    x_entity_kind[:num_tokens].numpy()[:] = _ENTITY_KIND_OF_TOKEN_KIND[np_token_kind]
 
     # The Effect rows scale after they're written: over the whole block at once
     np_eff_rows = np.zeros((len(batch_effect_rows), ENCODING_DIM_EFFECT), dtype=np.float32)
@@ -318,14 +396,13 @@ def _encode_tokens_into(
     start_idx: int,
     np_token: np.ndarray,
     np_token_kind: np.ndarray,
-    np_node_idx: np.ndarray,
 ) -> tuple[list[EffectRow], list[ModifierRow], dict[int, int]]:
     """Write a state's tokens into their rows from `start_idx` on.
 
     Each token goes at its Entity kind's columns, a combatant's health/block at the health/block
     columns, a Shop token's price at the price columns, a Monster's slot and a stasis Card's
-    holder's at the slot columns, a Card's, Relic's or Potion's Tags at the Tag columns and a
-    Room's Map node into `np_node_idx`.
+    holder's at the slot columns and a Card's, Relic's or Potion's Tags at the Tag columns. A
+    Room has no columns: the model reads the Map network's output there.
 
     Parameters
     ----------
@@ -340,9 +417,6 @@ def _encode_tokens_into(
         place.
     np_token_kind : np.ndarray
         (N_tok,) int16. The batch's token kinds; the state's are written in place.
-    np_node_idx : np.ndarray
-        (N_tok,) int16. The batch's tokens' Map nodes; the state's Room tokens' are written in
-        place.
 
     Returns
     -------
@@ -511,10 +585,6 @@ def _encode_tokens_into(
                     modifier_rows += [
                         (row, modifier, ModifierOwner.CHARACTER) for modifier in entity.modifiers
                     ]
-            
-            case Room():
-                # Its Map node: no columns, the model reads the Map network's output there
-                np_node_idx[row] = entity.y * MAP_WIDTH + entity.x
 
     # Cap Effect and Modifier rows and return them
     if len(effect_rows) > MAX_EFFECTS:

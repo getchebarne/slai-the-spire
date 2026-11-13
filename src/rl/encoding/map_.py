@@ -40,6 +40,11 @@ _OFF_MAP_EDGES = _alloc("edges", NUM_EDGE_CHANNELS)
 _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
 
+# The channels above are the Map network's node features; the one below names the Room tokens'
+# nodes
+NUM_FEATURE_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
+OFF_MAP_SELECTABLE = _alloc("selectable")
+
 NUM_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
 
 # GNN-facing view of the edge block (read by `map_encoder.py`)
@@ -179,9 +184,13 @@ def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
 
 
 def encode_map_grid_into(game_state: GameState, out: np.ndarray) -> None:
-    """Copy the cached static grid and stamp the current position into a state's grid."""
+    """Copy the cached static grid and stamp the current position and the selectable Rooms."""
     map_ = game_state.map
     out[:] = _get_static_grid(map_.identity_hash, map_.rooms)
     y_current, x_current = map_.y_current, map_.x_current
     if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
         out[y_current, x_current, OFF_MAP_POSITION] = 1
+
+    # The Room tokens' nodes, in the tokens' order: node order
+    for room in get_room_entities(game_state):
+        out[room.y, room.x, OFF_MAP_SELECTABLE] = 1

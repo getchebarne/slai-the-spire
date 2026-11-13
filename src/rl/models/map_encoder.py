@@ -7,7 +7,9 @@ from src.rl.constants import MAP_WIDTH
 from src.rl.encoding import EDGE_DELTAS
 from src.rl.encoding import NUM_CHANNELS
 from src.rl.encoding import NUM_EDGE_CHANNELS
+from src.rl.encoding import NUM_FEATURE_CHANNELS
 from src.rl.encoding import OFF_MAP_POSITION
+from src.rl.encoding import OFF_MAP_SELECTABLE
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
 
@@ -19,7 +21,7 @@ _NUM_NODES = MAP_HEIGHT * MAP_WIDTH
 _DEDUP_MIN_BATCH = 512
 
 # The dedup's packed rows: the grid's 0/1 cells 63 to an int64 word
-_GRID_BITS = _NUM_NODES * NUM_CHANNELS
+_GRID_BITS = _NUM_NODES * NUM_FEATURE_CHANNELS
 
 
 def _build_child_idx() -> torch.Tensor:
@@ -65,10 +67,8 @@ class MapGNN(nn.Module):
     there is no position bit (before the act's first Room, and in the boss and boss treasure
     Rooms).
 
-    Returns the node features (U, H * W, hidden) of each Map it ran on, the unique Maps on a
-    batch of _DEDUP_MIN_BATCH states or more and every state's on a smaller one, and each state's
-    Map (B,); then the readout (B, hidden): the mean over the Rooms that take part, zero when
-    none does.
+    Returns the selectable Rooms' node features (N_rooms, hidden), in the Room tokens' order;
+    then the readout (B, hidden): the mean over the Rooms that take part, zero when none does.
 
     Parameters
     ----------
@@ -80,7 +80,7 @@ class MapGNN(nn.Module):
 
     def __init__(self, num_layers: int, hidden: int) -> None:
         super().__init__()
-        self._in_proj = nn.Linear(NUM_CHANNELS, hidden)
+        self._in_proj = nn.Linear(NUM_FEATURE_CHANNELS, hidden)
         self._layers = nn.ModuleList(nn.Linear(hidden, hidden) for _ in range(num_layers))
         self._norms = nn.ModuleList(nn.LayerNorm(hidden) for _ in range(num_layers))
 
@@ -93,13 +93,48 @@ class MapGNN(nn.Module):
         # its compiled version on the Learner's model
         self.message_passing = message_passing
 
-    def forward(self, x_grid: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x_grid: torch.Tensor, num_rooms: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the message passing over `x_grid`'s Maps.
 
         Parameters
         ----------
         x_grid : torch.Tensor
             (B, H, W, C) uint8. Each state's Map.
+        num_rooms : int
+            The number of selectable Rooms over the batch, N_rooms.
+
+        Returns
+        -------
+        x_room_hidden : torch.Tensor
+            (N_rooms, hidden). The selectable Rooms' node features, state after state and each
+            state's in node order: the Room tokens' order.
+        x_map_readout : torch.Tensor
+            (B, hidden). Each state's readout.
+        """
+        batch_size = x_grid.shape[0]
+
+        # Flatten grid from (B, H, W, C) -> (B, H * W, C)
+        x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
+        x_hidden_map, x_map_of_state, x_map_readout = self._encode_maps(
+            x_nodes[:, :, :NUM_FEATURE_CHANNELS]
+        )
+
+        # The selectable Rooms' nodes, state after state and each state's in node order
+        x_selectable = x_nodes[:, :, OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
+        x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
+        x_room_state = x_room // _NUM_NODES
+        x_room_node = x_room % _NUM_NODES
+        return x_hidden_map[x_map_of_state[x_room_state], x_room_node], x_map_readout
+
+    def _encode_maps(
+        self, x_nodes: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run the message passing over the Maps, each distinct one once on a large batch.
+
+        Parameters
+        ----------
+        x_nodes : torch.Tensor
+            (B, H * W, NUM_FEATURE_CHANNELS) uint8. Each state's Map, flattened to nodes.
 
         Returns
         -------
@@ -111,14 +146,11 @@ class MapGNN(nn.Module):
         x_map_readout : torch.Tensor
             (B, hidden). Each state's readout.
         """
-        batch_size = x_grid.shape[0]
-
-        # Flatten grid from (B, H, W, C) -> (B, H * W, C)
-        x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
+        batch_size = x_nodes.shape[0]
 
         if batch_size < _DEDUP_MIN_BATCH:
             x_hidden, x_readout = self.message_passing(self, x_nodes)
-            return x_hidden, torch.arange(batch_size, device=x_grid.device), x_readout
+            return x_hidden, torch.arange(batch_size, device=x_nodes.device), x_readout
 
         # The game sits on one Map node for many steps, so its grid repeats across a minibatch:
         # run the GNN on unique grids once and gather back (exact)
@@ -128,8 +160,8 @@ class MapGNN(nn.Module):
         # x_inverse: (B,) / x_inverse[b] ∈ [0, U). Maps each batch sample to its unique ID
         x_uniq, x_inverse = torch.unique(x_packed, dim=0, return_inverse=True)
 
-        x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_grid.device)
-        x_rep[x_inverse] = torch.arange(batch_size, device=x_grid.device)
+        x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_nodes.device)
+        x_rep[x_inverse] = torch.arange(batch_size, device=x_nodes.device)
 
         # Encode the unique Maps, and gather the readout back
         x_hidden, x_readout_uniq = self.message_passing(self, x_nodes[x_rep])

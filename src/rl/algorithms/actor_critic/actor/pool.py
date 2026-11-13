@@ -397,7 +397,6 @@ def _collect_rollout(
         The episodes finished during the rollout.
     """
     state_batches: list[StateBatch] = []  # Per step, in state order
-    x_count_cpus: list[torch.Tensor] = []  # Their counts, on the CPU
     x_action_batches: list[torch.Tensor] = []  # Per step, (E, 3) on the device
     x_log_prob_batches: list[torch.Tensor] = []  # Per step, (E,) on the device
     x_reward_batches: list[torch.Tensor] = []  # Per step, (E, K) on the CPU
@@ -406,10 +405,10 @@ def _collect_rollout(
 
     # Turn off gradient computation
     with torch.no_grad():
-        state_batch, x_counts_cpu = snapshot_to_device(workers, device)
+        state_batch, state_counts_cpu = snapshot_to_device(workers, device)
         for _ in range(rollout_config.rollout_length):
             # Forward pass, policy only
-            policy_output = model.act(state_batch, generator=generator)
+            policy_output = model.act(state_batch, state_counts_cpu, generator=generator)
             x_step_actions = policy_output.x_actions
 
             # Step the worker's environments
@@ -419,20 +418,18 @@ def _collect_rollout(
 
             # Append the step's data
             state_batches.append(state_batch)
-            x_count_cpus.append(x_counts_cpu)
             x_action_batches.append(x_step_actions)
             x_log_prob_batches.append(policy_output.x_log_prob.sum(-1))
             x_reward_batches.append(x_step_rewards)
             x_done_batches.append(x_step_dones)
             episode_results.extend(step_episode_results)
 
-            # Snapshot new state and Jagged counts for the next step
-            state_batch, x_counts_cpu = snapshot_to_device(workers, device)
+            # Snapshot new state and its counts for the next step
+            state_batch, state_counts_cpu = snapshot_to_device(workers, device)
 
     return (
         Rollout(
             state_batch=cat_states(state_batches),
-            x_counts_cpu=torch.cat(x_count_cpus),
             x_actions=torch.cat(x_action_batches),
             x_log_probs_behavior=torch.cat(x_log_prob_batches),
             x_rewards=torch.stack(x_reward_batches).to(device),

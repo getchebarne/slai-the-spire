@@ -12,6 +12,7 @@ from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import CoreOutput
 from src.rl.types import Jagged
 from src.rl.types import StateBatch
+from src.rl.types import StateCounts
 from src.rl.types import TokenKind
 
 
@@ -23,7 +24,6 @@ _COUNT_TOKEN_KINDS = tuple(
 
 
 class Core(nn.Module):
-    # The buffers __init__ registers, typed for mypy
     _x_count_token_kinds: torch.Tensor
     _x_count_norm: torch.Tensor
     _x_is_reward: torch.Tensor
@@ -40,42 +40,44 @@ class Core(nn.Module):
     ) -> None:
         super().__init__()
 
+        # Entity projector
         self._entity_projector = EntityProjector(dim_entity, map_encoder_dim)
+
+        # Entity transformer
         self._entity_transformer = EntityTransformer(
             dim_entity, transformer_dim_ff, transformer_num_heads, transformer_num_blocks
         )
 
-        # Draw order: the value head reads the layer on every ordered pile, the policy only under
-        # Frozen Eye
+        # Draw order layer
         self._draw_order_layer = DrawOrderLayer(
             dim_entity, transformer_dim_ff, transformer_num_heads
         )
 
-        # Token identity: one row per TokenKind, looked up by the window's token kind row
+        # Token identity: one row per `TokenKind`, looked up by the window's token kind row
         self._type_emb = nn.Embedding(len(TokenKind), dim_entity)
+
+        # Map GNN
         self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim)
 
         # Global context: global token + Character + Map readout + token-kind counts + raw flats
-        global_input_dim = (
-            dim_entity  # Global token (attention-aggregated Entities)
-            + dim_entity  # Character (refined singleton)
-            + map_encoder_dim  # Map GNN readout (whole-graph summary)
+        dim_global_input = (
+            dim_entity                 # Global token (attention-aggregated Entities)
+            + dim_entity               # Character (refined singleton)
+            + map_encoder_dim          # Map GNN readout (whole-graph summary)
             + len(_COUNT_TOKEN_KINDS)  # Per-token-kind token counts, sqrt-normalized by their caps
-            + ENCODING_DIM_CONTEXT  # Raw per-state features, in their established column order
-            + dim_entity  # Embedded pending-halt Effect (EntityProjector)
+            + ENCODING_DIM_CONTEXT     # Raw per-state features, in their established column order
+            + dim_entity               # Embedded pending-halt Effect (EntityProjector)
         )
 
-        # Output LN: HeadActionType/HeadValue read this vector without their
-        # own norm, so scale drift here would move logits directly
+        # Global output
         self._global_projection = nn.Sequential(
-            nn.Linear(global_input_dim, dim_global),
+            nn.Linear(dim_global_input, dim_global),
             nn.ReLU(),
             nn.Linear(dim_global, dim_global),
             nn.LayerNorm(dim_global),
         )
 
-        # Count features: token kinds to count and each token kind's cap; derived, so excluded
-        # from checkpoints
+        # Count features
         self.register_buffer(
             "_x_count_token_kinds", torch.tensor(_COUNT_TOKEN_KINDS), persistent=False
         )
@@ -103,13 +105,17 @@ class Core(nn.Module):
         """Initialize the projector's token feature ranges after the general linear init."""
         self._entity_projector.init_token_weights()
 
-    def forward(self, state_batch: StateBatch, with_value: bool = True) -> CoreOutput:
+    def forward(
+        self, state_batch: StateBatch, state_counts_cpu: StateCounts, with_value: bool = True
+    ) -> CoreOutput:
         """Compute the core's output.
 
         Parameters
         ----------
         state_batch : StateBatch
             The game states.
+        state_counts_cpu : StateCounts
+            The states' counts on the CPU, `state_batch.state_counts`.
         with_value : bool, default True
             False runs the draw-order layer only on the states the policy reads, for callers that
             need no value, and leaves `x_value_context` the policy's.
@@ -117,26 +123,33 @@ class Core(nn.Module):
         Returns
         -------
         CoreOutput
-            The policy heads' and the value head's global vectors, the refined token embeddings
-            grouped by state, and their cached index.
+            The policy heads' and the value head's global vectors, and the refined token
+            embeddings grouped by state.
         """
 
-        # Map GNN: each unique Map's node features, each state's Map, and the whole-graph readout
-        x_hidden_map, x_map_of_state, x_map_readout = self._map_gnn(state_batch.x_map_grid)
+        tokens = state_batch.tokens
+        num_tokens = tokens.rows.x_token_kind.shape[0]
+        batch_size = tokens.x_lengths.shape[0]
 
-        # Token embeddings grouped by state, their index, the draw-order layer's states, and the
-        # embedded pending halt
-        projected, index, draw_order, x_effect_pending = self._entity_projector(
-            state_batch, x_hidden_map, x_map_of_state
-        )
+        # Each token's state
+        x_state = torch.repeat_interleave(tokens.x_lengths, output_size=num_tokens)  # (N,)
+
+        # Map GNN: the Room tokens' node features and the whole-graph readout
+        num_rooms = int(state_counts_cpu.x_token_kind_count[:, TokenKind.ROOMS].sum())
+        x_room_hidden, x_map_readout = self._map_gnn(state_batch.x_map_grid, num_rooms)
+
+        # Token embeddings grouped by state, and the embedded pending halt
+        projected, x_effect_pending = self._entity_projector(state_batch, x_room_hidden)
 
         # One transformer pass over every state, without the draw depths
         refined, x_global_token = self._entity_transformer(
             Jagged(
                 x_lengths=projected.x_lengths,
-                rows=self._embed_identity(projected.rows, index.x_kind),
+                rows=self._embed_identity(
+                    projected.rows, state_batch.tokens.rows.x_token_kind.long()
+                ),
             ),
-            index.x_state,
+            x_state,
         )
 
         # Per-state inputs to the global context: the same for the transformer and the layer, so
@@ -144,7 +157,7 @@ class Core(nn.Module):
         x_state_inputs = torch.cat(
             [
                 x_map_readout,
-                self._get_token_counts(index.x_kind_count),
+                self._get_token_counts(state_batch.state_counts.x_token_kind_count),
                 state_batch.x_context,
                 x_effect_pending,
             ],
@@ -152,61 +165,127 @@ class Core(nn.Module):
         )
 
         # The one Character token per state, its CHARACTER row
-        x_character_row = index.x_kind_row[:, TokenKind.CHARACTER]  # (B,)
+        x_is_character = tokens.rows.x_token_kind == TokenKind.CHARACTER  # (N,)
+        x_character_row = torch.nonzero_static(x_is_character, size=batch_size).squeeze(1)  # (B,)
         x_global = self._global_context(
             refined.rows[x_character_row], x_global_token, x_state_inputs
         )
 
-        # The layer's states, whose pile shows an order: the Frozen Eye ones, then the rest unless
-        # `with_value` is False, with their rows and pile rows
-        x_states = draw_order.x_states
-        num_rows, num_pile = draw_order.num_rows, draw_order.num_pile
-        if not with_value:
-            x_states = x_states[: draw_order.num_states_visible]
-            num_rows, num_pile = draw_order.num_rows_visible, draw_order.num_pile_visible
+        # The draw-order layer, on the states whose pile shows an order
+        refined, x_policy_context, x_value_context = self._apply_draw_order_layer(
+            state_batch,
+            refined,
+            x_global_token,
+            x_global,
+            x_state_inputs,
+            state_counts_cpu,
+            with_value,
+        )
+        return CoreOutput(
+            tokens=refined,
+            x_policy_context=x_policy_context,
+            x_value_context=x_value_context,
+        )
+
+    def _apply_draw_order_layer(
+        self,
+        state_batch: StateBatch,
+        refined: Jagged[torch.Tensor],
+        x_global_token: torch.Tensor,
+        x_global: torch.Tensor,
+        x_state_inputs: torch.Tensor,
+        state_counts_cpu: StateCounts,
+        with_value: bool,
+    ) -> tuple[Jagged[torch.Tensor], torch.Tensor, torch.Tensor]:
+        """Run the draw-order layer and write its output where the value and the policy read it.
+
+        The value reads the layer on every state whose pile shows an order, the policy only under
+        Frozen Eye.
+
+        Parameters
+        ----------
+        state_batch : StateBatch
+            The game states.
+        refined : Jagged[torch.Tensor]
+            The transformer's refined rows, one segment per state.
+        x_global_token : torch.Tensor
+            (B, dim_entity). The transformer's global tokens.
+        x_global : torch.Tensor
+            (B, dim_global). Each state's global vector, without the draw order.
+        x_state_inputs : torch.Tensor
+            (B, ...). Each state's per-state inputs to the global context.
+        state_counts_cpu : StateCounts
+            The states' counts on the CPU, `state_batch.state_counts`.
+        with_value : bool
+            False runs the layer only on the states the policy reads.
+
+        Returns
+        -------
+        refined : Jagged[torch.Tensor]
+            The refined rows, order-aware on the Frozen Eye states.
+        x_policy_context : torch.Tensor
+            (B, dim_global). The policy heads' global vectors.
+        x_value_context : torch.Tensor
+            (B, dim_global). The value head's global vectors; the policy's when `with_value` is
+            False.
+        """
+        # The states whose pile shows an order, as the device and as the host hold them
+        x_visible, x_hidden = _ordered_piles(state_batch.state_counts)
+        x_visible_cpu, x_hidden_cpu = _ordered_piles(state_counts_cpu)
+
+        # The layer's states: the Frozen Eye ones, then the rest unless `with_value` is False
+        num_states_policy = int(x_visible_cpu.sum())
+        x_states = torch.nonzero_static(x_visible, size=num_states_policy).squeeze(1)
+        x_layer_cpu = x_visible_cpu
+        if with_value:
+            num_states_hidden = int(x_hidden_cpu.sum())
+            x_states_hidden = torch.nonzero_static(x_hidden, size=num_states_hidden).squeeze(1)
+            x_states = torch.cat([x_states, x_states_hidden])
+            x_layer_cpu = x_visible_cpu | x_hidden_cpu
         if x_states.shape[0] == 0:
-            return CoreOutput(
-                tokens=refined,
-                index=index,
-                x_policy_context=x_global,
-                x_value_context=x_global,
-            )
+            return refined, x_global, x_global
+
+        # Those states' tokens, of every token kind, and their draw tokens, summed on the host
+        x_token_kind_count_cpu = state_counts_cpu.x_token_kind_count
+        num_rows = int(x_token_kind_count_cpu[x_layer_cpu].sum())
+        num_pile = int(x_token_kind_count_cpu[x_layer_cpu, TokenKind.CARD_PILE_DRAW].sum())
 
         # The value head reads the layer on every one of its states
         x_rows, x_refined_layer, x_global_token_layer = self._draw_order_layer(
-            refined, x_global_token, index, x_states, num_rows, num_pile
+            refined,
+            x_global_token,
+            state_batch.state_counts.x_token_kind_count,
+            x_states,
+            num_rows,
+            num_pile,
         )
 
         # Each layer state's Character among the layer's rows: the one CHARACTER row of each of
         # its states, state after state
         x_character_layer = torch.nonzero_static(
-            index.x_kind[x_rows] == TokenKind.CHARACTER, size=x_states.shape[0]
+            state_batch.tokens.rows.x_token_kind[x_rows] == TokenKind.CHARACTER,
+            size=x_states.shape[0],
         ).squeeze(1)
         x_global_layer = self._global_context(
             x_refined_layer[x_character_layer], x_global_token_layer, x_state_inputs[x_states]
         )
-        x_global_value = x_global.index_copy(0, x_states, x_global_layer)
+        x_value_context = x_global.index_copy(0, x_states, x_global_layer)
 
         # The policy reads it on the Frozen Eye states: their order-aware rows written back into
         # the window
-        num_states_visible = draw_order.num_states_visible
-        if num_states_visible > 0:
-            num_rows_visible = draw_order.num_rows_visible
-            x_global = x_global.index_copy(
-                0, x_states[:num_states_visible], x_global_layer[:num_states_visible]
+        x_policy_context = x_global
+        if num_states_policy > 0:
+            num_rows_policy = int(x_token_kind_count_cpu[x_visible_cpu].sum())
+            x_policy_context = x_global.index_copy(
+                0, x_states[:num_states_policy], x_global_layer[:num_states_policy]
             )
             refined = Jagged(
                 x_lengths=refined.x_lengths,
                 rows=refined.rows.index_copy(
-                    0, x_rows[:num_rows_visible], x_refined_layer[:num_rows_visible]
+                    0, x_rows[:num_rows_policy], x_refined_layer[:num_rows_policy]
                 ),
             )
-        return CoreOutput(
-            tokens=refined,
-            index=index,
-            x_policy_context=x_global,
-            x_value_context=x_global_value,
-        )
+        return refined, x_policy_context, x_value_context
 
     def _global_context(
         self, x_character: torch.Tensor, x_global_token: torch.Tensor, x_state_inputs: torch.Tensor
@@ -248,7 +327,7 @@ class Core(nn.Module):
         Parameters
         ----------
         x_token_kind_count : torch.Tensor
-            (B, len(TokenKind)) long. Each state's tokens of each token kind.
+            (B, len(TokenKind)) int16. Each state's tokens of each token kind.
 
         Returns
         -------
@@ -258,3 +337,26 @@ class Core(nn.Module):
         """
         x_count = x_token_kind_count[:, self._x_count_token_kinds].float()
         return (x_count / self._x_count_norm).sqrt()
+
+
+def _ordered_piles(state_counts: StateCounts) -> tuple[torch.Tensor, torch.Tensor]:
+    """Find the states whose draw pile shows an order: 2 or more draw tokens.
+
+    One definition for both homes of the counts: the device's copy gives the states, the host's
+    their sizes.
+
+    Parameters
+    ----------
+    state_counts : StateCounts
+        The states' counts, on the device or on the CPU.
+
+    Returns
+    -------
+    x_visible : torch.Tensor
+        (B,) bool. The ordered piles under Frozen Eye, which the policy reads too.
+    x_hidden : torch.Tensor
+        (B,) bool. The other ordered piles, which only the value reads.
+    """
+    x_ordered = state_counts.x_token_kind_count[:, TokenKind.CARD_PILE_DRAW] >= 2
+    x_draw_order_visible = state_counts.x_draw_order_visible
+    return x_ordered & x_draw_order_visible, x_ordered & ~x_draw_order_visible

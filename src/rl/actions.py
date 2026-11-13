@@ -3,7 +3,7 @@ from itertools import islice
 import slai
 from slai import ACTION_SPEC_REGISTRY
 
-from src.rl.constants import ACTION_TYPE_BY_INT
+from src.rl.constants import ACTION_TYPES
 from src.rl.tokens import get_entities_for_token_kind
 from src.rl.tokens import iter_tokens
 from src.rl.types import TokenKind
@@ -17,7 +17,7 @@ def engine_action(
     Parameters
     ----------
     idx_action_kind : int
-        The action kind's index in `ACTION_TYPE_BY_INT`.
+        The action kind's index in `ACTION_TYPES`.
     idx_token : int
         The selected token's index in this state's entire token sequence, in the encoder's
         order. It remains valid when states are concatenated or reordered in a minibatch.
@@ -33,7 +33,7 @@ def engine_action(
         The engine's Action, with the selected Entity's id and then the target Monster's, if
         any; with no ids when the action selects nothing.
     """
-    action_kind = ACTION_TYPE_BY_INT[idx_action_kind]
+    action_kind = ACTION_TYPES[idx_action_kind]
     
     if ACTION_SPEC_REGISTRY[action_kind].arity == (0, 0):
         return slai.Action(action_kind, [])

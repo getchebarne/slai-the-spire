@@ -7,14 +7,13 @@ import torch.nn.functional as F
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.metrics import MetricKey
-from src.rl.batches import build_state_batch_layout
+from src.rl.batches import map_tensors
 from src.rl.batches import slice_state_batch
 from src.rl.batches import take_minibatch_states
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
-from src.rl.types import MinibatchPlan
 from src.rl.types import Rollout
-from src.rl.types import StateBatchLayout
+from src.rl.types import StateCounts
 
 
 @dataclass
@@ -77,11 +76,13 @@ def update_ppo(
         variances and the `offpolicy/*` scalars, each computed once per update.
     """
     num_reward_streams = rollout.x_rewards.shape[-1]
-    state_batch_layout = build_state_batch_layout(rollout.x_counts_cpu, device)
+
+    # The rollout's counts on the host, read once: every size below is a sum over them
+    state_counts_cpu = map_tensors(rollout.state_batch.state_counts, torch.Tensor.cpu)
 
     # Calculate the rollout's log-probabilities and values under the current weights
     x_log_probs_prox, x_value_prox, x_value_final = _evaluate_rollout(
-        model, rollout, ppo_config.minibatch_size, state_batch_layout
+        model, rollout, state_counts_cpu, ppo_config.minibatch_size
     )
 
     # Compute GAE returns and advantages
@@ -108,20 +109,21 @@ def update_ppo(
         x_weights_capped=x_weights.clamp(max=ppo_config.is_clip),
     )
 
-    # All shuffles and CPU output sizes are planned before the first minibatch launches.
-    minibatch_plans = _plan_minibatches(
-        rollout.x_counts_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
+    # All shuffles are drawn, and their states' counts gathered, before the first minibatch
+    # launches.
+    minibatches = _plan_minibatches(
+        state_counts_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
     )
-    num_minibatches = len(minibatch_plans) // ppo_config.num_epochs
+    num_minibatches = len(minibatches) // ppo_config.num_epochs
 
     batch_metrics = []
-    for minibatch_plan in minibatch_plans:
+    for x_state_ids, state_counts_cpu_mini in minibatches:
         metrics = _update_minibatch(
             model,
             optimizer,
             rollout,
-            state_batch_layout,
-            minibatch_plan,
+            x_state_ids,
+            state_counts_cpu_mini,
             targets,
             ppo_config,
             device,
@@ -168,7 +170,7 @@ def adapt_lr_scale(lr_scale: float, approx_kl: float, target_kl: float) -> float
 
 
 def _evaluate_rollout(
-    model: ActorCritic, rollout: Rollout, minibatch_size: int, state_batch_layout: StateBatchLayout
+    model: ActorCritic, rollout: Rollout, state_counts_cpu: StateCounts, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
 
@@ -180,10 +182,10 @@ def _evaluate_rollout(
         The Learner's model.
     rollout : Rollout
         The rollout: `rollout_length` steps of `num_envs` games.
+    state_counts_cpu : StateCounts
+        The rollout's states' counts, on the CPU.
     minibatch_size : int
         The most states per forward.
-    state_batch_layout : StateBatchLayout
-        The rollout's cached offsets, shared with the subsequent shuffled update.
 
     Returns
     -------
@@ -205,21 +207,26 @@ def _evaluate_rollout(
 
             # Slice `StateBatch` and actions
             state_batch_slice = slice_state_batch(
-                rollout.state_batch, start, stop, state_batch_layout
+                rollout.state_batch, start, stop, state_counts_cpu
+            )
+            state_counts_cpu_slice = map_tensors(
+                state_counts_cpu, lambda x_tensor: x_tensor[start:stop]
             )
             x_actions_slice = rollout.x_actions[start:stop]
 
             # Evaluate actions on the slice's states
-            x_log_prob, _, _, x_value = model.evaluate_actions(
-                state_batch_slice, x_actions_slice
+            policy_output, x_value = model.evaluate_actions(
+                state_batch_slice, state_counts_cpu_slice, x_actions_slice
             )
 
             # Append log-probabilities and values
-            x_batch_log_prob.append(x_log_prob)
+            x_batch_log_prob.append(policy_output.x_log_prob.sum(-1))
             x_batch_value.append(x_value)
 
         # Bootstrap value i.e. value of the rollout's final state for each environment
-        x_value_final = model(rollout.state_batch_final)
+        state_batch_final = rollout.state_batch_final
+        state_counts_cpu_final = map_tensors(state_batch_final.state_counts, torch.Tensor.cpu)
+        x_value_final = model.get_values(state_batch_final, state_counts_cpu_final)
 
     x_value_prox = torch.cat(x_batch_value).reshape(
         rollout_length, num_envs, num_reward_streams
@@ -289,19 +296,18 @@ def _compute_gae(
 
 
 def _plan_minibatches(
-    x_counts_cpu: torch.Tensor,
+    state_counts_cpu: StateCounts,
     minibatch_size: int,
     num_epochs: int,
     device: torch.device,
     generator: torch.Generator,
-) -> list[MinibatchPlan]:
+) -> list[tuple[torch.Tensor, StateCounts]]:
     """Plan every epoch before training, transferring all shuffled state IDs together.
 
     Parameters
     ----------
-    x_counts_cpu : torch.Tensor
-        (num_states, number_of_Jaggeds) on the CPU. Each state's row and entry counts, in Jagged
-        order.
+    state_counts_cpu : StateCounts
+        The rollout's states' counts, on the CPU.
     minibatch_size : int
         The maximum number of states per minibatch.
     num_epochs : int
@@ -313,11 +319,11 @@ def _plan_minibatches(
 
     Returns
     -------
-    list[MinibatchPlan]
-        The minibatches in the order they run, epoch after epoch, with device state indices and
-        CPU total row and entry counts. Every epoch has the same number of them.
+    list[tuple[torch.Tensor, StateCounts]]
+        Each minibatch's state indices on the device and its states' counts on the CPU, in the
+        order the minibatches run, epoch after epoch. Every epoch has the same number of them.
     """
-    num_states = len(x_counts_cpu)
+    num_states = len(state_counts_cpu.x_token_kind_count)
 
     # One shuffle of the states per epoch
     x_state_ids_cpu = torch.stack(
@@ -327,24 +333,26 @@ def _plan_minibatches(
         device, non_blocking=True
     )
 
-    # Each shuffle cut into minibatches, their rows and entries totalled on the CPU
-    minibatch_plans = []
+    # Each shuffle cut into minibatches, with their states' counts
+    minibatches = []
     for num_epoch in range(num_epochs):
         for start in range(0, num_states, minibatch_size):
             stop = start + minibatch_size
-            x_state_ids_cpu_minibatch = x_state_ids_cpu[num_epoch, start:stop]
-            x_counts_cpu_minibatch = x_counts_cpu[x_state_ids_cpu_minibatch].sum(0, dtype=torch.long)
-            minibatch_plans.append(MinibatchPlan(x_state_ids[num_epoch, start:stop], x_counts_cpu_minibatch.tolist()))
+            x_state_ids_cpu_mini = x_state_ids_cpu[num_epoch, start:stop]
+            state_counts_cpu_mini = map_tensors(
+                state_counts_cpu, lambda x_tensor: x_tensor[x_state_ids_cpu_mini]
+            )
+            minibatches.append((x_state_ids[num_epoch, start:stop], state_counts_cpu_mini))
 
-    return minibatch_plans
+    return minibatches
 
 
 def _update_minibatch(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
     rollout: Rollout,
-    state_batch_layout: StateBatchLayout,
-    minibatch_plan: MinibatchPlan,
+    x_state_ids: torch.Tensor,
+    state_counts_cpu: StateCounts,
     targets: _Targets,
     ppo_config: PPOConfig,
     device: torch.device,
@@ -359,10 +367,10 @@ def _update_minibatch(
         The model's optimizer.
     rollout : Rollout
         The collected states and actions.
-    state_batch_layout : StateBatchLayout
-        The rollout's cached offsets.
-    minibatch_plan : MinibatchPlan
-        The minibatch's states.
+    x_state_ids : torch.Tensor
+        (minibatch_size,) long. The minibatch's states.
+    state_counts_cpu : StateCounts
+        Those states' counts, on the CPU.
     targets : _Targets
         What the update trains against, one row per state of the rollout.
     ppo_config : PPOConfig
@@ -376,16 +384,14 @@ def _update_minibatch(
         The minibatch's metrics, keyed by their TensorBoard scalar names; its approx KL is the
         ranks' mean.
     """
-    x_state_ids = minibatch_plan.x_state_ids
-
     # Forward pass, under the weights so far
-    state_batch_mini = take_minibatch_states(rollout.state_batch, minibatch_plan, state_batch_layout)
-    x_log_probs, x_entropies, x_kl_uniform, x_values = model.evaluate_actions(
-        state_batch_mini, rollout.x_actions[x_state_ids],
+    state_batch_mini = take_minibatch_states(rollout.state_batch, x_state_ids, state_counts_cpu)
+    policy_output, x_values = model.evaluate_actions(
+        state_batch_mini, state_counts_cpu, rollout.x_actions[x_state_ids],
     )
 
     # Policy Loss
-    x_log_ratios = x_log_probs - targets.x_log_probs_prox[x_state_ids]
+    x_log_ratios = policy_output.x_log_prob.sum(-1) - targets.x_log_probs_prox[x_state_ids]
     x_ratios = x_log_ratios.exp()
     x_loss_policy = _compute_loss_policy(
         x_ratios,
@@ -397,10 +403,10 @@ def _update_minibatch(
     # Value loss: summed over streams, mean over the batch
     x_returns = targets.x_returns[x_state_ids]
     x_loss_value = 0.5 * F.mse_loss(x_values, x_returns, reduction="none").sum(-1).mean()
-    x_loss_entropy = -torch.mean(x_entropies.sum(dim=-1))
+    x_loss_entropy = -torch.mean(policy_output.x_entropy.sum(dim=-1))
 
     # KL-Uniform barrier, summed per head like the entropy term; each head's KL falls
-    x_loss_kl_uniform = torch.mean(x_kl_uniform.sum(dim=-1))
+    x_loss_kl_uniform = torch.mean(policy_output.x_kl_uniform.sum(dim=-1))
     x_loss = (
         x_loss_policy
         + ppo_config.coef_value * x_loss_value
@@ -421,8 +427,8 @@ def _update_minibatch(
         x_loss_value,
         x_loss_entropy,
         x_loss_kl_uniform,
-        x_entropies,
-        x_kl_uniform,
+        policy_output.x_entropy,
+        policy_output.x_kl_uniform,
         x_ratios,
         x_log_ratios,
         x_grad_norm,
