@@ -57,6 +57,7 @@ __all__ = [
     "get_event_option_entities",
     "get_monster_entities",
     "get_wing_boots_charges",
+    "draw_order_visible",
     "get_room_entities",
 ]
 
@@ -372,6 +373,22 @@ def get_wing_boots_charges(game_state: GameState) -> int:
     return next(
         (relic.counter for relic in game_state.relics if relic.name == RelicName.WingBoots), 0
     )
+
+
+def draw_order_visible(game_state: GameState) -> bool:
+    """Return whether Frozen Eye shows the draw pile's order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    bool
+        True when the Character holds Frozen Eye.
+    """
+    return any(relic.name == RelicName.FrozenEye for relic in game_state.relics)
 
 
 def _next_row_candidate_cols(

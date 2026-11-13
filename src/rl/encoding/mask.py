@@ -20,7 +20,7 @@ from src.rl.constants import TOKEN_KINDS_CARD
 from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
 from src.rl.encoding.focus import derive_focus
-from src.rl.encoding.focus import draw_order_visible
+from src.rl.tokens import draw_order_visible
 from src.rl.tokens import get_wing_boots_charges
 from src.rl.types import Token
 from src.rl.types import TokenKind

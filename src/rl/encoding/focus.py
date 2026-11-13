@@ -8,7 +8,6 @@ from slai import EffectBombArm
 from slai import GameEnv
 from slai import GameState
 from slai import PendingEffect
-from slai import RelicName
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 
@@ -48,22 +47,6 @@ def derive_focus(game_state: GameState) -> Focus:
     return Focus.MAP
 
 
-def draw_order_visible(game_state: GameState) -> bool:
-    """Return whether Frozen Eye shows the draw pile's order.
-
-    Parameters
-    ----------
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    bool
-        True when the Character holds Frozen Eye.
-    """
-    return any(relic.name == RelicName.FrozenEye for relic in game_state.relics)
-
-
 # The engine's halting kinds, straight from the FFI's PendingEffect union, so a new halting
 # kind widens this tuple instead of raising the ValueError in _encode_focus_into
 _EFFECT_PENDING = get_args(PendingEffect)
@@ -97,9 +80,6 @@ _OFF_FOCUS_REST_DONE = _alloc("rest_done")
 _OFF_FOCUS_PRESENCE = _alloc(
     "presence", 6
 )  # Context-presence bits: Combat/reward/shop/event/rest/chest
-OFF_FOCUS_DRAW_ORDER_VISIBLE = _alloc(
-    "draw_order_visible"
-)  # Frozen Eye: the Actor may see the draw pile's order
 
 ENCODING_DIM_FOCUS = sum(w for _, w in _CHANNEL_LAYOUT_FOCUS)
 
@@ -165,8 +145,6 @@ def encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
     ):
         if ctx is not None:
             out[_OFF_FOCUS_PRESENCE + i] = 1.0
-
-    out[OFF_FOCUS_DRAW_ORDER_VISIBLE] = float(draw_order_visible(game_state))
 
 
 def _check_tables() -> None:

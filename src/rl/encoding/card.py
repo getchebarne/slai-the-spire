@@ -13,6 +13,7 @@ from slai import EffectSetCostOverride
 from slai import PlaySource
 from slai import get_card_templates
 
+from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
 from src.rl.encoding.effect_layout import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.types import Tag
@@ -49,7 +50,7 @@ _COST_OFFSET_MAX = max(
 )
 
 
-# Per-card identity + energy
+# Per-card identity + energy + draw depth
 
 
 _CHANNEL_LAYOUT_CARD, _alloc = make_channel_allocator()
@@ -78,6 +79,9 @@ _OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(
 _OFF_CARD_PLAY_SOURCE = _alloc(
     "play_source", len(_MAP_PLAY_SOURCE)
 )  # All-zero = not in the play queue
+_OFF_CARD_DRAW_DEPTH = _alloc(
+    "draw_depth", MAX_SIZE_CARD_PILE_DRAW
+)  # The Cards above it in the draw pile. All-zero = not visible
 
 ENCODING_DIM_CARD = sum(w for _, w in _CHANNEL_LAYOUT_CARD)
 
@@ -135,7 +139,7 @@ TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {
     CardName.WellLaidPlans: (Tag.SETUP,),
 }
 
-# Per-card encoding cache, keyed by (card_key, energy) — see card_key
+# Per-card encoding cache, keyed by (card_key, energy, draw depth) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
 _CARD_ROW_CACHE_MAX = 100_000
 
@@ -144,7 +148,9 @@ def _cost_offset(card: Card) -> float:
     return float(card.cost_kind.offset if isinstance(card.cost_kind, CardCostKindXCost) else 0)
 
 
-def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
+def _encode_card_into(
+    card: Card, energy_current: int, draw_depth: int | None, out: np.ndarray
+) -> None:
     out[_OFF_CARD_NAME + _MAP_CARD_NAME[card.name]] = 1.0
     out[_OFF_CARD_KIND + _MAP_CARD_KIND[card.kind]] = 1.0
     out[_OFF_CARD_COLOR + _MAP_CARD_COLOR[card.color]] = 1.0
@@ -173,13 +179,16 @@ def _encode_card_into(card: Card, energy_current: int, out: np.ndarray) -> None:
     out[_OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
     if card.play_source is not None:
         out[_OFF_CARD_PLAY_SOURCE + _MAP_PLAY_SOURCE[card.play_source]] = 1.0
+    if draw_depth is not None:
+        out[_OFF_CARD_DRAW_DEPTH + draw_depth] = 1.0
 
 
 def card_key(card: Card) -> tuple:
-    """Return the fields _encode_card_into reads, minus energy.
+    """Return the fields _encode_card_into reads, minus energy and draw depth.
 
-    Two Cards with equal identity encode the same ROW at any given energy. It keys the row cache
-    and, with effect_key, masks' identity dedup; Effects are rows of their own, so absent.
+    Two Cards with equal identity encode the same ROW at any given energy and draw depth. It keys
+    the row cache and, with effect_key, masks' identity dedup; Effects are rows of their own, so
+    absent.
 
     Explicit rather than hash(Card): live Entities carry a unique arena `id` that participates in
     the engine's __hash__, so hashing the object would make every Card distinct and silently kill
@@ -219,16 +228,18 @@ def card_key(card: Card) -> tuple:
     )
 
 
-def encode_card_into_w_cache(card: Card, energy_current: int, out: np.ndarray) -> None:
+def encode_card_into_w_cache(
+    card: Card, energy_current: int, draw_depth: int | None, out: np.ndarray
+) -> None:
     # Try cache hit
-    cache_key = (card_key(card), energy_current)
+    cache_key = (card_key(card), energy_current, draw_depth)
     row = _CARD_ROW_CACHE.get(cache_key)
 
     # Cache miss
     if row is None:
         # Encode Card
         row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
-        _encode_card_into(card, energy_current, row)
+        _encode_card_into(card, energy_current, draw_depth, row)
 
         # Write into cache
         row.flags.writeable = False

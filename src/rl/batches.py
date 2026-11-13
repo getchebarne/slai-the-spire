@@ -154,7 +154,6 @@ def allocate_states(num_buffers: int, buffer_size: int) -> StateBatchReserved:
                 num_buffers, buffer_size, len(TokenKind), dtype=torch.int16
             ),
             x_jagged_count=torch.zeros(num_buffers, buffer_size, num_jaggeds, dtype=torch.int32),
-            x_draw_order_visible=torch.zeros(num_buffers, buffer_size, dtype=torch.bool),
         ),
     )
 

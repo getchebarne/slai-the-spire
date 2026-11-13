@@ -9,7 +9,6 @@ from src.rl.encoding.context import focus_view
 from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.focus import ENCODING_DIM_FOCUS
-from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.map_ import EDGE_DELTAS
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
@@ -55,7 +54,6 @@ __all__ = [
     "NUM_CHANNELS",
     "NUM_EDGE_CHANNELS",
     "NUM_FEATURE_CHANNELS",
-    "OFF_FOCUS_DRAW_ORDER_VISIBLE",
     "OFF_MAP_POSITION",
     "OFF_MAP_SELECTABLE",
     "SLICE_MAP_EDGES",

@@ -81,9 +81,6 @@ class ActorCritic(nn.Module):
     ) -> PolicyOutput:
         """Select each state's action.
 
-        Without values to compute, the core runs the draw-order layer only on the states the
-        policy reads.
-
         Parameters
         ----------
         state_batch : StateBatch
@@ -101,7 +98,7 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
-        core_output = self.core(state_batch, state_counts_cpu, with_value=False)
+        core_output = self.core(state_batch, state_counts_cpu)
         entity_counts = _count_tokens_of_entity_kind(state_counts_cpu)
 
         # Sampling actions runs eager: `forward` itself, not the call `compile_hot_paths` compiles
@@ -135,7 +132,7 @@ class ActorCritic(nn.Module):
             (B, len(RewardStream)). The values.
         """
         core_output = self.core(state_batch, state_counts_cpu)
-        x_values = self._head_value(core_output.x_value_context)
+        x_values = self._head_value(core_output.x_global)
         entity_counts = _count_tokens_of_entity_kind(state_counts_cpu)
         policy_output = self._policy_heads(
             state_batch, core_output, entity_counts, x_recorded_actions
@@ -157,15 +154,15 @@ class ActorCritic(nn.Module):
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(state_batch, state_counts_cpu).x_value_context)
+        return self._head_value(self.core(state_batch, state_counts_cpu).x_global)
 
 
 def compile_hot_paths(model: ActorCritic) -> None:
     """Fuse the update's hot paths.
 
-    They are each transformer block, the draw-order layer's block, the Map GNN's message passing,
-    and the policy heads on recorded actions. All but the heads are autotuned, so the first update
-    compiles for a minute or two.
+    They are each transformer block, the Map GNN's message passing, and the policy heads on
+    recorded actions. All but the heads are autotuned, so the first update compiles for a minute
+    or two.
 
     Parameters
     ----------
@@ -175,7 +172,6 @@ def compile_hot_paths(model: ActorCritic) -> None:
     mode = "max-autotune-no-cudagraphs"
     for block in model.core._entity_transformer._entity_transformer_blocks:
         block.compile(dynamic=True, mode=mode)
-    model.core._draw_order_layer._draw_order_block.compile(dynamic=True, mode=mode)
     model.core._map_gnn.message_passing = torch.compile(message_passing, dynamic=True, mode=mode)
 
     # Not autotuned: an empty block's key-net matmul fails to lower under autotuning
@@ -197,6 +193,7 @@ def _count_tokens_of_entity_kind(state_counts_cpu: StateCounts) -> list[int]:
     """
     # Each Entity kind's tokens: its token kinds' summed on the host, in `EntityKind` order
     token_kind_counts_total = state_counts_cpu.x_token_kind_count.sum(0).tolist()
+    
     return [
         sum(token_kind_counts_total[token_kind] for token_kind in token_kinds)
         for _, token_kinds in sorted(TOKEN_KINDS_OF_ENTITY_KIND.items())

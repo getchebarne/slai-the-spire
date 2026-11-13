@@ -189,7 +189,6 @@ class StateCounts:
 
     x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) int16, its tokens of each token kind
     x_jagged_count: torch.Tensor  # (B, number_of_Jaggeds) int32, its rows in each, in Jagged order
-    x_draw_order_visible: torch.Tensor  # (B,) bool, whether Frozen Eye shows its draw pile's order
 
 
 @dataclass
@@ -227,16 +226,13 @@ type StateBatchReserved = States[
 
 @dataclass
 class CoreOutput:
-    """Refined token embeddings and per-state policy/value contexts.
+    """Refined token embeddings and each state's global vector.
 
-    The policy's tokens and context include draw order only where Frozen Eye makes it visible.
-    The value context includes draw order on every state whose pile shows an order. Both
-    contexts have one row per state; tokens have a variable number of rows per state.
+    Tokens have a variable number of rows per state; the global vector has one row per state.
     """
 
     tokens: Jagged[torch.Tensor]  # (B,) lengths; (N, dim_entity) refined token rows
-    x_policy_context: torch.Tensor  # (B, dim_global)
-    x_value_context: torch.Tensor  # (B, dim_global)
+    x_global: torch.Tensor  # (B, dim_global)
 
 
 @dataclass
