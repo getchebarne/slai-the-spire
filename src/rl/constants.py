@@ -5,12 +5,13 @@ Centralizes magic numbers and configuration values used across the RL codebase.
 
 import slai as _slai
 
+from src.rl.types import EntityKind
 from src.rl.types import TokenKind
 
 
 # The policy's action types are exactly the engine's
-ACTION_TYPE_BY_INT = _slai.ActionType.members()
-NUM_ACTION_TYPES = len(ACTION_TYPE_BY_INT)
+ACTION_TYPES = _slai.ActionType.members()
+NUM_ACTION_TYPES = len(ACTION_TYPES)
 
 # The top Ascension, which GameEnv doesn't expose; it sizes the ascension thermometer
 # (a checkpoint shape) and every catalog fold
@@ -225,15 +226,15 @@ TOKEN_KINDS_POTION = (
 )
 
 # The Entity kinds in window order, each its token kinds; the last four hold a single token kind
-TOKEN_KINDS_OF_ENTITY_KIND = (
-    TOKEN_KINDS_CARD,
-    TOKEN_KINDS_RELIC,
-    TOKEN_KINDS_POTION,
-    (TokenKind.MONSTERS,),
-    (TokenKind.EVENT_OPTIONS,),
-    (TokenKind.CHARACTER,),
-    (TokenKind.ROOMS,),
-)
+TOKEN_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[TokenKind, ...]] = {
+    EntityKind.CARD: TOKEN_KINDS_CARD,
+    EntityKind.RELIC: TOKEN_KINDS_RELIC,
+    EntityKind.POTION: TOKEN_KINDS_POTION,
+    EntityKind.MONSTER: (TokenKind.MONSTERS,),
+    EntityKind.EVENT_OPTION: (TokenKind.EVENT_OPTIONS,),
+    EntityKind.CHARACTER: (TokenKind.CHARACTER,),
+    EntityKind.ROOM: (TokenKind.ROOMS,),
+}
 
 # Each token kind's token cap: the slice token traversal applies to that collection
 MAP_TOKEN_KIND_MAX_TOKENS: dict[TokenKind, int] = {
@@ -286,12 +287,17 @@ def _check_tables() -> None:
             "A TokenKind has no entry in MAP_TOKEN_KIND_MAX_TOKENS: "
             f"{set(TokenKind) - set(MAP_TOKEN_KIND_MAX_TOKENS)}"
         )
+    if set(TOKEN_KINDS_OF_ENTITY_KIND) != set(EntityKind):
+        raise RuntimeError(
+            "An EntityKind has no entry in TOKEN_KINDS_OF_ENTITY_KIND: "
+            f"{set(EntityKind) - set(TOKEN_KINDS_OF_ENTITY_KIND)}"
+        )
 
     # TokenKind is declared in packing order, valued 0..len-1: the Entity kind tables, one after
     # another, list it, every token kind in one table
     token_kinds = [
         token_kind
-        for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND
+        for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND.values()
         for token_kind in token_kinds_entity_kind
     ]
     if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):

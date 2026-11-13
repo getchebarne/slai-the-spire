@@ -13,7 +13,9 @@ from src.rl.encoding.focus import OFF_FOCUS_DRAW_ORDER_VISIBLE
 from src.rl.encoding.map_ import EDGE_DELTAS
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
+from src.rl.encoding.map_ import NUM_FEATURE_CHANNELS
 from src.rl.encoding.map_ import OFF_MAP_POSITION
+from src.rl.encoding.map_ import OFF_MAP_SELECTABLE
 from src.rl.encoding.map_ import SLICE_MAP_EDGES
 from src.rl.encoding.map_ import SLICE_MAP_ROOM_KIND
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
@@ -52,8 +54,10 @@ __all__ = [
     "ENCODING_DIM_TOKEN",
     "NUM_CHANNELS",
     "NUM_EDGE_CHANNELS",
+    "NUM_FEATURE_CHANNELS",
     "OFF_FOCUS_DRAW_ORDER_VISIBLE",
     "OFF_MAP_POSITION",
+    "OFF_MAP_SELECTABLE",
     "SLICE_MAP_EDGES",
     "SLICE_MAP_ROOM_KIND",
     "focus_view",

@@ -12,6 +12,18 @@ from slai import Relic
 from slai import Room
 
 
+class EntityKind(IntEnum):
+    """The kind of Entity behind a token."""
+
+    CARD = 0
+    CHARACTER = 1
+    EVENT_OPTION = 2
+    MONSTER = 3
+    POTION = 4
+    RELIC = 5
+    ROOM = 6
+
+
 # In packing order: TOKEN_KINDS_OF_ENTITY_KIND's Entity kinds, one after another, each its
 # token kinds in order
 class TokenKind(IntEnum):
@@ -136,13 +148,6 @@ class SparseEntries:
     x_values: torch.Tensor  # (F,) float32
 
 
-# Sparse rows: x_lengths are (R,) int16, entries per row, including empty rows, and sum to F
-type Sparse = Jagged[SparseEntries]
-
-# The same rows in a worker's shared memory, at worst-case capacity
-type SparseReserved = JaggedReserved[SparseEntries]
-
-
 @final
 @dataclass
 class Tokens[TFeatures, TOwned]:
@@ -156,6 +161,7 @@ class Tokens[TFeatures, TOwned]:
 
     features: TFeatures
     x_token_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
+    x_entity_kind: torch.Tensor  # (N,) int16, its token kind's Entity kind
 
     # Items selectable under each action type, deduped by Card identity
     x_legal_selection: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
@@ -166,11 +172,24 @@ class Tokens[TFeatures, TOwned]:
     # Selections whose legal actions carry a Monster target (Cards / Potions)
     x_needs_target: torch.Tensor  # (N,) bool
 
-    x_node_idx: torch.Tensor  # (N,) int16: a Room token's Map node; 0 on every other token
-
     # The rows the tokens own
     effects: TOwned  # Any number per token; lengths are int16
     modifiers: TOwned  # Any number per Character / Monster; int16
+
+
+@final
+@dataclass
+class StateCounts:
+    """How much each state holds: a batch's shape.
+
+    Every size is a sum over these counts and every position a running total. A batch on a
+    device carries one copy; the same counts on the host travel beside it, so no size is ever
+    read back from the device.
+    """
+
+    x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) int16, its tokens of each token kind
+    x_jagged_count: torch.Tensor  # (B, number_of_Jaggeds) int32, its rows in each, in Jagged order
+    x_draw_order_visible: torch.Tensor  # (B,) bool, whether Frozen Eye shows its draw pile's order
 
 
 @dataclass
@@ -188,7 +207,14 @@ class States[TTokens, TEffectPending]:
     x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
     x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
+    state_counts: StateCounts
 
+
+# Sparse rows: x_lengths are (R,) int16, entries per row, including empty rows, and sum to F
+type Sparse = Jagged[SparseEntries]
+
+# The same rows in a worker's shared memory, at worst-case capacity
+type SparseReserved = JaggedReserved[SparseEntries]
 
 # Compact game states held by the model, rollout and minibatches
 type StateBatch = States[Jagged[Tokens[Sparse, Jagged[Sparse]]], Sparse]
@@ -199,47 +225,9 @@ type StateBatchReserved = States[
 ]
 
 
-@dataclass(frozen=True)
-class MinibatchPlan:
-    """Selected device state IDs and host integers sizing every Jagged's selected rows."""
-
-    x_state_ids: torch.Tensor
-    counts_total: list[int]  # One per Jagged, in Jagged order
-
-
-@dataclass(frozen=True)
-class StateBatchLayout:
-    """Cached offsets for one immutable game batch; never a batch read from a worker's buffer.
-
-    Device offsets index each Jagged's rows. CPU offsets also permit contiguous views
-    without reading device scalars. Rebuild this layout if the batch's lengths change.
-    """
-
-    x_off_state: torch.Tensor  # (B + 1, number_of_Jaggeds) long, in Jagged order
-    x_off_state_cpu: torch.Tensor  # (B + 1, number_of_Jaggeds) long, in Jagged order
-
-
-@dataclass
-class TokenIndex:
-    """Cached lookups for the model's token rows, built once by the projector.
-
-    Token rows stay in the encoded batch's order through projection and attention, so these
-    indices remain valid throughout the model pass. State boundaries belong to Jagged.x_lengths;
-    action masks belong to StateBatch.tokens.rows. Host entity counts share the projector's
-    one device read with the draw-order sizes.
-    """
-
-    x_kind: torch.Tensor  # (N,) long, Tokens.x_token_kind widened once for the projector and Core
-    x_entity_kind: torch.Tensor  # (N,) long
-    x_state: torch.Tensor  # (N,) long, the state owning each token
-    x_kind_row: torch.Tensor  # (B, len(TokenKind)) long, N where the token kind is absent
-    x_kind_count: torch.Tensor  # (B, len(TokenKind)) long
-    entity_counts: list[int]  # One per Entity kind, in TOKEN_KINDS_OF_ENTITY_KIND's order
-
-
 @dataclass
 class CoreOutput:
-    """Refined token embeddings, cached indices, and per-state policy/value contexts.
+    """Refined token embeddings and per-state policy/value contexts.
 
     The policy's tokens and context include draw order only where Frozen Eye makes it visible.
     The value context includes draw order on every state whose pile shows an order. Both
@@ -247,14 +235,13 @@ class CoreOutput:
     """
 
     tokens: Jagged[torch.Tensor]  # (B,) lengths; (N, dim_entity) refined token rows
-    index: TokenIndex
     x_policy_context: torch.Tensor  # (B, dim_global)
     x_value_context: torch.Tensor  # (B, dim_global)
 
 
 @dataclass
 class PolicyOutput:
-    """One sampled action per state, with the policy statistics for its three levels.
+    """One action per state, selected or recorded, with the policy statistics for its three levels.
 
     Each action row holds [action type, token offset, target rank]. The token offset indexes
     that state's encoded tokens, across all token kinds; it stays valid when whole states are
@@ -278,7 +265,6 @@ class Rollout:
     """
 
     state_batch: StateBatch  # N states
-    x_counts_cpu: torch.Tensor  # (N, number_of_Jaggeds) long, in Jagged order
     x_actions: torch.Tensor  # (N, 3): action type, state-local token offset, Monster rank
     x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
     x_rewards: torch.Tensor  # (T, E, K)

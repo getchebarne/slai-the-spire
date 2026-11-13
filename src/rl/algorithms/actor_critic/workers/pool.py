@@ -15,7 +15,6 @@ from src.rl.algorithms.actor_critic.envs import new_env
 from src.rl.algorithms.actor_critic.envs import step_env
 from src.rl.batches import allocate_states
 from src.rl.batches import cat_states
-from src.rl.batches import count_jagged_rows
 from src.rl.batches import iter_tensors
 from src.rl.batches import map_tensors
 from src.rl.batches import read_states
@@ -24,6 +23,7 @@ from src.rl.encoding import encode_states_into
 from src.rl.reward import RewardStream
 from src.rl.types import StateBatch
 from src.rl.types import StateBatchReserved
+from src.rl.types import StateCounts
 from src.rl.utils import parent_alive
 from src.rl.utils import set_rng_seeds
 
@@ -299,11 +299,11 @@ def _check_workers_alive(worker_handles: list[_WorkerHandle]) -> None:
         raise RuntimeError("The Learner died while waiting for rollout workers")
 
 
-def snapshot_to_device(workers: Workers, device: torch.device) -> tuple[StateBatch, torch.Tensor]:
+def snapshot_to_device(workers: Workers, device: torch.device) -> tuple[StateBatch, StateCounts]:
     """Copy every game's state out of the step buffers onto the device.
 
     The workers' rows are joined on the CPU and copied onto the device in one copy, with the
-    state's counts kept on the CPU. The copy is the snapshot: the rollout keeps it while the
+    states' counts kept on the CPU. The copy is the snapshot: the rollout keeps it while the
     workers overwrite the step on the next request.
 
     Parameters
@@ -317,8 +317,8 @@ def snapshot_to_device(workers: Workers, device: torch.device) -> tuple[StateBat
     -------
     state_batch : StateBatch
         Every game's state, on the device.
-    x_counts_cpu : torch.Tensor
-        (E, number_of_Jaggeds) long. Each of the E games' rows in each Jagged, on the CPU.
+    state_counts_cpu : StateCounts
+        The E games' counts, `state_batch.state_counts` on the CPU.
     """
     if not workers._handles:
         raise RuntimeError("The workers have been stopped")
@@ -330,7 +330,7 @@ def snapshot_to_device(workers: Workers, device: torch.device) -> tuple[StateBat
     state_batch = cat_states(state_batches)
 
     # Send the `StateBatch` to the device
-    return to_device(state_batch, device), count_jagged_rows(state_batch)
+    return to_device(state_batch, device), state_batch.state_counts
 
 
 def stop_workers(workers: Workers) -> None:

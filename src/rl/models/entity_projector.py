@@ -1,12 +1,10 @@
 import math
-from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_HEALTH_BLOCK
 from src.rl.encoding import COL_START_MONSTER
@@ -18,38 +16,12 @@ from src.rl.encoding import COL_START_TAG
 from src.rl.encoding import ENCODING_DIM_EFFECT
 from src.rl.encoding import ENCODING_DIM_MODIFIER
 from src.rl.encoding import ENCODING_DIM_TOKEN
-from src.rl.encoding import OFF_FOCUS_DRAW_ORDER_VISIBLE
-from src.rl.encoding import focus_view
 from src.rl.models.spread_embedding import SpreadEmbedding
+from src.rl.types import EntityKind
 from src.rl.types import Jagged
 from src.rl.types import Sparse
 from src.rl.types import StateBatch
-from src.rl.types import TokenIndex
 from src.rl.types import TokenKind
-
-
-# Each token kind's Entity kind: its index in `TOKEN_KINDS_OF_ENTITY_KIND`
-_MAP_TOKEN_KIND_TO_ENTITY_KIND = {
-    token_kind: entity_kind
-    for entity_kind, token_kinds in enumerate(TOKEN_KINDS_OF_ENTITY_KIND)
-    for token_kind in token_kinds
-}
-
-
-@dataclass
-class _DrawOrderPlan:
-    """States with ordered draw piles, visible ones first, and their cached host sizes.
-
-    The projector reads these sizes together with the entity counts. Core uses the visible
-    prefix for policy context and the entire plan for value context.
-    """
-
-    x_states: torch.Tensor  # (S,) long
-    num_states_visible: int
-    num_rows_visible: int
-    num_rows: int
-    num_pile_visible: int
-    num_pile: int
 
 
 class EntityProjector(nn.Module):
@@ -57,8 +29,8 @@ class EntityProjector(nn.Module):
 
     One first layer over the shared columns plus each token's Entity kind bias, the Rooms' Map
     nodes through their own, the owned row kinds (Effects, Modifiers) added into their owners,
-    then one shared second layer + LayerNorm. Returns the token embeddings grouped by state,
-    their cached index, the draw-order layer's states, and the embedded pending halt.
+    then one shared second layer + LayerNorm. Returns the token embeddings grouped by state and
+    the embedded pending halt.
 
     Parameters
     ----------
@@ -68,9 +40,6 @@ class EntityProjector(nn.Module):
         The width of the Map GNN's node features.
     """
 
-    # The buffer `__init__` registers, typed for mypy
-    _x_entity_kind_of_token_kind: torch.Tensor
-
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
 
@@ -78,9 +47,7 @@ class EntityProjector(nn.Module):
         self._pre_token = nn.Linear(ENCODING_DIM_TOKEN, dim_entity, bias=False)
 
         # Per-Entity kind bias
-        self._x_bias_entity_kind = nn.Parameter(
-            torch.zeros(len(TOKEN_KINDS_OF_ENTITY_KIND), dim_entity)
-        )
+        self._x_bias_entity_kind = nn.Parameter(torch.zeros(len(EntityKind), dim_entity))
 
         # Rooms are separate because they come already-processed by `MapGNN`
         self._pre_room = nn.Linear(dim_map, dim_entity)
@@ -105,22 +72,12 @@ class EntityProjector(nn.Module):
         # LayerNorm cuz LayerNorm
         self._layer_norm = nn.LayerNorm(dim_entity)
 
-        # Each token kind's Entity kind; derived, so excluded from checkpoints
-        self.register_buffer(
-            "_x_entity_kind_of_token_kind",
-            torch.tensor([_MAP_TOKEN_KIND_TO_ENTITY_KIND[token_kind] for token_kind in TokenKind]),
-            persistent=False,
-        )
-
     def init_token_weights(self) -> None:
         """Initialize each token feature range independently after the general linear init.
 
         Each range receives an orthogonal initialization with gain sqrt(2), preserving its
         scale regardless of the total number of token columns.
         """
-        # The shared first layer per column range, each Entity kind's then the health/block, price,
-        # slot and Tag ones, as its own layer: orthogonal over all of them would shrink each
-        # column's scale
         with torch.no_grad():
             for x_weight_range in torch.tensor_split(
                 self._pre_token.weight,
@@ -139,143 +96,57 @@ class EntityProjector(nn.Module):
                 nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
 
     def forward(
-        self, state_batch: StateBatch, x_hidden_map: torch.Tensor, x_map_of_state: torch.Tensor
-    ) -> tuple[Jagged[torch.Tensor], TokenIndex, _DrawOrderPlan, torch.Tensor]:
+        self, state_batch: StateBatch, x_room_hidden: torch.Tensor
+    ) -> tuple[Jagged[torch.Tensor], torch.Tensor]:
         """Embed `state_batch`'s window.
 
         Parameters
         ----------
         state_batch : StateBatch
             The game states.
-        x_hidden_map : torch.Tensor
-            (U, H * W, dim_map). The Map GNN's per-node features of each Map it ran on (see
-            `MapGNN.forward`).
-        x_map_of_state : torch.Tensor
-            (B,) long. Each state's Map, its index in `x_hidden_map`.
+        x_room_hidden : torch.Tensor
+            (N_rooms, dim_map). Each Room token's node features from the Map GNN, in the Room
+            tokens' order (see `MapGNN.forward`).
 
         Returns
         -------
         projected : Jagged[torch.Tensor]
             The (N_tok, D) token embeddings, grouped by state in window order.
-        index : TokenIndex
-            Cached token kinds, owners, and lookup tables for the model.
-        draw_order : _DrawOrderPlan
-            The draw-order layer's states.
         x_effect_pending : torch.Tensor
             (B, D). Each state's embedded pending halt, zero where none is pending.
         """
-        # Shapes: B = batch, D = embedding width, N_tok = the window's tokens
+        # Shapes: B = batch, D = embedding width, N_tok = number of tokens
         tokens = state_batch.tokens.rows
-        batch_size = state_batch.tokens.x_lengths.shape[0]
-        num_tokens = tokens.x_token_kind.shape[0]
-
-        # Each token's token kind, Entity kind and state, and each state's tokens
-        x_token_kind = tokens.x_token_kind.long()  # (N_tok,)
-        x_entity_kind = self._x_entity_kind_of_token_kind[x_token_kind]  # (N_tok,)
-
-        # Handy alias
-        x_count_window = state_batch.tokens.x_lengths  # (B,)
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
         x_first = _project_sparse(self._pre_token, tokens.features) + SpreadEmbedding.apply(
-            self._x_bias_entity_kind, x_entity_kind
+            self._x_bias_entity_kind, tokens.x_entity_kind.long()
         )
 
-        # State identifier for each token in the batch
-        x_state = torch.repeat_interleave(x_count_window, output_size=num_tokens)  # (N_tok,)
-
-        # `x_token_kind_count`:   Number of tokens of each `TokenKind` for each state
-        # `x_token_kind_row`:     Index of first token of each `TokenKind` for each state
-        # Both (B, `len(TokenKind)`)
-        x_token_kind_count, x_token_kind_row = _token_kind_tables(
-            x_state, x_token_kind, batch_size
-        )
-
-        # The draw-order layer's states, whose draw pile shows an order (2 or more draw tokens):
-        # `x_ordered` masks those under Frozen Eye (visible), then the others (hidden)
-        x_token_kind_count_draw_pile = x_token_kind_count[:, TokenKind.CARD_PILE_DRAW]  # (B,)
-        x_draw_order_visible = (
-            focus_view(state_batch.x_context)[:, OFF_FOCUS_DRAW_ORDER_VISIBLE] > 0
-        )  # (B,)
-        x_ordered = (x_token_kind_count_draw_pile >= 2) & torch.stack(
-            [x_draw_order_visible, ~x_draw_order_visible]
-        )  # (2, B)
-
-        # The layer's sizes and each Entity kind's tokens in one read: the CPU waits for the GPU
-        # here, and nowhere else; every other size is a shape
-        (
-            num_states_visible,
-            num_states_hidden,
-            num_rows_visible,
-            num_rows_hidden,
-            num_pile_visible,
-            num_pile_hidden,
-            *num_tokens_entity_kind,
-        ) = torch.cat(
-            [
-                x_ordered.sum(dim=1),  # (2,)
-                (x_ordered * x_count_window).sum(dim=1),  # (2,)
-                (x_ordered * x_token_kind_count_draw_pile).sum(dim=1),  # (2,)
-                torch.zeros(
-                    len(TOKEN_KINDS_OF_ENTITY_KIND), dtype=torch.long, device=x_entity_kind.device
-                ).index_add_(0, x_entity_kind, torch.ones_like(x_entity_kind)),
-            ]
-        ).tolist()
-
-        draw_order = _DrawOrderPlan(
-            x_states=torch.cat(
-                [
-                    torch.nonzero_static(x_ordered[0], size=num_states_visible),
-                    torch.nonzero_static(x_ordered[1], size=num_states_hidden),
-                ]
-            ).squeeze(1),
-            num_states_visible=num_states_visible,
-            num_rows_visible=num_rows_visible,
-            num_rows=num_rows_visible + num_rows_hidden,
-            num_pile_visible=num_pile_visible,
-            num_pile=num_pile_visible + num_pile_hidden,
-        )
-
-        # Rooms: each Room token's node in its state's Map, through _pre_room in place of the first
-        # layer (no entries, no Entity kind bias)
-        num_rooms = num_tokens_entity_kind[_MAP_TOKEN_KIND_TO_ENTITY_KIND[TokenKind.ROOMS]]
-        x_room_row = torch.nonzero_static(x_token_kind == TokenKind.ROOMS, size=num_rooms)
+        # Rooms: each Room token's node features, through _pre_room in place of the first layer
+        # (no entries, no Entity kind bias)
+        num_rooms = x_room_hidden.shape[0]
+        x_room_row = torch.nonzero_static(tokens.x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
-        x_node_hidden = x_hidden_map[
-            x_map_of_state[x_state[x_room_row]],
-            tokens.x_node_idx[x_room_row].long(),
-        ]  # (N_rooms, dim_map)
-        x_first[x_room_row] = self._pre_room(x_node_hidden)
+        x_first[x_room_row] = self._pre_room(x_room_hidden)
 
-        # Owned rows add into their owners, scaled by 1/sqrt(rows per owner), before the shared
-        # ReLU/LayerNorm
-        _add_owned(x_first, tokens.effects, self._effects_mlp)
-        _add_owned(x_first, tokens.modifiers, self._modifiers_mlp)
+        # Project owned rows
+        x_effects = _project_sparse(self._effects_mlp, tokens.effects.rows)
+        x_modifiers = _project_sparse(self._modifiers_mlp, tokens.modifiers.rows)
+
+        # Add owned rows to their owners, scaled by 1/sqrt(rows_per_owner)
+        _add_owned(x_first, x_effects, tokens.effects.x_lengths)
+        _add_owned(x_first, x_modifiers, tokens.modifiers.x_lengths)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
         effect_pending = state_batch.effect_pending
         x_effect_pending = _project_sparse(self._effects_mlp, effect_pending)  # (B, D)
-
-        # Zero the states with no halt pending, whose empty rows would keep the first layer's bias
         x_effect_pending = x_effect_pending * (effect_pending.x_lengths > 0).unsqueeze(1)
 
         # Shared second layer + norm on the rows
         x_hidden = self._layer_norm(self._post_shared(F.relu(x_first)))  # (N_tok, D)
 
-        index = TokenIndex(
-            x_kind=x_token_kind,
-            x_entity_kind=x_entity_kind,
-            x_state=x_state,
-            x_kind_row=x_token_kind_row,
-            x_kind_count=x_token_kind_count,
-            entity_counts=num_tokens_entity_kind,
-        )
-        return (
-            Jagged(x_lengths=x_count_window, rows=x_hidden),
-            index,
-            draw_order,
-            x_effect_pending,
-        )
+        return Jagged(x_lengths=state_batch.tokens.x_lengths, rows=x_hidden), x_effect_pending
 
 
 def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.Tensor:
@@ -309,7 +180,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.T
     return x_rows
 
 
-def _add_owned(x_first: torch.Tensor, owned: Jagged[Sparse], mapper: nn.Sequential) -> None:
+def _add_owned(x_first: torch.Tensor, x_rows: torch.Tensor, x_count: torch.Tensor) -> None:
     """Add an owned row kind's rows into their owners' rows of `x_first`.
 
     Each token owns one segment of rows, and each row is scaled by 1/sqrt(its owner's count).
@@ -318,79 +189,16 @@ def _add_owned(x_first: torch.Tensor, owned: Jagged[Sparse], mapper: nn.Sequenti
     ----------
     x_first : torch.Tensor
         (N_tok, D). The tokens' first-layer rows, updated in place.
-    owned : Jagged[Sparse]
-        The owned row kind's rows, held sparse.
-    mapper : nn.Sequential
-        The owned row kind's MLP.
+    x_rows : torch.Tensor
+        (M, D). The owned rows, projected, each token's after the previous token's.
+    x_count : torch.Tensor
+        (N_tok,) int16. Each token's number of owned rows.
     """
-    # Project owned rows
-    x_rows = _project_sparse(mapper, owned.rows)  # (M, D)
-
     # Each owned row's owner, from the counts widened
-    x_count = owned.x_lengths  # (N_tok,) int16
-    x_owner = torch.repeat_interleave(
-        x_count.long(), output_size=owned.rows.x_lengths.shape[0]
-    )  # (M,)
+    x_owner = torch.repeat_interleave(x_count.long(), output_size=x_rows.shape[0])  # (M,)
 
     # Sum projected owned rows to their respective owners' first-layer output representations
     x_first.index_add_(0, x_owner, x_rows / x_count[x_owner].to(x_rows.dtype).sqrt().unsqueeze(1))
-
-
-def _token_kind_tables(
-    x_state: torch.Tensor, x_token_kind: torch.Tensor, batch_size: int
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Count each state's tokens of each token kind and find each token kind's first row.
-
-    A token kind's tokens sit in consecutive rows.
-
-    Parameters
-    ----------
-    x_state : torch.Tensor
-        (N_tok,) long. Each row's state.
-    x_token_kind : torch.Tensor
-        (N_tok,) long. Each row's token kind.
-    batch_size : int
-        The number of states, B.
-
-    Returns
-    -------
-    x_token_kind_count : torch.Tensor
-        (B, len(TokenKind)) long. Each state's tokens of each token kind.
-    x_token_kind_row : torch.Tensor
-        (B, len(TokenKind)) long. Each state's row of each token kind's first token; the
-        window's rows (out of range) where the token kind is absent.
-    """
-    num_tokens = x_state.shape[0]
-
-    # Initialize tensors to:
-    #     1. Store the amount of tokens for each kind in each state
-    #     2. Store the index of the first token for each token kind in each state
-    x_token_kind_count = torch.zeros(
-        (batch_size * len(TokenKind),), dtype=torch.long, device=x_state.device
-    )
-    x_token_kind_row = torch.full(
-        (batch_size * len(TokenKind),), num_tokens, dtype=torch.long, device=x_state.device
-    )
-
-    # Calculate the key: each token's state and token kind
-    x_key = x_state * len(TokenKind) + x_token_kind  # (N_tok,)
-
-    # Add it for the counts (`x_token_kind_count` is initialized as zeros)
-    x_token_kind_count.index_add_(0, x_key, torch.ones_like(x_key))
-
-    # Scatter-reduce to get the index of the first token for each state and token kind
-    # Equivalent to:
-    # ```
-    # for i in range(num_tokens):
-    #     cell = x_key[i]
-    #     x_token_kind_row[cell] = min(x_token_kind_row[cell], i)
-    # ```
-    x_token_kind_row.scatter_reduce_(
-        0, x_key, torch.arange(num_tokens, device=x_key.device), reduce="amin"
-    )
-
-    # Return as (B, len(TokenKind)) pair
-    return x_token_kind_count.view(batch_size, -1), x_token_kind_row.view(batch_size, -1)
 
 
 class _SumSparseDenseBackward(torch.autograd.Function):
@@ -464,8 +272,6 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         """
         x_lengths, x_column, x_value = ctx.saved_tensors
 
-        # Entry owners are derived from lengths; the flat entry shape supplies output_size,
-        # so no tensor value needs to be read back to the CPU.
         x_owner = torch.repeat_interleave(x_lengths.long(), output_size=x_column.shape[0])
         x_dense = torch.zeros(
             x_lengths.shape[0], ctx.num_columns, dtype=x_grad.dtype, device=x_grad.device
