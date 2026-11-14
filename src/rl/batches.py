@@ -33,6 +33,8 @@ from src.rl.types import Tokens
 __all__ = [
     "allocate_states",
     "cat_states",
+    "get_row_segment",
+    "get_segment_first_row",
     "iter_tensors",
     "map_tensors",
     "read_states",
@@ -84,6 +86,46 @@ def map_tensors[T](value: T, fn: Callable[[torch.Tensor], torch.Tensor]) -> T:
     return type(record)(
         **{field.name: map_tensors(getattr(record, field.name), fn) for field in fields(record)}
     )
+
+
+def get_row_segment(x_lengths: torch.Tensor, num_rows: int) -> torch.Tensor:
+    """Find each row's segment.
+
+    The rows sit segment after segment: lengths [3, 2, 4] give [0, 0, 0, 1, 1, 2, 2, 2, 2].
+
+    Parameters
+    ----------
+    x_lengths : torch.Tensor
+        (S,) integer. Each segment's number of rows.
+    num_rows : int
+        The segments' total number of rows, as the host knows it: no size is read back from the
+        device.
+
+    Returns
+    -------
+    torch.Tensor
+        (num_rows,) long. Each row's segment.
+    """
+    return torch.repeat_interleave(x_lengths.long(), output_size=num_rows)
+
+
+def get_segment_first_row(x_lengths: torch.Tensor) -> torch.Tensor:
+    """Find each segment's first row.
+
+    The rows sit segment after segment: lengths [3, 2, 4] give [0, 3, 5].
+
+    Parameters
+    ----------
+    x_lengths : torch.Tensor
+        (S, ...) integer. Each segment's number of rows. Any further axes hold independent
+        groupings, each totalled on its own.
+
+    Returns
+    -------
+    torch.Tensor
+        (S, ...) long. Each segment's first row.
+    """
+    return x_lengths.cumsum(0) - x_lengths
 
 
 def allocate_states(num_buffers: int, buffer_size: int) -> StateBatchReserved:
@@ -399,12 +441,12 @@ def take_minibatch_states(
 
     # Each state's rows in every Jagged, and where they start
     x_jagged_count = state_batch.state_counts.x_jagged_count.long()  # (B, number_of_Jaggeds)
-    x_starts = x_jagged_count.cumsum(0) - x_jagged_count  # (B, number_of_Jaggeds)
+    x_state_first_row = get_segment_first_row(x_jagged_count)  # (B, number_of_Jaggeds)
 
     # Each Jagged's source rows, in output order
     jagged_rows = [
         _expand_ranges(
-            x_starts[x_state_ids, idx_jagged],
+            x_state_first_row[x_state_ids, idx_jagged],
             x_jagged_count[x_state_ids, idx_jagged],
             count_total,
         )
@@ -437,7 +479,7 @@ def _expand_ranges(
         (count_total,) long. The rows, range after range.
     """
     # Where each range lands in the output: back to back
-    x_starts_output = x_counts.cumsum(0) - x_counts
+    x_starts_output = get_segment_first_row(x_counts)
 
     # Every output row moves by its range's shift: source row = output row + shift
     x_shifts = (x_starts - x_starts_output)

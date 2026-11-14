@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.batches import get_row_segment
+from src.rl.batches import get_segment_first_row
 from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_HEALTH_BLOCK
 from src.rl.encoding import COL_START_MONSTER
@@ -193,11 +195,13 @@ def _add_owned(x_first: torch.Tensor, x_rows: torch.Tensor, x_count: torch.Tenso
     x_count : torch.Tensor
         (N_tok,) int16. Each token's number of owned rows.
     """
-    # Each owned row's owner, from the counts widened
-    x_owner = torch.repeat_interleave(x_count.long(), output_size=x_rows.shape[0])  # (M,)
+    # Each owned row's token
+    x_row_token = get_row_segment(x_count, x_rows.shape[0])  # (M,)
 
     # Sum projected owned rows to their respective owners' first-layer output representations
-    x_first.index_add_(0, x_owner, x_rows / x_count[x_owner].to(x_rows.dtype).sqrt().unsqueeze(1))
+    x_first.index_add_(
+        0, x_row_token, x_rows / x_count[x_row_token].to(x_rows.dtype).sqrt().unsqueeze(1)
+    )
 
 
 class _SumSparseDenseBackward(torch.autograd.Function):
@@ -237,13 +241,17 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         """
         ctx.save_for_backward(x_lengths, x_column, x_value)
         ctx.num_columns = x_weight.shape[1]
-        x_off = F.pad(x_lengths.cumsum(0, dtype=torch.long), (1, 0))  # (N + 1,)
+
+        # Each row's first entry, then the end
+        x_row_first_entry = F.pad(
+            get_segment_first_row(x_lengths), (0, 1), value=x_column.shape[0]
+        )  # (N + 1,)
 
         # The transposed weight copied whole: as a strided view, a GPU reads its rows uncoalesced
         return F.embedding_bag(
             x_column.int(),
             x_weight.t().contiguous(),
-            offsets=x_off,
+            offsets=x_row_first_entry,
             per_sample_weights=x_value,
             mode="sum",
             include_last_offset=True,
@@ -271,9 +279,10 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         """
         x_lengths, x_column, x_value = ctx.saved_tensors
 
-        x_owner = torch.repeat_interleave(x_lengths.long(), output_size=x_column.shape[0])
+        # Each entry's row
+        x_entry_row = get_row_segment(x_lengths, x_column.shape[0])  # (F,)
         x_dense = torch.zeros(
             x_lengths.shape[0], ctx.num_columns, dtype=x_grad.dtype, device=x_grad.device
         )
-        x_dense.view(-1).scatter_add_(0, x_owner * ctx.num_columns + x_column.long(), x_value)
+        x_dense.view(-1).scatter_add_(0, x_entry_row * ctx.num_columns + x_column.long(), x_value)
         return None, None, None, x_grad.t() @ x_dense  # (D, in)
