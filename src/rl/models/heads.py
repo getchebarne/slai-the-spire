@@ -5,10 +5,7 @@ import torch.nn as nn
 
 
 class HeadActionType(nn.Module):
-    """L1 ActionType head: `x_global` gated by the focus context before scoring.
-
-    The gate is an AlphaStar-style GLU, so the head can mute the global features irrelevant to the
-    current focus.
+    """L1 ActionType head: scores each choice from `x_global`.
 
     Parameters
     ----------
@@ -18,23 +15,18 @@ class HeadActionType(nn.Module):
         The width of the scorer's hidden layer.
     num_choices : int
         The number of choices the head scores.
-    dim_context : int
-        The width of the focus context.
     """
 
-    def __init__(self, dim_global: int, dim_ff: int, num_choices: int, dim_context: int) -> None:
+    def __init__(self, dim_global: int, dim_ff: int, num_choices: int) -> None:
         super().__init__()
 
-        self._gate = nn.Linear(dim_context, dim_global)
         self._scorer = nn.Sequential(
             nn.Linear(dim_global, dim_ff),
             nn.ReLU(),
             nn.Linear(dim_ff, num_choices),
         )
 
-    def forward(
-        self, x_global: torch.Tensor, x_context: torch.Tensor, x_mask: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x_global: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
         """Score the action-type choices.
 
         Sampling/recompute is the caller's job.
@@ -43,8 +35,6 @@ class HeadActionType(nn.Module):
         ----------
         x_global : torch.Tensor
             (B, dim_global). Each state's global vector.
-        x_context : torch.Tensor
-            (B, dim_context) float32. Each state's focus context, which gates `x_global`.
         x_mask : torch.Tensor
             (B, NUM_ACTION_TYPES) bool. Each state's legal `ActionType`s.
 
@@ -53,8 +43,7 @@ class HeadActionType(nn.Module):
         torch.Tensor
             (B, num_choices). The masked logits: -inf where `x_mask` is False.
         """
-        x_gated = torch.sigmoid(self._gate(x_context)) * x_global
-        x_logits = self._scorer(x_gated)
+        x_logits = self._scorer(x_global)
         return x_logits.masked_fill(~x_mask, float("-inf"))
 
 

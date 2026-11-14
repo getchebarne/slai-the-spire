@@ -251,12 +251,11 @@ class CoreOutput:
     """The game states after the core: what the heads read.
 
     Tokens have one segment per state; every other field has one row per state. The legal action
-    types, the focus and the counts are the input states' own, carried over untouched.
+    types and the counts are the input states' own, carried over untouched.
     """
 
     tokens: Jagged[TokensRefined]  # (B,) long lengths
     x_global: torch.Tensor  # (B, dim_global)
-    x_focus: torch.Tensor  # (B, ENCODING_DIM_FOCUS) float32, the context's focus columns
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     state_counts: StateCounts
 
@@ -275,7 +274,7 @@ class PolicyOutput:
     x_actions: torch.Tensor  # (B, 3) long; action type, state-local token offset, Monster rank
     x_log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
     x_entropy: torch.Tensor  # (B, 3) float, 0 where N/A
-    x_kl_uniform: torch.Tensor  # (B, 3) float, KL(uniform‖π) over legal actions, 0 where N/A
+    x_kl_uniform: torch.Tensor  # (B, 3) float, KL-Uniform over legal actions, 0 where N/A
 
 
 @dataclass

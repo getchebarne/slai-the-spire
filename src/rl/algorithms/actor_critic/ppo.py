@@ -504,7 +504,7 @@ def _minibatch_metrics(
     x_entropies : torch.Tensor
         (batch_size, 3). The entropy of each of the minibatch's states at each level.
     x_kl_uniform : torch.Tensor
-        (batch_size, 3). Each state's KL(uniform‖π) at each level.
+        (batch_size, 3). Each state's KL-Uniform at each level.
     x_ratios : torch.Tensor
         (batch_size,). Each recorded action's probability ratio, the current weights' over
         π_prox's.
