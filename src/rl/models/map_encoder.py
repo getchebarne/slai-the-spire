@@ -157,7 +157,7 @@ class MapGNN(nn.Module):
         x_packed = _pack_rows(x_nodes)  # (B, words)
 
         # x_uniq: (U, words)
-        # x_inverse: (B,) / x_inverse[b] ∈ [0, U). Maps each batch sample to its unique ID
+        # x_inverse: (B,) / x_inverse[b] ∈ [0, U). Maps each state to its unique ID
         x_uniq, x_inverse = torch.unique(x_packed, dim=0, return_inverse=True)
 
         x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_nodes.device)

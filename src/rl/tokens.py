@@ -1,4 +1,4 @@
-"""The engine collections behind tokens, their caps and their shared packing order."""
+"""The engine collections behind tokens, their caps, and a state's tokens in window order."""
 
 import warnings
 from collections.abc import Iterator
@@ -41,6 +41,7 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.constants import TOKEN_KINDS_CARD
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
+from src.rl.constants import TOKEN_KINDS_IN_WINDOW_ORDER
 from src.rl.constants import TOKEN_KINDS_POTION
 from src.rl.constants import TOKEN_KINDS_RELIC
 from src.rl.types import Entity
@@ -118,9 +119,9 @@ def iter_tokens(game_state: GameState) -> Iterator[Token]:
     Yields
     ------
     Token
-        Each token kind and Entity, in packing order and then collection order.
+        Each token kind and Entity, in `TOKEN_KINDS_IN_WINDOW_ORDER` and then collection order.
     """
-    for token_kind in TokenKind:
+    for token_kind in TOKEN_KINDS_IN_WINDOW_ORDER:
         for entity in get_entities_for_token_kind(token_kind, game_state):
             yield token_kind, entity
 

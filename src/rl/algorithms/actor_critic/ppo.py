@@ -34,10 +34,10 @@ class PPOConfig:
 class _Targets:
     """What an update's minibatches train against: one row per state, fixed for the update."""
 
-    x_log_probs_prox: torch.Tensor  # (num_states,) the recorded actions' log-probs under π_prox
-    x_returns: torch.Tensor  # (num_states, num_reward_streams)
-    x_advantages: torch.Tensor  # (num_states,) summed over the reward streams, normalized
-    x_weights_capped: torch.Tensor  # (num_states,) π_prox / π_behavior, capped
+    x_log_probs_prox: torch.Tensor  # (batch_size,) the recorded actions' log-probs under π_prox
+    x_returns: torch.Tensor  # (batch_size, num_reward_streams)
+    x_advantages: torch.Tensor  # (batch_size,) summed over the reward streams, normalized
+    x_weights_capped: torch.Tensor  # (batch_size,) π_prox / π_behavior, capped
 
 
 def update_ppo(
@@ -190,20 +190,20 @@ def _evaluate_rollout(
     Returns
     -------
     x_log_probs_prox : torch.Tensor
-        (num_states,). Each state's recorded action's log-prob, summed over the levels.
+        (batch_size,). Each state's recorded action's log-prob, summed over the levels.
     x_value_prox : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values.
     x_value_final : torch.Tensor
         (num_envs, num_reward_streams). Each game's final value.
     """
     rollout_length, num_envs, num_reward_streams = rollout.x_rewards.shape
-    num_states = rollout_length * num_envs
+    batch_size = rollout_length * num_envs
     
     x_batch_log_prob = []
     x_batch_value = []
     with torch.no_grad():
-        for start in range(0, num_states, minibatch_size):
-            stop = min(start + minibatch_size, num_states)
+        for start in range(0, batch_size, minibatch_size):
+            stop = min(start + minibatch_size, batch_size)
 
             # Slice `StateBatch` and actions
             state_batch_slice = slice_state_batch(
@@ -215,7 +215,7 @@ def _evaluate_rollout(
             x_actions_slice = rollout.x_actions[start:stop]
 
             # Evaluate actions on the slice's states
-            policy_output, x_value = model.evaluate_actions(
+            policy_output, x_value = model.action_evaluate(
                 state_batch_slice, state_counts_cpu_slice, x_actions_slice
             )
 
@@ -323,11 +323,11 @@ def _plan_minibatches(
         Each minibatch's state indices on the device and its states' counts on the CPU, in the
         order the minibatches run, epoch after epoch. Every epoch has the same number of them.
     """
-    num_states = len(state_counts_cpu.x_token_kind_count)
+    batch_size = len(state_counts_cpu.x_token_kind_count)
 
     # One shuffle of the states per epoch
     x_state_ids_cpu = torch.stack(
-        [torch.randperm(num_states, generator=generator) for _ in range(num_epochs)]
+        [torch.randperm(batch_size, generator=generator) for _ in range(num_epochs)]
     )
     x_state_ids = (x_state_ids_cpu.pin_memory() if device.type == "cuda" else x_state_ids_cpu).to(
         device, non_blocking=True
@@ -336,7 +336,7 @@ def _plan_minibatches(
     # Each shuffle cut into minibatches, with their states' counts
     minibatches = []
     for num_epoch in range(num_epochs):
-        for start in range(0, num_states, minibatch_size):
+        for start in range(0, batch_size, minibatch_size):
             stop = start + minibatch_size
             x_state_ids_cpu_mini = x_state_ids_cpu[num_epoch, start:stop]
             state_counts_cpu_mini = map_tensors(
@@ -386,7 +386,7 @@ def _update_minibatch(
     """
     # Forward pass, under the weights so far
     state_batch_mini = take_minibatch_states(rollout.state_batch, x_state_ids, state_counts_cpu)
-    policy_output, x_values = model.evaluate_actions(
+    policy_output, x_values = model.action_evaluate(
         state_batch_mini, state_counts_cpu, rollout.x_actions[x_state_ids],
     )
 
@@ -449,7 +449,7 @@ def _compute_loss_policy(
 ) -> torch.Tensor:
     """Compute the policy loss of decoupled PPO (Hilton et al. 2021).
 
-    It clips against π_prox, and weights each sample by π_prox / π_behavior, capped, for the
+    It clips against π_prox, and weights each state by π_prox / π_behavior, capped, for the
     weights that played.
 
     Parameters
@@ -616,14 +616,14 @@ def _anchor_metrics(
     Parameters
     ----------
     x_returns : torch.Tensor
-        (num_states, num_reward_streams). Each state's returns.
+        (batch_size, num_reward_streams). Each state's returns.
     x_value_prox : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values under π_prox's
         weights.
     x_log_weights : torch.Tensor
-        (num_states,). The log of each state's off-policy weight, π_prox / π_behavior, uncapped.
+        (batch_size,). The log of each state's off-policy weight, π_prox / π_behavior, uncapped.
     x_weights : torch.Tensor
-        (num_states,). Each state's off-policy weight, uncapped.
+        (batch_size,). Each state's off-policy weight, uncapped.
     is_clip : float
         The off-policy weights' cap.
 

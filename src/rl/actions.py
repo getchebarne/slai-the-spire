@@ -10,7 +10,7 @@ from src.rl.types import TokenKind
 
 
 def engine_action(
-    idx_action_kind: int, idx_token: int, idx_target: int, game_state: slai.GameState
+    idx_action_kind: int, idx_selection: int, idx_target: int, game_state: slai.GameState
 ) -> slai.Action:
     """Decode the Model's output Actions into the Game's input Action format.
 
@@ -18,7 +18,7 @@ def engine_action(
     ----------
     idx_action_kind : int
         The action kind's index in `ACTION_TYPES`.
-    idx_token : int
+    idx_selection : int
         The selected token's index in this state's entire token sequence, in the encoder's
         order. It remains valid when states are concatenated or reordered in a minibatch.
     idx_target : int
@@ -38,12 +38,14 @@ def engine_action(
     if ACTION_SPEC_REGISTRY[action_kind].arity == (0, 0):
         return slai.Action(action_kind, [])
     
-    if idx_token < 0:
+    if idx_selection < 0:
         raise ValueError("An action with a selection requires a nonnegative token index")
 
-    token = next(islice(iter_tokens(game_state), idx_token, idx_token + 1), None)
+    token = next(islice(iter_tokens(game_state), idx_selection, idx_selection + 1), None)
     if token is None:
-        raise IndexError(f"Token offset {idx_token} is outside this state's token sequence")
+        raise IndexError(
+            f"Selection offset {idx_selection} is outside this state's token sequence"
+        )
     
     ids = [token[1].id]
     if idx_target >= 0:

@@ -408,7 +408,7 @@ def _collect_rollout(
         state_batch, state_counts_cpu = snapshot_to_device(workers, device)
         for _ in range(rollout_config.rollout_length):
             # Forward pass, policy only
-            policy_output = model.act(state_batch, state_counts_cpu, generator=generator)
+            policy_output = model.action_select(state_batch, state_counts_cpu, generator=generator)
             x_step_actions = policy_output.x_actions
 
             # Step the worker's environments
