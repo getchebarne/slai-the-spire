@@ -229,11 +229,13 @@ type StateBatchReserved = States[
 class TokensRefined:
     """Every Entity token after the core, as a row, in the input tokens' order.
 
-    The embedding is the core's. The Entity kind and the legal masks are the input tokens' own,
-    carried over untouched so they stay with the tokens they describe.
+    The embedding is the core's, and so is each token's state, derived once from the lengths.
+    The Entity kind and the legal masks are the input tokens' own, carried over untouched so they
+    stay with the tokens they describe.
     """
 
     x_embedding: torch.Tensor  # (N, dim_entity)
+    x_token_state: torch.Tensor  # (N,) long, its state
     x_entity_kind: torch.Tensor  # (N,) int16, its token kind's Entity kind
 
     # Items selectable under each action type, deduped by Card identity
@@ -256,6 +258,7 @@ class CoreOutput:
 
     tokens: Jagged[TokensRefined]  # (B,) long lengths
     x_global: torch.Tensor  # (B, dim_global)
+    x_character_row: torch.Tensor  # (B,) long, its Character token's row among the tokens
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     state_counts: StateCounts
 

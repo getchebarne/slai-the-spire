@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+from src.rl.batches import get_row_segment
 from src.rl.constants import MAP_TOKEN_KIND_MAX_TOKENS
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.encoding import ENCODING_DIM_CONTEXT
@@ -113,7 +114,7 @@ class Core(nn.Module):
         -------
         CoreOutput
             The refined tokens grouped by state with their legal masks, and each state's global
-            vector, legal action types and counts.
+            vector, Character row, legal action types and counts.
         """
 
         tokens = state_batch.tokens
@@ -121,7 +122,7 @@ class Core(nn.Module):
         batch_size = tokens.x_lengths.shape[0]
 
         # Each token's state
-        x_state = torch.repeat_interleave(tokens.x_lengths, output_size=num_tokens)  # (N,)
+        x_token_state = get_row_segment(tokens.x_lengths, num_tokens)  # (N,)
 
         # Map GNN: the Room tokens' node features and the whole-graph readout
         num_rooms = int(state_counts_cpu.x_token_kind_count[:, TokenKind.ROOMS].sum())
@@ -138,7 +139,7 @@ class Core(nn.Module):
                     jag_projected.rows, state_batch.tokens.rows.x_token_kind.long()
                 ),
             ),
-            x_state,
+            x_token_state,
         )
 
         # Each state's global vector
@@ -161,6 +162,7 @@ class Core(nn.Module):
         # The input tokens' Entity kinds and legal masks stay with the refined tokens
         tokens_refined = TokensRefined(
             x_embedding=jag_refined.rows,
+            x_token_state=x_token_state,
             x_entity_kind=tokens.rows.x_entity_kind,
             x_legal_selection=tokens.rows.x_legal_selection,
             x_legal_target=tokens.rows.x_legal_target,
@@ -170,6 +172,7 @@ class Core(nn.Module):
         return CoreOutput(
             tokens=Jagged(x_lengths=jag_refined.x_lengths, rows=tokens_refined),
             x_global=x_global,
+            x_character_row=x_character_row,
             x_legal_action_type=state_batch.x_legal_action_type,
             state_counts=state_batch.state_counts,
         )

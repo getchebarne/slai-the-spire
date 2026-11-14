@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from torch.nn.attention.flex_attention import BlockMask
 from torch.nn.attention.flex_attention import flex_attention
 
+from src.rl.batches import get_row_segment
+from src.rl.batches import get_segment_first_row
 from src.rl.types import Jagged
 
 
@@ -40,7 +42,7 @@ class EntityTransformer(nn.Module):
         nn.init.normal_(self._x_entity_global, std=0.02)
 
     def forward(
-        self, x_tokens: Jagged[torch.Tensor], x_state: torch.Tensor
+        self, x_tokens: Jagged[torch.Tensor], x_token_state: torch.Tensor
     ) -> tuple[Jagged[torch.Tensor], torch.Tensor]:
         """Refine the packed window's rows together with each state's global token.
 
@@ -50,8 +52,8 @@ class EntityTransformer(nn.Module):
         ----------
         x_tokens : Jagged[torch.Tensor]
             (B,) lengths and (N, D) rows, one segment per state.
-        x_state : torch.Tensor
-            (N,) long. The cached state index for each row.
+        x_token_state : torch.Tensor
+            (N,) long. Each token's state.
 
         Returns
         -------
@@ -65,27 +67,31 @@ class EntityTransformer(nn.Module):
         batch_size = x_tokens.x_lengths.shape[0]
 
         # Start row of each state in `x_rows`. The +1 is for the states' global token
-        x_off = F.pad((x_tokens.x_lengths + 1).cumsum(0), (1, 0))  # (B + 1,)
+        x_state_first_slot = F.pad(
+            get_segment_first_row(x_tokens.x_lengths + 1), (0, 1), value=num_rows + batch_size
+        )  # (B + 1,)
 
         # Calculate number of FlexAttention slots and initialize tensor to hold the sequence
         num_slots = _padded(num_rows + batch_size, x_rows.device)
         x_sequence = torch.zeros(num_slots, dim, dtype=x_rows.dtype, device=x_rows.device)
 
         # Calculate each token's position in the sequence. The global token goes last in each state's sequence
-        x_place_row = x_state + torch.arange(num_rows, device=x_rows.device)   # (num_rows,)
-        x_place_global = x_off[1:] - 1  # (B,)
+        x_place_row = x_token_state + torch.arange(num_rows, device=x_rows.device)   # (num_rows,)
+        x_place_global = x_state_first_slot[1:] - 1  # (B,)
 
         # Fill the empty sequence tensor
         x_sequence[x_place_row] = x_rows
         x_sequence[x_place_global] = self._x_entity_global
 
         # Each slot's state. The padded slots past the last state form state `batch_size`
-        x_slot_state = torch.full((num_slots,), batch_size, dtype=torch.long, device=x_rows.device)
-        x_slot_state[x_place_row] = x_state
-        x_slot_state[x_place_global] = torch.arange(batch_size, device=x_rows.device)
+        x_slot_state = F.pad(
+            get_row_segment(x_tokens.x_lengths + 1, num_rows + batch_size),
+            (0, num_slots - num_rows - batch_size),
+            value=batch_size,
+        )  # (num_slots,)
 
         # Run Attention
-        x_refined = self._refine(x_sequence, _same_state_mask(x_slot_state, x_off))
+        x_refined = self._refine(x_sequence, _same_state_mask(x_slot_state, x_state_first_slot))
 
         # Return refined tokens and each state's global token
         return (
@@ -137,7 +143,7 @@ def _padded(num_rows: int, device: torch.device) -> int:
     return -(-num_rows // _FLEX_BLOCK) * _FLEX_BLOCK
 
 
-def _block_mask(x_slot_state: torch.Tensor, x_off: torch.Tensor) -> BlockMask:
+def _block_mask(x_slot_state: torch.Tensor, x_state_first_slot: torch.Tensor) -> BlockMask:
     """Build FlexAttention's same-state mask on the device.
 
     Each slot attends the slots of its own state.
@@ -147,7 +153,7 @@ def _block_mask(x_slot_state: torch.Tensor, x_off: torch.Tensor) -> BlockMask:
     x_slot_state : torch.Tensor
         (num_slots,) long. Each slot's state, num_slots a multiple of _FLEX_BLOCK; the padded
         slots form state B.
-    x_off : torch.Tensor
+    x_state_first_slot : torch.Tensor
         (B + 1,) long. Each state's first slot, then the end.
 
     Returns
@@ -159,7 +165,7 @@ def _block_mask(x_slot_state: torch.Tensor, x_off: torch.Tensor) -> BlockMask:
     num_blocks = num_slots // _FLEX_BLOCK
 
     # Every state's first slot, the padded slots' state too, then the sequence's end
-    x_starts = F.pad(x_off, (0, 1), value=num_slots)  # (B + 2,)
+    x_starts = F.pad(x_state_first_slot, (0, 1), value=num_slots)  # (B + 2,)
 
     # Each slot's state, one row per block
     x_slot_state_by_block = x_slot_state.view(num_blocks, _FLEX_BLOCK)  # (num_blocks, _FLEX_BLOCK)
@@ -196,7 +202,7 @@ def _block_mask(x_slot_state: torch.Tensor, x_off: torch.Tensor) -> BlockMask:
 
 
 def _same_state_mask(
-    x_slot_state: torch.Tensor, x_off: torch.Tensor
+    x_slot_state: torch.Tensor, x_state_first_slot: torch.Tensor
 ) -> BlockMask | torch.Tensor | None:
     """Build the mask that lets each slot attend the slots of its own state.
 
@@ -204,7 +210,7 @@ def _same_state_mask(
     ----------
     x_slot_state : torch.Tensor
         (num_slots,) long. Each slot's state; the padded slots form state B.
-    x_off : torch.Tensor
+    x_state_first_slot : torch.Tensor
         (B + 1,) long. Each state's first slot, then the end.
 
     Returns
@@ -214,9 +220,9 @@ def _same_state_mask(
         mask, or None for a single state.
     """
     if x_slot_state.is_cuda:
-        return _block_mask(x_slot_state, x_off)
+        return _block_mask(x_slot_state, x_state_first_slot)
 
-    if x_off.shape[0] == 2:
+    if x_state_first_slot.shape[0] == 2:
         return None
 
     return x_slot_state.unsqueeze(1) == x_slot_state.unsqueeze(0)
