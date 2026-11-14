@@ -9,14 +9,12 @@ from slai import ACTION_SPEC_REGISTRY
 from src.rl.constants import ACTION_TYPES
 from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.encoding import ENCODING_DIM_FOCUS
-from src.rl.encoding import focus_view
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
 from src.rl.models.heads import PointerKeys
 from src.rl.types import CoreOutput
 from src.rl.types import EntityKind
 from src.rl.types import PolicyOutput
-from src.rl.types import StateBatch
 from src.rl.types import TokenKind
 
 
@@ -107,7 +105,6 @@ class PolicyHeads(nn.Module):
 
     def forward(
         self,
-        state_batch: StateBatch,
         core_output: CoreOutput,
         entity_counts: list[int],
         x_recorded_actions: torch.Tensor | None = None,
@@ -121,10 +118,8 @@ class PolicyHeads(nn.Module):
 
         Parameters
         ----------
-        state_batch : StateBatch
-            The game states.
         core_output : CoreOutput
-            The core's output on `state_batch`.
+            The core's output.
         entity_counts : list[int]
             Each Entity kind's number of tokens, indexed by `EntityKind`.
         x_recorded_actions : torch.Tensor | None, default None
@@ -141,7 +136,7 @@ class PolicyHeads(nn.Module):
             Each state's action, selected or recorded, and each level's statistics.
         """
         jag_refined = core_output.tokens
-        x_legal_action_type = state_batch.x_legal_action_type
+        x_legal_action_type = core_output.x_legal_action_type
 
         # The recorded actions' columns, or None when selecting
         x_recorded_action_type, x_recorded_token_offset, x_recorded_target = (
@@ -150,7 +145,7 @@ class PolicyHeads(nn.Module):
 
         # Select the `ActionType` for every row — one masked categorical, focus-gated
         x_logits = self._head_action_type(
-            core_output.x_global, focus_view(state_batch.x_context), x_legal_action_type
+            core_output.x_global, core_output.x_focus, x_legal_action_type
         )
         x_action_type, x_log_prob_l1, x_entropy_l1, x_kl_uniform_l1 = _categorical_step(
             x_logits, x_legal_action_type, x_recorded_action_type, greedy, generator
@@ -158,17 +153,17 @@ class PolicyHeads(nn.Module):
 
         # Each token's state
         x_state_window = torch.repeat_interleave(
-            jag_refined.x_lengths, output_size=jag_refined.rows.shape[0]
+            jag_refined.x_lengths, output_size=jag_refined.rows.x_embedding.shape[0]
         )  # (N,)
 
         # The rows grouped by Entity kind, Entity kind after Entity kind and each Entity kind's
         # state after state: what the key nets split and the scoring runs on. Selections map back
         # to the window through it
-        x_order = torch.argsort(state_batch.tokens.rows.x_entity_kind, stable=True)  # (N,)
+        x_order = torch.argsort(jag_refined.rows.x_entity_kind, stable=True)  # (N,)
         x_state = x_state_window[x_order]
 
         # The split hands each class its rows
-        x_rows_of_entity_kind = jag_refined.rows[x_order].split(entity_counts)
+        x_rows_of_entity_kind = jag_refined.rows.x_embedding[x_order].split(entity_counts)
         grouped_rows = _GroupedRows(x_order, x_state, x_rows_of_entity_kind, entity_counts)
 
         # Compute the `Action`'s selections from the chosen `ActionType`
@@ -179,7 +174,6 @@ class PolicyHeads(nn.Module):
             x_entropy_l2,
             x_kl_uniform_l2,
         ) = self._select_token(
-            state_batch,
             core_output,
             grouped_rows,
             x_action_type,
@@ -188,7 +182,6 @@ class PolicyHeads(nn.Module):
             generator,
         )
         x_target, x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = self._select_target(
-            state_batch,
             core_output,
             grouped_rows,
             x_action_type,
@@ -208,7 +201,6 @@ class PolicyHeads(nn.Module):
 
     def _select_token(
         self,
-        state_batch: StateBatch,
         core_output: CoreOutput,
         grouped_rows: _GroupedRows,
         x_action_type: torch.Tensor,
@@ -222,10 +214,8 @@ class PolicyHeads(nn.Module):
 
         Parameters
         ----------
-        state_batch : StateBatch
-            The game states.
         core_output : CoreOutput
-            The core's output on `state_batch`.
+            The core's output.
         grouped_rows : _GroupedRows
             The window's rows grouped by Entity kind.
         x_action_type : torch.Tensor
@@ -269,7 +259,7 @@ class PolicyHeads(nn.Module):
         # L2: score every row against its state's query, conditioned on the `ActionType` embedding;
         # the selection mask keeps exactly the type's legal items
         x_selects_token = self._x_selects_token[x_action_type]
-        x_mask_rows = state_batch.tokens.rows.x_legal_selection[x_order, x_action_type[x_state]]
+        x_mask_rows = refined.rows.x_legal_selection[x_order, x_action_type[x_state]]
 
         # Every state at once: a type that selects no token (TurnEnd...) gets its state's Character
         # row as a placeholder, so its categorical stays finite. One per state, past the earlier
@@ -370,7 +360,6 @@ class PolicyHeads(nn.Module):
 
     def _select_target(
         self,
-        state_batch: StateBatch,
         core_output: CoreOutput,
         grouped_rows: _GroupedRows,
         x_action_type: torch.Tensor,
@@ -385,10 +374,8 @@ class PolicyHeads(nn.Module):
 
         Parameters
         ----------
-        state_batch : StateBatch
-            The game states.
         core_output : CoreOutput
-            The core's output on `state_batch`.
+            The core's output.
         grouped_rows : _GroupedRows
             The window's rows grouped by Entity kind.
         x_action_type : torch.Tensor
@@ -413,7 +400,7 @@ class PolicyHeads(nn.Module):
         x_kl_uniform : torch.Tensor
             (B,). KL(uniform‖π) over the legal targets, 0 where the level doesn't apply.
         """
-        tokens = state_batch.tokens.rows
+        tokens = core_output.tokens.rows
         batch_size = x_action_type.shape[0]
         x_states = torch.arange(batch_size, device=x_action_type.device)
 
@@ -456,7 +443,7 @@ class PolicyHeads(nn.Module):
 
         # A target is a Monster's rank: its choice is its state's first Monster choice plus
         # the rank
-        x_count_monster = state_batch.state_counts.x_token_kind_count[:, TokenKind.MONSTERS]
+        x_count_monster = core_output.state_counts.x_token_kind_count[:, TokenKind.MONSTERS]
         x_first_monster = x_count_monster.cumsum(0) - x_count_monster
         x_recorded_choice = None
         if x_recorded_target is not None:
@@ -468,7 +455,7 @@ class PolicyHeads(nn.Module):
         x_logits = self._head_level_3(
             x_keys,
             core_output.x_global,
-            core_output.tokens.rows[x_token_selected],
+            tokens.x_embedding[x_token_selected],
             x_choice_state,
             x_mask_l3,
         )

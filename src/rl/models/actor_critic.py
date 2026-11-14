@@ -103,7 +103,7 @@ class ActorCritic(nn.Module):
 
         # Sampling actions runs eager: `forward` itself, not the call `compile_hot_paths` compiles
         return self._policy_heads.forward(
-            state_batch, core_output, entity_counts, greedy=greedy, generator=generator
+            core_output, entity_counts, greedy=greedy, generator=generator
         )
 
     def evaluate_actions(
@@ -134,9 +134,7 @@ class ActorCritic(nn.Module):
         core_output = self.core(state_batch, state_counts_cpu)
         x_values = self._head_value(core_output.x_global)
         entity_counts = _count_tokens_of_entity_kind(state_counts_cpu)
-        policy_output = self._policy_heads(
-            state_batch, core_output, entity_counts, x_recorded_actions
-        )
+        policy_output = self._policy_heads(core_output, entity_counts, x_recorded_actions)
         return policy_output, x_values
 
     def get_values(self, state_batch: StateBatch, state_counts_cpu: StateCounts) -> torch.Tensor:

@@ -224,15 +224,41 @@ type StateBatchReserved = States[
 ]
 
 
+@final
 @dataclass
-class CoreOutput:
-    """Refined token embeddings and each state's global vector.
+class TokensRefined:
+    """Every Entity token after the core, as a row, in the input tokens' order.
 
-    Tokens have a variable number of rows per state; the global vector has one row per state.
+    The embedding is the core's. The Entity kind and the legal masks are the input tokens' own,
+    carried over untouched so they stay with the tokens they describe.
     """
 
-    tokens: Jagged[torch.Tensor]  # (B,) lengths; (N, dim_entity) refined token rows
+    x_embedding: torch.Tensor  # (N, dim_entity)
+    x_entity_kind: torch.Tensor  # (N,) int16, its token kind's Entity kind
+
+    # Items selectable under each action type, deduped by Card identity
+    x_legal_selection: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+
+    # Monster targets legal under each action type
+    x_legal_target: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+
+    # Selections whose legal actions carry a Monster target (Cards / Potions)
+    x_needs_target: torch.Tensor  # (N,) bool
+
+
+@dataclass
+class CoreOutput:
+    """The game states after the core: what the heads read.
+
+    Tokens have one segment per state; every other field has one row per state. The legal action
+    types, the focus and the counts are the input states' own, carried over untouched.
+    """
+
+    tokens: Jagged[TokensRefined]  # (B,) long lengths
     x_global: torch.Tensor  # (B, dim_global)
+    x_focus: torch.Tensor  # (B, ENCODING_DIM_FOCUS) float32, the context's focus columns
+    x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
+    state_counts: StateCounts
 
 
 @dataclass

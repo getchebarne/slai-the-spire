@@ -4,6 +4,7 @@ import torch.nn as nn
 from src.rl.constants import MAP_TOKEN_KIND_MAX_TOKENS
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.encoding import ENCODING_DIM_CONTEXT
+from src.rl.encoding import focus_view
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
@@ -13,6 +14,7 @@ from src.rl.types import Jagged
 from src.rl.types import StateBatch
 from src.rl.types import StateCounts
 from src.rl.types import TokenKind
+from src.rl.types import TokensRefined
 
 
 # Count features: one per token kind except the Character singleton (a constant 1.0), each
@@ -111,7 +113,8 @@ class Core(nn.Module):
         Returns
         -------
         CoreOutput
-            The refined token embeddings grouped by state, and each state's global vector.
+            The refined tokens grouped by state with their legal masks, and each state's global
+            vector, focus, legal action types and counts.
         """
 
         tokens = state_batch.tokens
@@ -156,7 +159,22 @@ class Core(nn.Module):
             )
         )
 
-        return CoreOutput(tokens=jag_refined, x_global=x_global)
+        # The input tokens' Entity kinds and legal masks stay with the refined tokens
+        tokens_refined = TokensRefined(
+            x_embedding=jag_refined.rows,
+            x_entity_kind=tokens.rows.x_entity_kind,
+            x_legal_selection=tokens.rows.x_legal_selection,
+            x_legal_target=tokens.rows.x_legal_target,
+            x_needs_target=tokens.rows.x_needs_target,
+        )
+
+        return CoreOutput(
+            tokens=Jagged(x_lengths=jag_refined.x_lengths, rows=tokens_refined),
+            x_global=x_global,
+            x_focus=focus_view(state_batch.x_context),
+            x_legal_action_type=state_batch.x_legal_action_type,
+            state_counts=state_batch.state_counts,
+        )
 
     def _embed_identity(
         self, x_projected: torch.Tensor, x_token_kind: torch.Tensor
