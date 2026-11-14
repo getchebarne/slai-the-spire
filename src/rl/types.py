@@ -24,39 +24,37 @@ class EntityKind(IntEnum):
     ROOM = 6
 
 
-# In packing order: TOKEN_KINDS_OF_ENTITY_KIND's Entity kinds, one after another, each its
-# token kinds in order
 class TokenKind(IntEnum):
-    CARD_PILE_HAND = 0
-    CARD_PILE_DISCOVER = 1
-    CARD_PILE_SELECTED = 2
-    CARD_REWARD_0 = 3
-    CARD_REWARD_1 = 4
-    CARD_REWARD_2 = 5
-    CARD_REWARD_3 = 6
-    CARD_REWARD_4 = 7
-    CARD_SHOP = 8
-    CARD_PILE_EVENT_ROLL = 9
-    CARD_MATCH_FLIPPED = 10
-    CARD_MATCH_PAIRS = 11
-    CARD_PILE_STASIS = 12
-    CARD_PLAY_QUEUE = 13
-    CARD_PILE_NIGHTMARE = 14
-    CARD_PILE_DRAW = 15
-    CARD_PILE_DISCARD = 16
-    CARD_PILE_EXHAUST = 17
-    CARD_PILE_DECK = 18
-    RELIC_REWARD = 19
-    RELIC_SHOP = 20
-    RELIC_EVENT_ROLL = 21
-    RELIC_OWNED = 22
+    CARD_MATCH_FLIPPED = 0
+    CARD_MATCH_PAIRS = 1
+    CARD_PILE_DECK = 2
+    CARD_PILE_DISCARD = 3
+    CARD_PILE_DISCOVER = 4
+    CARD_PILE_DRAW = 5
+    CARD_PILE_EVENT_ROLL = 6
+    CARD_PILE_EXHAUST = 7
+    CARD_PILE_HAND = 8
+    CARD_PILE_NIGHTMARE = 9
+    CARD_PILE_SELECTED = 10
+    CARD_PILE_STASIS = 11
+    CARD_PLAY_QUEUE = 12
+    CARD_REWARD_0 = 13
+    CARD_REWARD_1 = 14
+    CARD_REWARD_2 = 15
+    CARD_REWARD_3 = 16
+    CARD_REWARD_4 = 17
+    CARD_SHOP = 18
+    CHARACTER = 19
+    EVENT_OPTIONS = 20
+    MONSTERS = 21
+    POTION_EVENT_ROLL = 22
     POTION_OWNED = 23
     POTION_REWARD = 24
     POTION_SHOP = 25
-    POTION_EVENT_ROLL = 26
-    MONSTERS = 27
-    EVENT_OPTIONS = 28
-    CHARACTER = 29
+    RELIC_EVENT_ROLL = 26
+    RELIC_OWNED = 27
+    RELIC_REWARD = 28
+    RELIC_SHOP = 29
     ROOMS = 30
 
 
@@ -258,7 +256,6 @@ class CoreOutput:
 
     tokens: Jagged[TokensRefined]  # (B,) long lengths
     x_global: torch.Tensor  # (B, dim_global)
-    x_character_row: torch.Tensor  # (B,) long, its Character token's row among the tokens
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     state_counts: StateCounts
 
@@ -267,14 +264,14 @@ class CoreOutput:
 class PolicyOutput:
     """One action per state, selected or recorded, with the policy statistics for its three levels.
 
-    Each action row holds [action type, token offset, target rank]. The token offset indexes
-    that state's encoded tokens, across all token kinds; it stays valid when whole states are
-    reordered or joined into a new batch. The target is a Monster's rank. A selection or target
+    Each action row holds [action type, selection offset, target rank]. The selection offset
+    indexes that state's encoded tokens, across all token kinds; it stays valid when whole states
+    are reordered or joined into a new batch. The target is a Monster's rank. A selection or target
     that did not apply holds -1. `actions.engine_action` resolves these coordinates to engine
     Entity ids using the encoder's token ordering.
     """
 
-    x_actions: torch.Tensor  # (B, 3) long; action type, state-local token offset, Monster rank
+    x_actions: torch.Tensor  # (B, 3) long; action type, state-local selection offset, Monster rank
     x_log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
     x_entropy: torch.Tensor  # (B, 3) float, 0 where N/A
     x_kl_uniform: torch.Tensor  # (B, 3) float, KL-Uniform over legal actions, 0 where N/A
@@ -284,13 +281,13 @@ class PolicyOutput:
 class Rollout:
     """What the Actor collected, before GAE.
 
-    T steps of E games, state t * E + e of the N = T * E states. `state_batch_final` holds each
+    T steps of E games, state t * E + e of the B = T * E states. `state_batch_final` holds each
     game's state after the last step, for the bootstrap value.
     """
 
-    state_batch: StateBatch  # N states
-    x_actions: torch.Tensor  # (N, 3): action type, state-local token offset, Monster rank
-    x_log_probs_behavior: torch.Tensor  # (N,) under the weights that played
+    state_batch: StateBatch  # B states
+    x_actions: torch.Tensor  # (B, 3): action type, state-local selection offset, Monster rank
+    x_log_probs_behavior: torch.Tensor  # (B,) under the weights that played
     x_rewards: torch.Tensor  # (T, E, K)
     x_dones: torch.Tensor  # (T, E)
     state_batch_final: StateBatch  # E states

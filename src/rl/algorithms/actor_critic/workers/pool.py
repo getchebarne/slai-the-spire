@@ -39,7 +39,7 @@ class _StepBuffer:
     """
 
     # One row per game, written by the Actor
-    x_actions: torch.Tensor  # (B, 3) long: action type, state-local token offset, Monster target rank
+    x_actions: torch.Tensor  # (B, 3) long: action type, state-local selection offset, Monster target rank
     x_ascensions: torch.Tensor  # (B,) long. Each game's ascension under the live position
 
     # One row per game, written by the worker
@@ -195,7 +195,7 @@ def step_workers(
     workers : Workers
         The handle returned by `start_workers`.
     x_actions : torch.Tensor
-        (E, 3) long. Each game's action type, state-local token offset and Monster target rank.
+        (E, 3) long. Each game's action type, state-local selection offset and Monster target rank.
         The actions are copied to shared CPU storage before any worker is woken.
 
     Returns
@@ -412,9 +412,9 @@ def _worker_loop(
     while _wait_for_request(sph_request, x_stop):
         batch_ascension = step_buffer.x_ascensions.tolist()
 
-        for idx_env, (idx_action_kind, idx_token, idx_target) in enumerate(step_buffer.x_actions.tolist()):
+        for idx_env, (idx_action_kind, idx_selection, idx_target) in enumerate(step_buffer.x_actions.tolist()):
             # Transform the model's numeric output into an engine Action
-            action = engine_action(idx_action_kind, idx_token, idx_target, batch_game_state[idx_env])
+            action = engine_action(idx_action_kind, idx_selection, idx_target, batch_game_state[idx_env])
 
             # Step the environment
             game_state_next, reward, done = step_env(

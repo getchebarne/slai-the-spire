@@ -2,6 +2,13 @@ import math
 
 import torch
 import torch.nn as nn
+from slai import ACTION_SPEC_REGISTRY
+
+from src.rl.batches import get_entity_kind_rows
+from src.rl.constants import ACTION_TYPES
+from src.rl.constants import NUM_ACTION_TYPES
+from src.rl.types import CoreOutput
+from src.rl.types import EntityKind
 
 
 class HeadActionType(nn.Module):
@@ -13,38 +20,38 @@ class HeadActionType(nn.Module):
         The width of the global vector `x_global`.
     dim_ff : int
         The width of the scorer's hidden layer.
-    num_choices : int
-        The number of choices the head scores.
     """
 
-    def __init__(self, dim_global: int, dim_ff: int, num_choices: int) -> None:
+    def __init__(self, dim_global: int, dim_ff: int) -> None:
         super().__init__()
 
         self._scorer = nn.Sequential(
             nn.Linear(dim_global, dim_ff),
             nn.ReLU(),
-            nn.Linear(dim_ff, num_choices),
+            nn.Linear(dim_ff, NUM_ACTION_TYPES),
         )
 
-    def forward(self, x_global: torch.Tensor, x_mask: torch.Tensor) -> torch.Tensor:
+    def init_logit_weights(self) -> None:
+        """Initialize the logit layer near zero after the general linear init."""
+        nn.init.orthogonal_(self._scorer[-1].weight, gain=0.01)
+
+    def forward(self, core_output: CoreOutput) -> torch.Tensor:
         """Score the action-type choices.
 
         Sampling/recompute is the caller's job.
 
         Parameters
         ----------
-        x_global : torch.Tensor
-            (B, dim_global). Each state's global vector.
-        x_mask : torch.Tensor
-            (B, NUM_ACTION_TYPES) bool. Each state's legal `ActionType`s.
+        core_output : CoreOutput
+            The core's output.
 
         Returns
         -------
         torch.Tensor
-            (B, num_choices). The masked logits: -inf where `x_mask` is False.
+            (B, NUM_ACTION_TYPES). The masked logits: -inf where the `ActionType` is illegal.
         """
-        x_logits = self._scorer(x_global)
-        return x_logits.masked_fill(~x_mask, float("-inf"))
+        x_logits = self._scorer(core_output.x_global)
+        return x_logits.masked_fill(~core_output.x_legal_action_type, float("-inf"))
 
 
 class PointerKeys(nn.Module):
@@ -86,8 +93,8 @@ class PointerKeys(nn.Module):
         return self._net(x_entities)
 
 
-class HeadPointerSelect(nn.Module):
-    """Pointer-network selection head (AlphaStar PointerLogits).
+class PointerLogits(nn.Module):
+    """Pointer-network logits (AlphaStar PointerLogits), the scoring both pointer heads share.
 
     Each Entity's logit is key·query scaled by 1/√dim_key. The scaling deviates from AlphaStar
     deliberately: unscaled logits move ~√dim_key faster per weight step than the entropy/clip
@@ -112,6 +119,10 @@ class HeadPointerSelect(nn.Module):
             nn.ReLU(),
             nn.Linear(dim_global + dim_cond, dim_key),
         )
+
+    def init_logit_weights(self) -> None:
+        """Initialize the logit layer near zero after the general linear init."""
+        nn.init.orthogonal_(self._query_net[-1].weight, gain=0.01)
 
     def forward(
         self,
@@ -148,6 +159,190 @@ class HeadPointerSelect(nn.Module):
         x_query = self._query_net(torch.cat([x_global, x_cond], dim=-1))  # (B, dim_key)
         x_logits = (x_keys * x_query[x_key_state]).sum(-1) * self._scale
         return x_logits.masked_fill(~x_mask, float("-inf"))
+
+
+class HeadSelection(nn.Module):
+    """L2 selection head: scores each token of a state as its `ActionType`'s selection.
+
+    Parameters
+    ----------
+    dim_global : int
+        The width of the global vector.
+    dim_op : int
+        The width of the `ActionType` embedding.
+    dim_key : int
+        The width of the pointer keys and the query.
+    """
+
+    _x_has_selection: torch.Tensor
+
+    def __init__(self, dim_global: int, dim_op: int, dim_key: int) -> None:
+        super().__init__()
+
+        # `ActionType` embedding for the L2 pointer selection
+        self._action_type_emb = nn.Embedding(NUM_ACTION_TYPES, dim_op)
+        self._pointer_logits = PointerLogits(dim_global, dim_op, dim_key)
+
+        # Buffer for each `ActionType`'s L2 requirement
+        self.register_buffer(
+            "_x_has_selection",
+            torch.tensor(
+                [ACTION_SPEC_REGISTRY[action_type].arity != (0, 0) for action_type in ACTION_TYPES]
+            ),
+            persistent=False,
+        )
+
+    def init_logit_weights(self) -> None:
+        """Initialize the logit layer near zero after the general linear init."""
+        self._pointer_logits.init_logit_weights()
+
+    def forward(
+        self, core_output: CoreOutput, x_token_key: torch.Tensor, x_action_type: torch.Tensor
+    ) -> torch.Tensor:
+        """Score each token as the selection of its state's action type.
+
+        Parameters
+        ----------
+        core_output : CoreOutput
+            The core's output.
+        x_token_key : torch.Tensor
+            (N, dim_key). Each token's key, from PointerKeys.
+        x_action_type : torch.Tensor
+            (B,) long. Each state's action type, the L1 selection.
+
+        Returns
+        -------
+        torch.Tensor
+            (N,). Each token's masked logit: -inf where its state's action type can't select it.
+            Where the action type selects no token, its state's Character is the one legal row.
+        """
+        jag_refined = core_output.tokens
+        x_token_state = jag_refined.rows.x_token_state
+        x_rows = torch.arange(x_token_state.shape[0], device=x_token_state.device)  # (N,)
+
+        # Wether each token is selectable under its state selected `ActionType`
+        x_token_selectable = jag_refined.rows.x_legal_selection[x_rows, x_action_type[x_token_state]] # (N,)
+
+        # An `ActionType` that selects no token sets its state's Character as legal to avoid NaNs
+        x_is_character = jag_refined.rows.x_entity_kind == EntityKind.CHARACTER  # (N,)
+        x_has_selection = self._x_has_selection[x_action_type]
+        x_token_selectable |= x_is_character & ~x_has_selection[x_token_state]
+
+        # Calculate the rows' logits
+        return self._pointer_logits(
+            x_token_key,
+            core_output.x_global,
+            self._action_type_emb(x_action_type),
+            x_token_state,
+            x_token_selectable,
+        )
+
+
+class HeadTarget(nn.Module):
+    """L3 target head: scores each Monster of a state as its selected token's target.
+
+    Parameters
+    ----------
+    dim_global : int
+        The width of the global vector.
+    dim_entity : int
+        The width of the core's refined token rows.
+    dim_key : int
+        The width of the pointer keys and the query.
+    """
+
+    _x_has_target: torch.Tensor
+
+    def __init__(self, dim_global: int, dim_entity: int, dim_key: int) -> None:
+        super().__init__()
+
+        self._dim_key = dim_key
+        self._pointer_logits = PointerLogits(dim_global, dim_entity, dim_key)
+
+        # Buffer for each `ActionType`'s L3 requirement
+        self.register_buffer(
+            "_x_has_target",
+            torch.tensor(
+                [ACTION_SPEC_REGISTRY[action_type].arity[1] == 2 for action_type in ACTION_TYPES]
+            ),
+            persistent=False,
+        )
+
+    def init_logit_weights(self) -> None:
+        """Initialize the logit layer near zero after the general linear init."""
+        self._pointer_logits.init_logit_weights()
+
+    def forward(
+        self,
+        core_output: CoreOutput,
+        x_token_key: torch.Tensor,
+        x_target_state: torch.Tensor,
+        x_action_type: torch.Tensor,
+        x_selection_row: torch.Tensor,
+    ) -> torch.Tensor:
+        """Score each Monster as the target of its state's selected token, then "no target".
+
+        Parameters
+        ----------
+        core_output : CoreOutput
+            The core's output.
+        x_token_key : torch.Tensor
+            (N, dim_key). Each token's key, from PointerKeys.
+        x_target_state : torch.Tensor
+            (M + B,) long. Each target row's state: the Monsters', then each state's "no target".
+        x_action_type : torch.Tensor
+            (B,) long. Each state's action type, the L1 selection.
+        x_selection_row : torch.Tensor
+            (B,) long. Each state's selected token's row among the tokens, its Character's where
+            none: the L2 selection.
+
+        Returns
+        -------
+        torch.Tensor
+            (M + B,). Each target row's masked logit, the Monsters' and then each state's "no
+            target": -inf where illegal. Where the selection takes no target, its state's "no
+            target" is the one legal row.
+        """
+        tokens = core_output.tokens.rows
+        batch_size = x_action_type.shape[0]
+
+        # The target rows are the M Monsters, then one "no target" per state
+        num_monsters = x_target_state.shape[0] - batch_size
+
+        # The Monsters' rows in the window, state after state
+        x_monster_row = get_entity_kind_rows(
+            tokens.x_entity_kind, EntityKind.MONSTER, num_monsters
+        )  # (M,)
+
+        # Each Monster's state: the target rows' first M
+        x_monster_state = x_target_state[:num_monsters]  # (M,)
+
+        # For actions that take one (CardPlay / PotionUse) and tokens that need one only
+        x_has_target = self._x_has_target[x_action_type] & tokens.x_needs_target[x_selection_row] # (B,)
+        x_target_legal = tokens.x_legal_target[x_monster_row, x_action_type[x_monster_state]] # (M,)
+        x_mask_l3 = torch.cat([x_has_target[x_monster_state] & x_target_legal, ~x_has_target]) # (M + B,)
+
+        # A cat, not F.pad: compiled, F.pad's backward fails on an empty Monster block
+        x_keys = torch.cat(
+            [
+                x_token_key[x_monster_row],
+                torch.zeros(
+                    batch_size,
+                    self._dim_key,
+                    dtype=tokens.x_embedding.dtype,
+                    device=tokens.x_embedding.device,
+                ),
+            ]
+        )
+
+        # Calculate the target rows' logits
+        return self._pointer_logits(
+            x_keys,
+            core_output.x_global,
+            tokens.x_embedding[x_selection_row],
+            x_target_state,
+            x_mask_l3,
+        )
 
 
 class HeadValue(nn.Module):

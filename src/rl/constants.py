@@ -182,7 +182,7 @@ SHOP_PRICE_CAP = max(
 EVENT_STAGE_CAP = 10
 
 
-TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (tokens.py owns their packing)
+TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle, in bundle order
     TokenKind.CARD_REWARD_0,
     TokenKind.CARD_REWARD_1,
     TokenKind.CARD_REWARD_2,
@@ -190,7 +190,7 @@ TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle (tokens.py owns
     TokenKind.CARD_REWARD_4,
 )
 
-# Pack order within the Card Entity kind: decision pools first, observational piles last
+# The Card token kinds in window order: decision pools first, observational piles last
 TOKEN_KINDS_CARD = (
     TokenKind.CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER,
@@ -209,7 +209,7 @@ TOKEN_KINDS_CARD = (
     TokenKind.CARD_PILE_DECK,
 )
 
-# Pack order within the Relic Entity kind: decision pools first, the owned Relics last
+# The Relic token kinds in window order: decision pools first, the owned Relics last
 TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_REWARD,
     TokenKind.RELIC_SHOP,
@@ -217,7 +217,7 @@ TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_OWNED,
 )
 
-# Pack order within the Potion Entity kind; every source is engine-bounded
+# The Potion token kinds in window order; every source is engine-bounded
 TOKEN_KINDS_POTION = (
     TokenKind.POTION_OWNED,
     TokenKind.POTION_REWARD,
@@ -235,6 +235,13 @@ TOKEN_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[TokenKind, ...]] = {
     EntityKind.CHARACTER: (TokenKind.CHARACTER,),
     EntityKind.ROOM: (TokenKind.ROOMS,),
 }
+
+# A state's tokens come in this order: the Entity kinds one after another, each its token kinds
+TOKEN_KINDS_IN_WINDOW_ORDER = tuple(
+    token_kind
+    for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND.values()
+    for token_kind in token_kinds_entity_kind
+)
 
 # Each token kind's token cap: the slice token traversal applies to that collection
 MAP_TOKEN_KIND_MAX_TOKENS: dict[TokenKind, int] = {
@@ -293,18 +300,13 @@ def _check_tables() -> None:
             f"{set(EntityKind) - set(TOKEN_KINDS_OF_ENTITY_KIND)}"
         )
 
-    # TokenKind is declared in packing order, valued 0..len-1: the Entity kind tables, one after
-    # another, list it, every token kind in one table
-    token_kinds = [
-        token_kind
-        for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND.values()
-        for token_kind in token_kinds_entity_kind
-    ]
+    # Every token kind sits once in the window order, and TokenKind is valued 0..len-1
+    token_kinds = sorted(TOKEN_KINDS_IN_WINDOW_ORDER)
     if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):
-        names = [token_kind.name for token_kind in token_kinds]
+        names = [token_kind.name for token_kind in TOKEN_KINDS_IN_WINDOW_ORDER]
         raise RuntimeError(
-            "Declare TokenKind in packing order, valued 0..len-1: TOKEN_KINDS_OF_ENTITY_KIND's "
-            f"entity kinds, one after another, list {names}"
+            "Each TokenKind must sit once in TOKEN_KINDS_OF_ENTITY_KIND's tables, and TokenKind "
+            f"must be valued 0..len-1; the tables list {names}"
         )
 
 

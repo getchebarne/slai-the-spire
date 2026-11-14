@@ -18,6 +18,7 @@ from src.rl.encoding import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.encoding import NUM_CHANNELS
+from src.rl.types import EntityKind
 from src.rl.types import Jagged
 from src.rl.types import JaggedReserved
 from src.rl.types import SparseEntries
@@ -126,6 +127,31 @@ def get_segment_first_row(x_lengths: torch.Tensor) -> torch.Tensor:
         (S, ...) long. Each segment's first row.
     """
     return x_lengths.cumsum(0) - x_lengths
+
+
+def get_entity_kind_rows(
+    x_entity_kind: torch.Tensor, entity_kind: EntityKind, num_rows: int
+) -> torch.Tensor:
+    """Find the rows of one Entity kind's tokens.
+
+    The tokens sit state after state, so their rows come out state after state too.
+
+    Parameters
+    ----------
+    x_entity_kind : torch.Tensor
+        (N,) int16. Each token's Entity kind.
+    entity_kind : EntityKind
+        The Entity kind whose tokens to find.
+    num_rows : int
+        The number of tokens of that Entity kind, as the host knows it: no size is read back
+        from the device.
+
+    Returns
+    -------
+    torch.Tensor
+        (num_rows,) long. Those tokens' rows, in increasing order.
+    """
+    return torch.nonzero_static(x_entity_kind == entity_kind, size=num_rows).squeeze(1)
 
 
 def allocate_states(num_buffers: int, buffer_size: int) -> StateBatchReserved:
@@ -427,7 +453,7 @@ def take_minibatch_states(
     state_batch : StateBatch
         The source states.
     x_state_ids : torch.Tensor
-        (num_states,) long. The states to gather, in output order.
+        (batch_size,) long. The states to gather, in output order.
     state_counts_cpu : StateCounts
         Those states' counts, on the CPU.
 
