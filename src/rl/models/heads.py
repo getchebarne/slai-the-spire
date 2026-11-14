@@ -48,11 +48,10 @@ class HeadActionType(nn.Module):
 
 
 class PointerKeys(nn.Module):
-    """Entity-class key projection for pointer selection (AlphaStar PointerLogits keys net).
+    """Token key projection for pointer selection (AlphaStar PointerLogits keys net).
 
-    One layer: LayerNorm -> ReLU -> Linear. One instance per Entity class (Cards, Potions, ...),
-    shared by every action type that selects that class, so the same Entity maps to the same key
-    in every selection context.
+    One layer: LayerNorm -> ReLU -> Linear. One instance, shared by every Entity kind and both
+    pointer levels, so the same Entity maps to the same key in every selection context.
 
     Parameters
     ----------
