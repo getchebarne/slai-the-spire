@@ -4,7 +4,6 @@ import torch.nn as nn
 from src.rl.constants import MAP_TOKEN_KIND_MAX_TOKENS
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.encoding import ENCODING_DIM_CONTEXT
-from src.rl.encoding import focus_view
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
@@ -114,7 +113,7 @@ class Core(nn.Module):
         -------
         CoreOutput
             The refined tokens grouped by state with their legal masks, and each state's global
-            vector, focus, legal action types and counts.
+            vector, legal action types and counts.
         """
 
         tokens = state_batch.tokens
@@ -171,7 +170,6 @@ class Core(nn.Module):
         return CoreOutput(
             tokens=Jagged(x_lengths=jag_refined.x_lengths, rows=tokens_refined),
             x_global=x_global,
-            x_focus=focus_view(state_batch.x_context),
             x_legal_action_type=state_batch.x_legal_action_type,
             state_counts=state_batch.state_counts,
         )

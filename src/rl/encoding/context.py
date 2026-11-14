@@ -1,7 +1,6 @@
 """Dense per-state features in the global projection's established column order."""
 
 import numpy as np
-import torch
 from slai import GameState
 
 from src.rl.constants import ASCENSION_LEVEL
@@ -29,22 +28,6 @@ _REWARD_META = slice(_MAP_META.stop, _MAP_META.stop + ENCODING_DIM_REWARD_META)
 _SHOP_META = slice(_REWARD_META.stop, _REWARD_META.stop + ENCODING_DIM_SHOP_META)
 _EVENT_META = slice(_SHOP_META.stop, _SHOP_META.stop + ENCODING_DIM_EVENT_META)
 ENCODING_DIM_CONTEXT = _EVENT_META.stop
-
-
-def focus_view(x_context: torch.Tensor) -> torch.Tensor:
-    """View the focus columns without copying or storing a second tensor field.
-
-    Parameters
-    ----------
-    x_context : torch.Tensor
-        (B, ENCODING_DIM_CONTEXT). The batch's dense per-state features.
-
-    Returns
-    -------
-    torch.Tensor
-        (B, ENCODING_DIM_FOCUS). A view sharing the context tensor's storage.
-    """
-    return x_context[:, _FOCUS]
 
 
 def encode_context_into(game_state: GameState, out: np.ndarray) -> None:

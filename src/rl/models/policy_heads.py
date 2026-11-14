@@ -8,7 +8,6 @@ from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.constants import ACTION_TYPES
 from src.rl.constants import NUM_ACTION_TYPES
-from src.rl.encoding import ENCODING_DIM_FOCUS
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadPointerSelect
 from src.rl.models.heads import PointerKeys
@@ -70,7 +69,6 @@ class PolicyHeads(nn.Module):
             dim_global,
             dim_ff_primary,
             num_choices=NUM_ACTION_TYPES,
-            dim_context=ENCODING_DIM_FOCUS,
         )
         self._head_level_2 = HeadPointerSelect(dim_global, dim_op, dim_key)
         self._head_level_3 = HeadPointerSelect(dim_global, dim_entity, dim_key)
@@ -143,16 +141,14 @@ class PolicyHeads(nn.Module):
             x_recorded_actions.unbind(-1) if x_recorded_actions is not None else (None,) * 3
         )
 
-        # Select the `ActionType` for every row — one masked categorical, focus-gated
-        x_logits = self._head_action_type(
-            core_output.x_global, core_output.x_focus, x_legal_action_type
-        )
+        # Select the `ActionType` for every row — one masked categorical
+        x_logits = self._head_action_type(core_output.x_global, x_legal_action_type)
         x_action_type, x_log_prob_l1, x_entropy_l1, x_kl_uniform_l1 = _categorical_step(
             x_logits, x_legal_action_type, x_recorded_action_type, greedy, generator
         )
 
         # Each token's state
-        x_state_window = torch.repeat_interleave(
+        x_state = torch.repeat_interleave(
             jag_refined.x_lengths, output_size=jag_refined.rows.x_embedding.shape[0]
         )  # (N,)
 
@@ -160,7 +156,7 @@ class PolicyHeads(nn.Module):
         # state after state: what the key nets split and the scoring runs on. Selections map back
         # to the window through it
         x_order = torch.argsort(jag_refined.rows.x_entity_kind, stable=True)  # (N,)
-        x_state = x_state_window[x_order]
+        x_state = x_state[x_order]
 
         # The split hands each class its rows
         x_rows_of_entity_kind = jag_refined.rows.x_embedding[x_order].split(entity_counts)
@@ -240,7 +236,7 @@ class PolicyHeads(nn.Module):
         x_entropy : torch.Tensor
             (B,). The entropy, 0 where the level doesn't apply.
         x_kl_uniform : torch.Tensor
-            (B,). KL(uniform‖π) over the legal tokens, 0 where the level doesn't apply.
+            (B,). KL-Uniform over the legal tokens, 0 where the level doesn't apply.
         """
         refined = core_output.tokens
         x_order = grouped_rows.x_order
@@ -398,7 +394,7 @@ class PolicyHeads(nn.Module):
         x_entropy : torch.Tensor
             (B,). The entropy, 0 where the level doesn't apply.
         x_kl_uniform : torch.Tensor
-            (B,). KL(uniform‖π) over the legal targets, 0 where the level doesn't apply.
+            (B,). KL-Uniform over the legal targets, 0 where the level doesn't apply.
         """
         tokens = core_output.tokens.rows
         batch_size = x_action_type.shape[0]
@@ -481,7 +477,7 @@ def _categorical_step(
     greedy: bool,
     generator: torch.Generator | None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute each row's selection, its log-prob, the entropy and KL(uniform‖π).
+    """Compute each row's selection, its log-prob, the entropy and KL-Uniform.
 
     Parameters
     ----------
@@ -505,7 +501,7 @@ def _categorical_step(
     x_entropy : torch.Tensor
         (B,). The entropy.
     x_kl_uniform : torch.Tensor
-        (B,). KL(uniform‖π) over the legal set.
+        (B,). KL-Uniform over the legal set.
     """
     # No argument checks: each one reads the logits back, making the CPU wait for the GPU
     dist = torch.distributions.Categorical(logits=x_logits, validate_args=False)
@@ -521,11 +517,10 @@ def _categorical_step(
         # Sample from distribution
         x_idx = torch.multinomial(dist.probs, 1, True, generator=generator).squeeze(-1)
 
-    # KL(uniform‖π) over the legal set, the anti-collapse barrier. −log p clamps at the floor:
-    # unbounded, the barrier dominates the loss once a head nears determinism
-    x_n_legal = x_mask.sum(-1).clamp(min=1).float()  # min=1: empty/singleton rows → KL 0
+    # KL-Uniform over the legal set; the anti-collapse barrier
+    x_num_legal = x_mask.sum(-1).clamp(min=1).float()
     x_logp = dist.logits.clamp(min=_KL_UNIFORM_LOG_P_FLOOR)
-    x_kl_uniform = -x_logp.masked_fill(~x_mask, 0.0).sum(-1) / x_n_legal - x_n_legal.log()
+    x_kl_uniform = -x_logp.masked_fill(~x_mask, 0.0).sum(-1) / x_num_legal - x_num_legal.log()
 
     return x_idx, dist.log_prob(x_idx), dist.entropy(), x_kl_uniform
 
@@ -641,7 +636,7 @@ def _categorical_rows(
     x_entropy : torch.Tensor
         (S,). The entropy.
     x_kl_uniform : torch.Tensor
-        (S,). KL(uniform‖π) over the legal set.
+        (S,). KL-Uniform over the legal set.
     """
     # Each row's log-prob within its state; the max keeps the exponentials finite, and takes no
     # gradient, as in logsumexp
@@ -665,7 +660,7 @@ def _categorical_rows(
     x_log_prob_legal = x_log_prob.masked_fill(~x_mask, 0.0)
     x_entropy = -_sum_by_state(x_log_prob_legal.exp() * x_log_prob_legal, x_state, batch_size)
 
-    # KL(uniform‖π) over the legal set, −log p clamped at the floor, as in `_categorical_step`;
+    # KL-Uniform over the legal set, −log p clamped at the floor, as in `_categorical_step`;
     # min=1: empty/singleton states → KL 0
     x_n_legal = _sum_by_state(x_mask.to(x_logits.dtype), x_state, batch_size).clamp(min=1)
     x_log_prob_floor = x_log_prob.clamp(min=_KL_UNIFORM_LOG_P_FLOOR).masked_fill(~x_mask, 0.0)

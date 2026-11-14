@@ -5,10 +5,8 @@ exposes the layout names the models and `batches.py` read.
 """
 
 from src.rl.encoding.context import ENCODING_DIM_CONTEXT
-from src.rl.encoding.context import focus_view
 from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.encoding.focus import ENCODING_DIM_FOCUS
 from src.rl.encoding.map_ import EDGE_DELTAS
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
@@ -45,7 +43,6 @@ __all__ = [
     "EDGE_DELTAS",
     "ENCODING_DIM_CONTEXT",
     "ENCODING_DIM_EFFECT",
-    "ENCODING_DIM_FOCUS",
     "ENCODING_DIM_MODIFIER",
     "ENCODING_DIM_SPARSE_EFFECT",
     "ENCODING_DIM_SPARSE_MODIFIER",
@@ -58,5 +55,4 @@ __all__ = [
     "OFF_MAP_SELECTABLE",
     "SLICE_MAP_EDGES",
     "SLICE_MAP_ROOM_KIND",
-    "focus_view",
 ]
