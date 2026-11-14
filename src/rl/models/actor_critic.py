@@ -3,7 +3,6 @@ import math
 import torch
 import torch.nn as nn
 
-from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadValue
 from src.rl.models.map_encoder import message_passing
@@ -12,6 +11,7 @@ from src.rl.reward import RewardStream
 from src.rl.types import PolicyOutput
 from src.rl.types import StateBatch
 from src.rl.types import StateCounts
+from src.rl.types import TokenKind
 
 
 class ActorCritic(nn.Module):
@@ -99,11 +99,11 @@ class ActorCritic(nn.Module):
             `greedy`, otherwise samples from `generator`.
         """
         core_output = self.core(state_batch, state_counts_cpu)
-        entity_counts = _count_tokens_of_entity_kind(state_counts_cpu)
+        num_monsters = int(state_counts_cpu.x_token_kind_count[:, TokenKind.MONSTERS].sum())
 
         # Sampling actions runs eager: `forward` itself, not the call `compile_hot_paths` compiles
         return self._policy_heads.forward(
-            core_output, entity_counts, greedy=greedy, generator=generator
+            core_output, num_monsters, greedy=greedy, generator=generator
         )
 
     def evaluate_actions(
@@ -133,8 +133,8 @@ class ActorCritic(nn.Module):
         """
         core_output = self.core(state_batch, state_counts_cpu)
         x_values = self._head_value(core_output.x_global)
-        entity_counts = _count_tokens_of_entity_kind(state_counts_cpu)
-        policy_output = self._policy_heads(core_output, entity_counts, x_recorded_actions)
+        num_monsters = int(state_counts_cpu.x_token_kind_count[:, TokenKind.MONSTERS].sum())
+        policy_output = self._policy_heads(core_output, num_monsters, x_recorded_actions)
         return policy_output, x_values
 
     def get_values(self, state_batch: StateBatch, state_counts_cpu: StateCounts) -> torch.Tensor:
@@ -174,25 +174,3 @@ def compile_hot_paths(model: ActorCritic) -> None:
 
     # Not autotuned: an empty block's key-net matmul fails to lower under autotuning
     model._policy_heads.compile(dynamic=True)
-
-
-def _count_tokens_of_entity_kind(state_counts_cpu: StateCounts) -> list[int]:
-    """Count each Entity kind's tokens over the batch.
-
-    Parameters
-    ----------
-    state_counts_cpu : StateCounts
-        The states' counts on the CPU.
-
-    Returns
-    -------
-    list[int]
-        Each Entity kind's number of tokens, indexed by `EntityKind`.
-    """
-    # Each Entity kind's tokens: its token kinds' summed on the host, in `EntityKind` order
-    token_kind_counts_total = state_counts_cpu.x_token_kind_count.sum(0).tolist()
-    
-    return [
-        sum(token_kind_counts_total[token_kind] for token_kind in token_kinds)
-        for _, token_kinds in sorted(TOKEN_KINDS_OF_ENTITY_KIND.items())
-    ]
