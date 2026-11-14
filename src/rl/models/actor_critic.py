@@ -528,7 +528,8 @@ def _evaluate_idx(
     x_logp = dist.logits.clamp(min=_KL_UNIFORM_LOG_P_FLOOR)
     x_kl_uniform = -x_logp.masked_fill(~x_legal, 0.0).sum(-1) / x_num_legal - x_num_legal.log()
 
-    return dist.log_prob(x_idx), dist.entropy(), x_kl_uniform
+    # The entropy over its maximum, log(legal count); min=2: a lone legal choice gives 0, not 0/0
+    return dist.log_prob(x_idx), dist.entropy() / x_num_legal.clamp(min=2).log(), x_kl_uniform
 
 
 def _evaluate_row(
@@ -575,7 +576,9 @@ def _evaluate_row(
     x_log_prob_floor = x_log_prob.clamp(min=_KL_UNIFORM_LOG_P_FLOOR).masked_fill(~x_legal, 0.0)
     x_log_prob_sum = _sum_by_state(x_log_prob_floor, x_row_state, batch_size)
     x_kl_uniform = -1 * x_log_prob_sum / x_num_legal - x_num_legal.log()
-    return x_log_prob[x_row], x_entropy, x_kl_uniform
+
+    # The entropy over its maximum, log(legal count), as in `_evaluate_idx`
+    return x_log_prob[x_row], x_entropy / x_num_legal.clamp(min=2).log(), x_kl_uniform
 
 
 def _sum_by_state(
