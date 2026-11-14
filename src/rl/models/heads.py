@@ -46,7 +46,7 @@ class HeadActionType(nn.Module):
         x_context : torch.Tensor
             (B, dim_context) float32. Each state's focus context, which gates `x_global`.
         x_mask : torch.Tensor
-            (B, num_choices) bool. Each state's legal choices.
+            (B, NUM_ACTION_TYPES) bool. Each state's legal `ActionType`s.
 
         Returns
         -------
