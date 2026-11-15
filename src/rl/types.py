@@ -271,7 +271,7 @@ class PolicyOutput:
 
 @final
 @dataclass
-class MapOutput:
+class MapCache:
     """The Map GNN's outputs for every game of a rollout, whose weights don't change.
 
     The GNN reruns only the games whose Map changed since `x_node`, and writes their rows in

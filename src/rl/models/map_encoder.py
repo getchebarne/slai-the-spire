@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.batches import get_unique_rep_row
 from src.rl.constants import DEDUP_MIN_BATCH
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
@@ -13,7 +14,7 @@ from src.rl.encoding import OFF_MAP_POSITION
 from src.rl.encoding import OFF_MAP_SELECTABLE
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
-from src.rl.types import MapOutput
+from src.rl.types import MapCache
 
 
 _NUM_NODES = MAP_HEIGHT * MAP_WIDTH
@@ -94,7 +95,7 @@ class MapGNN(nn.Module):
         self.message_passing = message_passing
 
     def forward(
-        self, x_grid: torch.Tensor, num_rooms: int, map_output: MapOutput | None = None
+        self, x_grid: torch.Tensor, num_rooms: int, map_cache: MapCache | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the message passing over `x_grid`'s Maps.
 
@@ -104,7 +105,7 @@ class MapGNN(nn.Module):
             (B, H, W, C) uint8. Each state's Map.
         num_rooms : int
             The number of selectable Rooms over the batch, N_rooms.
-        map_output : MapOutput | None, default None
+        map_cache : MapCache | None, default None
             The outputs of this rollout's last step, to reuse and update, or None to run them all.
 
         Returns
@@ -113,15 +114,14 @@ class MapGNN(nn.Module):
             (N_rooms, hidden). The selectable Rooms' node features, state after state and each
             state's in node order: the Room tokens' order.
         x_map_readout : torch.Tensor
-            (B, hidden). Each state's readout. With `map_output`, this is its tensor, which the
-            next call overwrites.
+            (B, hidden). Each state's readout.
         """
         batch_size = x_grid.shape[0]
 
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
         x_node = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
-        x_hidden_map, x_map_of_state, x_map_readout = self._encode_maps(
-            x_node[:, :, :NUM_FEATURE_CHANNELS], map_output
+        x_hidden_map, x_map_of_state, x_readout_map = self._encode_maps(
+            x_node[:, :, :NUM_FEATURE_CHANNELS], map_cache
         )
 
         # The selectable Rooms' nodes, state after state and each state's in node order
@@ -129,10 +129,11 @@ class MapGNN(nn.Module):
         x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
         x_room_state = x_room // _NUM_NODES
         x_room_node = x_room % _NUM_NODES
-        return x_hidden_map[x_map_of_state[x_room_state], x_room_node], x_map_readout
+        x_room_hidden = x_hidden_map[x_map_of_state[x_room_state], x_room_node]
+        return x_room_hidden, x_readout_map[x_map_of_state]
 
     def _encode_maps(
-        self, x_node: torch.Tensor, map_output: MapOutput | None
+        self, x_node: torch.Tensor, map_cache: MapCache | None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run the message passing over the Maps, each distinct one once on a large batch.
 
@@ -140,7 +141,7 @@ class MapGNN(nn.Module):
         ----------
         x_node : torch.Tensor
             (B, H * W, NUM_FEATURE_CHANNELS) uint8. Each state's Map, flattened to nodes.
-        map_output : MapOutput | None
+        map_cache : MapCache | None
             The outputs of this rollout's last step, to reuse and update, or None to run them all.
 
         Returns
@@ -148,27 +149,27 @@ class MapGNN(nn.Module):
         x_hidden_map : torch.Tensor
             (U, H * W, hidden). The node features of each Map the GNN ran on: the unique Maps
             on a batch of DEDUP_MIN_BATCH states or more, every state's on a smaller one or with
-            `map_output`. With it, this is its tensor, which the next call overwrites.
+            `map_cache`.
         x_map_of_state : torch.Tensor
             (B,) long. Each state's Map, its index in `x_hidden_map`.
-        x_map_readout : torch.Tensor
-            (B, hidden). Each state's readout. With `map_output`, this is its tensor too.
+        x_readout_map : torch.Tensor
+            (U, hidden). The readout of each Map the GNN ran on.
         """
         batch_size = x_node.shape[0]
 
-        if map_output is not None:
-            x_hidden, x_readout = map_output.x_hidden, map_output.x_readout
-            if map_output.x_node is None or x_hidden is None or x_readout is None:
+        if map_cache is not None:
+            x_hidden, x_readout = map_cache.x_hidden, map_cache.x_readout
+            if map_cache.x_node is None or x_hidden is None or x_readout is None:
                 x_hidden, x_readout = self._encode_forward_rooms(x_node)
-                map_output.x_hidden, map_output.x_readout = x_hidden, x_readout
+                map_cache.x_hidden, map_cache.x_readout = x_hidden, x_readout
             else:
-                x_changed = (x_node != map_output.x_node).flatten(1).any(1)  # (B,)
+                x_changed = (x_node != map_cache.x_node).flatten(1).any(1)  # (B,)
                 x_idx_state = torch.nonzero(x_changed).squeeze(1)
                 if x_idx_state.shape[0] > 0:
                     x_hidden[x_idx_state], x_readout[x_idx_state] = self._encode_forward_rooms(
                         x_node[x_idx_state]
                     )
-            map_output.x_node = x_node
+            map_cache.x_node = x_node
             return x_hidden, torch.arange(batch_size, device=x_node.device), x_readout
 
         if batch_size < DEDUP_MIN_BATCH:
@@ -182,13 +183,11 @@ class MapGNN(nn.Module):
         # x_uniq: (U, words)
         # x_inverse: (B,) / x_inverse[b] ∈ [0, U). Maps each state to its unique ID
         x_uniq, x_inverse = torch.unique(x_packed, dim=0, return_inverse=True)
+        x_rep = get_unique_rep_row(x_inverse, x_uniq.shape[0])  # (U,)
 
-        x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_node.device)
-        x_rep[x_inverse] = torch.arange(batch_size, device=x_node.device)
-
-        # Encode the unique Maps, and gather the readout back
+        # Encode the unique Maps
         x_hidden, x_readout_uniq = self._encode_forward_rooms(x_node[x_rep])
-        return x_hidden, x_inverse, x_readout_uniq[x_inverse]
+        return x_hidden, x_inverse, x_readout_uniq
 
     def _encode_forward_rooms(self, x_node: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the message passing over the Maps' forward Rooms, and put them back on the grid.
