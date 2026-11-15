@@ -34,12 +34,16 @@ from src.rl.types import Tokens
 __all__ = [
     "allocate_states",
     "cat_states",
+    "expand_ranges",
     "gather_states",
     "get_owner_first_row",
     "get_row_owner",
+    "get_unique_rep_row",
     "iter_tensors",
     "map_tensors",
     "read_states",
+    "select_owned_rows",
+    "select_sparse",
     "slice_states",
     "to_device",
 ]
@@ -146,6 +150,28 @@ def get_owner_first_row(x_count: torch.Tensor) -> torch.Tensor:
     """
     # Scanned along the last axis: CUDA's first-axis scan runs one serial thread per column
     return x_count.movedim(0, -1).cumsum(-1).movedim(-1, 0) - x_count
+
+
+def get_unique_rep_row(x_inverse: torch.Tensor, num_unique: int) -> torch.Tensor:
+    """Find one row of each unique value: its representative.
+
+    Which of a value's rows comes out is unspecified.
+
+    Parameters
+    ----------
+    x_inverse : torch.Tensor
+        (N,) long. Each row's unique value, as `torch.unique` returns it with `return_inverse`.
+    num_unique : int
+        The number of unique values.
+
+    Returns
+    -------
+    torch.Tensor
+        (num_unique,) long. Each unique value's representative row.
+    """
+    x_rep = torch.zeros(num_unique, dtype=torch.long, device=x_inverse.device)
+    x_rep[x_inverse] = torch.arange(x_inverse.shape[0], device=x_inverse.device)
+    return x_rep
 
 
 def get_entity_kind_rows(
@@ -389,7 +415,7 @@ def _bytes_as(x_buffer: torch.Tensor, x_like: torch.Tensor, idx_start: int) -> t
     return x_buffer[idx_start : idx_start + size].view(x_like.dtype).view(x_like.shape)
 
 
-def _select_sparse[TStorage](
+def select_sparse[TStorage](
     sparse: Sparse[TStorage],
     selector_rows: slice | torch.Tensor,
     selector_entries: slice | torch.Tensor,
@@ -417,7 +443,7 @@ def _select_sparse[TStorage](
     )
 
 
-def _select_owned_rows[TStorage](
+def select_owned_rows[TStorage](
     owned_rows: OwnedRows[TStorage],
     selector_tokens: slice | torch.Tensor,
     selector_rows: slice | torch.Tensor,
@@ -442,7 +468,7 @@ def _select_owned_rows[TStorage](
         The selected ownership counts and feature rows.
     """
     return OwnedRows(
-        sparse=_select_sparse(owned_rows.sparse, selector_rows, selector_entries),
+        sparse=select_sparse(owned_rows.sparse, selector_rows, selector_entries),
         x_count=owned_rows.x_count[selector_tokens],
     )
 
@@ -529,7 +555,7 @@ def gather_states[TStorage](
 
     # Each collection's source rows, in output order
     selectors = {
-        collection: _expand_ranges(
+        collection: expand_ranges(
             x_state_first_row[x_idx_state, collection],
             x_total[x_idx_state, collection],
             num_rows[collection],
@@ -570,16 +596,16 @@ def _select_states[TStorage](
     return States(
         tokens=Tokens(
             features=EncodedFeatures(
-                sparse=_select_sparse(
+                sparse=select_sparse(
                     tokens.features.sparse, selector_tokens,
                     selectors[StateCollection.TOKEN_ENTRIES],
                 ),
-                effects=_select_owned_rows(
+                effects=select_owned_rows(
                     tokens.features.effects, selector_tokens,
                     selectors[StateCollection.EFFECTS],
                     selectors[StateCollection.EFFECT_ENTRIES],
                 ),
-                modifiers=_select_owned_rows(
+                modifiers=select_owned_rows(
                     tokens.features.modifiers, selector_tokens,
                     selectors[StateCollection.MODIFIERS],
                     selectors[StateCollection.MODIFIER_ENTRIES],
@@ -592,7 +618,7 @@ def _select_states[TStorage](
             x_legal_target=tokens.x_legal_target[selector_tokens],
             x_needs_target=tokens.x_needs_target[selector_tokens],
         ),
-        effect_pending=_select_sparse(
+        effect_pending=select_sparse(
             states.effect_pending, selector_states, selectors[StateCollection.PENDING_ENTRIES]
         ),
         x_context=states.x_context[selector_states],
@@ -607,7 +633,7 @@ def _select_states[TStorage](
     )
 
 
-def _expand_ranges(
+def expand_ranges(
     x_start: torch.Tensor, x_count: torch.Tensor, num_rows: int
 ) -> torch.Tensor:
     """List the rows of consecutive ranges, one range after another.

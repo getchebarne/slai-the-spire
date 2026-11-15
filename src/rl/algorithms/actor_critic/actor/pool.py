@@ -31,7 +31,7 @@ from src.rl.algorithms.actor_critic.workers import write_ascensions
 from src.rl.batches import cat_states
 from src.rl.models import ActorCritic
 from src.rl.types import Live
-from src.rl.types import MapOutput
+from src.rl.types import MapCache
 from src.rl.types import Rollout
 from src.rl.types import States
 from src.rl.utils import parent_alive
@@ -410,14 +410,14 @@ def _collect_rollout(
     episode_results: list[EpisodeResult] = []
 
     # A game's Map outputs last until its Map changes: the weights change between rollouts
-    map_output = MapOutput()
+    map_cache = MapCache()
 
     # Turn off gradient computation
     with torch.no_grad():
         states = snapshot_to_device(workers, device)
         for _ in range(rollout_config.rollout_length):
             # Forward pass, policy only
-            policy_output = model.action_select(states, generator=generator, map_output=map_output)
+            policy_output = model.action_select(states, generator=generator, map_cache=map_cache)
             x_step_action = policy_output.x_action
 
             # Step the worker's environments
