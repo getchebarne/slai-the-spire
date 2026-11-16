@@ -54,13 +54,11 @@ from src.rl.types import TokenKind
 __all__ = [
     "get_entities_for_token_kind",
     "iter_tokens",
-    "get_card_entities",
     "get_relic_entities",
     "get_potion_entities",
     "get_event_option_entities",
     "get_monster_entities",
     "relic_held",
-    "draw_order_visible",
     "get_room_entities",
     "get_room_burning",
     "get_burning_path",
@@ -98,7 +96,7 @@ def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) ->
         One Entity per token of the token kind, in rank order.
     """
     if token_kind in TOKEN_KINDS_CARD:
-        return get_card_entities(token_kind, game_state)
+        return _get_card_entities(token_kind, game_state)
     if token_kind in TOKEN_KINDS_RELIC:
         return get_relic_entities(token_kind, game_state)
     if token_kind in TOKEN_KINDS_POTION:
@@ -134,9 +132,7 @@ def iter_tokens(game_state: GameState) -> Iterator[Token]:
             yield token_kind, entity
 
 
-def _capped(
-    token_kind: TokenKind, cards: list[Card], cap: int, keep_last: bool = False
-) -> list[Card]:
+def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
     """Cut `cards` to `cap`, warning once per token kind when that drops any.
 
     Parameters
@@ -147,13 +143,11 @@ def _capped(
         The Cards to cut.
     cap : int
         The token kind's cap.
-    keep_last : bool, default False
-        Keep the last `cap` Cards rather than the first.
 
     Returns
     -------
     list[Card]
-        The first `cap` Cards, or the last `cap` with `keep_last`.
+        The first `cap` Cards.
     """
     if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
         _WARNED_OVERFLOW.add(token_kind)
@@ -161,10 +155,10 @@ def _capped(
             f"{token_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
             "dropped"
         )
-    return cards[max(0, len(cards) - cap) :] if keep_last else cards[:cap]
+    return cards[:cap]
 
 
-def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
+def _get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
     """Return the GameState Card pile a Card token kind names, truncated to the pile's cap.
 
     Used by get_entities_for_token_kind. A Card past the cap has no token, so masks cannot name
@@ -180,8 +174,8 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
     Returns
     -------
     list[Card]
-        The pile's Cards in engine order, the draw pile's cut to the ones nearest its top; empty
-        when the state has no such pile.
+        The pile's Cards in engine order, the draw pile's known Cards by depth and then the rest
+        by id; empty when the state has no such pile.
     """
     combat = game_state.combat
     match token_kind:
@@ -191,10 +185,12 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             if combat is None:
                 return []
 
-            # The top of the pile, still in engine order (bottom first)
-            return _capped(
-                token_kind, combat.card_pile_draw, MAX_SIZE_CARD_PILE_DRAW, keep_last=True
+            # Known Cards by depth, then the rest by id: the order hides what the player can't see
+            cards_draw = sorted(
+                combat.card_pile_draw,
+                key=lambda card: (card.draw_depth is None, card.draw_depth or 0, card.id),
             )
+            return _capped(token_kind, cards_draw, MAX_SIZE_CARD_PILE_DRAW)
         case TokenKind.CARD_PILE_DISCARD:
             if combat is None:
                 return []
@@ -400,22 +396,6 @@ def relic_held(game_state: GameState, relic_name: RelicName) -> bool:
         Whether it is held.
     """
     return any(relic.name == relic_name for relic in game_state.relics)
-
-
-def draw_order_visible(game_state: GameState) -> bool:
-    """Return whether Frozen Eye shows the draw pile's order.
-
-    Parameters
-    ----------
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    bool
-        True when the Character holds Frozen Eye.
-    """
-    return relic_held(game_state, RelicName.FrozenEye)
 
 
 def _next_row_candidate_cols(

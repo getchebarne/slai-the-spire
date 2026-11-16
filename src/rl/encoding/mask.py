@@ -11,7 +11,6 @@ from src.rl.constants import TOKEN_KINDS_CARD
 from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
 from src.rl.encoding.focus import derive_focus
-from src.rl.tokens import draw_order_visible
 from src.rl.types import Token
 from src.rl.types import TokenKind
 from src.rl.utils import action_masked
@@ -195,10 +194,6 @@ def encode_batch_masks_into(
         # Keep the first legal copy of each Card identity, separately per kind and action type
         for action_type, token_kind in legal_token_kinds:
             if token_kind not in TOKEN_KINDS_CARD:
-                continue
-            
-            # With Frozen Eye, equal Cards at different draw depths are distinct choices
-            if token_kind is TokenKind.CARD_PILE_DRAW and draw_order_visible(game_state):
                 continue
 
             rows = [
