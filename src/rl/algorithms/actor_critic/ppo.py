@@ -73,7 +73,8 @@ def update_ppo(
     dict[str, float]
         The update's metrics, keyed by their TensorBoard scalar names: each per-minibatch metric
         averaged over the minibatches run, then `update/epochs_run`, the `value/ev_*` explained
-        variances and the `offpolicy/*` scalars, each computed once per update.
+        variances, the `offpolicy/*` scalars and, with a target KL, `update/approx_kl`, the
+        update's total KL, each computed once per update.
     """
     num_reward_streams = rollout.x_reward.shape[-1]
 
@@ -118,6 +119,7 @@ def update_ppo(
     num_minibatches = len(minibatches) // ppo_config.num_epochs
 
     batch_metrics = []
+    batch_approx_kl = []
     for indices in minibatches:
         # Select this minibatch's states, actions and targets
         states_mini = gather_states(rollout.states, indices)
@@ -130,55 +132,64 @@ def update_ppo(
             x_weight_capped=targets.x_weight_capped[x_idx_state],
         )
 
-        metrics = _update_minibatch(
+        metrics, approx_kl = _update_minibatch(
             model,
             optimizer,
             states_mini,
             x_action_mini,
             targets_mini,
             ppo_config,
-            device,
         )
         del states_mini, x_action_mini, targets_mini
         batch_metrics.append(metrics)
+        batch_approx_kl.append(approx_kl)
 
         # Trust-region early stop check
         if ppo_config.target_kl is not None and _left_trust_region(
-            batch_metrics, num_minibatches, ppo_config.target_kl
+            batch_approx_kl, num_minibatches, ppo_config.target_kl
         ):
             break
 
     # Each per-minibatch metric averaged over the minibatches run, then the once-per-update ones
-    return _average_minibatch_metrics(batch_metrics, num_minibatches) | _anchor_metrics(
+    metrics_update = _average_minibatch_metrics(batch_metrics, num_minibatches) | _anchor_metrics(
         targets.x_return, x_value_prox, x_log_weight, x_weight, ppo_config.is_clip
     )
 
+    # With a target KL, the update's approx KL: its total, from π_prox to the updated weights
+    if ppo_config.target_kl is not None:
+        x_log_prob_updated, _, _ = _evaluate_rollout(model, rollout, ppo_config.minibatch_size)
+        metrics_update[MetricKey.UPDATE_APPROX_KL] = mean_over_ranks(
+            _approx_kl(x_log_prob_updated - x_log_prob_prox)
+        )
 
-def adapt_lr_scale(lr_scale: float, approx_kl: float, target_kl: float) -> float:
-    """Return the next adaptive-KL lr scale.
+    return metrics_update
+
+
+def adapt_lr(lr: float, approx_kl: float, target_kl: float) -> float:
+    """Return the next adaptive-KL learning rate.
 
     Parameters
     ----------
-    lr_scale : float
-        The current lr scale.
+    lr : float
+        The current learning rate.
     approx_kl : float
-        The last update's approx KL.
+        The last update's total approx KL.
     target_kl : float
         The target KL.
 
     Returns
     -------
     float
-        `lr_scale` divided by 1.5 when `approx_kl` is above twice `target_kl`, down to 1/64;
-        multiplied by 1.5 when below half of it, up to 1.0; unchanged otherwise.
+        `lr` divided by 1.5 when `approx_kl` is above twice `target_kl`, down to 1e-5;
+        multiplied by 1.5 when below half of it, up to 1e-2; unchanged otherwise.
     """
     if approx_kl > 2.0 * target_kl:
-        return max(lr_scale / 1.5, 1.0 / 64.0)
+        return max(lr / 1.5, 1e-5)
     
     if approx_kl < 0.5 * target_kl:
-        return min(lr_scale * 1.5, 1.0)
+        return min(lr * 1.5, 1e-2)
     
-    return lr_scale
+    return lr
 
 
 def _evaluate_rollout(
@@ -199,9 +210,9 @@ def _evaluate_rollout(
 
     Returns
     -------
-    x_log_prob_prox : torch.Tensor
+    x_log_prob : torch.Tensor
         (batch_size,). Each state's recorded action's log-prob, summed over the levels.
-    x_value_prox : torch.Tensor
+    x_value : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values.
     x_value_final : torch.Tensor
         (num_envs, num_reward_streams). Each game's final value.
@@ -220,22 +231,20 @@ def _evaluate_rollout(
             x_action_slice = rollout.x_action[idx_start:idx_stop]
 
             # Evaluate actions on the slice's states
-            policy_output, x_value = model.action_evaluate(
+            policy_output, x_value_slice = model.action_evaluate(
                 states_slice, x_action_slice
             )
 
             # Append log-probabilities and values
             batch_x_log_prob.append(policy_output.x_log_prob.sum(-1))
-            batch_x_value.append(x_value)
+            batch_x_value.append(x_value_slice)
 
         # Bootstrap value i.e. value of the rollout's final state for each environment
         states_final = rollout.states_final
         x_value_final = model.get_values(states_final)
 
-    x_value_prox = torch.cat(batch_x_value).reshape(
-        rollout_length, num_envs, num_reward_streams
-    )
-    return torch.cat(batch_x_log_prob), x_value_prox, x_value_final
+    x_value = torch.cat(batch_x_value).reshape(rollout_length, num_envs, num_reward_streams)
+    return torch.cat(batch_x_log_prob), x_value, x_value_final
 
 
 def _compute_gae(
@@ -363,8 +372,7 @@ def _update_minibatch(
     x_action: torch.Tensor,
     targets: _Targets,
     ppo_config: PPOConfig,
-    device: torch.device,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], float]:
     """Take one optimizer step on the selected states, actions and targets.
 
     Parameters
@@ -381,14 +389,14 @@ def _update_minibatch(
         What the update trains against, one row per selected state.
     ppo_config : PPOConfig
         The PPO settings.
-    device : torch.device
-        The Learner's device.
 
     Returns
     -------
-    dict[str, float]
-        The minibatch's metrics, keyed by their TensorBoard scalar names; its approx KL is the
-        ranks' mean.
+    metrics : dict[str, float]
+        The minibatch's metrics, keyed by their TensorBoard scalar names.
+    approx_kl : float
+        The approx KL from π_prox to the weights before this step, averaged over the ranks: the
+        early stops' input.
     """
     # Forward pass, under the weights so far
     policy_output, x_value = model.action_evaluate(states, x_action)
@@ -433,15 +441,13 @@ def _update_minibatch(
         policy_output.x_entropy,
         policy_output.x_kl_uniform,
         x_ratio,
-        x_log_ratio,
         x_grad_norm,
         ppo_config.clip_eps,
     )
 
     # Every rank stops on the same KL, or the others would wait in the next all-reduce
-    approx_kl = mean_over_ranks(metrics[MetricKey.UPDATE_APPROX_KL], device)
-    metrics[MetricKey.UPDATE_APPROX_KL] = approx_kl
-    return metrics
+    approx_kl = mean_over_ranks(_approx_kl(x_log_ratio))
+    return metrics, approx_kl
 
 
 def _compute_loss_policy(
@@ -485,14 +491,13 @@ def _minibatch_metrics(
     x_entropy: torch.Tensor,
     x_kl_uniform: torch.Tensor,
     x_ratio: torch.Tensor,
-    x_log_ratio: torch.Tensor,
     x_grad_norm: torch.Tensor,
     clip_eps: float,
 ) -> dict[str, float]:
     """Return the per-minibatch TensorBoard scalars (minibatch means).
 
-    Schulman's approx-KL estimator; clip fraction = share of moved-off ratios; grad norm is the
-    pre-clip total (otherwise discarded by clip_grad_norm_).
+    Clip fraction = share of moved-off ratios; grad norm is the pre-clip total (otherwise
+    discarded by clip_grad_norm_).
 
     Parameters
     ----------
@@ -511,8 +516,6 @@ def _minibatch_metrics(
     x_ratio : torch.Tensor
         (batch_size,). Each recorded action's probability ratio, the current weights' over
         π_prox's.
-    x_log_ratio : torch.Tensor
-        (batch_size,). The ratios' logs.
     x_grad_norm : torch.Tensor
         (). The gradients' total norm before clipping.
     clip_eps : float
@@ -543,9 +546,6 @@ def _minibatch_metrics(
             MetricKey.KL_UNIFORM_L2: x_kl_uniform_mean[1],
             MetricKey.KL_UNIFORM_L3: x_kl_uniform_mean[2],
 
-            # KL-Update
-            MetricKey.UPDATE_APPROX_KL: ((x_ratio - 1) - x_log_ratio).mean(),
-
             # Other
             MetricKey.UPDATE_CLIP_FRACTION: ((x_ratio - 1).abs() > clip_eps).float().mean(),
             MetricKey.GRAD_NORM_PRECLIP: x_grad_norm,
@@ -554,14 +554,14 @@ def _minibatch_metrics(
 
 
 def _left_trust_region(
-    records: list[dict[str, float]], num_minibatches: int, target_kl: float
+    batch_approx_kl: list[float], num_minibatches: int, target_kl: float
 ) -> bool:
     """Tell whether the last minibatch took the policy out of the trust region.
 
     Parameters
     ----------
-    records : list[dict[str, float]]
-        The metrics of each minibatch run so far, in order.
+    batch_approx_kl : list[float]
+        The approx KL of each minibatch run so far, in order, each from before its step.
     num_minibatches : int
         The number of minibatches per epoch.
     target_kl : float
@@ -574,15 +574,14 @@ def _left_trust_region(
         mean KL is above 1.5x the target.
     """
     # Minibatch-level trust region: 3.0x the target
-    if records[-1][MetricKey.UPDATE_APPROX_KL] > 3.0 * target_kl:
+    if batch_approx_kl[-1] > 3.0 * target_kl:
         return True
 
     # Batch-level trust region: 1.5x the target
-    if len(records) % num_minibatches != 0:
+    if len(batch_approx_kl) % num_minibatches != 0:
         return False
     
-    approx_kls = [metrics[MetricKey.UPDATE_APPROX_KL] for metrics in records[-num_minibatches:]]
-    return sum(approx_kls) / num_minibatches > 1.5 * target_kl
+    return sum(batch_approx_kl[-num_minibatches:]) / num_minibatches > 1.5 * target_kl
 
 
 def _average_minibatch_metrics(
@@ -644,9 +643,26 @@ def _anchor_metrics(
             **{f"{MetricKey.VALUE_EV}_{reward_stream}": x_explained_var[idx_reward_stream] for idx_reward_stream, reward_stream in enumerate(RewardStream)},
             MetricKey.OFFPOLICY_IS_WEIGHT_MEAN: x_weight.clamp(max=is_clip).mean(),
             MetricKey.OFFPOLICY_IS_WEIGHT_TRUNCATED: (x_weight > is_clip).float().mean(),
-            MetricKey.OFFPOLICY_KL_BEHAVIOR_PROX: (x_weight - 1 - x_log_weight).mean(),
+            MetricKey.OFFPOLICY_KL_BEHAVIOR_PROX: _approx_kl(x_log_weight),
         }
     )
+
+
+def _approx_kl(x_log_ratio: torch.Tensor) -> torch.Tensor:
+    """Return Schulman's approx-KL estimate: the mean of (r - 1) - log r over the log-ratios.
+
+    Parameters
+    ----------
+    x_log_ratio : torch.Tensor
+        (batch_size,). Each recorded action's log-ratio: the newer weights' log-prob minus the
+        older weights'.
+
+    Returns
+    -------
+    torch.Tensor
+        (). The estimate of KL(older ‖ newer).
+    """
+    return ((x_log_ratio.exp() - 1) - x_log_ratio).mean()
 
 
 def _read_metrics(x_metrics: dict[str, torch.Tensor]) -> dict[str, float]:

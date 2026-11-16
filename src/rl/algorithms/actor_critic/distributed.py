@@ -101,26 +101,24 @@ def average_gradients(model: nn.Module) -> None:
         offset += x_param.numel()
 
 
-def mean_over_ranks(value: float, device: torch.device) -> float:
-    """Average `value` over the ranks: the same number on every rank.
+def mean_over_ranks(x_value: torch.Tensor) -> float:
+    """Average a scalar over the ranks, read once: the same number on every rank.
 
     Parameters
     ----------
-    value : float
-        This rank's value.
-    device : torch.device
-        This rank's device, where the all-reduce runs.
+    x_value : torch.Tensor
+        (). This rank's value, on its device, where the all-reduce runs.
 
     Returns
     -------
     float
-        The mean of every rank's `value`.
+        The mean of every rank's `x_value`.
     """
     if not dist.is_initialized():
-        return value
-    x_value = torch.tensor([value], dtype=torch.float64, device=device)
-    dist.all_reduce(x_value)
-    return x_value.item() / dist.get_world_size()
+        return x_value.item()
+    x_value_sum = x_value.detach().to(torch.float64)
+    dist.all_reduce(x_value_sum)
+    return x_value_sum.item() / dist.get_world_size()
 
 
 def any_rank(flag: bool, device: torch.device) -> bool:

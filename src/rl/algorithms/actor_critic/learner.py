@@ -28,7 +28,7 @@ from src.rl.algorithms.actor_critic.metrics import MetricKey
 from src.rl.algorithms.actor_critic.metrics import log_eval
 from src.rl.algorithms.actor_critic.metrics import log_iteration
 from src.rl.algorithms.actor_critic.ppo import PPOConfig
-from src.rl.algorithms.actor_critic.ppo import adapt_lr_scale
+from src.rl.algorithms.actor_critic.ppo import adapt_lr
 from src.rl.algorithms.actor_critic.ppo import update_ppo
 from src.rl.models import ActorCritic
 from src.rl.models.actor_critic import compile_hot_paths
@@ -112,9 +112,7 @@ def train(
     # Load checkpoint
     iteration_start, run_state = load_checkpoint(exp_name, model, optimizer)
     if run_state is None:
-        run_state = RunState(
-            total_steps=0, ascension_current=curriculum.ascension_start, streak=0, lr_scale=1.0
-        )
+        run_state = RunState(total_steps=0, ascension_current=curriculum.ascension_start, streak=0)
 
     # Offset the seeds per resume and rank; rank 0 of a fresh run keeps the single-GPU seeds
     if iteration_start > 0 or rank_info.rank > 0:
@@ -134,8 +132,6 @@ def train(
         rank_info.world_size * rollout_config.rollout_length * rollout_config.num_envs
     )
 
-    # Adaptive-KL learning rate: base recovered from the (possibly resumed-scaled) learning rate
-    base_lr = optimizer.param_groups[0]["lr"] / run_state.lr_scale
     with ExitStack() as stack:
         writer = None
         evaluator = None
@@ -186,11 +182,13 @@ def train(
 
             # Adaptive-KL-LR: the early stops bound epochs, not the first epoch's step size
             if ppo_config.target_kl is not None:
-                run_state.lr_scale = adapt_lr_scale(
-                    run_state.lr_scale, metrics[MetricKey.UPDATE_APPROX_KL], ppo_config.target_kl
+                lr = adapt_lr(
+                    optimizer.param_groups[0]["lr"],
+                    metrics[MetricKey.UPDATE_APPROX_KL],
+                    ppo_config.target_kl,
                 )
                 for group in optimizer.param_groups:
-                    group["lr"] = base_lr * run_state.lr_scale
+                    group["lr"] = lr
 
             # Rank 0: log a finished eval battery and step the curriculum on its win rate
             if evaluator is not None and writer is not None:
@@ -222,6 +220,7 @@ def train(
                         iteration,
                         run_state,
                         metrics,
+                        optimizer.param_groups[0]["lr"],
                         episode_results,
                         delivery,
                         seconds_update,

@@ -64,7 +64,6 @@ def save_checkpoint(
             "total_steps": run_state.total_steps,
             "ascension_current": run_state.ascension_current,
             "streak": run_state.streak,
-            "lr_scale": run_state.lr_scale,
         },
         f"{exp_dir}/checkpoints/iter-{iteration}.pth",
     )
@@ -112,7 +111,6 @@ def load_checkpoint(
         total_steps=ckpt["total_steps"],
         ascension_current=ckpt["ascension_current"],
         streak=ckpt["streak"],
-        lr_scale=ckpt["lr_scale"],
     )
     return ckpt["iteration"] + 1, run_state
 

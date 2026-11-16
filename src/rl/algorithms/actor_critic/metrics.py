@@ -60,7 +60,7 @@ class MetricKey(StrEnum):
     UPDATE_APPROX_KL = "update/approx_kl"
     UPDATE_CLIP_FRACTION = "update/clip_fraction"
     UPDATE_EPOCHS_RUN = "update/epochs_run"
-    UPDATE_LR_SCALE = "update/lr_scale"
+    UPDATE_LR = "update/lr"
     VALUE_EV = "value/ev"  # Each reward stream's: value/ev_<stream>
     WIN_RATE = "win_rate"
 
@@ -77,6 +77,7 @@ def log_iteration(
     iteration: int,
     run_state: RunState,
     metrics: dict[str, float],
+    lr: float,
     episode_results: list[EpisodeResult],
     delivery: Delivery,
     seconds_update: float,
@@ -96,6 +97,8 @@ def log_iteration(
         The run's progress after the iteration.
     metrics : dict[str, float]
         The update's metrics, keyed by `MetricKey`.
+    lr : float
+        The adaptive-KL learning rate after the update.
     episode_results : list[EpisodeResult]
         The episodes the iteration's rollouts finished, every rank's, possibly none.
     delivery : Delivery
@@ -109,7 +112,7 @@ def log_iteration(
     device : torch.device
         The Learner's device.
     """
-    _log_training(writer, iteration, metrics, run_state.lr_scale)
+    _log_training(writer, iteration, metrics, lr)
     _log_behavior(
         writer, iteration, _MetricPrefix.TRAIN, episode_results, run_state.ascension_current
     )
@@ -158,9 +161,9 @@ def log_eval(
 
 
 def _log_training(
-    writer: SummaryWriter, iteration: int, metrics: dict[str, float], lr_scale: float
+    writer: SummaryWriter, iteration: int, metrics: dict[str, float], lr: float
 ) -> None:
-    """Write an update's training metrics under train/, with the learning-rate scale it left.
+    """Write an update's training metrics under train/, with the learning rate it left.
 
     Parameters
     ----------
@@ -170,12 +173,10 @@ def _log_training(
         The iteration.
     metrics : dict[str, float]
         The update's metrics, keyed by `MetricKey`.
-    lr_scale : float
-        The adaptive-KL learning-rate scale after the update.
+    lr : float
+        The adaptive-KL learning rate after the update.
     """
-    _write_metrics(
-        writer, iteration, _MetricPrefix.TRAIN, {**metrics, MetricKey.UPDATE_LR_SCALE: lr_scale}
-    )
+    _write_metrics(writer, iteration, _MetricPrefix.TRAIN, {**metrics, MetricKey.UPDATE_LR: lr})
 
 
 def _log_behavior(
