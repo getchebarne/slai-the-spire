@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_row_segment
+from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.constants import MAP_TOKEN_KIND_MAX_TOKENS
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.constants import TOKEN_KINDS_IN_WINDOW_ORDER
@@ -68,6 +69,7 @@ class Core(nn.Module):
             + len(_COUNT_TOKEN_KINDS)  # Per-token-kind token counts, sqrt-normalized by their caps
             + ENCODING_DIM_CONTEXT     # Raw per-state features, in their established column order
             + dim_entity               # Embedded pending-halt Effect (EntityProjector)
+            + NUM_ACTION_TYPES         # The legal action types after the masks, 0/1
         )
 
         # Global output
@@ -160,6 +162,7 @@ class Core(nn.Module):
                     self._get_token_counts(state_batch.state_counts.x_token_kind_count),
                     state_batch.x_context,
                     x_effect_pending,
+                    state_batch.x_legal_action_type.to(state_batch.x_context.dtype),
                 ],
                 dim=1,
             )

@@ -1,11 +1,13 @@
 """The engine collections behind tokens, their caps, and a state's tokens in window order."""
 
+import math
 import warnings
 from collections.abc import Iterator
 from collections.abc import Sequence
 
 from slai import Card
 from slai import EventOption
+from slai import GameEnv
 from slai import GameState
 from slai import Monster
 from slai import Potion
@@ -60,6 +62,8 @@ __all__ = [
     "get_wing_boots_charges",
     "draw_order_visible",
     "get_room_entities",
+    "get_room_burning",
+    "get_burning_path",
 ]
 
 
@@ -457,3 +461,125 @@ def get_room_entities(game_state: GameState) -> list[Room]:
 
     y_next = 0 if y_current is None else y_current + 1
     return [room for x, room in enumerate(rooms[y_next]) if x in cols and room is not None]
+
+
+def get_room_burning(rooms: list[list[Room | None]]) -> Room | None:
+    """Return the burning Room, whose won fight grants the Emerald Key.
+
+    Parameters
+    ----------
+    rooms : list[list[Room | None]]
+        The Map's Rooms, by row and column.
+
+    Returns
+    -------
+    Room | None
+        The burning Room, or None when the Map has none.
+    """
+    return next((room for row in rooms for room in row if room is not None and room.burning), None)
+
+
+def get_burning_path(game_state: GameState) -> set[tuple[int, int]]:
+    """Return the Rooms that still lead to the burning Room within the Wing Boots charges left.
+
+    Only while the Emerald Key is chased: in Act 3 with the final act on and the key not held. A
+    Room counts when the cheapest way to it from the current position plus the cheapest way from it
+    to the burning Room burn no more charges than are left. Each move onto a Room not in the
+    current Room's edges burns one; the act's first move is free.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    set[tuple[int, int]]
+        The Rooms' (y, x), the current Room's included while it counts; empty when the key isn't
+        chased or the burning Room is out of reach.
+    """
+    if (
+        game_state.act != GameEnv.ACT_FINAL - 1
+        or not game_state.final_act
+        or game_state.key_emerald
+    ):
+        return set()
+
+    map_ = game_state.map
+    rooms = map_.rooms
+    room_burning = get_room_burning(rooms)
+    if room_burning is None:
+        return set()
+
+    # Forward from the current Room, or from every first-row Room at the act's start
+    y_current, x_current = map_.y_current, map_.x_current
+    wb_charges_from = [[math.inf] * MAP_WIDTH for _ in rooms]
+    if y_current is None or x_current is None:
+        y_first = 0
+        for room in rooms[0]:
+            if room is not None:
+                wb_charges_from[0][room.x] = 0
+    elif y_current <= room_burning.y:
+        y_first = y_current
+        wb_charges_from[y_current][x_current] = 0
+    else:
+        return set()
+
+    for y in range(y_first + 1, room_burning.y + 1):
+        for room in rooms[y - 1]:
+            if room is None or wb_charges_from[y - 1][room.x] == math.inf:
+                continue
+
+            edges = room.edges  # Bound once: each read clones the list
+            for room_next in rooms[y]:
+                if room_next is not None:
+                    wb_charges_from[y][room_next.x] = min(
+                        wb_charges_from[y][room_next.x],
+                        wb_charges_from[y - 1][room.x] + (room_next.x not in edges),
+                    )
+
+    wb_charges_to = _wing_boots_charges_to_room_burning(rooms, room_burning)
+    wb_charges_left = get_wing_boots_charges(game_state)
+    return {
+        (y, room.x)
+        for y in range(y_first, room_burning.y + 1)
+        for room in rooms[y]
+        if room is not None
+        and wb_charges_from[y][room.x] + wb_charges_to[y][room.x] <= wb_charges_left
+    }
+
+
+def _wing_boots_charges_to_room_burning(
+    rooms: list[list[Room | None]], room_burning: Room
+) -> list[list[float]]:
+    """Return the Wing Boots charges each Room needs to reach the burning Room.
+
+    Each move onto a Room not in the current Room's edges burns one.
+
+    Parameters
+    ----------
+    rooms : list[list[Room | None]]
+        The Map's Rooms, by row and column.
+    room_burning : Room
+        The burning Room.
+
+    Returns
+    -------
+    list[list[float]]
+        The charges, by row and column; inf where the burning Room can't be reached, as from any
+        other Room on its row or past it.
+    """
+    # Initialize grid
+    wb_charges = [[math.inf] * MAP_WIDTH for _ in rooms]
+    wb_charges[room_burning.y][room_burning.x] = 0
+
+    # Back from the burning Room's row: each Room takes its cheapest move into the next row
+    for y in range(room_burning.y - 1, -1, -1):
+        for room in rooms[y]:
+            if room is not None:
+                edges = room.edges  # Bound once: each read clones the list
+                wb_charges[y][room.x] = min(
+                    charges_next + (x_next not in edges)
+                    for x_next, charges_next in enumerate(wb_charges[y + 1])
+                )
+    return wb_charges

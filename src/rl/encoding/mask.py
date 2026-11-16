@@ -1,4 +1,4 @@
-import math
+import random
 import warnings
 from typing import cast
 
@@ -6,32 +6,32 @@ import numpy as np
 import slai
 from slai import ActionType
 from slai import Card
-from slai import CardName
 from slai import EffectRoomEnter
 from slai import EventName
 from slai import GameEnv
 from slai import PotionName
-from slai import RelicName
-from slai import Room
 
 from src.rl.constants import MAP_HEIGHT
-from src.rl.constants import MAP_WIDTH
 from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.constants import TOKEN_KINDS_CARD
 from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
 from src.rl.encoding.focus import derive_focus
 from src.rl.tokens import draw_order_visible
-from src.rl.tokens import get_wing_boots_charges
+from src.rl.tokens import get_burning_path
+from src.rl.tokens import get_room_burning
 from src.rl.types import Token
 from src.rl.types import TokenKind
+from src.rl.utils import event_option_wasted
+from src.rl.utils import potion_discard_wasted
 
 
 def _card_identity(card: Card) -> tuple:
     """Return the Card features and Effects that determine selection equivalence.
 
-    Same-name Cards with different Effects remain distinct. The Card object itself is not a
-    suitable key because its hash includes its unique arena id.
+    Same-name Cards with different Effects remain distinct, and so do copies at different prices or
+    with different cost overrides. The Card object itself is not a suitable key because its hash
+    includes its unique arena id.
 
     Parameters
     ----------
@@ -41,124 +41,21 @@ def _card_identity(card: Card) -> tuple:
     Returns
     -------
     tuple
-        The Card feature key and its play, discard and draw Effect keys.
+        The Card feature key, its cost override and price, and its play, discard and draw Effect
+        keys.
     """
     return (
         card_key(card),
+        card.cost_override,
+        card.price,
         effect_key(card.effects_play),
         effect_key(card.effects_discard),
         effect_key(card.effects_draw),
     )
 
 
-def potion_can_arrive(game_state: slai.GameState) -> bool:
-    """Return whether a free belt slot could take a Potion from this state.
-
-    A Potion comes from a Reward, a Shop the Character can pay, an Alchemize in hand or The Knowing
-    Skull, and from none of them under Sozu.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state to read.
-
-    Returns
-    -------
-    bool
-        Whether a Potion can arrive.
-    """
-    if any(relic.name == RelicName.Sozu for relic in game_state.relics):
-        return False
-    reward = game_state.reward
-    if reward is not None and reward.potions:
-        return True
-    shop = game_state.shop
-    if shop is not None and any(
-        cast(int, potion.price) <= game_state.character.gold for potion in shop.potions
-    ):
-        return True
-    combat = game_state.combat
-    if combat is not None and any(
-        card.name == CardName.Alchemize for card in combat.card_pile_hand
-    ):
-        return True
-    event = game_state.event
-    return event is not None and event.name == EventName.KnowingSkull and not event.consumed
-
-
-def potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether `action` discards a Potion while nothing needs the room.
-
-    No Potion can arrive under Sozu. An Entropic Brew held in another slot makes the discard pay as
-    a reroll. Otherwise the room only pays on a full belt, where a Potion can arrive.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state `action` is legal in.
-    action : slai.Action
-        One legal action.
-
-    Returns
-    -------
-    bool
-        True for a Potion discard under Sozu, or with no Entropic Brew in another slot and either a
-        free belt slot or no Potion that can arrive.
-    """
-    if action.action_type is not ActionType.PotionDiscard:
-        return False
-    
-    if any(relic.name == RelicName.Sozu for relic in game_state.relics):
-        return True
-    
-    potions = game_state.potions
-    if any(
-        potion.name == PotionName.EntropicBrew for potion in potions if potion.id != action.ids[0]
-    ):
-        return False
-    return len(potions) < game_state.potion_slots_max or not potion_can_arrive(game_state)
-
-
-def _get_room_burning(rooms: list[list[Room | None]]) -> Room:
-    return next(room for row in rooms for room in row if room is not None and room.burning)
-
-
-def _wing_boots_charges_to_room_burning(rooms: list[list[Room | None]]) -> list[list[float]]:
-    """Return the Wing Boots charges each Room needs to reach the burning Room.
-
-    Each move onto a Room not in the current Room's edges burns one.
-
-    Parameters
-    ----------
-    rooms : list[list[Room | None]]
-        The Map's Rooms, by row and column.
-
-    Returns
-    -------
-    list[list[float]]
-        The charges, by row and column; inf where the burning Room can't be reached, as from any
-        other Room on its row or past it.
-    """
-    room_burning = _get_room_burning(rooms)
-
-    # Initialize grid
-    wb_charges = [[math.inf] * MAP_WIDTH for _ in rooms]
-    wb_charges[room_burning.y][room_burning.x] = 0
-
-    # Back from the burning Room's row: each Room takes its cheapest move into the next row
-    for y in range(room_burning.y - 1, -1, -1):
-        for room in rooms[y]:
-            if room is not None:
-                edges = room.edges  # Bound once: each read clones the list
-                wb_charges[y][room.x] = min(
-                    charges_next + (x_next not in edges)
-                    for x_next, charges_next in enumerate(wb_charges[y + 1])
-                )
-    return wb_charges
-
-
 def _misses_room_burning(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether a RoomSelect puts the burning Room out of reach.
+    """Return whether a RoomSelect leaves the burning Room's path.
 
     Parameters
     ----------
@@ -170,32 +67,18 @@ def _misses_room_burning(game_state: slai.GameState, action: slai.Action) -> boo
     Returns
     -------
     bool
-        True when the burning Room takes more Wing Boots charges than are left from the selected
-        Room, counting the move itself, and doesn't from another Room in its row.
+        True when the selected Room is off `get_burning_path` while another Room in its row is on
+        it.
     """
-    # Handy references
-    map_ = game_state.map
-    rooms = map_.rooms
-    y_current, x_current = map_.y_current, map_.x_current
     id_room = action.ids[0]
-
-    # Get current and selected Rooms
-    room_current = None if y_current is None or x_current is None else rooms[y_current][x_current]
+    rooms = game_state.map.rooms
     room_selected = next(
         room for row in rooms for room in row if room is not None and room.id == id_room
     )
-
-    # Number of remaining Wing Boots charges
-    wb_charges_left = get_wing_boots_charges(game_state)
-
-    # The move itself: free from the Act's start, else off the current Room's edges it burns one
-    edges = range(MAP_WIDTH) if room_current is None else room_current.edges
-    wb_charges_row = [
-        charges + (x not in edges)
-        for x, charges in enumerate(_wing_boots_charges_to_room_burning(rooms)[room_selected.y])
-    ]
-
-    return min(wb_charges_row) <= wb_charges_left < wb_charges_row[room_selected.x]
+    burning_path = get_burning_path(game_state)
+    return (room_selected.y, room_selected.x) not in burning_path and any(
+        y == room_selected.y for y, _ in burning_path
+    )
 
 
 def _escapes_room_burning(game_state: slai.GameState, action: slai.Action) -> bool:
@@ -219,8 +102,12 @@ def _escapes_room_burning(game_state: slai.GameState, action: slai.Action) -> bo
         return False
 
     map_ = game_state.map
-    room_burning = _get_room_burning(map_.rooms)
-    return map_.y_current == room_burning.y and map_.x_current == room_burning.x
+    room_burning = get_room_burning(map_.rooms)
+    return (
+        room_burning is not None
+        and map_.y_current == room_burning.y
+        and map_.x_current == room_burning.x
+    )
 
 
 def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> bool:
@@ -437,7 +324,14 @@ def encode_batch_masks_into(
         legal_token_kinds: set[tuple[int, TokenKind]] = set()
 
         for action in batch_legal_actions[b]:
-            if potion_discard_wasted(game_state, action) or _forfeits_key(game_state, action):
+            if (
+                potion_discard_wasted(game_state, action)
+                or (
+                    action.action_type is ActionType.EventOptionSelect
+                    and event_option_wasted(game_state, action.ids[0])
+                )
+                or _forfeits_key(game_state, action)
+            ):
                 continue
 
             action_type = int(action.action_type)
@@ -484,12 +378,20 @@ def encode_batch_masks_into(
             if token_kind is TokenKind.CARD_PILE_DRAW and draw_order_visible(game_state):
                 continue
 
+            rows = [
+                row
+                for row, (kind, _) in enumerate(tokens, start)
+                if kind == token_kind and np_legal_selection[row, action_type]
+            ]
+
+            # The draw order is hidden: scan in an order keyed on the pile, so the copy kept is a
+            # random one; the pile's order (bottom first) would always keep the deepest
+            if token_kind is TokenKind.CARD_PILE_DRAW:
+                random.Random(hash(tuple(tokens[row - start][1].id for row in rows))).shuffle(rows)
+
             seen_tokens = set()
-            for row, (kind, entity) in enumerate(tokens, start):
-                if kind != token_kind or not np_legal_selection[row, action_type]:
-                    continue
-                
-                identity = _card_identity(cast(Card, entity))
+            for row in rows:
+                identity = _card_identity(cast(Card, tokens[row - start][1]))
                 if identity in seen_tokens:
                     # An identical Card is already selectable for this `ActionType`
                     np_legal_selection[row, action_type] = False

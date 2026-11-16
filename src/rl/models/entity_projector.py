@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from src.rl.batches import get_row_segment
 from src.rl.batches import get_segment_first_row
 from src.rl.encoding import COL_START_CHARACTER
+from src.rl.encoding import COL_START_EVENT_OPTION
 from src.rl.encoding import COL_START_HEALTH_BLOCK
 from src.rl.encoding import COL_START_MONSTER
 from src.rl.encoding import COL_START_POTION
@@ -88,6 +89,7 @@ class EntityProjector(nn.Module):
                     COL_START_POTION,
                     COL_START_MONSTER,
                     COL_START_CHARACTER,
+                    COL_START_EVENT_OPTION,
                     COL_START_HEALTH_BLOCK,
                     COL_START_PRICE,
                     COL_START_STASIS_SLOT,

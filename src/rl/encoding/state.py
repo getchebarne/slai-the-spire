@@ -34,6 +34,9 @@ from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
 from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
+from src.rl.encoding.event import ENCODING_DIM_SPARSE_EVENT_OPTION
+from src.rl.encoding.event import encode_event_option_into
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
@@ -85,15 +88,16 @@ _ENCODING_DIM_SPARSE_SLOT = 1
 _ENCODING_DIM_TAG = len(Tag)
 _ENCODING_DIM_SPARSE_TAG = _ENCODING_DIM_TAG
 
-# Each Entity kind's first column in the shared space; Event Options and Rooms have no columns
+# Each Entity kind's first column in the shared space; Rooms have no columns
 _COL_START_CARD = 0
 COL_START_RELIC = _COL_START_CARD + ENCODING_DIM_CARD
 COL_START_POTION = COL_START_RELIC + ENCODING_DIM_RELIC
 COL_START_MONSTER = COL_START_POTION + ENCODING_DIM_POTION
 COL_START_CHARACTER = COL_START_MONSTER + ENCODING_DIM_MONSTER
+COL_START_EVENT_OPTION = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
 
 # The ranges shared across tokens of different Entity kinds
-COL_START_HEALTH_BLOCK = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
+COL_START_HEALTH_BLOCK = COL_START_EVENT_OPTION + ENCODING_DIM_EVENT_OPTION
 COL_START_PRICE = COL_START_HEALTH_BLOCK + ENCODING_DIM_HEALTH_BLOCK
 COL_START_STASIS_SLOT = COL_START_PRICE + ENCODING_DIM_PRICE
 
@@ -113,6 +117,7 @@ ENCODING_DIM_SPARSE_TOKEN = max(
     ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + _ENCODING_DIM_SPARSE_TAG,
     ENCODING_DIM_SPARSE_MONSTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK + _ENCODING_DIM_SPARSE_SLOT,
     ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
+    ENCODING_DIM_SPARSE_EVENT_OPTION,
 )
 
 # The owned row kinds that have already warned about overflow — truncation is never silent
@@ -449,7 +454,8 @@ def _encode_tokens_into(
     np_token_relic = np_token[:, COL_START_RELIC:COL_START_POTION]
     np_token_potion = np_token[:, COL_START_POTION:COL_START_MONSTER]
     np_token_monster = np_token[:, COL_START_MONSTER:COL_START_CHARACTER]
-    np_token_character = np_token[:, COL_START_CHARACTER:COL_START_HEALTH_BLOCK]
+    np_token_character = np_token[:, COL_START_CHARACTER:COL_START_EVENT_OPTION]
+    np_token_event_option = np_token[:, COL_START_EVENT_OPTION:COL_START_HEALTH_BLOCK]
     np_token_health_block = np_token[:, COL_START_HEALTH_BLOCK:COL_START_PRICE]
     np_token_price = np_token[:, COL_START_PRICE:COL_START_STASIS_SLOT]
     np_token_stasis_slot = np_token[:, COL_START_STASIS_SLOT:COL_START_TAG]
@@ -578,7 +584,9 @@ def _encode_tokens_into(
                 ]
 
             case EventOption():
-                # No columns: everything it does lives in its Effect rows
+                encode_event_option_into(game_state, entity, np_token_event_option[row])
+
+                # Everything it does lives in its Effect rows
                 effect_rows += [
                     (row, effect, EffectSource.EVENT_OPTION_SELECT) for effect in entity.effects
                 ]
