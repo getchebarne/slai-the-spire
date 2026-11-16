@@ -26,7 +26,6 @@ class EpisodeResult:
     won: bool = False  # Beat the Heart (reward.game_won)
     floor: int = 0  # GameState.floor at the end, 0..56
     act: int = 0  # The last act reached
-    boss_reached: bool = False  # Reached the Heart's Room
 
     reward_stream_rets: np.ndarray = field(default_factory=lambda: np.zeros(len(RewardStream)))
     gold_gained: int = 0  # Per step, the gold delta plus the Shop spend, floored at 0
@@ -35,10 +34,11 @@ class EpisodeResult:
     truncated: bool = False  # Cut at _MAX_STEPS_EPISODE while the game still ran
 
     # Keys held at death, a cut at the step limit included; `None` after a win
-    keys_at_death: int | None = None
+    keys_end: int = 0
 
     # Share of its max HP gone, ending in its Room; None elsewhere
-    heart_damage: float | None = None
+    heart_damage: float = 0
+    heart_reached: bool = False  # Reached the Heart's Room
 
 
 def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
@@ -121,7 +121,7 @@ def step_env(
 
 
 def _tally_step(
-    stats: EpisodeResult,
+    episode_result: EpisodeResult,
     game_state: GameState,
     game_state_next: GameState,
     action: Action,
@@ -134,11 +134,11 @@ def _tally_step(
     """Add one policy step: `action` took game_state to game_state_next and paid `reward`.
 
     On the episode's last step it also sets the fields the episode settles at its end, from
-    game_state_next: won, truncated, floor, act, boss_reached, heart_damage and deck_size.
+    game_state_next: won, truncated, floor, act, heart_reached, heart_damage and deck_size.
 
     Parameters
     ----------
-    stats : EpisodeResult
+    episode_result : EpisodeResult
         The episode's tally, updated in place.
     game_state : GameState
         The state before the step.
@@ -157,35 +157,41 @@ def _tally_step(
     truncated : bool
         Whether the step cut the episode at the step limit while the game still ran.
     """
-    stats.reward_stream_rets += gamma**stats.num_discounts * reward
-    stats.length += 1
-    stats.num_discounts += num_discounts
+    # Increment 
+    episode_result.length += 1
+    episode_result.num_discounts += num_discounts
+    episode_result.reward_stream_rets += gamma**episode_result.num_discounts * reward
+    
+    # Gold spent
     gold_spent = shop_gold_spent(game_state, action)
-    stats.gold_spent += gold_spent
-    stats.gold_gained += max(
+    episode_result.gold_spent += gold_spent
+    episode_result.gold_gained += max(
         0, game_state_next.character.gold - game_state.character.gold + gold_spent
     )
 
     # The last step fills the fields an episode settles at its end, from its last snapshot
     if done:
-        stats.won = game_won(game_state_next)
-        stats.truncated = truncated
-        stats.floor = game_state_next.floor
-        stats.act = game_state_next.act
+        episode_result.won = game_won(game_state_next)
+        episode_result.truncated = truncated
+        episode_result.floor = game_state_next.floor
+        episode_result.act = game_state_next.act
 
         # The Heart's Room: reaching it splits the final act's plateau into reach x conversion
-        stats.boss_reached = (
+        episode_result.heart_reached = (
             game_state_next.act == GameEnv.ACT_FINAL
             and game_state_next.map.y_current == MAP_HEIGHT
         )
-        stats.heart_damage = _heart_damage(game_state_next) if stats.boss_reached else None
-        stats.deck_size = len(game_state_next.card_pile_deck)
-        if not stats.won:
-            stats.keys_at_death = (
-                game_state_next.key_emerald
-                + game_state_next.key_ruby
-                + game_state_next.key_sapphire
-            )
+        episode_result.heart_damage = _heart_damage(game_state_next) if episode_result.heart_reached else 0.0
+
+        # Final Deck size
+        episode_result.deck_size = len(game_state_next.card_pile_deck)
+
+        # Keys held at episode end
+        episode_result.keys_end = (
+            game_state_next.key_emerald
+            + game_state_next.key_ruby
+            + game_state_next.key_sapphire
+        )
 
 
 def _heart_damage(game_state: GameState) -> float:
