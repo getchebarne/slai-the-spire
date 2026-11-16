@@ -82,6 +82,12 @@ _OFF_CARD_PLAY_SOURCE = _alloc(
 _OFF_CARD_DRAW_DEPTH = _alloc(
     "draw_depth", MAX_SIZE_CARD_PILE_DRAW
 )  # The Cards above it in the draw pile. All-zero = not visible
+_OFF_CARD_DRAW_DEPTH_SCALAR = _alloc(
+    "draw_depth_scalar"
+)  # The same count over MAX_SIZE_CARD_PILE_DRAW, at most 1
+_OFF_CARD_DRAW_BELOW_SCALAR = _alloc(
+    "draw_below_scalar"
+)  # The Cards below it in the draw pile, likewise
 
 ENCODING_DIM_CARD = sum(w for _, w in _CHANNEL_LAYOUT_CARD)
 
@@ -139,7 +145,7 @@ TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {
     CardName.WellLaidPlans: (Tag.SETUP,),
 }
 
-# Per-card encoding cache, keyed by (card_key, energy, draw depth) — see card_key
+# Per-card encoding cache, keyed by (card_key, energy, draw_below) — see card_key
 _CARD_ROW_CACHE: dict[tuple, np.ndarray] = {}
 _CARD_ROW_CACHE_MAX = 100_000
 
@@ -149,7 +155,7 @@ def _cost_offset(card: Card) -> float:
 
 
 def _encode_card_into(
-    card: Card, energy_current: int, draw_depth: int | None, np_out: np.ndarray
+    card: Card, energy_current: int, draw_below: int | None, np_out: np.ndarray
 ) -> None:
     np_out[_OFF_CARD_NAME + _IDX_OF_CARD_NAME[card.name]] = 1.0
     np_out[_OFF_CARD_KIND + _IDX_OF_CARD_KIND[card.kind]] = 1.0
@@ -179,14 +185,21 @@ def _encode_card_into(
     np_out[_OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
     if card.play_source is not None:
         np_out[_OFF_CARD_PLAY_SOURCE + _IDX_OF_PLAY_SOURCE[card.play_source]] = 1.0
-    if draw_depth is not None:
-        np_out[_OFF_CARD_DRAW_DEPTH + draw_depth] = 1.0
+    if card.draw_depth is not None:
+        np_out[_OFF_CARD_DRAW_DEPTH + min(card.draw_depth, MAX_SIZE_CARD_PILE_DRAW - 1)] = 1.0
+        np_out[_OFF_CARD_DRAW_DEPTH_SCALAR] = (
+            min(card.draw_depth, MAX_SIZE_CARD_PILE_DRAW) / MAX_SIZE_CARD_PILE_DRAW
+        )
+    if draw_below is not None:
+        np_out[_OFF_CARD_DRAW_BELOW_SCALAR] = (
+            min(draw_below, MAX_SIZE_CARD_PILE_DRAW) / MAX_SIZE_CARD_PILE_DRAW
+        )
 
 
 def card_key(card: Card) -> tuple:
-    """Return the fields _encode_card_into reads, minus energy and draw depth.
+    """Return the fields _encode_card_into reads, minus energy and `draw_below`.
 
-    Two Cards with equal identity encode the same ROW at any given energy and draw depth. It keys
+    Two Cards with equal identity encode the same ROW at any given energy and `draw_below`. It keys
     the row cache and, with effect_key, masks' identity dedup; Effects are rows of their own, so
     absent.
 
@@ -225,21 +238,25 @@ def card_key(card: Card) -> tuple:
         card.bottled,
         card.free_to_play_once,
         card.play_source,
+        card.draw_depth,
     )
 
 
 def encode_card_into_w_cache(
-    card: Card, energy_current: int, draw_depth: int | None, np_out: np.ndarray
+    card: Card, energy_current: int, draw_pile_size: int, np_out: np.ndarray
 ) -> None:
+    # The Cards below it, when its draw depth shows
+    draw_below = None if card.draw_depth is None else draw_pile_size - 1 - card.draw_depth
+
     # Try cache hit
-    cache_key = (card_key(card), energy_current, draw_depth)
+    cache_key = (card_key(card), energy_current, draw_below)
     np_row = _CARD_ROW_CACHE.get(cache_key)
 
     # Cache miss
     if np_row is None:
         # Encode Card
         np_row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
-        _encode_card_into(card, energy_current, draw_depth, np_row)
+        _encode_card_into(card, energy_current, draw_below, np_row)
 
         # Write into cache
         np_row.flags.writeable = False

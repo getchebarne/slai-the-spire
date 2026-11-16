@@ -60,8 +60,6 @@ from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_price_into
 from src.rl.encoding.sparse import encode_owned_rows_into
 from src.rl.encoding.sparse import encode_sparse_rows_into
-from src.rl.tokens import draw_order_visible
-from src.rl.tokens import get_card_entities
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
@@ -435,18 +433,11 @@ def _encode_tokens_into(
     energy_current = (
         game_state.combat.energy.energy_current if game_state.combat is not None else 0
     )
+    draw_pile_size = len(game_state.combat.card_pile_draw) if game_state.combat is not None else 0
     relic_linked = game_state.reward.relic_linked if game_state.reward is not None else None
     effect_rows: list[EffectRow] = []
     modifier_rows: list[ModifierRow] = []
     row_of_entity_id: dict[int, int] = {}
-
-    # Under Frozen Eye, each draw pile Card's depth by its id: the Cards above it
-    draw_depth_of_card_id: dict[int, int] = {}
-    if draw_order_visible(game_state):
-        cards_draw = get_card_entities(TokenKind.CARD_PILE_DRAW, game_state)
-        draw_depth_of_card_id = {
-            card.id: draw_depth for draw_depth, card in enumerate(reversed(cards_draw))
-        }
 
     # The rows at each Entity kind's columns, then at the Health/Block, Price and Slot columns
     np_token_card = np_token[:, _COL_START_CARD:COL_START_RELIC]
@@ -473,12 +464,9 @@ def _encode_tokens_into(
 
         match entity:
             case Card():
-                # Draw depth. Visible under Frozen Eye
-                draw_depth = None
-                if token_kind is TokenKind.CARD_PILE_DRAW:
-                    draw_depth = draw_depth_of_card_id.get(entity.id)
-
-                encode_card_into_w_cache(entity, energy_current, draw_depth, np_token_card[row])
+                encode_card_into_w_cache(
+                    entity, energy_current, draw_pile_size, np_token_card[row]
+                )
 
                 # Tags. Shared w/ Relics and Potions
                 for tag in TAGS_OF_CARD_NAME.get(entity.name, ()):
