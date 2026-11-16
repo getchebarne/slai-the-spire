@@ -165,6 +165,9 @@ def train(
         if rank_info.device.type == _DEVICE_TYPE_CUDA:
             compile_hot_paths(model)
 
+        # The ranks start averaging each bucket of gradients while the backward still runs
+        gradient_buckets = distributed.hook_gradient_buckets(model)
+
         # Instance generator for batch sampling 
         generator = torch.Generator().manual_seed(random.randint(0, 2**31 - 1))
 
@@ -180,7 +183,14 @@ def train(
             # PPO update on the collected rollout
             t_update = time.perf_counter()
             metrics = update_ppo(
-                model, delivery.rollout, optimizer, ppo_config, gamma, rank_info.device, generator
+                model,
+                delivery.rollout,
+                optimizer,
+                gradient_buckets,
+                ppo_config,
+                gamma,
+                rank_info.device,
+                generator,
             )
             seconds_update = time.perf_counter() - t_update
 

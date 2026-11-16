@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.algorithms.actor_critic.distributed import average_gradients
+from src.rl.algorithms.actor_critic.distributed import GradientBuckets
+from src.rl.algorithms.actor_critic.distributed import average_gradient_buckets
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.metrics import MetricKey
 from src.rl.batches import map_tensors
@@ -44,6 +45,7 @@ def update_ppo(
     model: ActorCritic,
     rollout: Rollout,
     optimizer: torch.optim.Optimizer,
+    gradient_buckets: GradientBuckets,
     ppo_config: PPOConfig,
     gamma: float,
     device: torch.device,
@@ -59,6 +61,8 @@ def update_ppo(
         The collected states, actions and rewards.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
+    gradient_buckets : GradientBuckets
+        The model's gradient buckets, which average each step's gradients over the ranks.
     ppo_config : PPOConfig
         The PPO settings.
     gamma : float
@@ -122,6 +126,7 @@ def update_ppo(
         metrics = _update_minibatch(
             model,
             optimizer,
+            gradient_buckets,
             rollout,
             x_state_ids,
             state_counts_cpu_mini,
@@ -356,6 +361,7 @@ def _plan_minibatches(
 def _update_minibatch(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
+    gradient_buckets: GradientBuckets,
     rollout: Rollout,
     x_state_ids: torch.Tensor,
     state_counts_cpu: StateCounts,
@@ -371,6 +377,8 @@ def _update_minibatch(
         The Learner's model, updated in place.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
+    gradient_buckets : GradientBuckets
+        The model's gradient buckets, which average each step's gradients over the ranks.
     rollout : Rollout
         The collected states and actions.
     x_state_ids : torch.Tensor
@@ -423,7 +431,7 @@ def _update_minibatch(
     # Optimizer step, on the gradient averaged over the ranks
     optimizer.zero_grad()
     x_loss.backward()
-    average_gradients(model)
+    average_gradient_buckets(gradient_buckets, model)
     x_grad_norm = nn.utils.clip_grad_norm_(model.parameters(), ppo_config.max_grad_norm)
     optimizer.step()
 
