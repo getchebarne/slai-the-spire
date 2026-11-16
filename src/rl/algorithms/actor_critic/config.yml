@@ -33,6 +33,7 @@ rollout:
   num_envs: 256
   rollout_length: 32
   num_workers: 16 # Must divide evenly across `num_envs`
+  pandora_share: 0.5 # Share of training games that start from Neow's swap onto Pandora's Box
 
 model:
   # Core encoder

@@ -7,6 +7,13 @@ from queue import Empty
 
 import torch
 import torch.multiprocessing as mp
+from slai import Action
+from slai import ActionType
+from slai import EffectRelicGrantRandom
+from slai import EffectRelicLose
+from slai import GameEnv
+from slai import GameState
+from slai import RelicName
 
 from src.rl.actions import engine_action
 from src.rl.algorithms.actor_critic.curriculum import ascensions
@@ -21,6 +28,7 @@ from src.rl.batches import read_states
 from src.rl.batches import to_device
 from src.rl.encoding import encode_states_into
 from src.rl.reward import RewardStream
+from src.rl.scripted import step_scripted
 from src.rl.types import Live
 from src.rl.types import Reserved
 from src.rl.types import States
@@ -73,7 +81,12 @@ class Workers:
 
 
 def start_workers(
-    num_envs: int, num_workers: int, ascension_current: float, gamma: float, seed: int
+    num_envs: int,
+    num_workers: int,
+    ascension_current: float,
+    gamma: float,
+    seed: int,
+    pandora_share: float,
 ) -> Workers:
     """Start `num_workers` processes, each stepping an equal share of the `num_envs` games.
 
@@ -91,6 +104,8 @@ def start_workers(
         The discount the games' rewards and discounted returns use.
     seed : int
         The seed each worker's own seed derives from.
+    pandora_share : float
+        The probability that each new game starts from Pandora's Box.
 
     Returns
     -------
@@ -134,6 +149,7 @@ def start_workers(
                     x_stop,
                     seed * 7919 + idx_step_buffer,
                     gamma,
+                    pandora_share,
                 ),
                 daemon=True,
             )
@@ -369,6 +385,7 @@ def _worker_loop(
     x_stop: torch.Tensor,
     seed: int,
     gamma: float,
+    pandora_share: float,
 ) -> None:
     """Run one shard of the games until the stop flag is set.
 
@@ -392,6 +409,8 @@ def _worker_loop(
         The worker's seed, fixed for the run.
     gamma : float
         The discount the games' rewards and discounted returns use.
+    pandora_share : float
+        The probability that each new game starts from Pandora's Box.
     """
     set_rng_seeds(seed)
     torch.set_num_threads(1)
@@ -401,7 +420,7 @@ def _worker_loop(
     batch_game_state = []
     episode_results = []
     for ascension in step_buffer.x_ascension.tolist():
-        env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
+        env, game_state = _new_env_training(ascension, pandora_share)
         batch_env.append(env)
         batch_game_state.append(game_state)
         episode_results.append(EpisodeResult()) 
@@ -436,8 +455,8 @@ def _worker_loop(
             if done:
                 episode_result_queue.put(episode_results[idx_env])
                 episode_results[idx_env] = EpisodeResult()
-                batch_env[idx_env], game_state_next = new_env(
-                    batch_ascension[idx_env], random.randint(0, 2**31 - 1)
+                batch_env[idx_env], game_state_next = _new_env_training(
+                    batch_ascension[idx_env], pandora_share
                 )
 
             # Overwrite current game state
@@ -471,3 +490,67 @@ def _wait_for_request(sph_request: Semaphore, x_stop: torch.Tensor) -> bool:
         if not parent_alive():  # The Actor died without stopping this worker
             return False
     return not x_stop
+
+
+def _new_env_training(ascension: int, pandora_share: float) -> tuple[GameEnv, GameState]:
+    """Start a training game at `ascension` from a new random seed.
+
+    With probability `pandora_share` the game starts from Pandora's Box.
+
+    Parameters
+    ----------
+    ascension : int
+        The game's ascension.
+    pandora_share : float
+        The probability that the game starts from Pandora's Box.
+
+    Returns
+    -------
+    env : GameEnv
+        The game, with the run's `NEOW` setting.
+    game_state : GameState
+        Its first state.
+    """
+    # A share of 0 skips this draw, so the seeds stay those of a run without Pandora starts
+    if pandora_share > 0 and random.random() < pandora_share:
+        return _new_env_pandora(ascension)
+
+    return new_env(ascension, random.randint(0, 2**31 - 1))
+
+
+def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
+    """Start a game at `ascension` from Neow's boss Relic swap onto Pandora's Box.
+
+    Each try draws a new random seed and takes the swap outside the policy, until the swap
+    grants Pandora's Box: about one seed in 22 does.
+
+    Parameters
+    ----------
+    ascension : int
+        The game's ascension.
+
+    Returns
+    -------
+    env : GameEnv
+        The game, with the run's `NEOW` setting.
+    game_state : GameState
+        The first state after the swap and the scripted steps it triggers, every starter
+        Strike and Defend transformed.
+    """
+    while True:
+        env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
+
+        # Neow's boss Relic swap: the option that loses a Relic and grants a random one
+        option_swap = next(
+            option
+            for option in game_state.event.options
+            if {type(effect) for effect in option.effects}
+            >= {EffectRelicLose, EffectRelicGrantRandom}
+        )
+
+        # Take the swap outside the policy, and keep the game if it granted Pandora's Box
+        game_state, _, _ = step_scripted(
+            env, Action(ActionType.EventOptionSelect, [option_swap.id])
+        )
+        if any(relic.name == RelicName.PandorasBox for relic in game_state.relics):
+            return env, game_state

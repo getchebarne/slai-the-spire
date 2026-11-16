@@ -44,6 +44,7 @@ class RolloutConfig:
     num_envs: int
     num_workers: int
     rollout_length: int
+    pandora_share: float
 
 
 @dataclass
@@ -108,7 +109,8 @@ def start_actor(
     model_config : dict[str, Any]
         The model's architecture, which the Actor process builds a model of its own from.
     rollout_config : RolloutConfig
-        The games, worker processes and steps a rollout plays.
+        The games, worker processes and steps a rollout plays, and the share of games that start
+        from Pandora's Box.
     device : torch.device
         The device the Actor process plays on.
     gamma : float
@@ -307,6 +309,7 @@ def _actor_loop(
             float(weight_slot_first.x_ascension_current),
             actor_config.gamma,
             actor_config.seed,
+            actor_config.rollout_config.pandora_share,
         )
         stack.callback(stop_workers, workers)
 
