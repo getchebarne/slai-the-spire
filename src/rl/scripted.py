@@ -8,28 +8,18 @@ from slai import RelicName
 from slai import RelicTier
 from slai import Reward
 
-from src.rl.encoding import potion_can_arrive
-from src.rl.encoding import potion_discard_wasted
+from src.rl.utils import potion_discard_wasted
 
 
 # Most scripted actions per policy step, so forced turn ends can't hang a worker
 _ACTIONS_SCRIPTED_MAX = 32
 
-# A Reward's gold costs no discount: every other action costs one γ
+# A Reward's gold costs no discount: every other action costs one step-discount
 _ACTION_TYPES_GOLD = frozenset({ActionType.RewardTakeGold, ActionType.RewardTakeGoldStolen})
 
-_ACTION_TYPES_POTION = frozenset({ActionType.PotionDiscard, ActionType.PotionUse})
-
-_ACTION_TYPES_ROOM = frozenset({ActionType.RoomExit, ActionType.RoomSelect})
-
-# The Events whose first option runs for the policy, with the Relic that leaves it to the policy:
-# Ectoplasm blocks Golden Idol's gold, Du-Vu Doll gives Strength for the Curses a drink removes
+# The Events whose first option runs for the policy, with the Relic that leaves it to the policy
 _EVENTS_OPTION_FIRST_SCRIPTED: dict[EventName, RelicName | None] = {
-    EventName.Duplicator: None,
     EventName.GoldenIdol: RelicName.Ectoplasm,
-    EventName.Purifier: None,
-    EventName.TheDivineFountain: RelicName.DuVuDoll,
-    EventName.Transmogrifier: None,
     EventName.UpgradeShrine: None,
 }
 
@@ -68,32 +58,50 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
     -------
     bool
         True for the gold, for a scripted Special Relic, for a Relic of a scripted tier whose name
-        isn't unscripted, as long as no Sapphire Key is linked to it and it isn't Tiny Chest under
-        Cursed Key, and for a Potion when every offered one fits in the belt, or under Sozu, where
-        a take obtains nothing.
+        isn't unscripted, as long as no Sapphire Key is linked to it, it isn't Tiny Chest under
+        Cursed Key, Omamori with Du-Vu Doll or Darkstone Periapt held, or Peace Pipe with Coffee
+        Dripper held, and for a Potion when every offered one fits in the belt and Sozu isn't held.
     """
     if action.action_type in _ACTION_TYPES_GOLD:
         return True
+    
     match action.action_type:
         case ActionType.RewardTakeRelic:
             relic = next(relic for relic in reward.relics if relic.id == action.ids[0])
-            relic_linked = reward.relic_linked  # Taking it gives up the Sapphire Key
+            relic_linked = reward.relic_linked
 
             # Under Cursed Key, each Chest that Tiny Chest adds costs a Curse
             tiny_chest_cursed = relic.name == RelicName.TinyChest and any(
                 relic_held.name == RelicName.CursedKey for relic_held in game_state.relics
+            )
+
+            # Du-Vu Doll and Darkstone Periapt pay for each Curse, which Omamori would negate
+            omamori_negates_wanted = relic.name == RelicName.Omamori and any(
+                relic_held.name in (RelicName.DuVuDoll, RelicName.DarkstonePeriapt)
+                for relic_held in game_state.relics
+            )
+
+            # Under Coffee Dripper, Toke can be a Rest Site's only option, a forced Card removal
+            peace_pipe_forced = relic.name == RelicName.PeacePipe and any(
+                relic_held.name == RelicName.CoffeeDripper for relic_held in game_state.relics
             )
             return (
                 (relic.tier in _RELIC_TIERS_SCRIPTED or relic.name in _RELICS_SPECIAL_SCRIPTED)
                 and relic.name not in _RELICS_UNSCRIPTED
                 and (relic_linked is None or relic_linked.id != relic.id)
                 and not tiny_chest_cursed
+                and not omamori_negates_wanted
+                and not peace_pipe_forced
             )
+        
         case ActionType.RewardTakePotion:
+            # Under Sozu a take obtains nothing and still costs a discount
+            if any(relic.name == RelicName.Sozu for relic in game_state.relics):
+                return False
+
             num_slots_free = game_state.potion_slots_max - len(game_state.potions)
-            return len(reward.potions) <= num_slots_free or any(
-                relic.name == RelicName.Sozu for relic in game_state.relics
-            )
+            return len(reward.potions) <= num_slots_free
+        
         case _:
             return False
 
@@ -150,17 +158,7 @@ def _action_scripted(game_state: GameState, actions: list[Action]) -> Action | N
     actions_open = [action for action in actions if not potion_discard_wasted(game_state, action)]
     if len(actions_open) == 1:
         return actions_open[0]
-
-    # Leaving a Room or entering the next: a Potion can wait, unless another can arrive here
-    actions_no_potion = [
-        action for action in actions if action.action_type not in _ACTION_TYPES_POTION
-    ]
-    if (
-        len(actions_no_potion) == 1
-        and actions_no_potion[0].action_type in _ACTION_TYPES_ROOM
-        and not potion_can_arrive(game_state)
-    ):
-        return actions_no_potion[0]
+    
     return None
 
 
@@ -187,12 +185,16 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int]:
     """
     game_state, terminated = env.step(action)
     num_discounts = int(action.action_type not in _ACTION_TYPES_GOLD)
+    
     for _ in range(_ACTIONS_SCRIPTED_MAX):
         if terminated:
             break
+
         action_scripted = _action_scripted(game_state, env.get_legal_actions())
         if action_scripted is None:
             break
+        
         game_state, terminated = env.step(action_scripted)
         num_discounts += action_scripted.action_type not in _ACTION_TYPES_GOLD
+    
     return game_state, terminated, num_discounts

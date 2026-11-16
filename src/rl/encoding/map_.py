@@ -9,6 +9,7 @@ from slai import RoomKind
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_room_entities
 
 
@@ -39,6 +40,7 @@ _OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_EDGES = _alloc("edges", NUM_EDGE_CHANNELS)
 _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
+_OFF_MAP_BURNING_PATH = _alloc("burning_path")  # On a path that still reaches the burning Room
 
 # The channels above are the Map network's node features; the one below names the Room tokens'
 # nodes
@@ -184,12 +186,16 @@ def _encode_unknown_room_into(game_state: GameState, out: np.ndarray) -> None:
 
 
 def encode_map_grid_into(game_state: GameState, out: np.ndarray) -> None:
-    """Copy the cached static grid and stamp the current position and the selectable Rooms."""
+    """Copy the cached static grid and stamp the position, burning path and selectable Rooms."""
     map_ = game_state.map
     out[:] = _get_static_grid(map_.identity_hash, map_.rooms)
     y_current, x_current = map_.y_current, map_.x_current
     if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
         out[y_current, x_current, OFF_MAP_POSITION] = 1
+
+    # The Rooms the key masks still allow while the Emerald Key is chased
+    for y, x in get_burning_path(game_state):
+        out[y, x, _OFF_MAP_BURNING_PATH] = 1
 
     # The Room tokens' nodes, in the tokens' order: node order
     for room in get_room_entities(game_state):

@@ -2,6 +2,7 @@ import warnings
 
 import numpy as np
 from slai import EventName
+from slai import EventOption
 from slai import GameEnv
 from slai import GameState
 from slai import MonsterEncounter
@@ -11,6 +12,7 @@ from src.rl.constants import EVENT_STAGE_CAP
 from src.rl.constants import MAX_EVENT_OPTIONS
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.utils import event_option_wasted
 
 
 _EVENT_NAME_TO_IDX = {name: int(name) for name in EventName.members()}
@@ -47,6 +49,32 @@ ENCODING_DIM_EVENT_META = sum(w for _, w in _CHANNEL_LAYOUT_EVENT_META)
 
 # Event kinds whose option list overflowed the cap (warn-once per kind)
 _WARNED_EVENT_TRUNCATED: set = set()
+
+
+_CHANNEL_LAYOUT_EVENT_OPTION, _alloc = make_channel_allocator()
+_OFF_EVENT_OPTION_AVAILABLE = _alloc("available")  # The engine allows it and no mask blocks it
+
+ENCODING_DIM_EVENT_OPTION = sum(w for _, w in _CHANNEL_LAYOUT_EVENT_OPTION)
+
+# Most nonzero columns an Event option row holds
+ENCODING_DIM_SPARSE_EVENT_OPTION = len(_CHANNEL_LAYOUT_EVENT_OPTION)
+
+
+def encode_event_option_into(game_state: GameState, option: EventOption, out: np.ndarray) -> None:
+    """Write whether the policy can select `option`: legal in the engine and not masked as wasted.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state, at the option's Event.
+    option : EventOption
+        The option to encode.
+    out : np.ndarray
+        (ENCODING_DIM_EVENT_OPTION,) float32. The option's row, written in place.
+    """
+    out[_OFF_EVENT_OPTION_AVAILABLE] = float(
+        option.available and not event_option_wasted(game_state, option.id)
+    )
 
 
 def encode_event_meta_into(game_state: GameState, out: np.ndarray) -> None:
