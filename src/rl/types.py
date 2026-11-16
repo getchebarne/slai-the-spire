@@ -295,4 +295,3 @@ class RunState:
     total_steps: int          # Steps played so far, every rank's games counted
     ascension_current: float  # The soft-curriculum position
     streak: int               # The consecutive passes at ascension_current so far
-    lr_scale: float           # The Adaptive-KL learning rate scale
