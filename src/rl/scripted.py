@@ -9,6 +9,7 @@ from slai import RelicTier
 from slai import Reward
 
 from src.rl.utils import potion_discard_wasted
+from src.rl.utils import potion_take_wasted
 
 
 # Most scripted actions per policy step, so forced turn ends can't hang a worker
@@ -96,7 +97,7 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
         
         case ActionType.RewardTakePotion:
             # Under Sozu a take obtains nothing and still costs a discount
-            if any(relic.name == RelicName.Sozu for relic in game_state.relics):
+            if potion_take_wasted(game_state, action):
                 return False
 
             num_slots_free = game_state.potion_slots_max - len(game_state.potions)
@@ -154,8 +155,13 @@ def _action_scripted(game_state: GameState, actions: list[Action]) -> Action | N
             ):
                 return action
 
-    # The only action left once wasted discards are out
-    actions_open = [action for action in actions if not potion_discard_wasted(game_state, action)]
+    # The only action left once wasted discards and takes are out
+    actions_open = [
+        action
+        for action in actions
+        if not potion_discard_wasted(game_state, action)
+        and not potion_take_wasted(game_state, action)
+    ]
     if len(actions_open) == 1:
         return actions_open[0]
     

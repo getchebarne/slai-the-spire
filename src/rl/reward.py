@@ -69,11 +69,13 @@ def shop_gold_spent(game_state: slai.GameState, action: slai.Action) -> int:
     """
     if action.action_type not in _SHOP_SPEND_ACTIONS:
         return 0
+
     shop = cast(slai.Shop, game_state.shop)
     if action.action_type == slai.ActionType.ShopPurge:
         return shop.purge_cost
-    stock: list[slai.Card | slai.Relic | slai.Potion] = [*shop.cards, *shop.relics, *shop.potions]
-    return cast(int, next(entity.price for entity in stock if entity.id == action.ids[0]))
+    
+    shop_stock: list[slai.Card | slai.Relic | slai.Potion] = [*shop.cards, *shop.relics, *shop.potions]
+    return cast(int, next(entity.price for entity in shop_stock if entity.id == action.ids[0]))
 
 
 def game_won(game_state: slai.GameState) -> bool:
