@@ -519,9 +519,11 @@ def get_burning_path(game_state: GameState) -> set[tuple[int, int]]:
         for room in rooms[0]:
             if room is not None:
                 wb_charges_from[0][room.x] = 0
+    
     elif y_current <= room_burning.y:
         y_first = y_current
         wb_charges_from[y_current][x_current] = 0
+    
     else:
         return set()
 
@@ -582,4 +584,5 @@ def _wing_boots_charges_to_room_burning(
                     charges_next + (x_next not in edges)
                     for x_next, charges_next in enumerate(wb_charges[y + 1])
                 )
+                
     return wb_charges

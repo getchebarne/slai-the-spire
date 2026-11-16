@@ -24,6 +24,7 @@ from src.rl.types import Token
 from src.rl.types import TokenKind
 from src.rl.utils import event_option_wasted
 from src.rl.utils import potion_discard_wasted
+from src.rl.utils import potion_take_wasted
 
 
 def _card_identity(card: Card) -> tuple:
@@ -326,6 +327,7 @@ def encode_batch_masks_into(
         for action in batch_legal_actions[b]:
             if (
                 potion_discard_wasted(game_state, action)
+                or potion_take_wasted(game_state, action)
                 or (
                     action.action_type is ActionType.EventOptionSelect
                     and event_option_wasted(game_state, action.ids[0])
@@ -384,8 +386,7 @@ def encode_batch_masks_into(
                 if kind == token_kind and np_legal_selection[row, action_type]
             ]
 
-            # The draw order is hidden: scan in an order keyed on the pile, so the copy kept is a
-            # random one; the pile's order (bottom first) would always keep the deepest
+            # Draw order hidden: scan in an order keyed on the pile, so the kept copy is random
             if token_kind is TokenKind.CARD_PILE_DRAW:
                 random.Random(hash(tuple(tokens[row - start][1].id for row in rows))).shuffle(rows)
 

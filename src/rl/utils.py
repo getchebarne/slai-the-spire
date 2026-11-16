@@ -133,6 +133,28 @@ def potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bo
     return len(potions) < game_state.potion_slots_max or not _potion_can_arrive(game_state)
 
 
+def potion_take_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether `action` takes a Reward's Potion under Sozu, which obtains nothing.
+
+    The Shop's Potions need no such check: the engine doesn't offer them under Sozu.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        One legal action.
+
+    Returns
+    -------
+    bool
+        True for a Potion take while Sozu is held.
+    """
+    return action.action_type is ActionType.RewardTakePotion and any(
+        relic.name == RelicName.Sozu for relic in game_state.relics
+    )
+
+
 def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
     """Return whether selecting the Event's option pays for a gain that a held Relic voids.
 
