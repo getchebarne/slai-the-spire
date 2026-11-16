@@ -23,7 +23,7 @@ class MetricKey(StrEnum):
     ACT3_RATE = "act3_rate"
     ACT4_RATE = "act4_rate"
     ASCENSION = "ascension"
-    BOSS_RATE = "boss_rate"
+    HEART_RATE = "heart_rate"
     COMPLETED_COUNT = "completed_count"
     DECK_SIZE_AVG = "deck_size_avg"
     ENTROPY_L1 = "entropy/l1"
@@ -34,7 +34,7 @@ class MetricKey(StrEnum):
     GOLD_SPENT_AVG = "gold_spent_avg"
     GRAD_NORM_PRECLIP = "grad/norm_preclip"
     HEART_DAMAGE_AVG = "heart_damage_avg"
-    KEYS_AT_DEATH_AVG = "keys_at_death_avg"
+    KEYS_END_AVG = "keys_end_avg"
     KL_UNIFORM_L1 = "kl_uniform/l1"
     KL_UNIFORM_L2 = "kl_uniform/l2"
     KL_UNIFORM_L3 = "kl_uniform/l3"
@@ -344,13 +344,8 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
     """
     num_episodes = len(episode_results)
     returns = [float(episode.reward_stream_rets.sum()) for episode in episode_results]
-    keys_at_death = [
-        episode.keys_at_death for episode in episode_results if episode.keys_at_death is not None
-    ]
-    heart_damage = [
-        episode.heart_damage for episode in episode_results if episode.heart_damage is not None
-    ]
     metrics: dict[str, float] = {
+        MetricKey.COMPLETED_COUNT: num_episodes,
         MetricKey.WIN_RATE: sum(episode.won for episode in episode_results) / num_episodes,
         MetricKey.FLOOR_AVG: sum(episode.floor for episode in episode_results) / num_episodes,
         MetricKey.LENGTH_AVG: sum(episode.length for episode in episode_results) / num_episodes,
@@ -361,20 +356,15 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
         MetricKey.ACT4_RATE: sum(episode.act >= 4 for episode in episode_results) / num_episodes,
         MetricKey.GOLD_AVG: sum(episode.gold_gained for episode in episode_results) / num_episodes,
         MetricKey.GOLD_SPENT_AVG: sum(episode.gold_spent for episode in episode_results) / num_episodes,
-        MetricKey.BOSS_RATE: sum(episode.boss_reached for episode in episode_results) / num_episodes,
+        MetricKey.HEART_RATE: sum(episode.heart_reached for episode in episode_results) / num_episodes,
+        MetricKey.HEART_DAMAGE_AVG: sum(episode.heart_damage for episode in episode_results) / num_episodes,
+        MetricKey.KEYS_END_AVG: sum(episode.keys_end for episode in episode_results) / num_episodes,
         MetricKey.DECK_SIZE_AVG: sum(episode.deck_size for episode in episode_results) / num_episodes,
         MetricKey.TRUNCATED_RATE: sum(episode.truncated for episode in episode_results) / num_episodes,
     }
 
-    # Over the games that died, and over those that got to the Heart
-    if keys_at_death:
-        metrics[MetricKey.KEYS_AT_DEATH_AVG] = sum(keys_at_death) / len(keys_at_death)
-    if heart_damage:
-        metrics[MetricKey.HEART_DAMAGE_AVG] = sum(heart_damage) / len(heart_damage)
-    metrics[MetricKey.COMPLETED_COUNT] = num_episodes
+    # Discounted per-stream returns, the optimizer's actual objective
     for k, name in enumerate(RewardStream):
-        # Discounted per-stream returns, the optimizer's actual objective:
-        # undiscounted sums shift with episode length
         metrics[f"{MetricKey.RETURN_AVG}_{name}"] = (
             sum(episode.reward_stream_rets[k] for episode in episode_results) / num_episodes
         )
