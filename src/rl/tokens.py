@@ -7,8 +7,8 @@ from collections.abc import Sequence
 
 from slai import Card
 from slai import EventOption
-from slai import GameEnv
 from slai import GameState
+from slai import Map
 from slai import Monster
 from slai import Potion
 from slai import Relic
@@ -73,6 +73,10 @@ _REWARD_BUNDLE_OF_TOKEN_KIND = {
 
 # The token kinds that have already warned about overflow
 _WARNED_OVERFLOW: set[TokenKind] = set()
+
+# The burning path by Map, current Room and Wing Boots charges left
+_BURNING_PATH_CACHE: dict[tuple[int | None, ...], frozenset[tuple[int, int]]] = {}
+_BURNING_PATH_CACHE_MAX = 100_000
 
 
 def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) -> Sequence[Entity]:
@@ -479,13 +483,15 @@ def get_room_burning(rooms: list[list[Room | None]]) -> Room | None:
     return next((room for row in rooms for room in row if room is not None and room.burning), None)
 
 
-def get_burning_path(game_state: GameState) -> set[tuple[int, int]]:
+def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
     """Return the Rooms that still lead to the burning Room within the Wing Boots charges left.
 
-    Only while the Emerald Key is chased: in Act 3 with the final act on and the key not held. A
+    Only while the Emerald Key can be taken: with the final act on and the key not held, on the
+    Maps of Acts 1 to 3, which hold a burning Room. The key masks force the path in Act 3 alone. A
     Room counts when the cheapest way to it from the current position plus the cheapest way from it
     to the burning Room burn no more charges than are left. Each move onto a Room not in the
-    current Room's edges burns one; the act's first move is free.
+    current Room's edges burns one; the act's first move is free. Cached by Map, current Room and
+    charges, all it depends on.
 
     Parameters
     ----------
@@ -494,22 +500,46 @@ def get_burning_path(game_state: GameState) -> set[tuple[int, int]]:
 
     Returns
     -------
-    set[tuple[int, int]]
-        The Rooms' (y, x), the current Room's included while it counts; empty when the key isn't
-        chased or the burning Room is out of reach.
+    frozenset[tuple[int, int]]
+        The Rooms' (y, x), the current Room's included while it counts; empty when the key can't
+        be taken or the burning Room is out of reach.
     """
-    if (
-        game_state.act != GameEnv.ACT_FINAL - 1
-        or not game_state.final_act
-        or game_state.key_emerald
-    ):
-        return set()
+    if not game_state.final_act or game_state.key_emerald:
+        return frozenset()
 
     map_ = game_state.map
+    wb_charges_left = get_wing_boots_charges(game_state)
+    cache_key = (map_.identity_hash, map_.y_current, map_.x_current, wb_charges_left)
+    burning_path = _BURNING_PATH_CACHE.get(cache_key)
+    if burning_path is None:
+        burning_path = _get_burning_path_uncached(map_, wb_charges_left)
+        if len(_BURNING_PATH_CACHE) >= _BURNING_PATH_CACHE_MAX:
+            _BURNING_PATH_CACHE.clear()
+
+        _BURNING_PATH_CACHE[cache_key] = burning_path
+
+    return burning_path
+
+
+def _get_burning_path_uncached(map_: Map, wb_charges_left: int) -> frozenset[tuple[int, int]]:
+    """Compute `get_burning_path` on `map_` from its current Room.
+
+    Parameters
+    ----------
+    map_ : Map
+        The act's Map.
+    wb_charges_left : int
+        The Wing Boots charges left.
+
+    Returns
+    -------
+    frozenset[tuple[int, int]]
+        The Rooms' (y, x); empty when the Map has no burning Room or it is out of reach.
+    """
     rooms = map_.rooms
     room_burning = get_room_burning(rooms)
     if room_burning is None:
-        return set()
+        return frozenset()
 
     # Forward from the current Room, or from every first-row Room at the act's start
     y_current, x_current = map_.y_current, map_.x_current
@@ -525,7 +555,7 @@ def get_burning_path(game_state: GameState) -> set[tuple[int, int]]:
         wb_charges_from[y_current][x_current] = 0
     
     else:
-        return set()
+        return frozenset()
 
     for y in range(y_first + 1, room_burning.y + 1):
         for room in rooms[y - 1]:
@@ -541,14 +571,13 @@ def get_burning_path(game_state: GameState) -> set[tuple[int, int]]:
                     )
 
     wb_charges_to = _wing_boots_charges_to_room_burning(rooms, room_burning)
-    wb_charges_left = get_wing_boots_charges(game_state)
-    return {
+    return frozenset(
         (y, room.x)
         for y in range(y_first, room_burning.y + 1)
         for room in rooms[y]
         if room is not None
         and wb_charges_from[y][room.x] + wb_charges_to[y][room.x] <= wb_charges_left
-    }
+    )
 
 
 def _wing_boots_charges_to_room_burning(

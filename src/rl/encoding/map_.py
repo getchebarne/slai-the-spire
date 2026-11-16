@@ -193,7 +193,7 @@ def encode_map_grid_into(game_state: GameState, out: np.ndarray) -> None:
     if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
         out[y_current, x_current, OFF_MAP_POSITION] = 1
 
-    # The Rooms the key masks still allow while the Emerald Key is chased
+    # The Rooms that still reach the burning Room while the Emerald Key is missing
     for y, x in get_burning_path(game_state):
         out[y, x, _OFF_MAP_BURNING_PATH] = 1
 
