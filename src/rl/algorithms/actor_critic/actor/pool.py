@@ -407,10 +407,10 @@ def _collect_rollout(
 
     # Turn off gradient computation
     with torch.no_grad():
-        states, x_total_cpu = snapshot_to_device(workers, device)
+        states = snapshot_to_device(workers, device)
         for _ in range(rollout_config.rollout_length):
             # Forward pass, policy only
-            policy_output = model.action_select(states, x_total_cpu, generator=generator)
+            policy_output = model.action_select(states, generator=generator)
             x_step_action = policy_output.x_action
 
             # Step the worker's environments
@@ -428,7 +428,7 @@ def _collect_rollout(
             episode_results.extend(step_episode_results)
 
             # Snapshot new state and its totals for the next step
-            states, x_total_cpu = snapshot_to_device(workers, device)
+            states = snapshot_to_device(workers, device)
 
     return (
         Rollout(

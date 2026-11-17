@@ -5,8 +5,8 @@ exposes the layout names the models and `batches.py` read.
 """
 
 from src.rl.encoding.context import ENCODING_DIM_CONTEXT
-from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
-from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding.effect import ENCODING_DIM_EFFECT
+from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.map_ import EDGE_DELTAS
 from src.rl.encoding.map_ import NUM_CHANNELS
 from src.rl.encoding.map_ import NUM_EDGE_CHANNELS

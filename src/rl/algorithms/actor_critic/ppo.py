@@ -7,11 +7,13 @@ import torch.nn.functional as F
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.metrics import MetricKey
+from src.rl.batches import gather_states
 from src.rl.batches import slice_states
-from src.rl.batches import take_minibatch_states
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
+from src.rl.types import Live
 from src.rl.types import Rollout
+from src.rl.types import States
 
 
 @dataclass
@@ -75,12 +77,9 @@ def update_ppo(
     """
     num_reward_streams = rollout.x_reward.shape[-1]
 
-    # The rollout's totals on the host, read once: every size below is a sum over them
-    x_total_cpu = rollout.states.x_total.cpu()
-
     # Calculate the rollout's log-probabilities and values under the current weights
     x_log_prob_prox, x_value_prox, x_value_final = _evaluate_rollout(
-        model, rollout, x_total_cpu, ppo_config.minibatch_size
+        model, rollout, ppo_config.minibatch_size
     )
 
     # Compute GAE returns and advantages
@@ -108,25 +107,39 @@ def update_ppo(
         x_weight_capped=x_weight.clamp(max=ppo_config.is_clip),
     )
 
-    # All shuffles are drawn, and their states' totals gathered, before the first minibatch
-    # launches.
+    # All shuffles are drawn and transferred before the first minibatch launches
     minibatches = _plan_minibatches(
-        x_total_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
+        len(rollout.states.x_context),
+        ppo_config.minibatch_size,
+        ppo_config.num_epochs,
+        device,
+        generator,
     )
     num_minibatches = len(minibatches) // ppo_config.num_epochs
 
     batch_metrics = []
-    for x_idx_state, x_total_cpu_mini in minibatches:
+    for indices in minibatches:
+        # Select this minibatch's states, actions and targets
+        states_mini = gather_states(rollout.states, indices)
+        _, x_idx_state = indices
+        x_action_mini = rollout.x_action[x_idx_state]
+        targets_mini = _Targets(
+            x_log_prob_prox=targets.x_log_prob_prox[x_idx_state],
+            x_return=targets.x_return[x_idx_state],
+            x_advantage=targets.x_advantage[x_idx_state],
+            x_weight_capped=targets.x_weight_capped[x_idx_state],
+        )
+
         metrics = _update_minibatch(
             model,
             optimizer,
-            rollout,
-            x_idx_state,
-            x_total_cpu_mini,
-            targets,
+            states_mini,
+            x_action_mini,
+            targets_mini,
             ppo_config,
             device,
         )
+        del states_mini, x_action_mini, targets_mini
         batch_metrics.append(metrics)
 
         # Trust-region early stop check
@@ -169,7 +182,7 @@ def adapt_lr_scale(lr_scale: float, approx_kl: float, target_kl: float) -> float
 
 
 def _evaluate_rollout(
-    model: ActorCritic, rollout: Rollout, x_total_cpu: torch.Tensor, minibatch_size: int
+    model: ActorCritic, rollout: Rollout, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
 
@@ -181,8 +194,6 @@ def _evaluate_rollout(
         The Learner's model.
     rollout : Rollout
         The rollout: `rollout_length` steps of `num_envs` games.
-    x_total_cpu : torch.Tensor
-        The rollout's states' totals, on the CPU.
     minibatch_size : int
         The most states per forward.
 
@@ -205,15 +216,12 @@ def _evaluate_rollout(
             idx_stop = min(idx_start + minibatch_size, batch_size)
 
             # Slice `States` and actions
-            states_slice = slice_states(
-                rollout.states, idx_start, idx_stop, x_total_cpu
-            )
-            x_total_cpu_slice = x_total_cpu[idx_start:idx_stop]
+            states_slice = slice_states(rollout.states, idx_start, idx_stop)
             x_action_slice = rollout.x_action[idx_start:idx_stop]
 
             # Evaluate actions on the slice's states
             policy_output, x_value = model.action_evaluate(
-                states_slice, x_total_cpu_slice, x_action_slice
+                states_slice, x_action_slice
             )
 
             # Append log-probabilities and values
@@ -222,8 +230,7 @@ def _evaluate_rollout(
 
         # Bootstrap value i.e. value of the rollout's final state for each environment
         states_final = rollout.states_final
-        x_total_cpu_final = states_final.x_total.cpu()
-        x_value_final = model.get_values(states_final, x_total_cpu_final)
+        x_value_final = model.get_values(states_final)
 
     x_value_prox = torch.cat(batch_x_value).reshape(
         rollout_length, num_envs, num_reward_streams
@@ -298,7 +305,7 @@ def _compute_gae(
 
 
 def _plan_minibatches(
-    x_total_cpu: torch.Tensor,
+    batch_size: int,
     minibatch_size: int,
     num_epochs: int,
     device: torch.device,
@@ -308,8 +315,8 @@ def _plan_minibatches(
 
     Parameters
     ----------
-    x_total_cpu : torch.Tensor
-        The rollout's states' totals, on the CPU.
+    batch_size : int
+        The number of states in the rollout.
     minibatch_size : int
         The maximum number of states per minibatch.
     num_epochs : int
@@ -322,11 +329,9 @@ def _plan_minibatches(
     Returns
     -------
     list[tuple[torch.Tensor, torch.Tensor]]
-        Each minibatch's state indexes on the device and its states' totals on the CPU, in the
-        order the minibatches run, epoch after epoch. Every epoch has the same number of them.
+        Each minibatch's state indexes on the CPU and on the device, in the order the minibatches
+        run, epoch after epoch. Every epoch has the same number of them.
     """
-    batch_size = len(x_total_cpu)
-
     # One shuffle of the states per epoch
     x_idx_state_cpu = torch.stack(
         [torch.randperm(batch_size, generator=generator) for _ in range(num_epochs)]
@@ -335,14 +340,18 @@ def _plan_minibatches(
         device, non_blocking=True
     )
 
-    # Each shuffle cut into minibatches, with their states' totals
+    # Each shuffle cut into minibatches
     minibatches = []
     for idx_epoch in range(num_epochs):
         for idx_start in range(0, batch_size, minibatch_size):
             idx_stop = idx_start + minibatch_size
             x_idx_state_cpu_mini = x_idx_state_cpu[idx_epoch, idx_start:idx_stop]
-            x_total_cpu_mini = x_total_cpu[x_idx_state_cpu_mini]
-            minibatches.append((x_idx_state[idx_epoch, idx_start:idx_stop], x_total_cpu_mini))
+            minibatches.append(
+                (
+                    x_idx_state_cpu_mini,
+                    x_idx_state[idx_epoch, idx_start:idx_stop],
+                )
+            )
 
     return minibatches
 
@@ -350,14 +359,13 @@ def _plan_minibatches(
 def _update_minibatch(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
-    rollout: Rollout,
-    x_idx_state: torch.Tensor,
-    x_total_cpu: torch.Tensor,
+    states: States[Live],
+    x_action: torch.Tensor,
     targets: _Targets,
     ppo_config: PPOConfig,
     device: torch.device,
 ) -> dict[str, float]:
-    """Take one optimizer step on a minibatch of the rollout's states.
+    """Take one optimizer step on the selected states, actions and targets.
 
     Parameters
     ----------
@@ -365,14 +373,12 @@ def _update_minibatch(
         The Learner's model, updated in place.
     optimizer : torch.optim.Optimizer
         The model's optimizer.
-    rollout : Rollout
-        The collected states and actions.
-    x_idx_state : torch.Tensor
-        (minibatch_size,) long. The minibatch's states.
-    x_total_cpu : torch.Tensor
-        Those states' totals, on the CPU.
+    states : States[Live]
+        The minibatch's selected states, including their CPU totals.
+    x_action : torch.Tensor
+        (minibatch_size, 3) long. The recorded actions for these states.
     targets : _Targets
-        What the update trains against, one row per state of the rollout.
+        What the update trains against, one row per selected state.
     ppo_config : PPOConfig
         The PPO settings.
     device : torch.device
@@ -385,23 +391,20 @@ def _update_minibatch(
         ranks' mean.
     """
     # Forward pass, under the weights so far
-    states_mini = take_minibatch_states(rollout.states, x_idx_state, x_total_cpu)
-    policy_output, x_value = model.action_evaluate(
-        states_mini, x_total_cpu, rollout.x_action[x_idx_state],
-    )
+    policy_output, x_value = model.action_evaluate(states, x_action)
 
     # Policy Loss
-    x_log_ratio = policy_output.x_log_prob.sum(-1) - targets.x_log_prob_prox[x_idx_state]
+    x_log_ratio = policy_output.x_log_prob.sum(-1) - targets.x_log_prob_prox
     x_ratio = x_log_ratio.exp()
     x_loss_policy = _compute_loss_policy(
         x_ratio,
-        targets.x_advantage[x_idx_state],
-        targets.x_weight_capped[x_idx_state],
+        targets.x_advantage,
+        targets.x_weight_capped,
         ppo_config.clip_eps,
     )
 
     # Value loss: summed over streams, mean over the batch
-    x_return = targets.x_return[x_idx_state]
+    x_return = targets.x_return
     x_loss_value = 0.5 * F.mse_loss(x_value, x_return, reduction="none").sum(-1).mean()
     x_loss_entropy = -torch.mean(policy_output.x_entropy.sum(dim=-1))
 

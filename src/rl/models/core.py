@@ -108,15 +108,13 @@ class Core(nn.Module):
         """Initialize the projector's token feature ranges after the general linear init."""
         self._entity_projector.init_token_weights()
 
-    def forward(self, states: States[Live], x_total_cpu: torch.Tensor) -> CoreOutput:
+    def forward(self, states: States[Live]) -> CoreOutput:
         """Compute the core's output.
 
         Parameters
         ----------
         states : States[Live]
             The game states.
-        x_total_cpu : torch.Tensor
-            (B, C) int32. The states' totals on the CPU, `states.x_total`.
 
         Returns
         -------
@@ -133,7 +131,7 @@ class Core(nn.Module):
         x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
 
         # Map GNN: the Room tokens' node features and the whole-graph readout
-        num_rooms = int(x_total_cpu[:, TokenKind.ROOMS].sum())
+        num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
         x_room_hidden, x_map_readout = self._map_gnn(states.x_map_grid, num_rooms)
 
         # Token embeddings grouped by state, and the embedded pending halt

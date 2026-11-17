@@ -219,9 +219,10 @@ class States[TStorage]:
     Reserved to these collections. `read_states` turns reserved capacity into populated views;
     rewriting that capacity invalidates its earlier views. The worker protocol owns access.
 
-    `x_total` holds each state's derived totals, for model features and batch sizing. TokenKind
-    indexes its first columns and StateCollection the rest. A CPU copy travels beside device
-    states so output sizes need no device readback.
+    `x_total` holds each state's derived totals on the data's device, and `x_total_cpu` holds
+    the same totals on the CPU so output sizes need no device readback. CPU states use the same
+    tensor for both fields. Batch operations keep them together. TokenKind indexes the first
+    columns and StateCollection the rest.
     """
 
     tokens: Tokens[EncodedFeatures[TStorage]]
@@ -232,6 +233,7 @@ class States[TStorage]:
     x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     x_total: torch.Tensor              # (B, len(TokenKind) + len(StateCollection)) int32
+    x_total_cpu: torch.Tensor          # Same totals on CPU; aliases x_total for CPU states
 
 
 @dataclass
