@@ -24,20 +24,20 @@ _DEDUP_MIN_BATCH = 512
 _GRID_BITS = _NUM_NODES * NUM_FEATURE_CHANNELS
 
 
-def _build_child_idx() -> torch.Tensor:
-    x_child = torch.full((_NUM_NODES, NUM_EDGE_CHANNELS), _NUM_NODES, dtype=torch.long)
+def _build_idx_child() -> torch.Tensor:
+    x_idx_child = torch.full((_NUM_NODES, NUM_EDGE_CHANNELS), _NUM_NODES, dtype=torch.long)
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
-            hw = y * MAP_WIDTH + x  # Flat index
+            idx_node = y * MAP_WIDTH + x  # Flat index
             if y + 1 < MAP_HEIGHT:
-                for c, delta in enumerate(EDGE_DELTAS):
-                    xc = x + delta  # {-1, 0, +1}
-                    if 0 <= xc < MAP_WIDTH:
-                        x_child[hw, c] = (y + 1) * MAP_WIDTH + xc
-    return x_child
+                for idx_edge, delta in enumerate(EDGE_DELTAS):
+                    x_next = x + delta  # {-1, 0, +1}
+                    if 0 <= x_next < MAP_WIDTH:
+                        x_idx_child[idx_node, idx_edge] = (y + 1) * MAP_WIDTH + x_next
+    return x_idx_child
 
 
-def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
+def _pack_rows(x_node: torch.Tensor) -> torch.Tensor:
     """Pack each grid into int64 words that sort as the grid does.
 
     This way unique() groups and orders them alike at a fraction of the cost: the 0/1 cells most
@@ -45,7 +45,7 @@ def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
 
     Parameters
     ----------
-    x_nodes : torch.Tensor
+    x_node : torch.Tensor
         (B, H * W, C) uint8. Each state's Map grid, flattened to nodes.
 
     Returns
@@ -53,10 +53,10 @@ def _pack_rows(x_nodes: torch.Tensor) -> torch.Tensor:
     torch.Tensor
         (B, words) long. Each grid's 0/1 cells, 63 to a word.
     """
-    batch_size, device = x_nodes.shape[0], x_nodes.device
-    x_bit_shifts = torch.arange(62, -1, -1, device=device)
-    x_bits = F.pad(x_nodes.reshape(batch_size, -1).long(), (0, -_GRID_BITS % 63))
-    return (x_bits.view(batch_size, -1, 63) << x_bit_shifts).sum(-1)  # (B, words)
+    batch_size, device = x_node.shape[0], x_node.device
+    x_bit_shift = torch.arange(62, -1, -1, device=device)
+    x_bit = F.pad(x_node.reshape(batch_size, -1).long(), (0, -_GRID_BITS % 63))
+    return (x_bit.view(batch_size, -1, 63) << x_bit_shift).sum(-1)  # (B, words)
 
 
 class MapGNN(nn.Module):
@@ -84,7 +84,7 @@ class MapGNN(nn.Module):
         self._layers = nn.ModuleList(nn.Linear(hidden, hidden) for _ in range(num_layers))
         self._norms = nn.ModuleList(nn.LayerNorm(hidden) for _ in range(num_layers))
 
-        self.register_buffer("_x_child_idx", _build_child_idx(), persistent=False)
+        self.register_buffer("_x_idx_child", _build_idx_child(), persistent=False)
         self.register_buffer(
             "_x_row_of_node", (torch.arange(_NUM_NODES) // MAP_WIDTH).float(), persistent=False
         )
@@ -114,26 +114,26 @@ class MapGNN(nn.Module):
         batch_size = x_grid.shape[0]
 
         # Flatten grid from (B, H, W, C) -> (B, H * W, C)
-        x_nodes = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
+        x_node = x_grid.reshape(batch_size, _NUM_NODES, NUM_CHANNELS)
         x_hidden_map, x_map_of_state, x_map_readout = self._encode_maps(
-            x_nodes[:, :, :NUM_FEATURE_CHANNELS]
+            x_node[:, :, :NUM_FEATURE_CHANNELS]
         )
 
         # The selectable Rooms' nodes, state after state and each state's in node order
-        x_selectable = x_nodes[:, :, OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
+        x_selectable = x_node[:, :, OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
         x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
         x_room_state = x_room // _NUM_NODES
         x_room_node = x_room % _NUM_NODES
         return x_hidden_map[x_map_of_state[x_room_state], x_room_node], x_map_readout
 
     def _encode_maps(
-        self, x_nodes: torch.Tensor
+        self, x_node: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run the message passing over the Maps, each distinct one once on a large batch.
 
         Parameters
         ----------
-        x_nodes : torch.Tensor
+        x_node : torch.Tensor
             (B, H * W, NUM_FEATURE_CHANNELS) uint8. Each state's Map, flattened to nodes.
 
         Returns
@@ -146,33 +146,33 @@ class MapGNN(nn.Module):
         x_map_readout : torch.Tensor
             (B, hidden). Each state's readout.
         """
-        batch_size = x_nodes.shape[0]
+        batch_size = x_node.shape[0]
 
         if batch_size < _DEDUP_MIN_BATCH:
-            x_hidden, x_readout = self.message_passing(self, x_nodes)
-            return x_hidden, torch.arange(batch_size, device=x_nodes.device), x_readout
+            x_hidden, x_readout = self.message_passing(self, x_node)
+            return x_hidden, torch.arange(batch_size, device=x_node.device), x_readout
 
         # The game sits on one Map node for many steps, so its grid repeats across a minibatch:
         # run the GNN on unique grids once and gather back (exact)
-        x_packed = _pack_rows(x_nodes)  # (B, words)
+        x_packed = _pack_rows(x_node)  # (B, words)
 
         # x_uniq: (U, words)
         # x_inverse: (B,) / x_inverse[b] ∈ [0, U). Maps each state to its unique ID
         x_uniq, x_inverse = torch.unique(x_packed, dim=0, return_inverse=True)
 
-        x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_nodes.device)
-        x_rep[x_inverse] = torch.arange(batch_size, device=x_nodes.device)
+        x_rep = torch.zeros(x_uniq.shape[0], dtype=torch.long, device=x_node.device)
+        x_rep[x_inverse] = torch.arange(batch_size, device=x_node.device)
 
         # Encode the unique Maps, and gather the readout back
-        x_hidden, x_readout_uniq = self.message_passing(self, x_nodes[x_rep])
+        x_hidden, x_readout_uniq = self.message_passing(self, x_node[x_rep])
         return x_hidden, x_inverse, x_readout_uniq[x_inverse]
 
-    def _forward_valid(self, x_nodes: torch.Tensor) -> torch.Tensor:
+    def _forward_valid(self, x_node: torch.Tensor) -> torch.Tensor:
         """Compute the valid Rooms matrix (higher than current floor and not None).
 
         Parameters
         ----------
-        x_nodes : torch.Tensor
+        x_node : torch.Tensor
             (U, H * W, C) float32. Each Map's nodes.
 
         Returns
@@ -183,8 +183,8 @@ class MapGNN(nn.Module):
 
         # The encoder sets one Room-kind bit per Room, none elsewhere, and at most one
         # position bit, on the current Room
-        x_room_exists = x_nodes[:, :, SLICE_MAP_ROOM_KIND].sum(-1) > 0  # (U, H * W)
-        x_position = x_nodes[:, :, OFF_MAP_POSITION]  # Current-position bit: (U, H * W)
+        x_room_exists = x_node[:, :, SLICE_MAP_ROOM_KIND].sum(-1) > 0  # (U, H * W)
+        x_position = x_node[:, :, OFF_MAP_POSITION]  # Current-position bit: (U, H * W)
         x_row_current = (x_position * self._x_row_of_node).sum(
             -1
         )  # (U,) / Current floor, 0 if none
@@ -198,22 +198,22 @@ class MapGNN(nn.Module):
         x_forward = self._x_row_of_node.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
         return x_room_exists & x_forward  # (U, H * W)
 
-    def _adjacency(self, x_nodes: torch.Tensor) -> torch.Tensor:
-        num_unique = x_nodes.shape[0]
+    def _adjacency(self, x_node: torch.Tensor) -> torch.Tensor:
+        num_unique = x_node.shape[0]
 
-        x_edges = x_nodes[:, :, SLICE_MAP_EDGES]
+        x_edge = x_node[:, :, SLICE_MAP_EDGES]
         x_adj = torch.zeros(
             num_unique,
             _NUM_NODES,
             _NUM_NODES + 1,
-            device=x_nodes.device,
-            dtype=x_nodes.dtype,
+            device=x_node.device,
+            dtype=x_node.dtype,
         )
         x_adj = torch.scatter(
             x_adj,
             dim=2,
-            index=self._x_child_idx.unsqueeze(0).expand(num_unique, -1, -1),
-            src=x_edges,
+            index=self._x_idx_child.unsqueeze(0).expand(num_unique, -1, -1),
+            src=x_edge,
         )
 
         # Drop the off-grid padding column, then row-normalize
@@ -221,14 +221,14 @@ class MapGNN(nn.Module):
         return x_adj / x_adj.sum(-1, keepdim=True).clamp(min=1.0)
 
 
-def message_passing(gnn: MapGNN, x_nodes: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def message_passing(gnn: MapGNN, x_node: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Run `gnn` over the Maps.
 
     Parameters
     ----------
     gnn : MapGNN
         The GNN to run.
-    x_nodes : torch.Tensor
+    x_node : torch.Tensor
         (U, H * W, C) uint8. The Maps.
 
     Returns
@@ -238,13 +238,13 @@ def message_passing(gnn: MapGNN, x_nodes: torch.Tensor) -> tuple[torch.Tensor, t
     x_readout : torch.Tensor
         (U, hidden). The readout: each Map's mean over its valid nodes, zero when it has none.
     """
-    x_nodes = x_nodes.float()
-    x_valid = gnn._forward_valid(x_nodes)  # (U, H * W) / Forward Rooms only
-    x_adj = gnn._adjacency(x_nodes)  # (U, H * W, H * W) / Row-normalized children
+    x_node = x_node.float()
+    x_valid = gnn._forward_valid(x_node)  # (U, H * W) / Forward Rooms only
+    x_adj = gnn._adjacency(x_node)  # (U, H * W, H * W) / Row-normalized children
 
     # Message passing: aggregate children per layer, masked to forward Rooms. The dense bmm
     # beats a sparse gather-sum here: at HW=105 it is launch-bound, not FLOP-bound
-    x_hidden = gnn._in_proj(x_nodes) * x_valid.unsqueeze(-1)
+    x_hidden = gnn._in_proj(x_node) * x_valid.unsqueeze(-1)
     for lin, norm in zip(gnn._layers, gnn._norms):
         x_hidden = norm(x_hidden + F.relu(lin(torch.bmm(x_adj, x_hidden))))
         x_hidden = x_hidden * x_valid.unsqueeze(-1)

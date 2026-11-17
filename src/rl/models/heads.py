@@ -50,8 +50,8 @@ class HeadActionType(nn.Module):
         torch.Tensor
             (B, NUM_ACTION_TYPES). The masked logits: -inf where the `ActionType` is illegal.
         """
-        x_logits = self._scorer(core_output.x_global)
-        return x_logits.masked_fill(~core_output.x_legal_action_type, float("-inf"))
+        x_logit = self._scorer(core_output.x_global)
+        return x_logit.masked_fill(~core_output.x_legal_action_type, float("-inf"))
 
 
 class PointerKeys(nn.Module):
@@ -77,12 +77,12 @@ class PointerKeys(nn.Module):
             nn.Linear(dim_in, dim_key),
         )
 
-    def forward(self, x_entities: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_entity: torch.Tensor) -> torch.Tensor:
         """Project Entity embeddings to pointer keys.
 
         Parameters
         ----------
-        x_entities : torch.Tensor
+        x_entity : torch.Tensor
             (..., dim_in). The Entity embeddings.
 
         Returns
@@ -90,7 +90,7 @@ class PointerKeys(nn.Module):
         torch.Tensor
             (..., dim_key). The pointer keys.
         """
-        return self._net(x_entities)
+        return self._net(x_entity)
 
 
 class PointerLogits(nn.Module):
@@ -157,8 +157,8 @@ class PointerLogits(nn.Module):
             (...). The masked logits: -inf where `x_mask` is False.
         """
         x_query = self._query_net(torch.cat([x_global, x_cond], dim=-1))  # (B, dim_key)
-        x_logits = (x_keys * x_query[x_key_state]).sum(-1) * self._scale
-        return x_logits.masked_fill(~x_mask, float("-inf"))
+        x_logit = (x_keys * x_query[x_key_state]).sum(-1) * self._scale
+        return x_logit.masked_fill(~x_mask, float("-inf"))
 
 
 class HeadSelection(nn.Module):
@@ -216,15 +216,15 @@ class HeadSelection(nn.Module):
             (N,). Each token's masked logit: -inf where its state's action type can't select it.
             Where the action type selects no token, its state's Character is the one legal row.
         """
-        jag_refined = core_output.tokens
-        x_token_state = jag_refined.rows.x_token_state
-        x_rows = torch.arange(x_token_state.shape[0], device=x_token_state.device)  # (N,)
+        tokens_refined = core_output.tokens
+        x_token_state = core_output.x_token_state
+        x_token_row = torch.arange(x_token_state.shape[0], device=x_token_state.device)  # (N,)
 
         # Wether each token is selectable under its state selected `ActionType`
-        x_token_selectable = jag_refined.rows.x_legal_selection[x_rows, x_action_type[x_token_state]] # (N,)
+        x_token_selectable = tokens_refined.x_legal_selection[x_token_row, x_action_type[x_token_state]] # (N,)
 
         # An `ActionType` that selects no token sets its state's Character as legal to avoid NaNs
-        x_is_character = jag_refined.rows.x_entity_kind == EntityKind.CHARACTER  # (N,)
+        x_is_character = tokens_refined.x_entity_kind == EntityKind.CHARACTER  # (N,)
         x_has_selection = self._x_has_selection[x_action_type]
         x_token_selectable |= x_is_character & ~x_has_selection[x_token_state]
 
@@ -303,7 +303,7 @@ class HeadTarget(nn.Module):
             target": -inf where illegal. Where the selection takes no target, its state's "no
             target" is the one legal row.
         """
-        tokens = core_output.tokens.rows
+        tokens = core_output.tokens
         batch_size = x_action_type.shape[0]
 
         # The target rows are the M Monsters, then one "no target" per state
@@ -329,8 +329,8 @@ class HeadTarget(nn.Module):
                 torch.zeros(
                     batch_size,
                     self._dim_key,
-                    dtype=tokens.x_embedding.dtype,
-                    device=tokens.x_embedding.device,
+                    dtype=tokens.features.x_value.dtype,
+                    device=tokens.features.x_value.device,
                 ),
             ]
         )
@@ -339,7 +339,7 @@ class HeadTarget(nn.Module):
         return self._pointer_logits(
             x_keys,
             core_output.x_global,
-            tokens.x_embedding[x_selection_row],
+            tokens.features.x_value[x_selection_row],
             x_target_state,
             x_mask_l3,
         )

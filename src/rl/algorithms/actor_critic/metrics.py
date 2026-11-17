@@ -364,9 +364,10 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
     }
 
     # Discounted per-stream returns, the optimizer's actual objective
-    for k, name in enumerate(RewardStream):
-        metrics[f"{MetricKey.RETURN_AVG}_{name}"] = (
-            sum(episode.reward_stream_rets[k] for episode in episode_results) / num_episodes
+    for idx_reward_stream, reward_stream in enumerate(RewardStream):
+        metrics[f"{MetricKey.RETURN_AVG}_{reward_stream}"] = (
+            sum(episode.reward_stream_rets[idx_reward_stream] for episode in episode_results)
+            / num_episodes
         )
 
     return metrics

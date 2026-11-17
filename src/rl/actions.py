@@ -10,13 +10,13 @@ from src.rl.types import TokenKind
 
 
 def engine_action(
-    idx_action_kind: int, idx_selection: int, idx_target: int, game_state: slai.GameState
+    idx_action_type: int, idx_selection: int, idx_target: int, game_state: slai.GameState
 ) -> slai.Action:
     """Decode the Model's output Actions into the Game's input Action format.
 
     Parameters
     ----------
-    idx_action_kind : int
+    idx_action_type : int
         The action kind's index in `ACTION_TYPES`.
     idx_selection : int
         The selected token's index in this state's entire token sequence, in the encoder's
@@ -33,10 +33,10 @@ def engine_action(
         The engine's Action, with the selected Entity's id and then the target Monster's, if
         any; with no ids when the action selects nothing.
     """
-    action_kind = ACTION_TYPES[idx_action_kind]
+    action_type = ACTION_TYPES[idx_action_type]
     
-    if ACTION_SPEC_REGISTRY[action_kind].arity == (0, 0):
-        return slai.Action(action_kind, [])
+    if ACTION_SPEC_REGISTRY[action_type].arity == (0, 0):
+        return slai.Action(action_type, [])
     
     if idx_selection < 0:
         raise ValueError("An action with a selection requires a nonnegative token index")
@@ -57,4 +57,4 @@ def engine_action(
     
         ids.append(monsters[idx_target].id)
 
-    return slai.Action(action_kind, ids)
+    return slai.Action(action_type, ids)

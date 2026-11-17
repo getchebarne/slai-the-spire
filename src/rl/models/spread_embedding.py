@@ -16,14 +16,14 @@ class SpreadEmbedding(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx: Any, x_weight: torch.Tensor, x_idxs: torch.Tensor) -> torch.Tensor:
-        """Look up the rows of `x_weight` at `x_idxs`, as F.embedding does.
+    def forward(ctx: Any, x_weight: torch.Tensor, x_idx_emb: torch.Tensor) -> torch.Tensor:
+        """Look up the rows of `x_weight` at `x_idx_emb`, as F.embedding does.
 
         Parameters
         ----------
         x_weight : torch.Tensor
             (R, D). The table: R rows of width D.
-        x_idxs : torch.Tensor
+        x_idx_emb : torch.Tensor
             (...) long. The rows to look up, in any shape; both callers pass (N,), one per token.
 
         Returns
@@ -31,9 +31,9 @@ class SpreadEmbedding(torch.autograd.Function):
         torch.Tensor
             (..., D). Each lookup's row.
         """
-        ctx.save_for_backward(x_idxs)
+        ctx.save_for_backward(x_idx_emb)
         ctx.num_embeddings = x_weight.shape[0]
-        return F.embedding(x_idxs, x_weight)
+        return F.embedding(x_idx_emb, x_weight)
 
     @staticmethod
     def backward(ctx: Any, x_grad: torch.Tensor) -> tuple[torch.Tensor, None]:
@@ -49,25 +49,28 @@ class SpreadEmbedding(torch.autograd.Function):
         x_weight_grad : torch.Tensor
             (R, D). The table's gradient.
         None
-            The indices take no gradient.
+            The indexes take no gradient.
         """
-        (x_idxs,) = ctx.saved_tensors  # (...) long
+        (x_idx_emb,) = ctx.saved_tensors  # (...) long
 
         # The first row of each lookup's copy in the stacked table:
         # Lookup `i` (flat position) goes to copy `i % _SPREAD_COPIES`,
         # whose rows start at `(i % _SPREAD_COPIES) * R`
-        x_starts = (
-            torch.arange(x_idxs.numel(), device=x_idxs.device).view_as(x_idxs) % _SPREAD_COPIES
+        x_start = (
+            torch.arange(x_idx_emb.numel(), device=x_idx_emb.device).view_as(
+                x_idx_emb
+            )
+            % _SPREAD_COPIES
         ) * ctx.num_embeddings  # (...)
 
         # F.embedding's own backward: row `r` of the result sums the gradients of the lookups at
         # row `r`, as `torch.zeros(num_weights, D).index_add_(0, indices, grad_output)` would
-        x_grad_copies = torch.ops.aten.embedding_dense_backward(
+        x_grad_copy = torch.ops.aten.embedding_dense_backward(
             x_grad,  # (..., D)
-            x_starts + x_idxs,  # (...): rows of the stacked table
+            x_start + x_idx_emb,  # (...): rows of the stacked table
             ctx.num_embeddings * _SPREAD_COPIES,
             padding_idx=-1,
             scale_grad_by_freq=False,
         )  # (_SPREAD_COPIES * R, D)
-        x_weight_grad = x_grad_copies.view(_SPREAD_COPIES, ctx.num_embeddings, -1).sum(0)  # (R, D)
+        x_weight_grad = x_grad_copy.view(_SPREAD_COPIES, ctx.num_embeddings, -1).sum(0)  # (R, D)
         return x_weight_grad, None

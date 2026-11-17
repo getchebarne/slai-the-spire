@@ -50,7 +50,7 @@ def _run_eval_episode(
     """
     env, game_state = new_env(ascension, seed)
     episode_result = EpisodeResult()
-    state_batch_reserved = map_tensors(allocate_states(1, 1), lambda x_tensor: x_tensor[0])
+    states_reserved = map_tensors(allocate_states(1, 1), lambda x_tensor: x_tensor[0])
     done = False
     while not done:
         legal_actions = env.get_legal_actions()
@@ -60,13 +60,13 @@ def _run_eval_episode(
             )
 
         # Greedy step: Encode (masks included) -> Forward
-        encode_states_into(state_batch_reserved, [game_state], [legal_actions])
-        state_batch = read_states(state_batch_reserved)
-        policy = model.action_select(state_batch, state_batch.state_counts, greedy=True)
+        encode_states_into(states_reserved, [game_state], [legal_actions])
+        states = read_states(states_reserved)
+        policy = model.action_select(states, states.x_total, greedy=True)
 
         # Game step
-        idx_action_kind, idx_selection, idx_target = policy.x_actions[0].tolist()
-        action = engine_action(idx_action_kind, idx_selection, idx_target, game_state)
+        idx_action_type, idx_selection, idx_target = policy.x_action[0].tolist()
+        action = engine_action(idx_action_type, idx_selection, idx_target, game_state)
         game_state, _, _, done = step_env(env, game_state, episode_result, action, gamma)
     
     return episode_result

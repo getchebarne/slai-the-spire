@@ -25,7 +25,7 @@ class _WeightBuffer:
 
     # Two suffice: the Learner overwrites the older slot only after taking rollouts played on it
     weight_slots: list[_WeightSlot]  # Last two weights published by the Learner
-    sph_new_version: Semaphore  # Released once per publish; the Actor acquires once per version
+    sph_new_version: Semaphore       # Released once per publish; the Actor acquires once per version
 
 
 def allocate_buffer(weights: Mapping[str, torch.Tensor]) -> _WeightBuffer:

@@ -1,10 +1,12 @@
+from dataclasses import replace
+
 import torch
 import torch.nn as nn
 
 from src.rl.batches import get_entity_kind_rows
-from src.rl.batches import get_row_segment
+from src.rl.batches import get_row_owner
 from src.rl.constants import NUM_ACTION_TYPES
-from src.rl.constants import MAP_TOKEN_KIND_MAX_TOKENS
+from src.rl.constants import MAX_TOKENS_OF_TOKEN_KIND
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.constants import TOKEN_KINDS_IN_WINDOW_ORDER
 from src.rl.encoding import ENCODING_DIM_CONTEXT
@@ -13,12 +15,11 @@ from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
 from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import CoreOutput
+from src.rl.types import Dense
 from src.rl.types import EntityKind
-from src.rl.types import Jagged
-from src.rl.types import StateBatch
-from src.rl.types import StateCounts
+from src.rl.types import Live
+from src.rl.types import States
 from src.rl.types import TokenKind
-from src.rl.types import TokensRefined
 
 
 # Count features: one per token kind except the Character singleton (a constant 1.0), each
@@ -31,7 +32,7 @@ _COUNT_TOKEN_KINDS = tuple(
 
 
 class Core(nn.Module):
-    _x_count_token_kinds: torch.Tensor
+    _x_count_token_kind: torch.Tensor
     _x_count_norm: torch.Tensor
     _x_is_reward: torch.Tensor
 
@@ -82,12 +83,12 @@ class Core(nn.Module):
 
         # Count features
         self.register_buffer(
-            "_x_count_token_kinds", torch.tensor(_COUNT_TOKEN_KINDS), persistent=False
+            "_x_count_token_kind", torch.tensor(_COUNT_TOKEN_KINDS), persistent=False
         )
         self.register_buffer(
             "_x_count_norm",
             torch.tensor(
-                [float(MAP_TOKEN_KIND_MAX_TOKENS[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
+                [float(MAX_TOKENS_OF_TOKEN_KIND[token_kind]) for token_kind in _COUNT_TOKEN_KINDS]
             ).view(1, -1),
             persistent=False,
         )
@@ -107,15 +108,15 @@ class Core(nn.Module):
         """Initialize the projector's token feature ranges after the general linear init."""
         self._entity_projector.init_token_weights()
 
-    def forward(self, state_batch: StateBatch, state_counts_cpu: StateCounts) -> CoreOutput:
+    def forward(self, states: States[Live], x_total_cpu: torch.Tensor) -> CoreOutput:
         """Compute the core's output.
 
         Parameters
         ----------
-        state_batch : StateBatch
+        states : States[Live]
             The game states.
-        state_counts_cpu : StateCounts
-            The states' counts on the CPU, `state_batch.state_counts`.
+        x_total_cpu : torch.Tensor
+            (B, C) int32. The states' totals on the CPU, `states.x_total`.
 
         Returns
         -------
@@ -124,26 +125,28 @@ class Core(nn.Module):
             vector, legal action types and counts.
         """
 
-        tokens = state_batch.tokens
-        num_tokens = tokens.rows.x_token_kind.shape[0]
-        batch_size = tokens.x_lengths.shape[0]
+        tokens = states.tokens
+        num_tokens = tokens.x_token_kind.shape[0]
+        batch_size = tokens.x_count.shape[0]
 
         # Each token's state
-        x_token_state = get_row_segment(tokens.x_lengths, num_tokens)  # (N,)
+        x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
 
         # Map GNN: the Room tokens' node features and the whole-graph readout
-        num_rooms = int(state_counts_cpu.x_token_kind_count[:, TokenKind.ROOMS].sum())
-        x_room_hidden, x_map_readout = self._map_gnn(state_batch.x_map_grid, num_rooms)
+        num_rooms = int(x_total_cpu[:, TokenKind.ROOMS].sum())
+        x_room_hidden, x_map_readout = self._map_gnn(states.x_map_grid, num_rooms)
 
         # Token embeddings grouped by state, and the embedded pending halt
-        jag_projected, x_effect_pending = self._entity_projector(state_batch, x_room_hidden)
+        tokens_projected, x_effect_pending = self._entity_projector(states, x_room_hidden)
 
         # One transformer pass over every state
-        jag_refined, x_global_token = self._entity_transformer(
-            Jagged(
-                x_lengths=jag_projected.x_lengths,
-                rows=self._embed_identity(
-                    jag_projected.rows, state_batch.tokens.rows.x_token_kind.long()
+        tokens_refined, x_global_token = self._entity_transformer(
+            replace(
+                tokens_projected,
+                features=Dense(
+                    x_value=self._embed_identity(
+                        tokens_projected.features.x_value, tokens.x_token_kind.long()
+                    )
                 ),
             ),
             x_token_state,
@@ -151,38 +154,30 @@ class Core(nn.Module):
 
         # Each state's global vector
         x_character_row = get_entity_kind_rows(
-            tokens.rows.x_entity_kind, EntityKind.CHARACTER, batch_size
+            tokens.x_entity_kind, EntityKind.CHARACTER, batch_size
         )  # (B,)
         x_global = self._global_projection(
             torch.cat(
                 [
                     x_global_token,
-                    jag_refined.rows[x_character_row],
+                    tokens_refined.features.x_value[x_character_row],
                     x_map_readout,
-                    self._get_token_counts(state_batch.state_counts.x_token_kind_count),
-                    state_batch.x_context,
+                    self._get_token_counts(states.x_total),
+                    states.x_context,
                     x_effect_pending,
-                    state_batch.x_legal_action_type.to(state_batch.x_context.dtype),
+                    states.x_legal_action_type.to(states.x_context.dtype),
                 ],
                 dim=1,
             )
         )
 
         # The input tokens' Entity kinds and legal masks stay with the refined tokens
-        tokens_refined = TokensRefined(
-            x_embedding=jag_refined.rows,
-            x_token_state=x_token_state,
-            x_entity_kind=tokens.rows.x_entity_kind,
-            x_legal_selection=tokens.rows.x_legal_selection,
-            x_legal_target=tokens.rows.x_legal_target,
-            x_needs_target=tokens.rows.x_needs_target,
-        )
-
         return CoreOutput(
-            tokens=Jagged(x_lengths=jag_refined.x_lengths, rows=tokens_refined),
+            tokens=tokens_refined,
+            x_token_state=x_token_state,
             x_global=x_global,
-            x_legal_action_type=state_batch.x_legal_action_type,
-            state_counts=state_batch.state_counts,
+            x_legal_action_type=states.x_legal_action_type,
+            x_total=states.x_total,
         )
 
     def _embed_identity(
@@ -209,15 +204,15 @@ class Core(nn.Module):
 
         return x_projected + x_token_kind_emb + self._x_is_reward[x_token_kind].unsqueeze(1) * self._x_reward_identity
 
-    def _get_token_counts(self, x_token_kind_count: torch.Tensor) -> torch.Tensor:
+    def _get_token_counts(self, x_total: torch.Tensor) -> torch.Tensor:
         """Compute the per-token-kind token counts, sqrt-normalized by the token kind's cap.
 
         A count never exceeds its cap, so the ratio is in [0, 1].
 
         Parameters
         ----------
-        x_token_kind_count : torch.Tensor
-            (B, len(TokenKind)) int16. Each state's tokens of each token kind.
+        x_total : torch.Tensor
+            (B, C) int32. Each state's totals; TokenKind indexes its token-kind columns.
 
         Returns
         -------
@@ -225,6 +220,6 @@ class Core(nn.Module):
             (B, len(_COUNT_TOKEN_KINDS)) float32. Each state's normalized counts, one per token
             kind except the Character.
         """
-        x_count = x_token_kind_count[:, self._x_count_token_kinds].float()
+        x_count = x_total[:, self._x_count_token_kind].float()
 
         return (x_count / self._x_count_norm).sqrt()

@@ -20,16 +20,16 @@ _OFF_SHOP_PURGED = ENCODING_DIM_PRICE
 ENCODING_DIM_SHOP_META = ENCODING_DIM_PRICE + 1
 
 
-def encode_price_into(price: int, gold: int, out: np.ndarray) -> None:
-    out[_OFF_SHOP_PRICE] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
-    out[_OFF_SHOP_AFFORDABLE] = float(gold >= price)
-    out[_OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+def encode_price_into(price: int, gold: int, np_out: np.ndarray) -> None:
+    np_out[_OFF_SHOP_PRICE] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+    np_out[_OFF_SHOP_AFFORDABLE] = float(gold >= price)
+    np_out[_OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
 
 
-def encode_shop_meta_into(game_state: GameState, out: np.ndarray) -> None:
+def encode_shop_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     """Write the purge service's price features and whether it was used."""
     shop = game_state.shop
     if shop is None:
         return
-    encode_price_into(shop.purge_cost, game_state.character.gold, out)
-    out[_OFF_SHOP_PURGED] = float(shop.purged)
+    encode_price_into(shop.purge_cost, game_state.character.gold, np_out)
+    np_out[_OFF_SHOP_PURGED] = float(shop.purged)

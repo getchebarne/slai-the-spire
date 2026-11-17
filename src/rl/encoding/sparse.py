@@ -1,39 +1,34 @@
 import numpy as np
-import torch
 
-from src.rl.types import SparseReserved
+from src.rl.types import OwnedRows
+from src.rl.types import Reserved
+from src.rl.types import Sparse
 
 
-def encode_sparse_into(
-    x_segment_lengths: torch.Tensor,
-    destination: SparseReserved,
-    np_segment_lengths: np.ndarray,
-    np_dense: np.ndarray,
-    max_entries: int,
+def encode_owned_rows_into(
+    owned_rows: OwnedRows[Reserved], np_count: np.ndarray, np_dense: np.ndarray, max_entries: int
 ) -> None:
-    """Write each segment's row count and the dense feature rows as flat nonzero entries.
+    """Write each token's number of owned rows and those rows as flat nonzero entries.
 
-    The segment lengths count rows per segment; the sparse lengths count feature entries per row.
+    `owned_rows.x_count` counts rows per token; `owned_rows.sparse.x_count` entries per row.
 
     Parameters
     ----------
-    x_segment_lengths : torch.Tensor
-        (segment capacity,) integer. Each segment's row count, written in place.
-    destination : SparseReserved
-        The reserved row and entry arrays of one table.
-    np_segment_lengths : np.ndarray
-        (S,). The number of rows in each of the S segments.
+    owned_rows : OwnedRows[Reserved]
+        The reserved owner counts and sparse rows of one collection.
+    np_count : np.ndarray
+        (N,). Each token's number of owned rows.
     np_dense : np.ndarray
         (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
     max_entries : int
         The maximum number of nonzero feature entries allowed in one row.
     """
-    encode_sparse_rows_into(destination, np_dense, max_entries)
-    x_segment_lengths[: len(np_segment_lengths)].numpy()[:] = np_segment_lengths
+    encode_sparse_rows_into(owned_rows.sparse, np_dense, max_entries)
+    owned_rows.x_count[: len(np_count)].numpy()[:] = np_count
 
 
 def encode_sparse_rows_into(
-    destination: SparseReserved, np_dense: np.ndarray, max_entries: int
+    sparse_out: Sparse[Reserved], np_dense: np.ndarray, max_entries: int
 ) -> None:
     """Write dense feature rows as flat nonzero entries.
 
@@ -41,7 +36,7 @@ def encode_sparse_rows_into(
 
     Parameters
     ----------
-    destination : SparseReserved
+    sparse_out : Sparse[Reserved]
         The reserved row and entry arrays of one table.
     np_dense : np.ndarray
         (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
@@ -52,26 +47,29 @@ def encode_sparse_rows_into(
     num_rows = np_dense.size // num_cols
 
     # Flat indexes of non-zero entries
-    np_pos = np.flatnonzero(np_dense != 0)
+    np_idx_nonzero = np.flatnonzero(np_dense != 0)
 
     # The rows and columns each non-zero entry flat-space corresponds to 
-    np_rows, np_cols = np.divmod(np_pos, num_cols)
+    np_entry_row, np_entry_col = np.divmod(np_idx_nonzero, num_cols)
 
     # Number of non-zero entries each row has
-    np_lens = np.bincount(np_rows, minlength=num_rows)
+    np_count = np.bincount(np_entry_row, minlength=num_rows)
 
     # Sanity checks
-    max_nonzero_entries_of_row = int(np_lens.max(initial=0))
+    max_nonzero_entries_of_row = int(np_count.max(initial=0))
     if max_nonzero_entries_of_row > max_entries:
         raise IndexError(f"Sparse row has {max_nonzero_entries_of_row} entries, exceeding its cap of {max_entries}")
-    if max_nonzero_entries_of_row > np.iinfo(np.int16).max:
-        raise ValueError("Sparse row np_lens exceed int16 capacity")
-    num_entries = len(np_pos)
-    if num_rows > len(destination.x_lengths):
-        raise IndexError("Sparse row count exceeds the destination's capacity")
-    if num_entries > len(destination.rows.x_values):
-        raise IndexError("Sparse entry count exceeds the destination's capacity")
     
-    destination.x_lengths[:num_rows].numpy()[:] = np_lens
-    destination.rows.x_columns[:num_entries].numpy()[:] = np_cols
-    np.take(np_dense.reshape(-1), np_pos, out=destination.rows.x_values[:num_entries].numpy())
+    if max_nonzero_entries_of_row > np.iinfo(np.int16).max:
+        raise ValueError("Sparse row entry counts exceed int16 capacity")
+    
+    num_entries = len(np_idx_nonzero)
+    if num_rows > len(sparse_out.x_count):
+        raise IndexError("Sparse row count exceeds the sparse_out's capacity")
+    
+    if num_entries > len(sparse_out.x_value):
+        raise IndexError("Sparse entry count exceeds the sparse_out's capacity")
+    
+    sparse_out.x_count[:num_rows].numpy()[:] = np_count
+    sparse_out.x_col[:num_entries].numpy()[:] = np_entry_col
+    np.take(np_dense.reshape(-1), np_idx_nonzero, out=sparse_out.x_value[:num_entries].numpy())

@@ -209,7 +209,7 @@ def _vocabulary(*specs: Iterable[M | list[M]]) -> dict[M, int]:
         for value in spec:
             names.update(value if isinstance(value, list) else [value])
 
-    return {name: i + 1 for i, name in enumerate(sorted(names, key=int))}
+    return {name: idx_name + 1 for idx_name, name in enumerate(sorted(names, key=int))}
 
 
 def _index_enum(enum: type[M]) -> dict[M, int]:
@@ -241,7 +241,7 @@ def _index_union(union: UnionType) -> dict[type, int]:
     dict[type, int]
         Each variant type's column index.
     """
-    return {cls: i for i, cls in enumerate(get_args(union))}
+    return {cls: idx_class for idx_class, cls in enumerate(get_args(union))}
 
 
 INDEX_EFFECT = _index_union(Effect)
@@ -483,16 +483,16 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (OFF_TURNS, _CAP_TURNS, _NormMode.LINEAR),
 )
 
-_SCALED_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
-_CAPS = np.ones(ENCODING_DIM_EFFECT, dtype=np.float32)
-_SQRT_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
+_NP_SCALED_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
+_NP_CAP = np.ones(ENCODING_DIM_EFFECT, dtype=np.float32)
+_NP_SQRT_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
 for _off, _cap_value, _mode in _NORM_META:
-    _SCALED_MASK[_off] = True
-    _CAPS[_off] = _cap_value
-    _SQRT_MASK[_off] = _mode == _NormMode.SQRT
+    _NP_SCALED_MASK[_off] = True
+    _NP_CAP[_off] = _cap_value
+    _NP_SQRT_MASK[_off] = _mode == _NormMode.SQRT
 
 # Only the _NORM_META channels need scaling at all
-IDXS_SCALED = np.nonzero(_SCALED_MASK)[0]
-SCALED_CAPS = _CAPS[IDXS_SCALED]
-SCALED_SQRT = _SQRT_MASK[IDXS_SCALED]
-SCALED_LINEAR = ~SCALED_SQRT
+NP_IDX_SCALED = np.nonzero(_NP_SCALED_MASK)[0]
+NP_SCALED_CAP = _NP_CAP[NP_IDX_SCALED]
+NP_SCALED_SQRT = _NP_SQRT_MASK[NP_IDX_SCALED]
+NP_SCALED_LINEAR = ~NP_SCALED_SQRT

@@ -32,21 +32,21 @@ ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w in _CHANNEL_LAYOUT_HEALTH_BLOCK)
 ENCODING_DIM_SPARSE_HEALTH_BLOCK = len(_CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 
-def encode_health_block_into(health: int, block: int, out: np.ndarray) -> None:
+def encode_health_block_into(health: int, block: int, np_out: np.ndarray) -> None:
     total = health + block
 
     health_bucket = get_piecewise_bucket(
         health, _HEALTH_MIN, HEALTH_MAX_ENTITY, _LINEAR_SQRT_THRESHOLD
     )
-    out[_OFF_HEALTH_BLOCK_HEALTH + health_bucket] = 1.0
+    np_out[_OFF_HEALTH_BLOCK_HEALTH + health_bucket] = 1.0
     block_bucket = get_piecewise_bucket(
         block, _BLOCK_MIN, BLOCK_MAX_ENTITY, _LINEAR_SQRT_THRESHOLD
     )
-    out[_OFF_HEALTH_BLOCK_BLOCK + block_bucket] = 1.0
+    np_out[_OFF_HEALTH_BLOCK_BLOCK + block_bucket] = 1.0
     total_bucket = get_piecewise_bucket(total, _TOTAL_MIN, _TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
-    out[_OFF_HEALTH_BLOCK_TOTAL + total_bucket] = 1.0
+    np_out[_OFF_HEALTH_BLOCK_TOTAL + total_bucket] = 1.0
 
     # Scalars
-    out[_OFF_HEALTH_BLOCK_HEALTH_SCALAR] = min(health / HEALTH_MAX_ENTITY, 1.0)
-    out[_OFF_HEALTH_BLOCK_BLOCK_SCALAR] = min(block / BLOCK_MAX_ENTITY, 1.0)
-    out[_OFF_HEALTH_BLOCK_TOTAL_SCALAR] = min(total / _TOTAL_MAX, 1.0)
+    np_out[_OFF_HEALTH_BLOCK_HEALTH_SCALAR] = min(health / HEALTH_MAX_ENTITY, 1.0)
+    np_out[_OFF_HEALTH_BLOCK_BLOCK_SCALAR] = min(block / BLOCK_MAX_ENTITY, 1.0)
+    np_out[_OFF_HEALTH_BLOCK_TOTAL_SCALAR] = min(total / _TOTAL_MAX, 1.0)

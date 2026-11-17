@@ -50,7 +50,7 @@ def derive_focus(game_state: GameState) -> Focus:
 # The engine's halting kinds, straight from the FFI's PendingEffect union, so a new halting
 # kind widens this tuple instead of raising the ValueError in _encode_focus_into
 _EFFECT_PENDING = get_args(PendingEffect)
-_EFFECT_PENDING_TO_IDX = {cls: i for i, cls in enumerate(_EFFECT_PENDING)}
+_IDX_OF_EFFECT_PENDING = {cls: idx_class for idx_class, cls in enumerate(_EFFECT_PENDING)}
 
 _NUM_CHEST_KINDS = len(ChestKind.members())
 
@@ -96,21 +96,21 @@ _INPUT_POOL_CAP = {
 }
 
 
-def encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
+def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
     combat = game_state.combat
     chest = game_state.chest
     rest_site = game_state.rest_site
     pending = game_state.effect_pending
 
-    out[_OFF_FOCUS_KIND + derive_focus(game_state)] = 1.0
+    np_out[_OFF_FOCUS_KIND + derive_focus(game_state)] = 1.0
 
     # Pending input
     if pending is not None:
-        idx = _EFFECT_PENDING_TO_IDX.get(type(pending))
-        if idx is None:
+        idx_effect_pending = _IDX_OF_EFFECT_PENDING.get(type(pending))
+        if idx_effect_pending is None:
             raise ValueError(f"Unsupported pending halt kind: {type(pending).__name__}")
 
-        out[_OFF_FOCUS_PENDING_KIND + idx] = 1.0
+        np_out[_OFF_FOCUS_PENDING_KIND + idx_effect_pending] = 1.0
 
         target = pending.target
         selection_kind = target.selection_kind if target is not None else None
@@ -122,29 +122,29 @@ def encode_focus_into(game_state: GameState, out: np.ndarray) -> None:
                     f" (pending {type(pending).__name__})"
                 )
 
-            out[_OFF_FOCUS_PENDING_COUNT] = selection_kind.count / cap
+            np_out[_OFF_FOCUS_PENDING_COUNT] = selection_kind.count / cap
             if isinstance(selection_kind, SelectionKindInputUpTo):
-                out[_OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
+                np_out[_OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
 
     if combat is not None:
         for turns_left, damage in combat.bombs:
-            out[_OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
-        due = out[_OFF_FOCUS_BOMB_DAMAGE_DUE : _OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
+            np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
+        due = np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE : _OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
         due[:] = np.minimum(due, _BOMB_DAMAGE_MAX) / _BOMB_DAMAGE_MAX
 
     if chest is not None:
-        out[_OFF_FOCUS_CHEST_KIND + int(chest.kind)] = 1.0
-        out[_OFF_FOCUS_CHEST_OPENED] = float(chest.opened)
+        np_out[_OFF_FOCUS_CHEST_KIND + int(chest.kind)] = 1.0
+        np_out[_OFF_FOCUS_CHEST_OPENED] = float(chest.opened)
 
     if rest_site is not None:
-        out[_OFF_FOCUS_REST_DONE] = float(rest_site.done)
+        np_out[_OFF_FOCUS_REST_DONE] = float(rest_site.done)
 
     # Context-presence bits: the Focus OHE alone can't express overlays
-    for i, ctx in enumerate(
+    for idx_context, context in enumerate(
         (combat, game_state.reward, game_state.shop, game_state.event, rest_site, chest)
     ):
-        if ctx is not None:
-            out[_OFF_FOCUS_PRESENCE + i] = 1.0
+        if context is not None:
+            np_out[_OFF_FOCUS_PRESENCE + idx_context] = 1.0
 
 
 def _check_tables() -> None:

@@ -92,11 +92,11 @@ def average_gradients(model: nn.Module) -> None:
         ]
     )
     dist.all_reduce(x_flat)
-    x_grads = x_flat[: -len(params)] / dist.get_world_size()
+    x_grad = x_flat[: -len(params)] / dist.get_world_size()
     offset = 0
     for x_param, reached in zip(params, x_flat[-len(params) :].tolist()):
         x_param.grad = (
-            x_grads[offset : offset + x_param.numel()].view_as(x_param) if reached else None
+            x_grad[offset : offset + x_param.numel()].view_as(x_param) if reached else None
         )
         offset += x_param.numel()
 

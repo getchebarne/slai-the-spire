@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 
 from src.rl.batches import get_entity_kind_rows
-from src.rl.batches import get_row_segment
-from src.rl.batches import get_segment_first_row
+from src.rl.batches import get_owner_first_row
+from src.rl.batches import get_row_owner
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadTarget
@@ -16,9 +16,9 @@ from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
 from src.rl.types import CoreOutput
 from src.rl.types import EntityKind
+from src.rl.types import Live
 from src.rl.types import PolicyOutput
-from src.rl.types import StateBatch
-from src.rl.types import StateCounts
+from src.rl.types import States
 from src.rl.types import TokenKind
 
 
@@ -103,8 +103,8 @@ class ActorCritic(nn.Module):
 
     def action_select(
         self,
-        state_batch: StateBatch,
-        state_counts_cpu: StateCounts,
+        states: States[Live],
+        x_total_cpu: torch.Tensor,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> PolicyOutput:
@@ -114,10 +114,10 @@ class ActorCritic(nn.Module):
 
         Parameters
         ----------
-        state_batch : StateBatch
+        states : States[Live]
             The game states.
-        state_counts_cpu : StateCounts
-            The states' counts on the CPU, `state_batch.state_counts`.
+        x_total_cpu : torch.Tensor
+            (B, C) int32. The states' totals on the CPU, `states.x_total`.
         greedy : bool, default False
             Whether each level takes its argmax rather than a sample.
         generator : torch.Generator | None, default None
@@ -129,45 +129,45 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
-        core_output = self.core(state_batch, state_counts_cpu)
-        jag_refined = core_output.tokens
-        batch_size = jag_refined.x_lengths.shape[0]
+        core_output = self.core(states, x_total_cpu)
+        tokens_refined = core_output.tokens
+        batch_size = tokens_refined.x_count.shape[0]
 
         # Select the `ActionType` for every row — one masked categorical
-        x_logits_action_type = self._head_action_type(core_output)
-        x_action_type = _select_idx(x_logits_action_type, greedy, generator)
+        x_logit_action_type = self._head_action_type(core_output)
+        x_action_type = _select_idx(x_logit_action_type, greedy, generator)
 
         # Compute the `Action`'s selections from the chosen `ActionType`
-        x_token_key = self._pointer_keys(jag_refined.rows.x_embedding)  # (N, dim_key)
-        x_logits_selection = self._head_selection(core_output, x_token_key, x_action_type)
+        x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
+        x_logit_selection = self._head_selection(core_output, x_token_key, x_action_type)
         x_selection_row = _select_row(
-            x_logits_selection, jag_refined.rows.x_token_state, batch_size, greedy, generator
+            x_logit_selection, core_output.x_token_state, batch_size, greedy, generator
         )
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(state_counts_cpu.x_token_kind_count[:, TokenKind.MONSTERS].sum())
+        num_monsters = int(x_total_cpu[:, TokenKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
-        x_logits_target = self._head_target(
+        x_logit_target = self._head_target(
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
         )
-        x_target_row = _select_row(x_logits_target, x_target_state, batch_size, greedy, generator)
+        x_target_row = _select_row(x_logit_target, x_target_state, batch_size, greedy, generator)
 
         return self._evaluate_selections(
             core_output,
-            x_logits_action_type,
+            x_logit_action_type,
             x_action_type,
-            x_logits_selection,
+            x_logit_selection,
             x_selection_row,
-            x_logits_target,
+            x_logit_target,
             x_target_state,
             x_target_row,
         )
 
     def action_evaluate(
         self,
-        state_batch: StateBatch,
-        state_counts_cpu: StateCounts,
-        x_recorded_actions: torch.Tensor,
+        states: States[Live],
+        x_total_cpu: torch.Tensor,
+        x_recorded_action: torch.Tensor,
     ) -> tuple[PolicyOutput, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
@@ -175,11 +175,11 @@ class ActorCritic(nn.Module):
 
         Parameters
         ----------
-        state_batch : StateBatch
+        states : States[Live]
             The game states.
-        state_counts_cpu : StateCounts
-            The states' counts on the CPU, `state_batch.state_counts`.
-        x_recorded_actions : torch.Tensor
+        x_total_cpu : torch.Tensor
+            (B, C) int32. The states' totals on the CPU, `states.x_total`.
+        x_recorded_action : torch.Tensor
             (B, 3) long. Each state's recorded action: action type, selection offset within that
             state, Monster target rank; -1 where a selection or target didn't apply.
 
@@ -187,60 +187,60 @@ class ActorCritic(nn.Module):
         -------
         policy_output : PolicyOutput
             The recorded actions and each level's statistics.
-        x_values : torch.Tensor
+        x_value : torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        core_output = self.core(state_batch, state_counts_cpu)
-        x_values = self._head_value(core_output.x_global)
-        jag_refined = core_output.tokens
+        core_output = self.core(states, x_total_cpu)
+        x_value = self._head_value(core_output.x_global)
+        tokens_refined = core_output.tokens
 
         # Pointer keys
-        x_token_key = self._pointer_keys(jag_refined.rows.x_embedding)  # (N, dim_key)
+        x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(state_counts_cpu.x_token_kind_count[:, TokenKind.MONSTERS].sum())
+        num_monsters = int(x_total_cpu[:, TokenKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
 
         # The recorded selections, each as a row of its level's logits
-        x_action_type, x_selection_off, x_target = x_recorded_actions.unbind(-1)
+        x_action_type, x_selection_off, x_target = x_recorded_action.unbind(-1)
         x_selection_row = _row_of_selection_off(core_output, x_selection_off)
         x_target_row = _row_of_target(core_output, num_monsters, x_target)
 
         # Each level's logits, given the recorded selections before it
-        x_logits_action_type = self._head_action_type(core_output)
-        x_logits_selection = self._head_selection(core_output, x_token_key, x_action_type)
-        x_logits_target = self._head_target(
+        x_logit_action_type = self._head_action_type(core_output)
+        x_logit_selection = self._head_selection(core_output, x_token_key, x_action_type)
+        x_logit_target = self._head_target(
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
         )
 
         policy_output = self._evaluate_selections(
             core_output,
-            x_logits_action_type,
+            x_logit_action_type,
             x_action_type,
-            x_logits_selection,
+            x_logit_selection,
             x_selection_row,
-            x_logits_target,
+            x_logit_target,
             x_target_state,
             x_target_row,
         )
-        return policy_output, x_values
+        return policy_output, x_value
 
-    def get_values(self, state_batch: StateBatch, state_counts_cpu: StateCounts) -> torch.Tensor:
+    def get_values(self, states: States[Live], x_total_cpu: torch.Tensor) -> torch.Tensor:
         """Compute the values.
 
         Parameters
         ----------
-        state_batch : StateBatch
+        states : States[Live]
             The game states.
-        state_counts_cpu : StateCounts
-            The states' counts on the CPU, `state_batch.state_counts`.
+        x_total_cpu : torch.Tensor
+            (B, C) int32. The states' totals on the CPU, `states.x_total`.
 
         Returns
         -------
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(state_batch, state_counts_cpu).x_global)
+        return self._head_value(self.core(states, x_total_cpu).x_global)
 
 
 def compile_hot_paths(model: ActorCritic) -> None:
@@ -285,11 +285,11 @@ def _get_target_state(core_output: CoreOutput, num_monsters: int) -> torch.Tenso
     torch.Tensor
         (M + B,) long. Each target row's state.
     """
-    batch_size = core_output.tokens.x_lengths.shape[0]
-    x_count_monster = core_output.state_counts.x_token_kind_count[:, TokenKind.MONSTERS]
-    x_monster_state = get_row_segment(x_count_monster, num_monsters)  # (M,)
-    x_states = torch.arange(batch_size, device=x_monster_state.device)
-    return torch.cat([x_monster_state, x_states])
+    batch_size = core_output.tokens.x_count.shape[0]
+    x_count_monster = core_output.x_total[:, TokenKind.MONSTERS]
+    x_monster_state = get_row_owner(x_count_monster, num_monsters)  # (M,)
+    x_idx_state = torch.arange(batch_size, device=x_monster_state.device)
+    return torch.cat([x_monster_state, x_idx_state])
 
 
 def _row_of_selection_off(core_output: CoreOutput, x_selection_off: torch.Tensor) -> torch.Tensor:
@@ -309,9 +309,9 @@ def _row_of_selection_off(core_output: CoreOutput, x_selection_off: torch.Tensor
         offset is -1.
     """
     batch_size = x_selection_off.shape[0]
-    x_state_first_token = get_segment_first_row(core_output.tokens.x_lengths)  # (B,)
+    x_state_first_token = get_owner_first_row(core_output.tokens.x_count)  # (B,)
     x_character_row = get_entity_kind_rows(
-        core_output.tokens.rows.x_entity_kind, EntityKind.CHARACTER, batch_size
+        core_output.tokens.x_entity_kind, EntityKind.CHARACTER, batch_size
     )  # (B,)
     return torch.where(
         x_selection_off >= 0, x_state_first_token + x_selection_off, x_character_row
@@ -338,22 +338,22 @@ def _row_of_target(
         (B,) long. Each state's target's row among the batch's target rows; its "no target" row
         where the rank is -1.
     """
-    x_states = torch.arange(x_target.shape[0], device=x_target.device)
+    x_idx_state = torch.arange(x_target.shape[0], device=x_target.device)
 
     # A target is a Monster's rank: its row is its state's first Monster row plus the rank
-    x_count_monster = core_output.state_counts.x_token_kind_count[:, TokenKind.MONSTERS]
-    x_state_first_monster = get_segment_first_row(x_count_monster)  # (B,)
-    return torch.where(x_target >= 0, x_state_first_monster + x_target, num_monsters + x_states)
+    x_count_monster = core_output.x_total[:, TokenKind.MONSTERS]
+    x_state_first_monster = get_owner_first_row(x_count_monster)  # (B,)
+    return torch.where(x_target >= 0, x_state_first_monster + x_target, num_monsters + x_idx_state)
 
 
 def _select_idx(
-    x_logits: torch.Tensor, greedy: bool, generator: torch.Generator | None
+    x_logit: torch.Tensor, greedy: bool, generator: torch.Generator | None
 ) -> torch.Tensor:
     """Select each state's index among its logits.
 
     Parameters
     ----------
-    x_logits : torch.Tensor
+    x_logit : torch.Tensor
         (B, C). A head's logits, C per state, -inf where illegal.
     greedy : bool
         Whether to select each state's highest logit rather than sample.
@@ -367,17 +367,17 @@ def _select_idx(
     """
     if greedy:
         # Highest logit
-        return torch.argmax(x_logits, dim=-1)
+        return torch.argmax(x_logit, dim=-1)
 
     # No argument checks: each one reads the logits back, making the CPU wait for the GPU
-    dist = torch.distributions.Categorical(logits=x_logits, validate_args=False)
+    dist = torch.distributions.Categorical(logits=x_logit, validate_args=False)
 
     # Sample from distribution
     return torch.multinomial(dist.probs, 1, True, generator=generator).squeeze(-1)
 
 
 def _select_row(
-    x_logits: torch.Tensor,
+    x_logit: torch.Tensor,
     x_row_state: torch.Tensor,
     batch_size: int,
     greedy: bool,
@@ -390,7 +390,7 @@ def _select_row(
 
     Parameters
     ----------
-    x_logits : torch.Tensor
+    x_logit : torch.Tensor
         (R,). A head's logits, one per row, -inf where illegal.
     x_row_state : torch.Tensor
         (R,) long. Each row's state.
@@ -408,21 +408,21 @@ def _select_row(
     """
     if greedy:
         # Highest logit
-        return _argmax_by_state(x_logits, x_row_state, batch_size)
+        return _argmax_by_state(x_logit, x_row_state, batch_size)
 
     # Sample: Gumbel noise per row, masked after it is added, then each state's highest
-    x_gumbel = -torch.empty_like(x_logits).exponential_(generator=generator).log()
-    x_score = (x_logits + x_gumbel).masked_fill(x_logits == float("-inf"), float("-inf"))
+    x_gumbel = -torch.empty_like(x_logit).exponential_(generator=generator).log()
+    x_score = (x_logit + x_gumbel).masked_fill(x_logit == float("-inf"), float("-inf"))
     return _argmax_by_state(x_score, x_row_state, batch_size)
 
 
 def _evaluate_selections(
     core_output: CoreOutput,
-    x_logits_action_type: torch.Tensor,
+    x_logit_action_type: torch.Tensor,
     x_action_type: torch.Tensor,
-    x_logits_selection: torch.Tensor,
+    x_logit_selection: torch.Tensor,
     x_selection_row: torch.Tensor,
-    x_logits_target: torch.Tensor,
+    x_logit_target: torch.Tensor,
     x_target_state: torch.Tensor,
     x_target_row: torch.Tensor,
 ) -> PolicyOutput:
@@ -432,16 +432,16 @@ def _evaluate_selections(
     ----------
     core_output : CoreOutput
         The core's output.
-    x_logits_action_type : torch.Tensor
+    x_logit_action_type : torch.Tensor
         (B, NUM_ACTION_TYPES). The L1 logits.
     x_action_type : torch.Tensor
         (B,) long. Each state's action type, the L1 selection.
-    x_logits_selection : torch.Tensor
+    x_logit_selection : torch.Tensor
         (N,). The L2 logits, one per token.
     x_selection_row : torch.Tensor
         (B,) long. Each state's selected token's row among the tokens, its Character's where
         none: the L2 selection.
-    x_logits_target : torch.Tensor
+    x_logit_target : torch.Tensor
         (M + B,). The L3 logits, one per target row.
     x_target_state : torch.Tensor
         (M + B,) long. Each target row's state.
@@ -454,35 +454,35 @@ def _evaluate_selections(
     PolicyOutput
         Each state's action and each level's statistics.
     """
-    jag_refined = core_output.tokens
-    batch_size = jag_refined.x_lengths.shape[0]
+    tokens_refined = core_output.tokens
+    batch_size = tokens_refined.x_count.shape[0]
 
     # The target rows are the M Monsters, then one "no target" per state
     num_monsters = x_target_state.shape[0] - batch_size
 
     # Each level's log-prob, entropy and KL-Uniform
     x_log_prob_l1, x_entropy_l1, x_kl_uniform_l1 = _evaluate_idx(
-        x_logits_action_type, x_action_type
+        x_logit_action_type, x_action_type
     )
     x_log_prob_l2, x_entropy_l2, x_kl_uniform_l2 = _evaluate_row(
-        x_logits_selection, jag_refined.rows.x_token_state, batch_size, x_selection_row
+        x_logit_selection, core_output.x_token_state, batch_size, x_selection_row
     )
     x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _evaluate_row(
-        x_logits_target, x_target_state, batch_size, x_target_row
+        x_logit_target, x_target_state, batch_size, x_target_row
     )
 
     # Calculate offsets 
-    x_selection_off = x_selection_row - get_segment_first_row(jag_refined.x_lengths)
-    x_target_off = x_target_row - get_segment_first_row(core_output.state_counts.x_token_kind_count[:, TokenKind.MONSTERS])
+    x_selection_off = x_selection_row - get_owner_first_row(tokens_refined.x_count)
+    x_target_off = x_target_row - get_owner_first_row(core_output.x_total[:, TokenKind.MONSTERS])
 
     # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
-    x_actions = torch.stack([x_action_type, x_selection_off, x_target_off], dim=1)
+    x_action = torch.stack([x_action_type, x_selection_off, x_target_off], dim=1)
     x_log_prob = torch.stack([x_log_prob_l1, x_log_prob_l2, x_log_prob_l3], dim=1)
     x_entropy = torch.stack([x_entropy_l1, x_entropy_l2, x_entropy_l3], dim=1)
     x_kl_uniform = torch.stack([x_kl_uniform_l1, x_kl_uniform_l2, x_kl_uniform_l3], dim=1)
 
     # Whether each level applies: its selection is no placeholder, the Character or "no target"
-    x_has_selection = jag_refined.rows.x_entity_kind[x_selection_row] != EntityKind.CHARACTER
+    x_has_selection = tokens_refined.x_entity_kind[x_selection_row] != EntityKind.CHARACTER
     x_has_target = x_target_row < num_monsters
     x_level_applies = torch.stack(
         [torch.ones_like(x_has_selection), x_has_selection, x_has_target], dim=1
@@ -490,7 +490,7 @@ def _evaluate_selections(
 
     # A level a row doesn't reach: no selection (-1) and zero terms, whatever its placeholder drew
     return PolicyOutput(
-        x_actions=torch.where(x_level_applies, x_actions, -1),
+        x_action=torch.where(x_level_applies, x_action, -1),
         x_log_prob=torch.where(x_level_applies, x_log_prob, 0.0),
         x_entropy=torch.where(x_level_applies, x_entropy, 0.0),
         x_kl_uniform=torch.where(x_level_applies, x_kl_uniform, 0.0),
@@ -498,15 +498,15 @@ def _evaluate_selections(
 
 
 def _evaluate_idx(
-    x_logits: torch.Tensor, x_idx: torch.Tensor
+    x_logit: torch.Tensor, x_idx_choice: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute each state's selected index's log-prob, with its entropy and KL-Uniform.
 
     Parameters
     ----------
-    x_logits : torch.Tensor
+    x_logit : torch.Tensor
         (B, C). A head's logits, C per state, -inf where illegal.
-    x_idx : torch.Tensor
+    x_idx_choice : torch.Tensor
         (B,) long. Each state's selected index.
 
     Returns
@@ -518,10 +518,10 @@ def _evaluate_idx(
     x_kl_uniform : torch.Tensor
         (B,). KL-Uniform over the legal set.
     """
-    x_legal = x_logits != float("-inf")
+    x_legal = x_logit != float("-inf")
 
     # No argument checks: each one reads the logits back, making the CPU wait for the GPU
-    dist = torch.distributions.Categorical(logits=x_logits, validate_args=False)
+    dist = torch.distributions.Categorical(logits=x_logit, validate_args=False)
 
     # KL-Uniform over the legal set; the anti-collapse barrier
     x_num_legal = x_legal.sum(-1).float()
@@ -529,11 +529,15 @@ def _evaluate_idx(
     x_kl_uniform = -x_logp.masked_fill(~x_legal, 0.0).sum(-1) / x_num_legal - x_num_legal.log()
 
     # The entropy over its maximum, log(legal count); min=2: a lone legal choice gives 0, not 0/0
-    return dist.log_prob(x_idx), dist.entropy() / x_num_legal.clamp(min=2).log(), x_kl_uniform
+    return (
+        dist.log_prob(x_idx_choice),
+        dist.entropy() / x_num_legal.clamp(min=2).log(),
+        x_kl_uniform,
+    )
 
 
 def _evaluate_row(
-    x_logits: torch.Tensor, x_row_state: torch.Tensor, batch_size: int, x_row: torch.Tensor
+    x_logit: torch.Tensor, x_row_state: torch.Tensor, batch_size: int, x_row: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute each state's selected row's log-prob, with its entropy and KL-Uniform.
 
@@ -541,7 +545,7 @@ def _evaluate_row(
 
     Parameters
     ----------
-    x_logits : torch.Tensor
+    x_logit : torch.Tensor
         (R,). A head's logits, one per row, -inf where illegal.
     x_row_state : torch.Tensor
         (R,) long. Each row's state.
@@ -559,11 +563,11 @@ def _evaluate_row(
     x_kl_uniform : torch.Tensor
         (B,). KL-Uniform over the legal set.
     """
-    x_legal = x_logits != float("-inf")
+    x_legal = x_logit != float("-inf")
 
     # Each row's log-prob within its state; the max keeps the exponentials finite, and takes no
     # gradient, as in logsumexp
-    x_shifted = x_logits - _max_by_state(x_logits.detach(), x_row_state, batch_size)[x_row_state]
+    x_shifted = x_logit - _max_by_state(x_logit.detach(), x_row_state, batch_size)[x_row_state]
     x_sum_exp = _sum_by_state(x_shifted.exp(), x_row_state, batch_size)
     x_log_prob = x_shifted - x_sum_exp.log()[x_row_state]
 
@@ -572,7 +576,7 @@ def _evaluate_row(
     x_entropy = -1 * _sum_by_state(x_log_prob_legal.exp() * x_log_prob_legal, x_row_state, batch_size)
 
     # KL-Uniform over the legal set, −log p clamped at the floor, as in `_evaluate_idx`
-    x_num_legal = _sum_by_state(x_legal.to(x_logits.dtype), x_row_state, batch_size)
+    x_num_legal = _sum_by_state(x_legal.to(x_logit.dtype), x_row_state, batch_size)
     x_log_prob_floor = x_log_prob.clamp(min=_KL_UNIFORM_LOG_P_FLOOR).masked_fill(~x_legal, 0.0)
     x_log_prob_sum = _sum_by_state(x_log_prob_floor, x_row_state, batch_size)
     x_kl_uniform = -1 * x_log_prob_sum / x_num_legal - x_num_legal.log()
@@ -582,13 +586,13 @@ def _evaluate_row(
 
 
 def _sum_by_state(
-    x_values: torch.Tensor, x_row_state: torch.Tensor, batch_size: int
+    x_value: torch.Tensor, x_row_state: torch.Tensor, batch_size: int
 ) -> torch.Tensor:
-    """Sum each state's rows' `x_values`.
+    """Sum each state's rows' `x_value`.
 
     Parameters
     ----------
-    x_values : torch.Tensor
+    x_value : torch.Tensor
         (R,). Each row's value.
     x_row_state : torch.Tensor
         (R,) long. Each row's state.
@@ -598,21 +602,21 @@ def _sum_by_state(
     Returns
     -------
     torch.Tensor
-        (B,). Each state's sum of its rows' `x_values`.
+        (B,). Each state's sum of its rows' `x_value`.
     """
-    return torch.zeros(batch_size, dtype=x_values.dtype, device=x_values.device).index_add_(
-        0, x_row_state, x_values
+    return torch.zeros(batch_size, dtype=x_value.dtype, device=x_value.device).index_add_(
+        0, x_row_state, x_value
     )
 
 
 def _max_by_state(
-    x_values: torch.Tensor, x_row_state: torch.Tensor, batch_size: int
+    x_value: torch.Tensor, x_row_state: torch.Tensor, batch_size: int
 ) -> torch.Tensor:
-    """Find each state's max of its rows' `x_values`.
+    """Find each state's max of its rows' `x_value`.
 
     Parameters
     ----------
-    x_values : torch.Tensor
+    x_value : torch.Tensor
         (R,). Each row's value.
     x_row_state : torch.Tensor
         (R,) long. Each row's state.
@@ -622,21 +626,21 @@ def _max_by_state(
     Returns
     -------
     torch.Tensor
-        (B,). Each state's max of its rows' `x_values`.
+        (B,). Each state's max of its rows' `x_value`.
     """
     return torch.full(
-        (batch_size,), float("-inf"), dtype=x_values.dtype, device=x_values.device
-    ).scatter_reduce_(0, x_row_state, x_values, reduce="amax")
+        (batch_size,), float("-inf"), dtype=x_value.dtype, device=x_value.device
+    ).scatter_reduce_(0, x_row_state, x_value, reduce="amax")
 
 
 def _argmax_by_state(
-    x_values: torch.Tensor, x_row_state: torch.Tensor, batch_size: int
+    x_value: torch.Tensor, x_row_state: torch.Tensor, batch_size: int
 ) -> torch.Tensor:
-    """Find each state's row of its highest `x_values`, the first of a tie.
+    """Find each state's row of its highest `x_value`, the first of a tie.
 
     Parameters
     ----------
-    x_values : torch.Tensor
+    x_value : torch.Tensor
         (R,). Each row's value.
     x_row_state : torch.Tensor
         (R,) long. Each row's state.
@@ -646,12 +650,12 @@ def _argmax_by_state(
     Returns
     -------
     torch.Tensor
-        (B,) long. Each state's row of its highest `x_values`, the first of a tie.
+        (B,) long. Each state's row of its highest `x_value`, the first of a tie.
     """
-    num_rows = x_values.shape[0]
-    x_row = torch.arange(num_rows, device=x_values.device)
-    x_is_max = x_values == _max_by_state(x_values, x_row_state, batch_size)[x_row_state]
+    num_rows = x_value.shape[0]
+    x_row = torch.arange(num_rows, device=x_value.device)
+    x_is_max = x_value == _max_by_state(x_value, x_row_state, batch_size)[x_row_state]
     
     return torch.full(
-        (batch_size,), num_rows, dtype=torch.long, device=x_values.device
+        (batch_size,), num_rows, dtype=torch.long, device=x_value.device
     ).scatter_reduce_(0, x_row_state, x_row.masked_fill(~x_is_max, num_rows), reduce="amin")

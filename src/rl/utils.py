@@ -208,7 +208,9 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
     event = cast(slai.Event, game_state.event)
 
     # The options are in catalog order, the order each case below lists them in
-    position = next(idx for idx, option in enumerate(event.options) if option.id == id_option)
+    idx_option = next(
+        idx_option for idx_option, option in enumerate(event.options) if option.id == id_option
+    )
     relic_names = {relic.name for relic in game_state.relics}
 
     # Meat on the Bone gives lost HP a use
@@ -220,23 +222,23 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
             leave_free = not any(
                 isinstance(effect, EffectHealthDelta) for effect in option_leave.effects
             )
-            return position in (1, 2) or (position == 0 and leave_free)
+            return idx_option in (1, 2) or (idx_option == 0 and leave_free)
 
         # Wish for a Potion, gold or a Card, each for HP and a dearer next wish, or leave
         case EventName.KnowingSkull:
             return not hp_loss_useful and (
-                (position == 0 and RelicName.Sozu in relic_names)
-                or (position == 1 and RelicName.Ectoplasm in relic_names)
+                (idx_option == 0 and RelicName.Sozu in relic_names)
+                or (idx_option == 1 and RelicName.Ectoplasm in relic_names)
             )
 
         # Touch the face for gold and HP, trade for a face Relic, or leave
         case EventName.FaceTrader:
-            return position == 0 and RelicName.Ectoplasm in relic_names and not hp_loss_useful
+            return idx_option == 0 and RelicName.Ectoplasm in relic_names and not hp_loss_useful
 
         # Pray for gold, desecrate for more gold and Regret, or leave
         case EventName.GoldenShrine:
             return (
-                position == 1
+                idx_option == 1
                 and RelicName.Ectoplasm in relic_names
                 and not curse_useful(game_state)
             )
@@ -244,14 +246,14 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
         # Accept gold and Doubt, or leave
         case EventName.TheSsssserpent:
             return (
-                position == 0
+                idx_option == 0
                 and RelicName.Ectoplasm in relic_names
                 and not curse_useful(game_state)
             )
 
         # Heal to full for max HP, give the Golden Idol for gold, or leave
         case EventName.TheMoaiHead:
-            return position == 0 and RelicName.MarkOfTheBloom in relic_names
+            return idx_option == 0 and RelicName.MarkOfTheBloom in relic_names
 
         case _:
             return False
