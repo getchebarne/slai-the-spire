@@ -68,7 +68,7 @@ __all__ = [
 
 
 _REWARD_BUNDLE_OF_TOKEN_KIND = {
-    token_kind: bundle for bundle, token_kind in enumerate(TOKEN_KINDS_CARD_REWARDS)
+    token_kind: idx_bundle for idx_bundle, token_kind in enumerate(TOKEN_KINDS_CARD_REWARDS)
 }
 
 # The token kinds that have already warned about overflow
@@ -226,13 +226,13 @@ def get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card
             | TokenKind.CARD_REWARD_4
         ):
             reward = game_state.reward
-            bundle = _REWARD_BUNDLE_OF_TOKEN_KIND[token_kind]
-            if reward is None or bundle >= len(reward.cards):
+            idx_bundle = _REWARD_BUNDLE_OF_TOKEN_KIND[token_kind]
+            if reward is None or idx_bundle >= len(reward.cards):
                 return []
 
             # Bundle 0 must hold The Library's single wide roll
-            cap = MAX_CARD_REWARD_ROLL if bundle == 0 else MAX_COMBAT_CARD_REWARD
-            return reward.cards[bundle][:cap]
+            cap = MAX_CARD_REWARD_ROLL if idx_bundle == 0 else MAX_COMBAT_CARD_REWARD
+            return reward.cards[idx_bundle][:cap]
         case TokenKind.CARD_SHOP:
             shop = game_state.shop
             return shop.cards[:MAX_SIZE_SHOP_CARDS] if shop is not None else []

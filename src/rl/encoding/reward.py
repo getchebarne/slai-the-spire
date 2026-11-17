@@ -13,10 +13,10 @@ _OFF_REWARD_CARDS_FORCED = _alloc("cards_forced")  # The Library: one selection,
 ENCODING_DIM_REWARD_META = sum(w for _, w in _CHANNEL_LAYOUT_REWARD_META)
 
 
-def encode_reward_meta_into(game_state: GameState, out: np.ndarray) -> None:
+def encode_reward_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     """Write reward flags, leaving states without a reward zero."""
     reward = game_state.reward
     if reward is None:
         return
-    out[_OFF_REWARD_RELICS_EXCLUSIVE] = float(reward.relics_exclusive)
-    out[_OFF_REWARD_CARDS_FORCED] = float(reward.cards_forced)
+    np_out[_OFF_REWARD_RELICS_EXCLUSIVE] = float(reward.relics_exclusive)
+    np_out[_OFF_REWARD_CARDS_FORCED] = float(reward.cards_forced)

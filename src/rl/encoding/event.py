@@ -15,10 +15,10 @@ from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.utils import event_option_wasted
 
 
-_EVENT_NAME_TO_IDX = {name: int(name) for name in EventName.members()}
+_IDX_OF_EVENT_NAME = {name: int(name) for name in EventName.members()}
 
 # Dead Adventurer's elite is one of three: the engine's src/events/dead_adventurer.rs
-_MONSTER_ENCOUNTER_TO_IDX = {
+_IDX_OF_MONSTER_ENCOUNTER = {
     MonsterEncounter.GremlinNob: 0,
     MonsterEncounter.ThreeSentries: 1,
     MonsterEncounter.LagavulinEvent: 2,
@@ -30,7 +30,7 @@ _MATCH_AND_KEEP_BOARD_SIZE = 12
 
 
 _CHANNEL_LAYOUT_EVENT_META, _alloc = make_channel_allocator()
-_OFF_EVENT_NAME = _alloc("name", len(_EVENT_NAME_TO_IDX))
+_OFF_EVENT_NAME = _alloc("name", len(_IDX_OF_EVENT_NAME))
 _OFF_EVENT_CONSUMED = _alloc("consumed")
 _OFF_EVENT_STAGE = _alloc("stage")
 _OFF_EVENT_HEALTH_MAX_AT_OPEN = _alloc(
@@ -40,7 +40,7 @@ _OFF_EVENT_HEALTH_MAX_AT_OPEN = _alloc(
 _OFF_EVENT_FOUND_GOLD = _alloc("found_gold")
 _OFF_EVENT_FOUND_NOTHING = _alloc("found_nothing")
 _OFF_EVENT_FOUND_RELIC = _alloc("found_relic")
-_OFF_EVENT_MONSTER_ENCOUNTER = _alloc("monster_encounter", len(_MONSTER_ENCOUNTER_TO_IDX))
+_OFF_EVENT_MONSTER_ENCOUNTER = _alloc("monster_encounter", len(_IDX_OF_MONSTER_ENCOUNTER))
 # Match and Keep! only
 _OFF_EVENT_MATCH_ATTEMPTS = _alloc("match_attempts")
 _OFF_EVENT_CARD_MATCH_UNSEEN_COUNT = _alloc("card_match_unseen_count")
@@ -60,7 +60,9 @@ ENCODING_DIM_EVENT_OPTION = sum(w for _, w in _CHANNEL_LAYOUT_EVENT_OPTION)
 ENCODING_DIM_SPARSE_EVENT_OPTION = len(_CHANNEL_LAYOUT_EVENT_OPTION)
 
 
-def encode_event_option_into(game_state: GameState, option: EventOption, out: np.ndarray) -> None:
+def encode_event_option_into(
+    game_state: GameState, option: EventOption, np_out: np.ndarray
+) -> None:
     """Write whether the policy can select `option`: legal in the engine and not masked as wasted.
 
     Parameters
@@ -69,15 +71,15 @@ def encode_event_option_into(game_state: GameState, option: EventOption, out: np
         The state, at the option's Event.
     option : EventOption
         The option to encode.
-    out : np.ndarray
+    np_out : np.ndarray
         (ENCODING_DIM_EVENT_OPTION,) float32. The option's row, written in place.
     """
-    out[_OFF_EVENT_OPTION_AVAILABLE] = float(
+    np_out[_OFF_EVENT_OPTION_AVAILABLE] = float(
         option.available and not event_option_wasted(game_state, option.id)
     )
 
 
-def encode_event_meta_into(game_state: GameState, out: np.ndarray) -> None:
+def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     """Write event features, retaining the option-cap warning used by token encoding."""
     event = game_state.event
     if event is None:
@@ -89,31 +91,31 @@ def encode_event_meta_into(game_state: GameState, out: np.ndarray) -> None:
             f" encoder cap ({MAX_EVENT_OPTIONS})"
         )
 
-    out[_OFF_EVENT_NAME + _EVENT_NAME_TO_IDX[event.name]] = 1.0
-    out[_OFF_EVENT_CONSUMED] = float(event.consumed)
-    out[_OFF_EVENT_STAGE] = min(event.stage, EVENT_STAGE_CAP) / EVENT_STAGE_CAP
+    np_out[_OFF_EVENT_NAME + _IDX_OF_EVENT_NAME[event.name]] = 1.0
+    np_out[_OFF_EVENT_CONSUMED] = float(event.consumed)
+    np_out[_OFF_EVENT_STAGE] = min(event.stage, EVENT_STAGE_CAP) / EVENT_STAGE_CAP
 
     # On the Character row's max-health scale, so the two compare directly
-    out[_OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_sqrt_norm(
+    np_out[_OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_sqrt_norm(
         event.health_max_at_open, CHARACTER_HEALTH_CAP
     )
 
     # Dead Adventurer only
-    out[_OFF_EVENT_FOUND_GOLD] = float(event.found_gold)
-    out[_OFF_EVENT_FOUND_NOTHING] = float(event.found_nothing)
-    out[_OFF_EVENT_FOUND_RELIC] = float(event.found_relic)
+    np_out[_OFF_EVENT_FOUND_GOLD] = float(event.found_gold)
+    np_out[_OFF_EVENT_FOUND_NOTHING] = float(event.found_nothing)
+    np_out[_OFF_EVENT_FOUND_RELIC] = float(event.found_relic)
     adventurer_elite = event.adventurer_elite
     if adventurer_elite is not None:
-        idx_adventurer_elite = _MONSTER_ENCOUNTER_TO_IDX.get(adventurer_elite)
+        idx_adventurer_elite = _IDX_OF_MONSTER_ENCOUNTER.get(adventurer_elite)
         if idx_adventurer_elite is None:
             raise ValueError(
                 f"Unknown adventurer elite {adventurer_elite!r}; add it to "
-                "_MONSTER_ENCOUNTER_TO_IDX"
+                "_IDX_OF_MONSTER_ENCOUNTER"
             )
-        out[_OFF_EVENT_MONSTER_ENCOUNTER + idx_adventurer_elite] = 1.0
+        np_out[_OFF_EVENT_MONSTER_ENCOUNTER + idx_adventurer_elite] = 1.0
 
     # Match and Keep! only
-    out[_OFF_EVENT_MATCH_ATTEMPTS] = event.match_attempts / GameEnv.MATCH_AND_KEEP_ATTEMPTS
-    out[_OFF_EVENT_CARD_MATCH_UNSEEN_COUNT] = (
+    np_out[_OFF_EVENT_MATCH_ATTEMPTS] = event.match_attempts / GameEnv.MATCH_AND_KEEP_ATTEMPTS
+    np_out[_OFF_EVENT_CARD_MATCH_UNSEEN_COUNT] = (
         event.card_match_unseen_count / _MATCH_AND_KEEP_BOARD_SIZE
     )

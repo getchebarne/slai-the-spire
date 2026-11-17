@@ -30,12 +30,12 @@ _EVENT_META = slice(_SHOP_META.stop, _SHOP_META.stop + ENCODING_DIM_EVENT_META)
 ENCODING_DIM_CONTEXT = _EVENT_META.stop
 
 
-def encode_context_into(game_state: GameState, out: np.ndarray) -> None:
+def encode_context_into(game_state: GameState, np_out: np.ndarray) -> None:
     """Write one state's dense features into its initially zeroed context row."""
-    encode_energy_into(game_state, out[_ENERGY])
-    encode_focus_into(game_state, out[_FOCUS])
-    out[_ASCENSION][: game_state.ascension] = 1.0
-    encode_map_meta_into(game_state, out[_MAP_META])
-    encode_reward_meta_into(game_state, out[_REWARD_META])
-    encode_shop_meta_into(game_state, out[_SHOP_META])
-    encode_event_meta_into(game_state, out[_EVENT_META])
+    encode_energy_into(game_state, np_out[_ENERGY])
+    encode_focus_into(game_state, np_out[_FOCUS])
+    np_out[_ASCENSION][: game_state.ascension] = 1.0
+    encode_map_meta_into(game_state, np_out[_MAP_META])
+    encode_reward_meta_into(game_state, np_out[_REWARD_META])
+    encode_shop_meta_into(game_state, np_out[_SHOP_META])
+    encode_event_meta_into(game_state, np_out[_EVENT_META])

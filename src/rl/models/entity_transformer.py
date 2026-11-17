@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import cast
 
 import torch
@@ -6,9 +7,10 @@ import torch.nn.functional as F
 from torch.nn.attention.flex_attention import BlockMask
 from torch.nn.attention.flex_attention import flex_attention
 
-from src.rl.batches import get_row_segment
-from src.rl.batches import get_segment_first_row
-from src.rl.types import Jagged
+from src.rl.batches import get_owner_first_row
+from src.rl.batches import get_row_owner
+from src.rl.types import Dense
+from src.rl.types import Tokens
 
 
 # FlexAttention's block: on the GPU, the sequence is padded to a multiple of it
@@ -42,50 +44,50 @@ class EntityTransformer(nn.Module):
         nn.init.normal_(self._x_entity_global, std=0.02)
 
     def forward(
-        self, x_tokens: Jagged[torch.Tensor], x_token_state: torch.Tensor
-    ) -> tuple[Jagged[torch.Tensor], torch.Tensor]:
+        self, tokens: Tokens[Dense], x_token_state: torch.Tensor
+    ) -> tuple[Tokens[Dense], torch.Tensor]:
         """Refine the packed window's rows together with each state's global token.
 
         Each state's global token joins the sequence at the end of its state's rows.
 
         Parameters
         ----------
-        x_tokens : Jagged[torch.Tensor]
-            (B,) lengths and (N, D) rows, one segment per state.
+        tokens : Tokens[Dense]
+            The (N, D) token embeddings and their counts per state, kinds and legal masks.
         x_token_state : torch.Tensor
             (N,) long. Each token's state.
 
         Returns
         -------
-        refined : Jagged[torch.Tensor]
-            The refined rows, with the same lengths and order as the input.
+        tokens_refined : Tokens[Dense]
+            The refined rows, with the same counts, kinds, masks and order as the input.
         x_global_token : torch.Tensor
             (B, D). The global tokens.
         """
-        x_rows = x_tokens.rows
-        num_rows, dim = x_rows.shape
-        batch_size = x_tokens.x_lengths.shape[0]
+        x_row = tokens.features.x_value
+        num_rows, dim = x_row.shape
+        batch_size = tokens.x_count.shape[0]
 
-        # Start row of each state in `x_rows`. The +1 is for the states' global token
+        # Start row of each state in `x_row`. The +1 is for the states' global token
         x_state_first_slot = F.pad(
-            get_segment_first_row(x_tokens.x_lengths + 1), (0, 1), value=num_rows + batch_size
+            get_owner_first_row(tokens.x_count + 1), (0, 1), value=num_rows + batch_size
         )  # (B + 1,)
 
         # Calculate number of FlexAttention slots and initialize tensor to hold the sequence
-        num_slots = _padded(num_rows + batch_size, x_rows.device)
-        x_sequence = torch.zeros(num_slots, dim, dtype=x_rows.dtype, device=x_rows.device)
+        num_slots = _padded(num_rows + batch_size, x_row.device)
+        x_sequence = torch.zeros(num_slots, dim, dtype=x_row.dtype, device=x_row.device)
 
         # Calculate each token's position in the sequence. The global token goes last in each state's sequence
-        x_place_row = x_token_state + torch.arange(num_rows, device=x_rows.device)   # (num_rows,)
+        x_place_row = x_token_state + torch.arange(num_rows, device=x_row.device)   # (num_rows,)
         x_place_global = x_state_first_slot[1:] - 1  # (B,)
 
         # Fill the empty sequence tensor
-        x_sequence[x_place_row] = x_rows
+        x_sequence[x_place_row] = x_row
         x_sequence[x_place_global] = self._x_entity_global
 
         # Each slot's state. The padded slots past the last state form state `batch_size`
         x_slot_state = F.pad(
-            get_row_segment(x_tokens.x_lengths + 1, num_rows + batch_size),
+            get_row_owner(tokens.x_count + 1, num_rows + batch_size),
             (0, num_slots - num_rows - batch_size),
             value=batch_size,
         )  # (num_slots,)
@@ -95,7 +97,7 @@ class EntityTransformer(nn.Module):
 
         # Return refined tokens and each state's global token
         return (
-            Jagged(x_lengths=x_tokens.x_lengths, rows=x_refined[x_place_row]),
+            replace(tokens, features=Dense(x_value=x_refined[x_place_row])),
             x_refined[x_place_global],
         )
 
@@ -165,7 +167,7 @@ def _block_mask(x_slot_state: torch.Tensor, x_state_first_slot: torch.Tensor) ->
     num_blocks = num_slots // _FLEX_BLOCK
 
     # Every state's first slot, the padded slots' state too, then the sequence's end
-    x_starts = F.pad(x_state_first_slot, (0, 1), value=num_slots)  # (B + 2,)
+    x_start = F.pad(x_state_first_slot, (0, 1), value=num_slots)  # (B + 2,)
 
     # Each slot's state, one row per block
     x_slot_state_by_block = x_slot_state.view(num_blocks, _FLEX_BLOCK)  # (num_blocks, _FLEX_BLOCK)
@@ -175,8 +177,8 @@ def _block_mask(x_slot_state: torch.Tensor, x_state_first_slot: torch.Tensor) ->
     x_state_last = x_slot_state_by_block[:, -1]  # (num_blocks,)
 
     # Where those states start and end: the first and last slot the block's slots attend
-    x_slot_first = x_starts[x_state_first]  # (num_blocks,)
-    x_slot_last = x_starts[x_state_last + 1] - 1  # (num_blocks,)
+    x_slot_first = x_start[x_state_first]  # (num_blocks,)
+    x_slot_last = x_start[x_state_last + 1] - 1  # (num_blocks,)
 
     # The blocks those two slots are in: the first and last key block the query block attends
     x_block_first = x_slot_first // _FLEX_BLOCK  # (num_blocks,)
@@ -184,17 +186,20 @@ def _block_mask(x_slot_state: torch.Tensor, x_state_first_slot: torch.Tensor) ->
 
     # `from_kv_blocks` wants each query block's key blocks as wide as the key blocks: its first
     # (x_block_last - x_block_first + 1) count
-    x_rank = torch.arange(num_blocks, device=x_block_first.device)  # (num_blocks,)
-    x_blocks_key = x_block_first.unsqueeze(1) + x_rank  # (num_blocks, num_blocks)
+    x_idx_block = torch.arange(num_blocks, device=x_block_first.device)  # (num_blocks,)
+    x_block_key = x_block_first.unsqueeze(1) + x_idx_block  # (num_blocks, num_blocks)
 
     def same_state(
-        x_b: torch.Tensor, x_h: torch.Tensor, x_q_idx: torch.Tensor, x_kv_idx: torch.Tensor
+        x_idx_batch: torch.Tensor,
+        x_idx_head: torch.Tensor,
+        x_idx_q: torch.Tensor,
+        x_idx_kv: torch.Tensor,
     ) -> torch.Tensor:
-        return x_slot_state[x_q_idx] == x_slot_state[x_kv_idx]
+        return x_slot_state[x_idx_q] == x_slot_state[x_idx_kv]
 
     return BlockMask.from_kv_blocks(
         (x_block_last - x_block_first + 1).int().view(1, 1, -1),
-        x_blocks_key.clamp(max=num_blocks - 1).int().view(1, 1, -1, num_blocks),
+        x_block_key.clamp(max=num_blocks - 1).int().view(1, 1, -1, num_blocks),
         BLOCK_SIZE=_FLEX_BLOCK,
         mask_mod=same_state,
         seq_lengths=(num_slots, num_slots),

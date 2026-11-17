@@ -240,7 +240,7 @@ TOKEN_KINDS_IN_WINDOW_ORDER = tuple(
 )
 
 # Each token kind's token cap: the slice token traversal applies to that collection
-MAP_TOKEN_KIND_MAX_TOKENS: dict[TokenKind, int] = {
+MAX_TOKENS_OF_TOKEN_KIND: dict[TokenKind, int] = {
     TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
     TokenKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
@@ -251,7 +251,7 @@ MAP_TOKEN_KIND_MAX_TOKENS: dict[TokenKind, int] = {
     TokenKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
     TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
     TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
-    TokenKind.CARD_MATCH_FLIPPED: 1,  # Match and Keep's face-up Card
+    TokenKind.CARD_MATCH_FLIPPED: 1,
     TokenKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
     TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
     TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
@@ -275,7 +275,7 @@ MAP_TOKEN_KIND_MAX_TOKENS: dict[TokenKind, int] = {
 }
 
 # The cap of the block every collection packs into: the sum of the collections' caps
-MAX_TOKENS = sum(MAP_TOKEN_KIND_MAX_TOKENS.values())
+MAX_TOKENS = sum(MAX_TOKENS_OF_TOKEN_KIND.values())
 
 
 def _check_tables() -> None:
@@ -285,10 +285,10 @@ def _check_tables() -> None:
             f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
             "add CARD_REWARD_<b> token kinds"
         )
-    if set(MAP_TOKEN_KIND_MAX_TOKENS) != set(TokenKind):
+    if set(MAX_TOKENS_OF_TOKEN_KIND) != set(TokenKind):
         raise RuntimeError(
-            "A TokenKind has no entry in MAP_TOKEN_KIND_MAX_TOKENS: "
-            f"{set(TokenKind) - set(MAP_TOKEN_KIND_MAX_TOKENS)}"
+            "A TokenKind has no entry in MAX_TOKENS_OF_TOKEN_KIND: "
+            f"{set(TokenKind) - set(MAX_TOKENS_OF_TOKEN_KIND)}"
         )
     if set(TOKEN_KINDS_OF_ENTITY_KIND) != set(EntityKind):
         raise RuntimeError(

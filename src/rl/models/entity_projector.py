@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.batches import get_row_segment
-from src.rl.batches import get_segment_first_row
+from src.rl.batches import get_owner_first_row
+from src.rl.batches import get_row_owner
 from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_EVENT_OPTION
 from src.rl.encoding import COL_START_HEALTH_BLOCK
@@ -20,11 +20,13 @@ from src.rl.encoding import ENCODING_DIM_EFFECT
 from src.rl.encoding import ENCODING_DIM_MODIFIER
 from src.rl.encoding import ENCODING_DIM_TOKEN
 from src.rl.models.spread_embedding import SpreadEmbedding
+from src.rl.types import Dense
 from src.rl.types import EntityKind
-from src.rl.types import Jagged
+from src.rl.types import Live
 from src.rl.types import Sparse
-from src.rl.types import StateBatch
+from src.rl.types import States
 from src.rl.types import TokenKind
+from src.rl.types import Tokens
 
 
 class EntityProjector(nn.Module):
@@ -100,13 +102,13 @@ class EntityProjector(nn.Module):
                 nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
 
     def forward(
-        self, state_batch: StateBatch, x_room_hidden: torch.Tensor
-    ) -> tuple[Jagged[torch.Tensor], torch.Tensor]:
-        """Embed `state_batch`'s window.
+        self, states: States[Live], x_room_hidden: torch.Tensor
+    ) -> tuple[Tokens[Dense], torch.Tensor]:
+        """Embed `states`' window.
 
         Parameters
         ----------
-        state_batch : StateBatch
+        states : States[Live]
             The game states.
         x_room_hidden : torch.Tensor
             (N_rooms, dim_map). Each Room token's node features from the Map GNN, in the Room
@@ -114,16 +116,18 @@ class EntityProjector(nn.Module):
 
         Returns
         -------
-        jag_projected : Jagged[torch.Tensor]
-            The (N_tok, D) token embeddings, grouped by state in window order.
+        tokens_projected : Tokens[Dense]
+            The (N_tok, D) token embeddings, grouped by state in window order, with their kinds
+            and legal masks.
         x_effect_pending : torch.Tensor
             (B, D). Each state's embedded pending halt, zero where none is pending.
         """
         # Shapes: B = batch, D = embedding width, N_tok = number of tokens
-        tokens = state_batch.tokens.rows
+        tokens = states.tokens
+        features = tokens.features
 
         # First layer: the shared columns' projection, then each token's Entity kind bias
-        x_first = _project_sparse(self._pre_token, tokens.features) + SpreadEmbedding.apply(
+        x_first = _project_sparse(self._pre_token, features.sparse) + SpreadEmbedding.apply(
             self._x_bias_entity_kind, tokens.x_entity_kind.long()
         )
 
@@ -134,26 +138,34 @@ class EntityProjector(nn.Module):
         x_first[x_room_row] = self._pre_room(x_room_hidden)
 
         # Project owned rows
-        x_effects = _project_sparse(self._effects_mlp, tokens.effects.rows)
-        x_modifiers = _project_sparse(self._modifiers_mlp, tokens.modifiers.rows)
+        x_effect = _project_sparse(self._effects_mlp, features.effects.sparse)
+        x_modifier = _project_sparse(self._modifiers_mlp, features.modifiers.sparse)
 
         # Add owned rows to their owners, scaled by 1/sqrt(rows_per_owner)
-        _add_owned(x_first, x_effects, tokens.effects.x_lengths)
-        _add_owned(x_first, x_modifiers, tokens.modifiers.x_lengths)
+        _add_owned(x_first, x_effect, features.effects.x_count)
+        _add_owned(x_first, x_modifier, features.modifiers.x_count)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
-        effect_pending = state_batch.effect_pending
+        effect_pending = states.effect_pending
         x_effect_pending = _project_sparse(self._effects_mlp, effect_pending)  # (B, D)
-        x_effect_pending = x_effect_pending * (effect_pending.x_lengths > 0).unsqueeze(1)
+        x_effect_pending = x_effect_pending * (effect_pending.x_count > 0).unsqueeze(1)
 
         # Shared second layer + norm on the rows
         x_hidden = self._layer_norm(self._post_shared(F.relu(x_first)))  # (N_tok, D)
 
-        return Jagged(x_lengths=state_batch.tokens.x_lengths, rows=x_hidden), x_effect_pending
+        return Tokens(
+            features=Dense(x_value=x_hidden),
+            x_count=tokens.x_count,
+            x_token_kind=tokens.x_token_kind,
+            x_entity_kind=tokens.x_entity_kind,
+            x_legal_selection=tokens.x_legal_selection,
+            x_legal_target=tokens.x_legal_target,
+            x_needs_target=tokens.x_needs_target,
+        ), x_effect_pending
 
 
-def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.Tensor:
-    """Run `mapper` on the dense rows represented by `block`'s jagged entries.
+def _project_sparse(mapper: nn.Linear | nn.Sequential, sparse: Sparse[Live]) -> torch.Tensor:
+    """Run `mapper` on the dense rows represented by `sparse`'s sparse entries.
 
     Its first linear layer (the mapper, or a Sequential's first layer) sums its weight's columns
     at the entries' columns, scaled by their values, plus its bias; a Sequential's other layers
@@ -163,7 +175,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.T
     ----------
     mapper : nn.Linear | nn.Sequential
         A linear layer, or a Sequential whose first layer is linear.
-    block : Sparse
+    sparse : Sparse[Live]
         The block, its rows held sparse.
 
     Returns
@@ -172,37 +184,37 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, block: Sparse) -> torch.T
         (N, D). `mapper`'s output on each row.
     """
     linear = mapper if isinstance(mapper, nn.Linear) else mapper[0]
-    x_rows = _SumSparseDenseBackward.apply(
-        block.x_lengths, block.rows.x_columns, block.rows.x_values, linear.weight
+    x_row = _SumSparseDenseBackward.apply(
+        sparse.x_count, sparse.x_col, sparse.x_value, linear.weight
     )
     if linear.bias is not None:
-        x_rows = x_rows + linear.bias
+        x_row = x_row + linear.bias
     if isinstance(mapper, nn.Sequential):
-        for i in range(1, len(mapper)):
-            x_rows = mapper[i](x_rows)
-    return x_rows
+        for idx_layer in range(1, len(mapper)):
+            x_row = mapper[idx_layer](x_row)
+    return x_row
 
 
-def _add_owned(x_first: torch.Tensor, x_rows: torch.Tensor, x_count: torch.Tensor) -> None:
+def _add_owned(x_first: torch.Tensor, x_row: torch.Tensor, x_count: torch.Tensor) -> None:
     """Add an owned row kind's rows into their owners' rows of `x_first`.
 
-    Each token owns one segment of rows, and each row is scaled by 1/sqrt(its owner's count).
+    Each token owns consecutive rows, and each row is scaled by 1/sqrt(its owner's count).
 
     Parameters
     ----------
     x_first : torch.Tensor
         (N_tok, D). The tokens' first-layer rows, updated in place.
-    x_rows : torch.Tensor
+    x_row : torch.Tensor
         (M, D). The owned rows, projected, each token's after the previous token's.
     x_count : torch.Tensor
         (N_tok,) int16. Each token's number of owned rows.
     """
     # Each owned row's token
-    x_row_token = get_row_segment(x_count, x_rows.shape[0])  # (M,)
+    x_row_token = get_row_owner(x_count, x_row.shape[0])  # (M,)
 
     # Sum projected owned rows to their respective owners' first-layer output representations
     x_first.index_add_(
-        0, x_row_token, x_rows / x_count[x_row_token].to(x_rows.dtype).sqrt().unsqueeze(1)
+        0, x_row_token, x_row / x_count[x_row_token].to(x_row.dtype).sqrt().unsqueeze(1)
     )
 
 
@@ -216,8 +228,8 @@ class _SumSparseDenseBackward(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx: Any,
-        x_lengths: torch.Tensor,
-        x_column: torch.Tensor,
+        x_count: torch.Tensor,
+        x_col: torch.Tensor,
         x_value: torch.Tensor,
         x_weight: torch.Tensor,
     ) -> torch.Tensor:
@@ -227,9 +239,9 @@ class _SumSparseDenseBackward(torch.autograd.Function):
 
         Parameters
         ----------
-        x_lengths : torch.Tensor
+        x_count : torch.Tensor
             (N,) int16. Each row's number of entries, including empty rows.
-        x_column : torch.Tensor
+        x_col : torch.Tensor
             (F,) int16. The entries' columns, row after row.
         x_value : torch.Tensor
             (F,) float32. The entries' values, in the same order.
@@ -241,17 +253,17 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         torch.Tensor
             (N, D). Each row's sum.
         """
-        ctx.save_for_backward(x_lengths, x_column, x_value)
-        ctx.num_columns = x_weight.shape[1]
+        ctx.save_for_backward(x_count, x_col, x_value)
+        ctx.num_cols = x_weight.shape[1]
 
         # Each row's first entry, then the end
         x_row_first_entry = F.pad(
-            get_segment_first_row(x_lengths), (0, 1), value=x_column.shape[0]
+            get_owner_first_row(x_count), (0, 1), value=x_col.shape[0]
         )  # (N + 1,)
 
         # The transposed weight copied whole: as a strided view, a GPU reads its rows uncoalesced
         return F.embedding_bag(
-            x_column.int(),
+            x_col.int(),
             x_weight.t().contiguous(),
             offsets=x_row_first_entry,
             per_sample_weights=x_value,
@@ -271,7 +283,7 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         Returns
         -------
         None
-            The row lengths take no gradient.
+            The row counts take no gradient.
         None
             The entries' columns take no gradient.
         None
@@ -279,12 +291,14 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         torch.Tensor
             (D, in). The weight's gradient.
         """
-        x_lengths, x_column, x_value = ctx.saved_tensors
+        x_count, x_col, x_value = ctx.saved_tensors
 
         # Each entry's row
-        x_entry_row = get_row_segment(x_lengths, x_column.shape[0])  # (F,)
+        x_entry_row = get_row_owner(x_count, x_col.shape[0])  # (F,)
         x_dense = torch.zeros(
-            x_lengths.shape[0], ctx.num_columns, dtype=x_grad.dtype, device=x_grad.device
+            x_count.shape[0], ctx.num_cols, dtype=x_grad.dtype, device=x_grad.device
         )
-        x_dense.view(-1).scatter_add_(0, x_entry_row * ctx.num_columns + x_column.long(), x_value)
+        x_dense.view(-1).scatter_add_(
+            0, x_entry_row * ctx.num_cols + x_col.long(), x_value
+        )
         return None, None, None, x_grad.t() @ x_dense  # (D, in)

@@ -145,15 +145,15 @@ def encode_batch_masks_into(
     np_needs_target.fill(False)
     np_legal_action_type.fill(False)
 
-    start = 0
-    for b, game_state in enumerate(batch_game_state):
-        tokens = batch_tokens[b]
-        row_of_entity_id = batch_row_of_entity_id[b]
+    row_start = 0
+    for idx_state, game_state in enumerate(batch_game_state):
+        tokens = batch_tokens[idx_state]
+        row_of_entity_id = batch_row_of_entity_id[idx_state]
 
         # The (`ActionType`, `TokenKind`) pairs whose legal ids set a bit, for the dedup
         legal_token_kinds: set[tuple[int, TokenKind]] = set()
 
-        for action in batch_legal_actions[b]:
+        for action in batch_legal_actions[idx_state]:
             if action_masked(game_state, action):
                 continue
 
@@ -171,7 +171,7 @@ def encode_batch_masks_into(
                     continue
 
                 # Entity is selectable for this `ActionType`
-                np_legal_selection[start + row_local, action_type] = True
+                np_legal_selection[row_start + row_local, action_type] = True
 
                 # Add 
                 legal_token_kinds.add((action_type, tokens[row_local][0]))
@@ -179,17 +179,17 @@ def encode_batch_masks_into(
                 # Monster targeting (only relevant for Card play and Potion use)
                 if len(ids) == 2:
                     row_local_target = row_of_entity_id[ids[1]]
-                    np_needs_target[start + row_local] = True
-                    np_legal_target[start + row_local_target, action_type] = True
+                    np_needs_target[row_start + row_local] = True
+                    np_legal_target[row_start + row_local_target, action_type] = True
 
             # Mark the `ActionType` as legal for this state
-            np_legal_action_type[b, action_type] = True
+            np_legal_action_type[idx_state, action_type] = True
 
         # Sanity check: all states should have at least one legal `ActionType`
-        if not np_legal_action_type[b].any():
+        if not np_legal_action_type[idx_state].any():
             raise RuntimeError(
                 f"All legal actions dropped on focus {derive_focus(game_state).name}: "
-                f"{[(int(a.action_type), list(a.ids)) for a in batch_legal_actions[b]]}"
+                f"{[(int(a.action_type), list(a.ids)) for a in batch_legal_actions[idx_state]]}"
             )
 
         # Keep the first legal copy of each Card identity, separately per kind and action type
@@ -203,22 +203,24 @@ def encode_batch_masks_into(
 
             rows = [
                 row
-                for row, (kind, _) in enumerate(tokens, start)
+                for row, (kind, _) in enumerate(tokens, row_start)
                 if kind == token_kind and np_legal_selection[row, action_type]
             ]
 
             # Draw order hidden: scan in an order keyed on the pile, so the kept copy is random
             if token_kind is TokenKind.CARD_PILE_DRAW:
-                random.Random(hash(tuple(tokens[row - start][1].id for row in rows))).shuffle(rows)
+                random.Random(hash(tuple(tokens[row - row_start][1].id for row in rows))).shuffle(
+                    rows
+                )
 
             seen_tokens = set()
             for row in rows:
-                identity = _card_identity(cast(Card, tokens[row - start][1]))
+                identity = _card_identity(cast(Card, tokens[row - row_start][1]))
                 if identity in seen_tokens:
                     # An identical Card is already selectable for this `ActionType`
                     np_legal_selection[row, action_type] = False
                 else:
                     seen_tokens.add(identity)
 
-        # Increment `start` index w/ the number of tokens processed for this state
-        start += len(tokens)
+        # Increment `row_start` w/ the number of tokens processed for this state
+        row_start += len(tokens)

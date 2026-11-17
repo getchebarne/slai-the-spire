@@ -1,7 +1,8 @@
-"""Operations on a batch of game states: allocate, read, join, copy, count and select."""
+"""Operations on a batch of game states: allocate, read, join, copy and select."""
 
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from dataclasses import fields
 from typing import Any, cast
 
@@ -18,14 +19,13 @@ from src.rl.encoding import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.encoding import NUM_CHANNELS
+from src.rl.types import EncodedFeatures
 from src.rl.types import EntityKind
-from src.rl.types import Jagged
-from src.rl.types import JaggedReserved
-from src.rl.types import SparseEntries
-from src.rl.types import SparseReserved
-from src.rl.types import StateBatch
-from src.rl.types import StateBatchReserved
-from src.rl.types import StateCounts
+from src.rl.types import Live
+from src.rl.types import OwnedRows
+from src.rl.types import Reserved
+from src.rl.types import Sparse
+from src.rl.types import StateCollection
 from src.rl.types import States
 from src.rl.types import TokenKind
 from src.rl.types import Tokens
@@ -34,12 +34,12 @@ from src.rl.types import Tokens
 __all__ = [
     "allocate_states",
     "cat_states",
-    "get_row_segment",
-    "get_segment_first_row",
+    "get_owner_first_row",
+    "get_row_owner",
     "iter_tensors",
     "map_tensors",
     "read_states",
-    "slice_state_batch",
+    "slice_states",
     "take_minibatch_states",
     "to_device",
 ]
@@ -89,44 +89,44 @@ def map_tensors[T](value: T, fn: Callable[[torch.Tensor], torch.Tensor]) -> T:
     )
 
 
-def get_row_segment(x_lengths: torch.Tensor, num_rows: int) -> torch.Tensor:
-    """Find each row's segment.
+def get_row_owner(x_count: torch.Tensor, num_rows: int) -> torch.Tensor:
+    """Find each row's owner.
 
-    The rows sit segment after segment: lengths [3, 2, 4] give [0, 0, 0, 1, 1, 2, 2, 2, 2].
+    The rows sit owner after owner: counts [3, 2, 4] give [0, 0, 0, 1, 1, 2, 2, 2, 2].
 
     Parameters
     ----------
-    x_lengths : torch.Tensor
-        (S,) integer. Each segment's number of rows.
+    x_count : torch.Tensor
+        (num_owners,) integer. Each owner's number of rows.
     num_rows : int
-        The segments' total number of rows, as the host knows it: no size is read back from the
+        The owners' total number of rows, as the host knows it: no size is read back from the
         device.
 
     Returns
     -------
     torch.Tensor
-        (num_rows,) long. Each row's segment.
+        (num_rows,) long. Each row's owner.
     """
-    return torch.repeat_interleave(x_lengths.long(), output_size=num_rows)
+    return torch.repeat_interleave(x_count.long(), output_size=num_rows)
 
 
-def get_segment_first_row(x_lengths: torch.Tensor) -> torch.Tensor:
-    """Find each segment's first row.
+def get_owner_first_row(x_count: torch.Tensor) -> torch.Tensor:
+    """Find each owner's first row.
 
-    The rows sit segment after segment: lengths [3, 2, 4] give [0, 3, 5].
+    The rows sit owner after owner: counts [3, 2, 4] give [0, 3, 5].
 
     Parameters
     ----------
-    x_lengths : torch.Tensor
-        (S, ...) integer. Each segment's number of rows. Any further axes hold independent
-        groupings, each totalled on its own.
+    x_count : torch.Tensor
+        (num_owners, ...) integer. Each owner's number of rows. Any further axes hold
+        independent groupings, each totalled on its own.
 
     Returns
     -------
     torch.Tensor
-        (S, ...) long. Each segment's first row.
+        (num_owners, ...) long. Each owner's first row.
     """
-    return x_lengths.cumsum(0) - x_lengths
+    return x_count.cumsum(0) - x_count
 
 
 def get_entity_kind_rows(
@@ -154,101 +154,78 @@ def get_entity_kind_rows(
     return torch.nonzero_static(x_entity_kind == entity_kind, size=num_rows).squeeze(1)
 
 
-def allocate_states(num_buffers: int, buffer_size: int) -> StateBatchReserved:
+def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
     """Allocate reusable CPU capacity for every buffer's states.
 
     Parameters
     ----------
     num_buffers : int
-        The number of independent buffers.
+        The number of independent buffers, positive.
     buffer_size : int
-        The number of states written into each buffer.
+        The number of states written into each buffer, nonnegative.
 
     Returns
     -------
-    StateBatchReserved
+    States[Reserved]
         Ordinary CPU tensors with a leading buffer axis, sized for the maximum token, row and
-        feature-entry counts, with every length zero.
+        feature-entry counts, with every count zero. Select a buffer before writing or reading.
     """
+    if num_buffers <= 0 or buffer_size < 0:
+        raise ValueError("Buffer count must be positive and buffer size nonnegative")
+
     # Maximum number of tokens per buffer
     num_tokens = buffer_size * MAX_TOKENS
 
     # Reserve memory for the rows the states own
-    tokens = JaggedReserved(
-        x_lengths=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
-        rows=Tokens(
-            features=_allocate_sparse(num_buffers, num_tokens, ENCODING_DIM_SPARSE_TOKEN),
-            x_token_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
-            x_entity_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
-            x_legal_selection=torch.zeros(
-                num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
-            ),
-            x_legal_target=torch.zeros(
-                num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
-            ),
-            x_needs_target=torch.zeros(num_buffers, num_tokens, dtype=torch.bool),
-            effects=JaggedReserved(
-                x_lengths=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
-                rows=_allocate_sparse(
+    tokens: Tokens[EncodedFeatures[Reserved]] = Tokens(
+        features=EncodedFeatures(
+            sparse=_allocate_sparse(num_buffers, num_tokens, ENCODING_DIM_SPARSE_TOKEN),
+            effects=OwnedRows(
+                sparse=_allocate_sparse(
                     num_buffers, buffer_size * MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT
                 ),
+                x_count=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
             ),
-            modifiers=JaggedReserved(
-                x_lengths=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
-                rows=_allocate_sparse(
+            modifiers=OwnedRows(
+                sparse=_allocate_sparse(
                     num_buffers, buffer_size * MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER
                 ),
+                x_count=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
             ),
         ),
+        x_count=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
+        x_token_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+        x_entity_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+        x_legal_selection=torch.zeros(
+            num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
+        ),
+        x_legal_target=torch.zeros(num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_needs_target=torch.zeros(num_buffers, num_tokens, dtype=torch.bool),
     )
     effect_pending = _allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_SPARSE_EFFECT)
-
-    # One count column per Jagged among those rows
-    num_jaggeds = _count_jaggeds(tokens) + _count_jaggeds(effect_pending)
 
     # Reserve memory for states
     return States(
         tokens=tokens,
         effect_pending=effect_pending,
-        x_context=torch.zeros(num_buffers, buffer_size, ENCODING_DIM_CONTEXT, dtype=torch.float32),
+        x_context=torch.zeros(
+            num_buffers, buffer_size, ENCODING_DIM_CONTEXT, dtype=torch.float32
+        ),
         x_map_grid=torch.zeros(
             num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS, dtype=torch.uint8
         ),
         x_legal_action_type=torch.zeros(
             num_buffers, buffer_size, NUM_ACTION_TYPES, dtype=torch.bool
         ),
-        state_counts=StateCounts(
-            x_token_kind_count=torch.zeros(
-                num_buffers, buffer_size, len(TokenKind), dtype=torch.int16
-            ),
-            x_jagged_count=torch.zeros(num_buffers, buffer_size, num_jaggeds, dtype=torch.int32),
+        x_total=torch.zeros(
+            num_buffers, buffer_size, len(TokenKind) + len(StateCollection), dtype=torch.int32
         ),
     )
 
 
-def _count_jaggeds(value: Any) -> int:
-    """Count the Jaggeds under `value`, itself included.
-
-    Parameters
-    ----------
-    value : Any
-        A tensor, a reserved table or a nested dataclass record of them.
-
-    Returns
-    -------
-    int
-        The number of Jaggeds.
-    """
-    if isinstance(value, torch.Tensor):
-        return 0
-
-    if isinstance(value, JaggedReserved):
-        return 1 + _count_jaggeds(value.rows)
-
-    return sum(_count_jaggeds(getattr(value, field.name)) for field in fields(value))
-
-
-def _allocate_sparse(num_buffers: int, num_rows: int, entries_per_row: int) -> SparseReserved:
+def _allocate_sparse(
+    num_buffers: int, num_rows: int, entries_per_row: int
+) -> Sparse[Reserved]:
     """Allocate one sparse table's rows and entries for every buffer.
 
     Parameters
@@ -262,84 +239,57 @@ def _allocate_sparse(num_buffers: int, num_rows: int, entries_per_row: int) -> S
 
     Returns
     -------
-    SparseReserved
-        Ordinary CPU arrays with a leading buffer axis and every length zero.
+    Sparse[Reserved]
+        Reserved CPU arrays with a leading buffer axis and every count zero.
     """
     num_entries = num_rows * entries_per_row
-    return JaggedReserved(
-        x_lengths=torch.zeros(num_buffers, num_rows, dtype=torch.int16),
-        rows=SparseEntries(
-            x_columns=torch.zeros(num_buffers, num_entries, dtype=torch.int16),
-            x_values=torch.zeros(num_buffers, num_entries, dtype=torch.float32),
-        ),
+    return Sparse(
+        x_col=torch.zeros(num_buffers, num_entries, dtype=torch.int16),
+        x_value=torch.zeros(num_buffers, num_entries, dtype=torch.float32),
+        x_count=torch.zeros(num_buffers, num_rows, dtype=torch.int16),
     )
 
 
-def read_states(states: StateBatchReserved) -> StateBatch:
-    """Generate the Jagged records of a completed buffer's written rows, as views.
+def read_states(states_reserved: States[Reserved]) -> States[Live]:
+    """View the populated collections of one completed buffer.
 
     Parameters
     ----------
-    states : StateBatchReserved
-        One buffer's reserved states, its writer finished.
+    states_reserved : States[Reserved]
+        One buffer's reserved states, its writer finished. Counts in unused tails are ignored.
 
     Returns
     -------
-    StateBatch
+    States[Live]
         Views of the written rows, sharing the buffer's storage. Retained observations must be
         copied before the buffer is written again.
     """
-    return _read_rows(states, len(states.x_context))
+    if states_reserved.x_context.ndim != 2:
+        raise ValueError("Select one buffer before reading states")
 
-
-def _read_rows(value: Any, num_rows: int) -> Any:
-    """View the first `num_rows` rows of every tensor under `value`.
-
-    Each reserved table comes out as the Jagged of its written rows.
-
-    Parameters
-    ----------
-    value : Any
-        A tensor, a reserved table or a nested dataclass record of them.
-    num_rows : int
-        The number of written rows in `value`'s tensors.
-
-    Returns
-    -------
-    Any
-        Views of the written rows, preserving nesting.
-    """
-    if isinstance(value, torch.Tensor):
-        return value[:num_rows]
-
-    # A table has as many written rows as its written lengths add up to
-    if isinstance(value, JaggedReserved):
-        x_lengths = value.x_lengths[:num_rows]
-        num_rows = int(x_lengths.sum())
-        return Jagged(x_lengths, _read_rows(value.rows, num_rows))
-
-    return type(value)(
-        **{field.name: _read_rows(getattr(value, field.name), num_rows) for field in fields(value)}
+    # Every state of the buffer is written: its populated rows are the slice of all of them
+    return slice_states(
+        states_reserved, 0, len(states_reserved.x_context), states_reserved.x_total
     )
 
 
-def cat_states(state_batches: list[StateBatch]) -> StateBatch:
+def cat_states(batch_states: list[States[Live]]) -> States[Live]:
     """Concatenate compact worker batches or rollout steps field by field.
 
     Parameters
     ----------
-    state_batches : list[StateBatch]
+    batch_states : list[States[Live]]
         At least one batch, in output order, with matching field dtypes and trailing shapes.
 
     Returns
     -------
-    StateBatch
+    States[Live]
         The concatenated states and their descendants, preserving each batch's row order.
     """
-    if not state_batches:
+    if not batch_states:
         raise ValueError("`cat_states` requires at least one batch")
     
-    return _cat_records(state_batches)
+    return _cat_records(batch_states)
 
 
 def _cat_records(values: list[Any]) -> Any:
@@ -355,7 +305,7 @@ def _cat_records(values: list[Any]) -> Any:
     )
 
 
-def to_device(state_batch: StateBatch, device: torch.device) -> StateBatch:
+def to_device(states: States[Live], device: torch.device) -> States[Live]:
     """Make an independent snapshot, using one pinned transfer for CUDA.
 
     Every result tensor is a view of the copied byte buffer. On CPU, the staging
@@ -363,38 +313,38 @@ def to_device(state_batch: StateBatch, device: torch.device) -> StateBatch:
 
     Parameters
     ----------
-    state_batch : StateBatch
+    states : States[Live]
         The source states to snapshot.
     device : torch.device
         The destination device.
 
     Returns
     -------
-    StateBatch
+    States[Live]
         The states on the destination device, with their shapes and dtypes preserved and
-        storage independent of the source state_batch.
+        storage independent of the source states.
     """
     # Get all leaf Tensors
-    x_leaves = list(iter_tensors(state_batch))
+    x_leaves = list(iter_tensors(states))
 
     # Calculate total buffer size and start / end indexes of each leaf Tensor
     idx_starts = []
-    idx_end = 0 
+    idx_stop = 0 
     for x_leaf in x_leaves:
-        idx_starts.append(idx_end)
-        idx_end += (x_leaf.numel() * x_leaf.element_size() + 7) // 8 * 8
+        idx_starts.append(idx_stop)
+        idx_stop += (x_leaf.numel() * x_leaf.element_size() + 7) // 8 * 8
 
     # Allocate buffer in CPU memory and fill it. Each element stores a byte
-    x_buffer = torch.empty(idx_end, dtype=torch.uint8, pin_memory=device.type == "cuda")
+    x_buffer = torch.empty(idx_stop, dtype=torch.uint8, pin_memory=device.type == "cuda")
     for x_leaf, idx_start in zip(x_leaves, idx_starts):
         _bytes_as(x_buffer, x_leaf, idx_start).copy_(x_leaf)
 
     # Send buffer to device 
     x_buffer = x_buffer.to(device, non_blocking=True) if device.type == "cuda" else x_buffer
 
-    # Define an iterator to get back each leaf Tensor from the buffer, and map it to `state_batch`
+    # Define an iterator to get back each leaf Tensor from the buffer, and map it to `states`
     iter_x_leaves = iter(_bytes_as(x_buffer, x_leaf, idx_start) for x_leaf, idx_start in zip(x_leaves, idx_starts))
-    return map_tensors(state_batch, lambda _: next(iter_x_leaves))
+    return map_tensors(states, lambda _: next(iter_x_leaves))
 
 
 def _bytes_as(x_buffer: torch.Tensor, x_like: torch.Tensor, idx_start: int) -> torch.Tensor:
@@ -402,144 +352,223 @@ def _bytes_as(x_buffer: torch.Tensor, x_like: torch.Tensor, idx_start: int) -> t
     return x_buffer[idx_start : idx_start + size].view(x_like.dtype).view(x_like.shape)
 
 
-def _select_jagged_rows(
-    value: Any, selectors_remaining: Iterator[slice | torch.Tensor], selector: slice | torch.Tensor
-) -> Any:
-    """Index every tensor under `value` with its rows' selector, depth first in field order.
-
-    A Jagged's lengths are indexed with `selector`, like the tensors beside it; its rows take
-    the next selector from `selectors_remaining`.
+def _select_sparse[TStorage](
+    sparse: Sparse[TStorage],
+    selector_rows: slice | torch.Tensor,
+    selector_entries: slice | torch.Tensor,
+) -> Sparse[Live]:
+    """Select sparse rows and their entries using their respective selectors.
 
     Parameters
     ----------
-    value : Any
-        A tensor, or a table or nested dataclass record of tensors.
-    selectors_remaining : Iterator[slice | torch.Tensor]
-        The remaining Jaggeds' row selectors, each a slice or an index tensor, in Jagged order.
-    selector : slice | torch.Tensor
-        The rows to select at `value`'s level.
+    sparse : Sparse[TStorage]
+        The source feature rows and their entries, live or reserved.
+    selector_rows : slice | torch.Tensor
+        The logical rows, including empty rows.
+    selector_entries : slice | torch.Tensor
+        Those rows' entries, in the selected row order.
 
     Returns
     -------
-    Any
-        The selected rows, preserving record types and nesting.
+    Sparse[Live]
+        The selected row counts, columns and values.
     """
-    if isinstance(value, torch.Tensor):
-        return value[selector]
+    return Sparse(
+        x_col=sparse.x_col[selector_entries],
+        x_value=sparse.x_value[selector_entries],
+        x_count=sparse.x_count[selector_rows],
+    )
 
-    if isinstance(value, Jagged):
-        return Jagged(
-            value.x_lengths[selector],
-            _select_jagged_rows(value.rows, selectors_remaining, next(selectors_remaining)),
-        )
 
-    return type(value)(
-        **{
-            field.name: _select_jagged_rows(
-                getattr(value, field.name), selectors_remaining, selector
-            )
-            for field in fields(value)
-        }
+def _select_owned_rows[TStorage](
+    owned_rows: OwnedRows[TStorage],
+    selector_tokens: slice | torch.Tensor,
+    selector_rows: slice | torch.Tensor,
+    selector_entries: slice | torch.Tensor,
+) -> OwnedRows[Live]:
+    """Select some tokens' owned rows and their feature entries.
+
+    Parameters
+    ----------
+    owned_rows : OwnedRows[TStorage]
+        The source tokens' ownership counts and sparse rows, live or reserved.
+    selector_tokens : slice | torch.Tensor
+        The owning tokens.
+    selector_rows : slice | torch.Tensor
+        Their owned rows, in selected token order.
+    selector_entries : slice | torch.Tensor
+        Those rows' feature entries, in selected row order.
+
+    Returns
+    -------
+    OwnedRows[Live]
+        The selected ownership counts and feature rows.
+    """
+    return OwnedRows(
+        sparse=_select_sparse(owned_rows.sparse, selector_rows, selector_entries),
+        x_count=owned_rows.x_count[selector_tokens],
+    )
+
+
+def _select_states[TStorage](
+    states: States[TStorage],
+    selector_states: slice | torch.Tensor,
+    selectors: Mapping[StateCollection, slice | torch.Tensor],
+) -> States[Live]:
+    """Select states using a named selector for each of their collections.
+
+    Parameters
+    ----------
+    states : States[TStorage]
+        The source states, live or reserved.
+    selector_states : slice | torch.Tensor
+        The states, in output order.
+    selectors : Mapping[StateCollection, slice | torch.Tensor]
+        Each collection's rows or entries belonging to those states, in output order.
+
+    Returns
+    -------
+    States[Live]
+        The selected states and all their descendants.
+    """
+    tokens = states.tokens
+    selector_tokens = selectors[StateCollection.TOKENS]
+
+    return States(
+        tokens=Tokens(
+            features=EncodedFeatures(
+                sparse=_select_sparse(
+                    tokens.features.sparse, selector_tokens,
+                    selectors[StateCollection.TOKEN_ENTRIES],
+                ),
+                effects=_select_owned_rows(
+                    tokens.features.effects, selector_tokens,
+                    selectors[StateCollection.EFFECTS],
+                    selectors[StateCollection.EFFECT_ENTRIES],
+                ),
+                modifiers=_select_owned_rows(
+                    tokens.features.modifiers, selector_tokens,
+                    selectors[StateCollection.MODIFIERS],
+                    selectors[StateCollection.MODIFIER_ENTRIES],
+                ),
+            ),
+            x_count=tokens.x_count[selector_states],
+            x_token_kind=tokens.x_token_kind[selector_tokens],
+            x_entity_kind=tokens.x_entity_kind[selector_tokens],
+            x_legal_selection=tokens.x_legal_selection[selector_tokens],
+            x_legal_target=tokens.x_legal_target[selector_tokens],
+            x_needs_target=tokens.x_needs_target[selector_tokens],
+        ),
+        effect_pending=_select_sparse(
+            states.effect_pending, selector_states, selectors[StateCollection.PENDING_ENTRIES]
+        ),
+        x_context=states.x_context[selector_states],
+        x_map_grid=states.x_map_grid[selector_states],
+        x_legal_action_type=states.x_legal_action_type[selector_states],
+        x_total=states.x_total[selector_states],
     )
 
 
 def take_minibatch_states(
-    state_batch: StateBatch, x_state_ids: torch.Tensor, state_counts_cpu: StateCounts
-) -> StateBatch:
+    states: States[Live], x_idx_state: torch.Tensor, x_total_cpu: torch.Tensor
+) -> States[Live]:
     """Gather states and all their descendants.
 
     Parameters
     ----------
-    state_batch : StateBatch
+    states : States[Live]
         The source states.
-    x_state_ids : torch.Tensor
+    x_idx_state : torch.Tensor
         (batch_size,) long. The states to gather, in output order.
-    state_counts_cpu : StateCounts
-        Those states' counts, on the CPU.
+    x_total_cpu : torch.Tensor
+        Those states' totals, on the CPU.
 
     Returns
     -------
-    StateBatch
+    States[Live]
         The selected states and their descendants, preserving order and duplicate selections.
     """
-    # The selected states' rows in every Jagged, totalled on the host
-    counts_total = state_counts_cpu.x_jagged_count.sum(0).tolist()
+    # The selected states' rows in every collection, totalled on the host
+    num_rows = x_total_cpu.sum(0).tolist()
 
-    # Each state's rows in every Jagged, and where they start
-    x_jagged_count = state_batch.state_counts.x_jagged_count.long()  # (B, number_of_Jaggeds)
-    x_state_first_row = get_segment_first_row(x_jagged_count)  # (B, number_of_Jaggeds)
+    # Each state's rows in every collection, and where they start
+    x_total = states.x_total.long()
+    x_state_first_row = get_owner_first_row(x_total)
 
-    # Each Jagged's source rows, in output order
-    jagged_rows = [
-        _expand_ranges(
-            x_state_first_row[x_state_ids, idx_jagged],
-            x_jagged_count[x_state_ids, idx_jagged],
-            count_total,
+    # Each collection's source rows, in output order
+    selectors = {
+        collection: _expand_ranges(
+            x_state_first_row[x_idx_state, collection],
+            x_total[x_idx_state, collection],
+            num_rows[collection],
         )
-        for idx_jagged, count_total in enumerate(counts_total)
-    ]
-    return _select_jagged_rows(state_batch, iter(jagged_rows), x_state_ids)
+        for collection in StateCollection
+    }
+    return _select_states(states, x_idx_state, selectors)
 
 
 def _expand_ranges(
-    x_starts: torch.Tensor, x_counts: torch.Tensor, count_total: int
+    x_start: torch.Tensor, x_count: torch.Tensor, num_rows: int
 ) -> torch.Tensor:
     """List the rows of consecutive ranges, one range after another.
 
-    Range i covers x_counts[i] rows from x_starts[i]: starts [4, 0] with counts [2, 3] give
+    Range i covers x_count[i] rows from x_start[i]: starts [4, 0] with counts [2, 3] give
     [4, 5, 0, 1, 2]. It is a concatenation of `torch.arange(start, start + count)` without the
     loop.
 
     Parameters
     ----------
-    x_starts : torch.Tensor
+    x_start : torch.Tensor
         (num_ranges,) long. Each range's first row.
-    x_counts : torch.Tensor
+    x_count : torch.Tensor
         (num_ranges,) long. Each range's number of rows.
-    count_total : int
+    num_rows : int
         The ranges' total number of rows.
 
     Returns
     -------
     torch.Tensor
-        (count_total,) long. The rows, range after range.
+        (num_rows,) long. The rows, range after range.
     """
     # Where each range lands in the output: back to back
-    x_starts_output = get_segment_first_row(x_counts)
+    x_start_output = get_owner_first_row(x_count)
 
     # Every output row moves by its range's shift: source row = output row + shift
-    x_shifts = (x_starts - x_starts_output)
+    x_shift = (x_start - x_start_output)
 
     # Repeat the shift for each row in each state
-    x_shifts = x_shifts.repeat_interleave(x_counts, output_size=count_total)
+    x_shift = x_shift.repeat_interleave(x_count, output_size=num_rows)
 
     # Sum each row's indexes in the minibatch to the shifts to get their source-batch indexes
-    return x_shifts + torch.arange(count_total, device=x_starts.device)
+    return x_shift + torch.arange(num_rows, device=x_start.device)
 
 
-def slice_state_batch(
-    state_batch: StateBatch, start: int, stop: int, state_counts_cpu: StateCounts
-) -> StateBatch:
-    """View consecutive states and their descendants using CPU counts.
+def slice_states[TStorage](
+    states: States[TStorage], idx_start: int, idx_stop: int, x_total_cpu: torch.Tensor
+) -> States[Live]:
+    """View consecutive states and their descendants using CPU totals.
 
     Parameters
     ----------
-    state_batch : StateBatch
-        The source states.
-    start : int
+    states : States[TStorage]
+        The source states, live or reserved.
+    idx_start : int
         The first state's index, inclusive.
-    stop : int
+    idx_stop : int
         The last state's index, exclusive; at most the number of states.
-    state_counts_cpu : StateCounts
-        The source states' counts, on the CPU.
+    x_total_cpu : torch.Tensor
+        The source states' totals, on the CPU.
 
     Returns
     -------
-    StateBatch
+    States[Live]
         Views of the selected states and descendants, sharing the source tensors' storage.
     """
-    # Each Jagged's rows before the first state, and before the stop
-    x_jagged_count_cpu = state_counts_cpu.x_jagged_count
-    first = x_jagged_count_cpu[:start].sum(0).tolist()
-    last = x_jagged_count_cpu[:stop].sum(0).tolist()
-    return _select_jagged_rows(state_batch, map(slice, first, last), slice(start, stop))
+    # Each collection's rows before the first state, and before the stop
+    row_start = x_total_cpu[:idx_start].sum(0).tolist()
+    row_stop = x_total_cpu[:idx_stop].sum(0).tolist()
+    selectors = {
+        collection: slice(row_start[collection], row_stop[collection])
+        for collection in StateCollection
+    }
+    return _select_states(states, slice(idx_start, idx_stop), selectors)

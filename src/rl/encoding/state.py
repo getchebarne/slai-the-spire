@@ -1,8 +1,5 @@
 import warnings
-from collections.abc import Iterator
 from collections.abc import Sequence
-from dataclasses import fields
-from typing import Any
 
 import numpy as np
 import torch
@@ -61,16 +58,19 @@ from src.rl.encoding.relic import encode_relic_into_w_cache
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_price_into
-from src.rl.encoding.sparse import encode_sparse_into
+from src.rl.encoding.sparse import encode_owned_rows_into
+from src.rl.encoding.sparse import encode_sparse_rows_into
 from src.rl.tokens import draw_order_visible
 from src.rl.tokens import get_card_entities
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
-from src.rl.types import JaggedReserved
 from src.rl.types import ModifierOwner
-from src.rl.types import SparseReserved
-from src.rl.types import StateBatchReserved
+from src.rl.types import OwnedRows
+from src.rl.types import Reserved
+from src.rl.types import Sparse
+from src.rl.types import StateCollection
+from src.rl.types import States
 from src.rl.types import Tag
 from src.rl.types import Token
 from src.rl.types import TokenKind
@@ -124,7 +124,7 @@ ENCODING_DIM_SPARSE_TOKEN = max(
 _WARNED_OVERFLOW: set[str] = set()
 
 # Each Effect source's fill priority: past MAX_EFFECTS, a state keeps the lowest first
-_MAP_EFFECT_SOURCE_FILL_PRIORITY = {
+_FILL_PRIORITY_OF_EFFECT_SOURCE = {
     EffectSource.EVENT_OPTION_SELECT: 0,
     EffectSource.MONSTER_MOVE: 1,
     EffectSource.POTION_USE: 2,
@@ -150,20 +150,20 @@ _TOKEN_KINDS_ID_LOOKUP = frozenset(TokenKind) - {
 }
 
 # Each token kind's Entity kind
-_MAP_TOKEN_KIND_TO_ENTITY_KIND = {
+_ENTITY_KIND_OF_TOKEN_KIND = {
     token_kind: entity_kind
     for entity_kind, token_kinds in TOKEN_KINDS_OF_ENTITY_KIND.items()
     for token_kind in token_kinds
 }
 
 # The same, as the table the token writer indexes by token kind
-_ENTITY_KIND_OF_TOKEN_KIND = np.array(
-    [_MAP_TOKEN_KIND_TO_ENTITY_KIND[token_kind] for token_kind in TokenKind], dtype=np.int16
+_NP_ENTITY_KIND_OF_TOKEN_KIND = np.array(
+    [_ENTITY_KIND_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind], dtype=np.int16
 )
 
 
 def encode_states_into(
-    states: StateBatchReserved,
+    states_reserved: States[Reserved],
     batch_game_state: list[GameState],
     batch_legal_actions: list[list[Action]],
 ) -> None:
@@ -175,23 +175,28 @@ def encode_states_into(
 
     Parameters
     ----------
-    states : StateBatchReserved
+    states_reserved : States[Reserved]
         The reusable CPU capacity, either local or shared with readers.
     batch_game_state : list[GameState]
         The states to encode, exactly the buffer's number of states.
     batch_legal_actions : list[list[Action]]
         Each state's legal actions, in the same order.
     """
-    tokens = states.tokens.rows
+    if states_reserved.x_context.ndim != 2:
+        raise ValueError("Select one buffer before encoding states")
+    batch_size = len(states_reserved.x_context)
+    if len(batch_game_state) != batch_size or len(batch_legal_actions) != batch_size:
+        raise ValueError("States and legal actions must match the buffer's number of states")
+    tokens = states_reserved.tokens
 
     # Tokens
     batch_tokens, batch_row_of_entity_id = _encode_batch_tokens_into(
-        x_token_lengths=states.tokens.x_lengths,
+        x_token_count=tokens.x_count,
         x_token_kind=tokens.x_token_kind,
         x_entity_kind=tokens.x_entity_kind,
-        token_features=tokens.features,
-        effects=tokens.effects,
-        modifiers=tokens.modifiers,
+        sparse_token=tokens.features.sparse,
+        effects=tokens.features.effects,
+        modifiers=tokens.features.modifiers,
         batch_game_state=batch_game_state,
     )
 
@@ -205,105 +210,108 @@ def encode_states_into(
         tokens.x_legal_selection[:num_tokens].numpy(),
         tokens.x_legal_target[:num_tokens].numpy(),
         tokens.x_needs_target[:num_tokens].numpy(),
-        states.x_legal_action_type.numpy(),
+        states_reserved.x_legal_action_type.numpy(),
     )
 
     # Context and Map
-    np_context = states.x_context.numpy()
-    np_map_grid = states.x_map_grid.numpy()
+    np_context = states_reserved.x_context.numpy()
+    np_map_grid = states_reserved.x_map_grid.numpy()
     np_context.fill(0)
     np_map_grid.fill(0)
     for game_state, np_context_row, np_grid in zip(batch_game_state, np_context, np_map_grid):
         encode_context_into(game_state, np_context_row)
         encode_map_grid_into(game_state, np_grid)
 
-    encode_batch_effect_pending_into(states.effect_pending, batch_game_state)
+    encode_batch_effect_pending_into(states_reserved.effect_pending, batch_game_state)
 
-    # The counts last: they total the rows written above
-    _encode_counts_into(states)
+    # The totals last: they total the rows written above
+    _encode_totals_into(states_reserved)
 
 
-def _encode_counts_into(states: StateBatchReserved) -> None:
-    """Write each state's counts from the rows the pass has written.
+def _encode_totals_into(states_reserved: States[Reserved]) -> None:
+    """Write each state's totals from the rows the pass has written.
 
     Parameters
     ----------
-    states : StateBatchReserved
+    states_reserved : States[Reserved]
         The reusable CPU capacity, its rows written.
     """
-    state_counts = states.state_counts
+    tokens = states_reserved.tokens
+    features = tokens.features
+    np_total = states_reserved.x_total.numpy()
+    np_total.fill(0)
 
     # Its tokens of each token kind
-    np_count_tokens = states.tokens.x_lengths.numpy()  # (B,)
-    np_token_state = np.repeat(np.arange(len(np_count_tokens)), np_count_tokens)  # (N_tok,)
-    np_token_kind = states.tokens.rows.x_token_kind[: len(np_token_state)].numpy()
-    np_token_kind_count = state_counts.x_token_kind_count.numpy()
-    np_token_kind_count.fill(0)
-    np.add.at(np_token_kind_count, (np_token_state, np_token_kind), 1)
+    np_count_token = tokens.x_count.numpy()  # (B,)
+    np_token_state = np.repeat(np.arange(len(np_count_token)), np_count_token)  # (N_tok,)
+    np_token_kind = tokens.x_token_kind[: len(np_token_state)].numpy()
+    np.add.at(np_total, (np_token_state, np_token_kind), 1)
 
-    # Its rows in each Jagged, in Jagged order: each state is one row at the top
-    np_count_state = np.ones(len(np_count_tokens), dtype=np.int64)
-    state_counts.x_jagged_count.numpy()[:] = np.stack(
-        list(_iter_jagged_counts(states, np_count_state)), axis=1
+    # Its tokens, their feature entries, and the rows those tokens own
+    np_total[:, StateCollection.TOKENS] = np_count_token
+    np_total[:, StateCollection.TOKEN_ENTRIES] = _sum_counts(
+        np_count_token, features.sparse.x_count.numpy()
     )
+    np_count_effect = _sum_counts(np_count_token, features.effects.x_count.numpy())
+    np_count_modifier = _sum_counts(np_count_token, features.modifiers.x_count.numpy())
+    np_total[:, StateCollection.EFFECTS] = np_count_effect
+    np_total[:, StateCollection.MODIFIERS] = np_count_modifier
+
+    # Each owned row's entries, and the pending Effect's one sparse row per state
+    np_total[:, StateCollection.EFFECT_ENTRIES] = _sum_counts(
+        np_count_effect, features.effects.sparse.x_count.numpy()
+    )
+    np_total[:, StateCollection.MODIFIER_ENTRIES] = _sum_counts(
+        np_count_modifier, features.modifiers.sparse.x_count.numpy()
+    )
+    np_total[:, StateCollection.PENDING_ENTRIES] = states_reserved.effect_pending.x_count.numpy()
 
 
-def _iter_jagged_counts(value: Any, np_count_parent: np.ndarray) -> Iterator[np.ndarray]:
-    """Yield, depth first in field order, each Jagged's rows per state under `value`.
+def _sum_counts(np_count_parent: np.ndarray, np_count_child: np.ndarray) -> np.ndarray:
+    """Sum each state's child counts over its consecutive parent rows.
 
     Parameters
     ----------
-    value : Any
-        A tensor, a reserved table or a nested dataclass record of them.
     np_count_parent : np.ndarray
-        (B,). Each state's rows at `value`'s level.
+        (B,). Each state's number of parent rows.
+    np_count_child : np.ndarray
+        (parent capacity,). Each parent's number of children; unused capacity is ignored.
 
-    Yields
-    ------
+    Returns
+    -------
     np.ndarray
-        (B,) int64. A Jagged's rows per state.
+        (B,) int64. Each state's total number of children.
     """
-    if isinstance(value, torch.Tensor):
-        return
-
-    if isinstance(value, JaggedReserved):
-        # A state's rows in this Jagged: the lengths of its rows one level up, summed
-        np_off = np.concatenate(([0], np.cumsum(np_count_parent)))  # (B + 1,)
-        np_lengths = value.x_lengths[: np_off[-1]].numpy()
-        np_count = np.diff(np.concatenate(([0], np.cumsum(np_lengths, dtype=np.int64)))[np_off])
-        yield np_count
-        yield from _iter_jagged_counts(value.rows, np_count)
-
-    else:
-        for field in fields(value):
-            yield from _iter_jagged_counts(getattr(value, field.name), np_count_parent)
+    np_off = np.concatenate(([0], np.cumsum(np_count_parent, dtype=np.int64)))  # (B + 1,)
+    np_total = np.concatenate(([0], np.cumsum(np_count_child[: np_off[-1]], dtype=np.int64)))
+    return np.diff(np_total[np_off])
 
 
 def _encode_batch_tokens_into(
-    x_token_lengths: torch.Tensor,
+    x_token_count: torch.Tensor,
     x_token_kind: torch.Tensor,
     x_entity_kind: torch.Tensor,
-    token_features: SparseReserved,
-    effects: JaggedReserved[SparseReserved],
-    modifiers: JaggedReserved[SparseReserved],
+    sparse_token: Sparse[Reserved],
+    effects: OwnedRows[Reserved],
+    modifiers: OwnedRows[Reserved],
     batch_game_state: list[GameState],
 ) -> tuple[list[list[Token]], list[dict[int, int]]]:
     """Write the tokens and their owned rows into the arrays handed in.
 
     Parameters
     ----------
-    x_token_lengths : torch.Tensor
+    x_token_count : torch.Tensor
         (B,) long. Each state's number of tokens, written in place.
     x_token_kind : torch.Tensor
         (token capacity,) int16. Each token's kind, written in place.
     x_entity_kind : torch.Tensor
         (token capacity,) int16. Each token's Entity kind, written in place.
-    token_features : SparseReserved
+    sparse_token : Sparse[Reserved]
         One row per token.
-    effects : JaggedReserved[SparseReserved]
-        One segment per token and one row per owned Effect.
-    modifiers : JaggedReserved[SparseReserved]
-        One segment per token and one row per owned Modifier.
+    effects : OwnedRows[Reserved]
+        One count per token and one row per owned Effect.
+    modifiers : OwnedRows[Reserved]
+        One count per token and one row per owned Modifier.
     batch_game_state : list[GameState]
         The states to encode, B of them.
 
@@ -318,10 +326,10 @@ def _encode_batch_tokens_into(
     batch_tokens = [list(iter_tokens(game_state)) for game_state in batch_game_state]
 
     # Number of tokens for each state in the batch
-    np_count_tokens = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
+    np_count_token = np.array([len(tokens) for tokens in batch_tokens], dtype=np.int64)  # (B,)
 
     # Number of total tokens across all states
-    num_tokens = int(np_count_tokens.sum())
+    num_tokens = int(np_count_token.sum())
     if num_tokens > len(x_token_kind):
         raise IndexError("Token count exceeds the destination's capacity")
 
@@ -339,11 +347,11 @@ def _encode_batch_tokens_into(
     batch_row_of_entity_id: list[dict[int, int]] = []
 
     # Iterate over states
-    for game_state, tokens, start_idx in zip(
-        batch_game_state, batch_tokens, np.cumsum(np_count_tokens) - np_count_tokens
+    for game_state, tokens, row_start in zip(
+        batch_game_state, batch_tokens, np.cumsum(np_count_token) - np_count_token
     ):
         effect_rows, modifier_rows, row_of_entity_id = _encode_tokens_into(
-            game_state, tokens, start_idx, np_token, np_token_kind
+            game_state, tokens, row_start, np_token, np_token_kind
         )
 
         # Accumlate Effect and Modifier rows
@@ -354,39 +362,30 @@ def _encode_batch_tokens_into(
         batch_row_of_entity_id.append(row_of_entity_id)
 
     # Each token's Entity kind, its token kind's
-    x_entity_kind[:num_tokens].numpy()[:] = _ENTITY_KIND_OF_TOKEN_KIND[np_token_kind]
+    x_entity_kind[:num_tokens].numpy()[:] = _NP_ENTITY_KIND_OF_TOKEN_KIND[np_token_kind]
 
     # The Effect rows scale after they're written: over the whole block at once
-    np_eff_rows = np.zeros((len(batch_effect_rows), ENCODING_DIM_EFFECT), dtype=np.float32)
-    for np_eff_row, (_, effect, effect_source) in zip(np_eff_rows, batch_effect_rows):
-        encode_effect_row_into_w_cache(effect, effect_source, np_eff_row)
-    normalize_effect_rows(np_eff_rows)
-    np_count_eff = np.bincount([row for row, _, _ in batch_effect_rows], minlength=num_tokens)
+    np_effect = np.zeros((len(batch_effect_rows), ENCODING_DIM_EFFECT), dtype=np.float32)
+    for np_effect_row, (_, effect, effect_source) in zip(np_effect, batch_effect_rows):
+        encode_effect_row_into_w_cache(effect, effect_source, np_effect_row)
+    normalize_effect_rows(np_effect)
+    np_count_effect = np.bincount([row for row, _, _ in batch_effect_rows], minlength=num_tokens)
 
     # The Modifier rows and each token's count of them
-    np_mod_rows = np.zeros(
+    np_modifier = np.zeros(
         (len(batch_modifier_rows), ENCODING_DIM_MODIFIER), dtype=np.float32
     )
-    for np_mod_row, (_, modifier, owner) in zip(np_mod_rows, batch_modifier_rows):
-        encode_modifier_row_into(modifier, owner, np_mod_row)
-    np_count_mod = np.bincount(
+    for np_modifier_row, (_, modifier, owner) in zip(np_modifier, batch_modifier_rows):
+        encode_modifier_row_into(modifier, owner, np_modifier_row)
+    np_count_modifier = np.bincount(
         [row for row, _, _ in batch_modifier_rows], minlength=num_tokens
     )
 
-    # Each table's rows per owner and their sparse entries
-    encode_sparse_into(
-        x_token_lengths, token_features, np_count_tokens, np_token, ENCODING_DIM_SPARSE_TOKEN
-    )
-    encode_sparse_into(
-        effects.x_lengths, effects.rows, np_count_eff, np_eff_rows, ENCODING_DIM_SPARSE_EFFECT
-    )
-    encode_sparse_into(
-        modifiers.x_lengths,
-        modifiers.rows,
-        np_count_mod,
-        np_mod_rows,
-        ENCODING_DIM_SPARSE_MODIFIER,
-    )
+    # Each state's token count, the tokens' feature entries and the rows the tokens own
+    x_token_count[: len(np_count_token)].numpy()[:] = np_count_token
+    encode_sparse_rows_into(sparse_token, np_token, ENCODING_DIM_SPARSE_TOKEN)
+    encode_owned_rows_into(effects, np_count_effect, np_effect, ENCODING_DIM_SPARSE_EFFECT)
+    encode_owned_rows_into(modifiers, np_count_modifier, np_modifier, ENCODING_DIM_SPARSE_MODIFIER)
 
     return batch_tokens, batch_row_of_entity_id
 
@@ -394,11 +393,11 @@ def _encode_batch_tokens_into(
 def _encode_tokens_into(
     game_state: GameState,
     tokens: Sequence[Token],
-    start_idx: int,
+    row_start: int,
     np_token: np.ndarray,
     np_token_kind: np.ndarray,
 ) -> tuple[list[EffectRow], list[ModifierRow], dict[int, int]]:
-    """Write a state's tokens into their rows from `start_idx` on.
+    """Write a state's tokens into their rows from `row_start` on.
 
     Each token goes at its Entity kind's columns, a combatant's health/block at the health/block
     columns, a Shop token's price at the price columns, a Monster's slot and a stasis Card's
@@ -411,7 +410,7 @@ def _encode_tokens_into(
         The state to encode.
     tokens : Sequence[Token]
         The state's tokens, as (token kind, Entity) in window order.
-    start_idx : int
+    row_start : int
         The state's first row in the batch.
     np_token : np.ndarray
         (N_tok, ENCODING_DIM_TOKEN) float32. The batch's token rows; the state's are written in
@@ -463,9 +462,9 @@ def _encode_tokens_into(
     # The rows at the Tag columns
     np_token_tag = np_token[:, COL_START_TAG:]
 
-    # Iterate over tokens; `start_idx` gives the offset this state starts writing from
+    # Iterate over tokens; `row_start` gives the offset this state starts writing from
     for row_local, (token_kind, entity) in enumerate(tokens):
-        row = start_idx + row_local
+        row = row_start + row_local
         np_token_kind[row] = token_kind
 
         # Its Entity's id, at the id's first state-local row
@@ -615,10 +614,10 @@ def _encode_tokens_into(
 
         # The rows first by their source's fill priority stay, still token after token
         fill_priorities = [
-            _MAP_EFFECT_SOURCE_FILL_PRIORITY[effect_source] for _, _, effect_source in effect_rows
+            _FILL_PRIORITY_OF_EFFECT_SOURCE[effect_source] for _, _, effect_source in effect_rows
         ]
-        order = sorted(range(len(effect_rows)), key=lambda i: fill_priorities[i])
-        effect_rows = [effect_rows[i] for i in sorted(order[:MAX_EFFECTS])]
+        order = sorted(range(len(effect_rows)), key=fill_priorities.__getitem__)
+        effect_rows = [effect_rows[idx_row] for idx_row in sorted(order[:MAX_EFFECTS])]
 
     if len(modifier_rows) > MAX_MODIFIERS:
         warning = (
@@ -631,18 +630,18 @@ def _encode_tokens_into(
 
         # The Character's rows stay first, then the Monsters' by slot
         fill_priorities = [owner != ModifierOwner.CHARACTER for _, _, owner in modifier_rows]
-        order = sorted(range(len(modifier_rows)), key=lambda i: fill_priorities[i])
-        modifier_rows = [modifier_rows[i] for i in sorted(order[:MAX_MODIFIERS])]
+        order = sorted(range(len(modifier_rows)), key=fill_priorities.__getitem__)
+        modifier_rows = [modifier_rows[idx_row] for idx_row in sorted(order[:MAX_MODIFIERS])]
 
     return effect_rows, modifier_rows, row_of_entity_id
 
 
 def _check_tables() -> None:
     sources = set(EffectSource) - {EffectSource.PENDING}
-    if set(_MAP_EFFECT_SOURCE_FILL_PRIORITY) != sources:
+    if set(_FILL_PRIORITY_OF_EFFECT_SOURCE) != sources:
         raise RuntimeError(
-            "_MAP_EFFECT_SOURCE_FILL_PRIORITY drifted from EffectSource: "
-            f"{set(_MAP_EFFECT_SOURCE_FILL_PRIORITY) ^ sources}"
+            "_FILL_PRIORITY_OF_EFFECT_SOURCE drifted from EffectSource: "
+            f"{set(_FILL_PRIORITY_OF_EFFECT_SOURCE) ^ sources}"
         )
 
 

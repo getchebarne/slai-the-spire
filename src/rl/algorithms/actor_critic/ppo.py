@@ -7,13 +7,11 @@ import torch.nn.functional as F
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.metrics import MetricKey
-from src.rl.batches import map_tensors
-from src.rl.batches import slice_state_batch
+from src.rl.batches import slice_states
 from src.rl.batches import take_minibatch_states
 from src.rl.models import ActorCritic
 from src.rl.reward import RewardStream
 from src.rl.types import Rollout
-from src.rl.types import StateCounts
 
 
 @dataclass
@@ -34,10 +32,10 @@ class PPOConfig:
 class _Targets:
     """What an update's minibatches train against: one row per state, fixed for the update."""
 
-    x_log_probs_prox: torch.Tensor  # (batch_size,) the recorded actions' log-probs under π_prox
-    x_returns: torch.Tensor  # (batch_size, num_reward_streams)
-    x_advantages: torch.Tensor  # (batch_size,) summed over the reward streams, normalized
-    x_weights_capped: torch.Tensor  # (batch_size,) π_prox / π_behavior, capped
+    x_log_prob_prox: torch.Tensor  # (batch_size,) the recorded actions' log-probs under π_prox
+    x_return: torch.Tensor         # (batch_size, num_reward_streams)
+    x_advantage: torch.Tensor      # (batch_size,) summed over the reward streams, normalized
+    x_weight_capped: torch.Tensor  # (batch_size,) π_prox / π_behavior, capped
 
 
 def update_ppo(
@@ -75,56 +73,56 @@ def update_ppo(
         averaged over the minibatches run, then `update/epochs_run`, the `value/ev_*` explained
         variances and the `offpolicy/*` scalars, each computed once per update.
     """
-    num_reward_streams = rollout.x_rewards.shape[-1]
+    num_reward_streams = rollout.x_reward.shape[-1]
 
-    # The rollout's counts on the host, read once: every size below is a sum over them
-    state_counts_cpu = map_tensors(rollout.state_batch.state_counts, torch.Tensor.cpu)
+    # The rollout's totals on the host, read once: every size below is a sum over them
+    x_total_cpu = rollout.states.x_total.cpu()
 
     # Calculate the rollout's log-probabilities and values under the current weights
-    x_log_probs_prox, x_value_prox, x_value_final = _evaluate_rollout(
-        model, rollout, state_counts_cpu, ppo_config.minibatch_size
+    x_log_prob_prox, x_value_prox, x_value_final = _evaluate_rollout(
+        model, rollout, x_total_cpu, ppo_config.minibatch_size
     )
 
     # Compute GAE returns and advantages
-    x_returns, x_advantages = _compute_gae(
-        rollout.x_rewards,
+    x_return, x_advantage = _compute_gae(
+        rollout.x_reward,
         x_value_prox,
-        rollout.x_dones.unsqueeze(-1),
-        rollout.x_num_discounts.unsqueeze(-1),
+        rollout.x_done.unsqueeze(-1),
+        rollout.x_num_discount.unsqueeze(-1),
         x_value_final,
         gamma,
         ppo_config.lam,
     )
 
     # Sum per-stream advantages (advantage is linear) and normalize them over the batch
-    x_advantages = x_advantages.sum(-1)
-    x_advantages = (x_advantages - x_advantages.mean()) / (x_advantages.std() + 1e-8)
+    x_advantage = x_advantage.sum(-1)
+    x_advantage = (x_advantage - x_advantage.mean()) / (x_advantage.std() + 1e-8)
 
     # One row per state from here on
-    x_log_weights = x_log_probs_prox - rollout.x_log_probs_behavior
-    x_weights = x_log_weights.exp()
+    x_log_weight = x_log_prob_prox - rollout.x_log_prob_behavior
+    x_weight = x_log_weight.exp()
     targets = _Targets(
-        x_log_probs_prox=x_log_probs_prox,
-        x_returns=x_returns.reshape(-1, num_reward_streams),
-        x_advantages=x_advantages.reshape(-1),
-        x_weights_capped=x_weights.clamp(max=ppo_config.is_clip),
+        x_log_prob_prox=x_log_prob_prox,
+        x_return=x_return.reshape(-1, num_reward_streams),
+        x_advantage=x_advantage.reshape(-1),
+        x_weight_capped=x_weight.clamp(max=ppo_config.is_clip),
     )
 
-    # All shuffles are drawn, and their states' counts gathered, before the first minibatch
+    # All shuffles are drawn, and their states' totals gathered, before the first minibatch
     # launches.
     minibatches = _plan_minibatches(
-        state_counts_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
+        x_total_cpu, ppo_config.minibatch_size, ppo_config.num_epochs, device, generator
     )
     num_minibatches = len(minibatches) // ppo_config.num_epochs
 
     batch_metrics = []
-    for x_state_ids, state_counts_cpu_mini in minibatches:
+    for x_idx_state, x_total_cpu_mini in minibatches:
         metrics = _update_minibatch(
             model,
             optimizer,
             rollout,
-            x_state_ids,
-            state_counts_cpu_mini,
+            x_idx_state,
+            x_total_cpu_mini,
             targets,
             ppo_config,
             device,
@@ -139,7 +137,7 @@ def update_ppo(
 
     # Each per-minibatch metric averaged over the minibatches run, then the once-per-update ones
     return _average_minibatch_metrics(batch_metrics, num_minibatches) | _anchor_metrics(
-        targets.x_returns, x_value_prox, x_log_weights, x_weights, ppo_config.is_clip
+        targets.x_return, x_value_prox, x_log_weight, x_weight, ppo_config.is_clip
     )
 
 
@@ -171,7 +169,7 @@ def adapt_lr_scale(lr_scale: float, approx_kl: float, target_kl: float) -> float
 
 
 def _evaluate_rollout(
-    model: ActorCritic, rollout: Rollout, state_counts_cpu: StateCounts, minibatch_size: int
+    model: ActorCritic, rollout: Rollout, x_total_cpu: torch.Tensor, minibatch_size: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
 
@@ -183,63 +181,61 @@ def _evaluate_rollout(
         The Learner's model.
     rollout : Rollout
         The rollout: `rollout_length` steps of `num_envs` games.
-    state_counts_cpu : StateCounts
-        The rollout's states' counts, on the CPU.
+    x_total_cpu : torch.Tensor
+        The rollout's states' totals, on the CPU.
     minibatch_size : int
         The most states per forward.
 
     Returns
     -------
-    x_log_probs_prox : torch.Tensor
+    x_log_prob_prox : torch.Tensor
         (batch_size,). Each state's recorded action's log-prob, summed over the levels.
     x_value_prox : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values.
     x_value_final : torch.Tensor
         (num_envs, num_reward_streams). Each game's final value.
     """
-    rollout_length, num_envs, num_reward_streams = rollout.x_rewards.shape
+    rollout_length, num_envs, num_reward_streams = rollout.x_reward.shape
     batch_size = rollout_length * num_envs
     
-    x_batch_log_prob = []
-    x_batch_value = []
+    batch_x_log_prob = []
+    batch_x_value = []
     with torch.no_grad():
-        for start in range(0, batch_size, minibatch_size):
-            stop = min(start + minibatch_size, batch_size)
+        for idx_start in range(0, batch_size, minibatch_size):
+            idx_stop = min(idx_start + minibatch_size, batch_size)
 
-            # Slice `StateBatch` and actions
-            state_batch_slice = slice_state_batch(
-                rollout.state_batch, start, stop, state_counts_cpu
+            # Slice `States` and actions
+            states_slice = slice_states(
+                rollout.states, idx_start, idx_stop, x_total_cpu
             )
-            state_counts_cpu_slice = map_tensors(
-                state_counts_cpu, lambda x_tensor: x_tensor[start:stop]
-            )
-            x_actions_slice = rollout.x_actions[start:stop]
+            x_total_cpu_slice = x_total_cpu[idx_start:idx_stop]
+            x_action_slice = rollout.x_action[idx_start:idx_stop]
 
             # Evaluate actions on the slice's states
             policy_output, x_value = model.action_evaluate(
-                state_batch_slice, state_counts_cpu_slice, x_actions_slice
+                states_slice, x_total_cpu_slice, x_action_slice
             )
 
             # Append log-probabilities and values
-            x_batch_log_prob.append(policy_output.x_log_prob.sum(-1))
-            x_batch_value.append(x_value)
+            batch_x_log_prob.append(policy_output.x_log_prob.sum(-1))
+            batch_x_value.append(x_value)
 
         # Bootstrap value i.e. value of the rollout's final state for each environment
-        state_batch_final = rollout.state_batch_final
-        state_counts_cpu_final = map_tensors(state_batch_final.state_counts, torch.Tensor.cpu)
-        x_value_final = model.get_values(state_batch_final, state_counts_cpu_final)
+        states_final = rollout.states_final
+        x_total_cpu_final = states_final.x_total.cpu()
+        x_value_final = model.get_values(states_final, x_total_cpu_final)
 
-    x_value_prox = torch.cat(x_batch_value).reshape(
+    x_value_prox = torch.cat(batch_x_value).reshape(
         rollout_length, num_envs, num_reward_streams
     )
-    return torch.cat(x_batch_log_prob), x_value_prox, x_value_final
+    return torch.cat(batch_x_log_prob), x_value_prox, x_value_final
 
 
 def _compute_gae(
-    x_rewards: torch.Tensor,
-    x_values: torch.Tensor,
-    x_dones: torch.Tensor,
-    x_num_discounts: torch.Tensor,
+    x_reward: torch.Tensor,
+    x_value: torch.Tensor,
+    x_done: torch.Tensor,
+    x_num_discount: torch.Tensor,
     x_value_final: torch.Tensor,
     gamma: float,
     lam: float,
@@ -251,15 +247,15 @@ def _compute_gae(
 
     Parameters
     ----------
-    x_rewards : torch.Tensor
+    x_reward : torch.Tensor
         (rollout_length, num_envs, num_reward_streams) float32. Each step's rewards, one per
         reward stream.
-    x_values : torch.Tensor
+    x_value : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values.
-    x_dones : torch.Tensor
+    x_done : torch.Tensor
         (rollout_length, num_envs, 1) float32. Whether each step ended its game's episode: 1.0 if
         so, else 0.0.
-    x_num_discounts : torch.Tensor
+    x_num_discount : torch.Tensor
         (rollout_length, num_envs, 1) long. Each step's k: it discounts by γ^k and decays the
         trace by (γλ)^k.
     x_value_final : torch.Tensor
@@ -271,49 +267,49 @@ def _compute_gae(
 
     Returns
     -------
-    x_returns : torch.Tensor
+    x_return : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each step's advantages plus its values.
-    x_advantages : torch.Tensor
+    x_advantage : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each step's advantages.
     """
-    rollout_length = x_rewards.shape[0]
+    rollout_length = x_reward.shape[0]
 
     # Initialize tensors
-    x_advantages = torch.zeros_like(x_rewards)
+    x_advantage = torch.zeros_like(x_reward)
     x_gae = torch.zeros_like(x_value_final)
 
     # Iterate in reversed order
-    for t in reversed(range(rollout_length)):
-        x_value = x_values[t]
-        x_value_next = x_value_final if t == rollout_length - 1 else x_values[t + 1]
+    for idx_step in reversed(range(rollout_length)):
+        x_value_step = x_value[idx_step]
+        x_value_next = x_value_final if idx_step == rollout_length - 1 else x_value[idx_step + 1]
 
         # Game is still going flag
-        x_ongoing = 1.0 - x_dones[t]
+        x_ongoing = 1.0 - x_done[idx_step]
 
         # Calculate one-step TD error & GAE
-        x_discount = gamma ** x_num_discounts[t]
-        x_delta = x_rewards[t] + x_discount * x_value_next * x_ongoing - x_value
-        x_gae = x_delta + x_discount * lam ** x_num_discounts[t] * x_ongoing * x_gae
+        x_discount = gamma ** x_num_discount[idx_step]
+        x_delta = x_reward[idx_step] + x_discount * x_value_next * x_ongoing - x_value_step
+        x_gae = x_delta + x_discount * lam ** x_num_discount[idx_step] * x_ongoing * x_gae
 
         # Store GAE
-        x_advantages[t] = x_gae
+        x_advantage[idx_step] = x_gae
 
-    return x_advantages + x_values, x_advantages
+    return x_advantage + x_value, x_advantage
 
 
 def _plan_minibatches(
-    state_counts_cpu: StateCounts,
+    x_total_cpu: torch.Tensor,
     minibatch_size: int,
     num_epochs: int,
     device: torch.device,
     generator: torch.Generator,
-) -> list[tuple[torch.Tensor, StateCounts]]:
-    """Plan every epoch before training, transferring all shuffled state IDs together.
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Plan every epoch before training, transferring all shuffled state indexes together.
 
     Parameters
     ----------
-    state_counts_cpu : StateCounts
-        The rollout's states' counts, on the CPU.
+    x_total_cpu : torch.Tensor
+        The rollout's states' totals, on the CPU.
     minibatch_size : int
         The maximum number of states per minibatch.
     num_epochs : int
@@ -325,30 +321,28 @@ def _plan_minibatches(
 
     Returns
     -------
-    list[tuple[torch.Tensor, StateCounts]]
-        Each minibatch's state indices on the device and its states' counts on the CPU, in the
+    list[tuple[torch.Tensor, torch.Tensor]]
+        Each minibatch's state indexes on the device and its states' totals on the CPU, in the
         order the minibatches run, epoch after epoch. Every epoch has the same number of them.
     """
-    batch_size = len(state_counts_cpu.x_token_kind_count)
+    batch_size = len(x_total_cpu)
 
     # One shuffle of the states per epoch
-    x_state_ids_cpu = torch.stack(
+    x_idx_state_cpu = torch.stack(
         [torch.randperm(batch_size, generator=generator) for _ in range(num_epochs)]
     )
-    x_state_ids = (x_state_ids_cpu.pin_memory() if device.type == "cuda" else x_state_ids_cpu).to(
+    x_idx_state = (x_idx_state_cpu.pin_memory() if device.type == "cuda" else x_idx_state_cpu).to(
         device, non_blocking=True
     )
 
-    # Each shuffle cut into minibatches, with their states' counts
+    # Each shuffle cut into minibatches, with their states' totals
     minibatches = []
-    for num_epoch in range(num_epochs):
-        for start in range(0, batch_size, minibatch_size):
-            stop = start + minibatch_size
-            x_state_ids_cpu_mini = x_state_ids_cpu[num_epoch, start:stop]
-            state_counts_cpu_mini = map_tensors(
-                state_counts_cpu, lambda x_tensor: x_tensor[x_state_ids_cpu_mini]
-            )
-            minibatches.append((x_state_ids[num_epoch, start:stop], state_counts_cpu_mini))
+    for idx_epoch in range(num_epochs):
+        for idx_start in range(0, batch_size, minibatch_size):
+            idx_stop = idx_start + minibatch_size
+            x_idx_state_cpu_mini = x_idx_state_cpu[idx_epoch, idx_start:idx_stop]
+            x_total_cpu_mini = x_total_cpu[x_idx_state_cpu_mini]
+            minibatches.append((x_idx_state[idx_epoch, idx_start:idx_stop], x_total_cpu_mini))
 
     return minibatches
 
@@ -357,8 +351,8 @@ def _update_minibatch(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
     rollout: Rollout,
-    x_state_ids: torch.Tensor,
-    state_counts_cpu: StateCounts,
+    x_idx_state: torch.Tensor,
+    x_total_cpu: torch.Tensor,
     targets: _Targets,
     ppo_config: PPOConfig,
     device: torch.device,
@@ -373,10 +367,10 @@ def _update_minibatch(
         The model's optimizer.
     rollout : Rollout
         The collected states and actions.
-    x_state_ids : torch.Tensor
+    x_idx_state : torch.Tensor
         (minibatch_size,) long. The minibatch's states.
-    state_counts_cpu : StateCounts
-        Those states' counts, on the CPU.
+    x_total_cpu : torch.Tensor
+        Those states' totals, on the CPU.
     targets : _Targets
         What the update trains against, one row per state of the rollout.
     ppo_config : PPOConfig
@@ -391,24 +385,24 @@ def _update_minibatch(
         ranks' mean.
     """
     # Forward pass, under the weights so far
-    state_batch_mini = take_minibatch_states(rollout.state_batch, x_state_ids, state_counts_cpu)
-    policy_output, x_values = model.action_evaluate(
-        state_batch_mini, state_counts_cpu, rollout.x_actions[x_state_ids],
+    states_mini = take_minibatch_states(rollout.states, x_idx_state, x_total_cpu)
+    policy_output, x_value = model.action_evaluate(
+        states_mini, x_total_cpu, rollout.x_action[x_idx_state],
     )
 
     # Policy Loss
-    x_log_ratios = policy_output.x_log_prob.sum(-1) - targets.x_log_probs_prox[x_state_ids]
-    x_ratios = x_log_ratios.exp()
+    x_log_ratio = policy_output.x_log_prob.sum(-1) - targets.x_log_prob_prox[x_idx_state]
+    x_ratio = x_log_ratio.exp()
     x_loss_policy = _compute_loss_policy(
-        x_ratios,
-        targets.x_advantages[x_state_ids],
-        targets.x_weights_capped[x_state_ids],
+        x_ratio,
+        targets.x_advantage[x_idx_state],
+        targets.x_weight_capped[x_idx_state],
         ppo_config.clip_eps,
     )
 
     # Value loss: summed over streams, mean over the batch
-    x_returns = targets.x_returns[x_state_ids]
-    x_loss_value = 0.5 * F.mse_loss(x_values, x_returns, reduction="none").sum(-1).mean()
+    x_return = targets.x_return[x_idx_state]
+    x_loss_value = 0.5 * F.mse_loss(x_value, x_return, reduction="none").sum(-1).mean()
     x_loss_entropy = -torch.mean(policy_output.x_entropy.sum(dim=-1))
 
     # KL-Uniform barrier, summed per head like the entropy term; each head's KL falls
@@ -435,8 +429,8 @@ def _update_minibatch(
         x_loss_kl_uniform,
         policy_output.x_entropy,
         policy_output.x_kl_uniform,
-        x_ratios,
-        x_log_ratios,
+        x_ratio,
+        x_log_ratio,
         x_grad_norm,
         ppo_config.clip_eps,
     )
@@ -448,9 +442,9 @@ def _update_minibatch(
 
 
 def _compute_loss_policy(
-    x_ratios: torch.Tensor,
-    x_advantages: torch.Tensor,
-    x_weights_capped: torch.Tensor,
+    x_ratio: torch.Tensor,
+    x_advantage: torch.Tensor,
+    x_weight_capped: torch.Tensor,
     clip_eps: float,
 ) -> torch.Tensor:
     """Compute the policy loss of decoupled PPO (Hilton et al. 2021).
@@ -460,12 +454,12 @@ def _compute_loss_policy(
 
     Parameters
     ----------
-    x_ratios : torch.Tensor
+    x_ratio : torch.Tensor
         (batch_size,). Each recorded action's probability ratio, the current weights' over
         π_prox's.
-    x_advantages : torch.Tensor
+    x_advantage : torch.Tensor
         (batch_size,). Each state's normalized advantage.
-    x_weights_capped : torch.Tensor
+    x_weight_capped : torch.Tensor
         (batch_size,). Each state's capped off-policy weight.
     clip_eps : float
         The clip range.
@@ -475,9 +469,9 @@ def _compute_loss_policy(
     torch.Tensor
         (). The policy loss.
     """
-    x_surrogate = x_ratios * x_advantages
-    x_surrogate_clipped = torch.clamp(x_ratios, 1 - clip_eps, 1 + clip_eps) * x_advantages
-    return -torch.mean(x_weights_capped * torch.min(x_surrogate, x_surrogate_clipped))
+    x_surrogate = x_ratio * x_advantage
+    x_surrogate_clipped = torch.clamp(x_ratio, 1 - clip_eps, 1 + clip_eps) * x_advantage
+    return -torch.mean(x_weight_capped * torch.min(x_surrogate, x_surrogate_clipped))
 
 
 def _minibatch_metrics(
@@ -485,10 +479,10 @@ def _minibatch_metrics(
     x_loss_value: torch.Tensor,
     x_loss_entropy: torch.Tensor,
     x_loss_kl_uniform: torch.Tensor,
-    x_entropies: torch.Tensor,
+    x_entropy: torch.Tensor,
     x_kl_uniform: torch.Tensor,
-    x_ratios: torch.Tensor,
-    x_log_ratios: torch.Tensor,
+    x_ratio: torch.Tensor,
+    x_log_ratio: torch.Tensor,
     x_grad_norm: torch.Tensor,
     clip_eps: float,
 ) -> dict[str, float]:
@@ -507,14 +501,14 @@ def _minibatch_metrics(
         (). The entropy loss.
     x_loss_kl_uniform : torch.Tensor
         (). The uniform-KL loss.
-    x_entropies : torch.Tensor
+    x_entropy : torch.Tensor
         (batch_size, 3). The entropy of each of the minibatch's states at each level.
     x_kl_uniform : torch.Tensor
         (batch_size, 3). Each state's KL-Uniform at each level.
-    x_ratios : torch.Tensor
+    x_ratio : torch.Tensor
         (batch_size,). Each recorded action's probability ratio, the current weights' over
         π_prox's.
-    x_log_ratios : torch.Tensor
+    x_log_ratio : torch.Tensor
         (batch_size,). The ratios' logs.
     x_grad_norm : torch.Tensor
         (). The gradients' total norm before clipping.
@@ -526,7 +520,7 @@ def _minibatch_metrics(
     dict[str, float]
         Each scalar under its TensorBoard name.
     """
-    x_entropies_mean = x_entropies.mean(dim=0)
+    x_entropy_mean = x_entropy.mean(dim=0)
     x_kl_uniform_mean = x_kl_uniform.mean(dim=0)
     return _read_metrics(
         {
@@ -537,9 +531,9 @@ def _minibatch_metrics(
             MetricKey.LOSS_KL_UNIFORM: x_loss_kl_uniform,
 
             # Entropy
-            MetricKey.ENTROPY_L1: x_entropies_mean[0],
-            MetricKey.ENTROPY_L2: x_entropies_mean[1],
-            MetricKey.ENTROPY_L3: x_entropies_mean[2],
+            MetricKey.ENTROPY_L1: x_entropy_mean[0],
+            MetricKey.ENTROPY_L2: x_entropy_mean[1],
+            MetricKey.ENTROPY_L3: x_entropy_mean[2],
 
             # KL-Uniform
             MetricKey.KL_UNIFORM_L1: x_kl_uniform_mean[0],
@@ -547,10 +541,10 @@ def _minibatch_metrics(
             MetricKey.KL_UNIFORM_L3: x_kl_uniform_mean[2],
 
             # KL-Update
-            MetricKey.UPDATE_APPROX_KL: ((x_ratios - 1) - x_log_ratios).mean(),
+            MetricKey.UPDATE_APPROX_KL: ((x_ratio - 1) - x_log_ratio).mean(),
 
             # Other
-            MetricKey.UPDATE_CLIP_FRACTION: ((x_ratios - 1).abs() > clip_eps).float().mean(),
+            MetricKey.UPDATE_CLIP_FRACTION: ((x_ratio - 1).abs() > clip_eps).float().mean(),
             MetricKey.GRAD_NORM_PRECLIP: x_grad_norm,
         }
     )
@@ -611,24 +605,24 @@ def _average_minibatch_metrics(
 
 
 def _anchor_metrics(
-    x_returns: torch.Tensor,
+    x_return: torch.Tensor,
     x_value_prox: torch.Tensor,
-    x_log_weights: torch.Tensor,
-    x_weights: torch.Tensor,
+    x_log_weight: torch.Tensor,
+    x_weight: torch.Tensor,
     is_clip: float,
 ) -> dict[str, float]:
     """Return the TensorBoard scalars computed once per update, over the whole rollout.
 
     Parameters
     ----------
-    x_returns : torch.Tensor
+    x_return : torch.Tensor
         (batch_size, num_reward_streams). Each state's returns.
     x_value_prox : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values under π_prox's
         weights.
-    x_log_weights : torch.Tensor
+    x_log_weight : torch.Tensor
         (batch_size,). The log of each state's off-policy weight, π_prox / π_behavior, uncapped.
-    x_weights : torch.Tensor
+    x_weight : torch.Tensor
         (batch_size,). Each state's off-policy weight, uncapped.
     is_clip : float
         The off-policy weights' cap.
@@ -639,15 +633,15 @@ def _anchor_metrics(
         Each scalar under its TensorBoard name.
     """
     # Per-stream explained variance of the values the Learner recomputed before the update
-    x_value_prox = x_value_prox.reshape(x_returns.shape)
-    x_explained_var = 1.0 - (x_returns - x_value_prox).var(dim=0) / (x_returns.var(dim=0) + 1e-8)
+    x_value_prox = x_value_prox.reshape(x_return.shape)
+    x_explained_var = 1.0 - (x_return - x_value_prox).var(dim=0) / (x_return.var(dim=0) + 1e-8)
 
     return _read_metrics(
         {
-            **{f"{MetricKey.VALUE_EV}_{reward_stream}": x_explained_var[idx] for idx, reward_stream in enumerate(RewardStream)},
-            MetricKey.OFFPOLICY_IS_WEIGHT_MEAN: x_weights.clamp(max=is_clip).mean(),
-            MetricKey.OFFPOLICY_IS_WEIGHT_TRUNCATED: (x_weights > is_clip).float().mean(),
-            MetricKey.OFFPOLICY_KL_BEHAVIOR_PROX: (x_weights - 1 - x_log_weights).mean(),
+            **{f"{MetricKey.VALUE_EV}_{reward_stream}": x_explained_var[idx_reward_stream] for idx_reward_stream, reward_stream in enumerate(RewardStream)},
+            MetricKey.OFFPOLICY_IS_WEIGHT_MEAN: x_weight.clamp(max=is_clip).mean(),
+            MetricKey.OFFPOLICY_IS_WEIGHT_TRUNCATED: (x_weight > is_clip).float().mean(),
+            MetricKey.OFFPOLICY_KL_BEHAVIOR_PROX: (x_weight - 1 - x_log_weight).mean(),
         }
     )
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Literal
 from typing import final
 
 import torch
@@ -108,156 +109,145 @@ class Tag(IntEnum):
     SETUP = 3  # Meant for planned combo plays
 
 
+# Collection storage forms, used only in type annotations
+type Live = Literal["live"]
+type Reserved = Literal["reserved"]
+
+
 @final
 @dataclass
-class Jagged[T]:
-    """Consecutive variable-length segments of a tensor or row record.
+class Sparse[TStorage]:
+    """Nonzero feature entries, consecutive and ordered by row then column.
 
-    `x_lengths[i]` is the number of logical rows in segment i. A tensor has one value per row on
-    its leading axis. A Tokens record has one value per token in its direct tensors and one
-    row or segment per token in its nested records. A Sparse record has one length per logical
-    row, with columns and values on its entry axis. Only populated rows belong here; shared
-    storage capacity is a separate concern.
+    `x_count` counts entries per feature row, including empty rows. The columns and values
+    describe the same entries. Live collections hold exactly their populated rows and entries;
+    Reserved collections hold capacity whose unused tails are stale. TStorage records this
+    distinction in annotations without adding a runtime field.
     """
 
-    x_lengths: torch.Tensor  # (number of segments,) integer, nonnegative
-    rows: T
+    x_col: torch.Tensor    # (F,) int16
+    x_value: torch.Tensor  # (F,) float32
+    x_count: torch.Tensor  # (R,) int16, entries per row
 
 
 @final
 @dataclass
-class JaggedReserved[T]:
-    """A Jagged's arrays at worst-case capacity, in a worker's shared memory.
+class Dense:
+    """One dense feature vector per token, in the tokens' order."""
 
-    The encoders write a prefix of each array and the rows past it are stale, so nothing
-    consumes it until `read_states` has generated the Jagged of its written rows.
+    x_value: torch.Tensor  # (N, dim_entity)
+
+
+@final
+@dataclass
+class OwnedRows[TStorage]:
+    """Effect or Modifier rows, consecutive in their owning tokens' order.
+
+    `x_count` counts rows per token. Each owned row has one entry count in `sparse`, even when
+    that row has no nonzero features.
     """
 
-    x_lengths: torch.Tensor  # (segment capacity,) integer, nonnegative
-    rows: T
+    sparse: Sparse[TStorage]
+    x_count: torch.Tensor  # (N,) int16, rows per token
 
 
 @final
 @dataclass
-class SparseEntries:
-    """The nonzero entries of sparse rows, consecutive and ordered by row then column."""
+class EncodedFeatures[TStorage]:
+    """The encoder's token features and the rows those tokens own.
 
-    x_columns: torch.Tensor  # (F,) int16
-    x_values: torch.Tensor  # (F,) float32
+    Token entries index the shared column space, each Entity kind's columns from its COL_START,
+    then the health/block, price and slot columns Entity kinds share and the Tag columns Cards,
+    Relics and Potions share. The projector embeds the owned rows and adds them into each token.
+    """
+
+    sparse: Sparse[TStorage]  # One feature row per token
+
+    # The rows the tokens own
+    effects: OwnedRows[TStorage]    # Any number per token; counts are int16
+    modifiers: OwnedRows[TStorage]  # Any number per Character / Monster; int16
 
 
 @final
 @dataclass
-class Tokens[TFeatures, TOwned]:
-    """Every Entity token as a row, every state's in window order, state after state.
+class Tokens[TFeatures]:
+    """Every Entity token, each state's in window order, state after state.
 
-    Sparse features index the shared column space, each Entity kind's columns from its
-    COL_START, then the health/block, price and slot columns Entity kinds share and the Tag
-    columns Cards, Relics and Potions share. Effects and Modifiers each have one segment per
-    token; the projector adds their rows into that token.
+    `x_count` counts tokens per state. Every token has features, kinds and legal masks. Features
+    are EncodedFeatures before projection and Dense afterwards; projection and attention keep
+    the token order and state boundaries.
     """
 
     features: TFeatures
-    x_token_kind: torch.Tensor  # (N,) int16, which also names the Entity kind
-    x_entity_kind: torch.Tensor  # (N,) int16, its token kind's Entity kind
+    x_count: torch.Tensor  # (B,) long, tokens per state
 
-    # Items selectable under each action type, deduped by Card identity
-    x_legal_selection: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+    # Each token's `TokenKind` and `EntityKind`
+    x_token_kind: torch.Tensor   # (N_tok,) int16
+    x_entity_kind: torch.Tensor  # (N_tok,) int16
 
-    # Monster targets legal under each action type
-    x_legal_target: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
+    # Whether the token is selectable under the `ActionType`, deduped by Card identity
+    x_legal_selection: torch.Tensor  # (N_tok, NUM_ACTION_TYPES) bool
 
-    # Selections whose legal actions carry a Monster target (Cards / Potions)
-    x_needs_target: torch.Tensor  # (N,) bool
+    # Whether the token is targetable by the `ActionType` (`CardPlay` / `PotionUse`)
+    x_legal_target: torch.Tensor  # (N_tok, NUM_ACTION_TYPES) bool
 
-    # The rows the tokens own
-    effects: TOwned  # Any number per token; lengths are int16
-    modifiers: TOwned  # Any number per Character / Monster; int16
+    # Whether the token needs an additional Monster target if selected (Cards / Potions)
+    x_needs_target: torch.Tensor  # (N_tok,) bool
 
 
-@final
-@dataclass
-class StateCounts:
-    """How much each state holds: a batch's shape.
+class StateCollection(IntEnum):
+    """Columns of States.x_total after its per-token-kind counts.
 
-    Every size is a sum over these counts and every position a running total. A batch on a
-    device carries one copy; the same counts on the host travel beside it, so no size is ever
-    read back from the device.
+    These identities name collections explicitly; record field order does not determine them.
     """
 
-    x_token_kind_count: torch.Tensor  # (B, len(TokenKind)) int16, its tokens of each token kind
-    x_jagged_count: torch.Tensor  # (B, number_of_Jaggeds) int32, its rows in each, in Jagged order
+    TOKENS = len(TokenKind)
+    TOKEN_ENTRIES = TOKENS + 1
+    EFFECTS = TOKENS + 2
+    EFFECT_ENTRIES = TOKENS + 3
+    MODIFIERS = TOKENS + 4
+    MODIFIER_ENTRIES = TOKENS + 5
+    PENDING_ENTRIES = TOKENS + 6
 
 
 @dataclass
-class States[TTokens, TEffectPending]:
-    """Game states in either form: finished (`StateBatch`) or worker memory (`StateBatchReserved`).
+class States[TStorage]:
+    """Encoded game states, with explicit collections of tokens, owned rows and sparse entries.
 
-    Tokens have one segment per state, and each token owns segments of Effects and Modifiers.
-    All other fields, the pending Effect included, have one row per state. `src/rl/batches.py`
-    selects and joins states using those explicit segment boundaries. Jagged order is this
-    record's field order, depth first.
+    Tokens belong to states; Effects and Modifiers belong to tokens. The pending Effect has one
+    sparse feature row per state, empty where no halt is pending. TStorage propagates Live or
+    Reserved to these collections. `read_states` turns reserved capacity into populated views;
+    rewriting that capacity invalidates its earlier views. The worker protocol owns access.
+
+    `x_total` holds each state's derived totals, for model features and batch sizing. TokenKind
+    indexes its first columns and StateCollection the rest. A CPU copy travels beside device
+    states so output sizes need no device readback.
     """
 
-    tokens: TTokens  # (B,) long lengths
-    effect_pending: TEffectPending  # (B,) int16 lengths, 0 where no halt is pending
-    x_context: torch.Tensor  # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
-    x_map_grid: torch.Tensor  # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
+    tokens: Tokens[EncodedFeatures[TStorage]]
+    effect_pending: Sparse[TStorage]
+
+    # One row per state
+    x_context: torch.Tensor            # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
+    x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
-    state_counts: StateCounts
-
-
-# Sparse rows: x_lengths are (R,) int16, entries per row, including empty rows, and sum to F
-type Sparse = Jagged[SparseEntries]
-
-# The same rows in a worker's shared memory, at worst-case capacity
-type SparseReserved = JaggedReserved[SparseEntries]
-
-# Compact game states held by the model, rollout and minibatches
-type StateBatch = States[Jagged[Tokens[Sparse, Jagged[Sparse]]], Sparse]
-
-# The same states in a worker's shared memory, at worst-case capacity
-type StateBatchReserved = States[
-    JaggedReserved[Tokens[SparseReserved, JaggedReserved[SparseReserved]]], SparseReserved
-]
-
-
-@final
-@dataclass
-class TokensRefined:
-    """Every Entity token after the core, as a row, in the input tokens' order.
-
-    The embedding is the core's, and so is each token's state, derived once from the lengths.
-    The Entity kind and the legal masks are the input tokens' own, carried over untouched so they
-    stay with the tokens they describe.
-    """
-
-    x_embedding: torch.Tensor  # (N, dim_entity)
-    x_token_state: torch.Tensor  # (N,) long, its state
-    x_entity_kind: torch.Tensor  # (N,) int16, its token kind's Entity kind
-
-    # Items selectable under each action type, deduped by Card identity
-    x_legal_selection: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
-
-    # Monster targets legal under each action type
-    x_legal_target: torch.Tensor  # (N, NUM_ACTION_TYPES) bool
-
-    # Selections whose legal actions carry a Monster target (Cards / Potions)
-    x_needs_target: torch.Tensor  # (N,) bool
+    x_total: torch.Tensor              # (B, len(TokenKind) + len(StateCollection)) int32
 
 
 @dataclass
 class CoreOutput:
     """The game states after the core: what the heads read.
 
-    Tokens have one segment per state; every other field has one row per state. The legal action
-    types and the counts are the input states' own, carried over untouched.
+    Dense token features preserve the input tokens' order, kinds and legal masks. The core also
+    carries each token's state, derived once from the counts. Global vectors, legal action types
+    and totals each have one row per state.
     """
 
-    tokens: Jagged[TokensRefined]  # (B,) long lengths
-    x_global: torch.Tensor  # (B, dim_global)
+    tokens: Tokens[Dense]
+    x_token_state: torch.Tensor        # (N,) long, each token's state
+    x_global: torch.Tensor             # (B, dim_global)
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
-    state_counts: StateCounts
+    x_total: torch.Tensor              # (B, len(TokenKind) + len(StateCollection)) int32
 
 
 @dataclass
@@ -271,9 +261,9 @@ class PolicyOutput:
     Entity ids using the encoder's token ordering.
     """
 
-    x_actions: torch.Tensor  # (B, 3) long; action type, state-local selection offset, Monster rank
-    x_log_prob: torch.Tensor  # (B, 3) float, 0 where N/A
-    x_entropy: torch.Tensor  # (B, 3) float, 0 where N/A
+    x_action: torch.Tensor      # (B, 3) long; action type, state-local selection offset, Monster rank
+    x_log_prob: torch.Tensor    # (B, 3) float, 0 where N/A
+    x_entropy: torch.Tensor     # (B, 3) float, 0 where N/A
     x_kl_uniform: torch.Tensor  # (B, 3) float, KL-Uniform over legal actions, 0 where N/A
 
 
@@ -281,24 +271,26 @@ class PolicyOutput:
 class Rollout:
     """What the Actor collected, before GAE.
 
-    T steps of E games, state t * E + e of the B = T * E states. `state_batch_final` holds each
+    T steps of E games, state t * E + e of the B = T * E states. `states_final` holds each
     game's state after the last step, for the bootstrap value.
     """
 
-    state_batch: StateBatch  # B states
-    x_actions: torch.Tensor  # (B, 3): action type, state-local selection offset, Monster rank
-    x_log_probs_behavior: torch.Tensor  # (B,) under the weights that played
-    x_rewards: torch.Tensor  # (T, E, K)
-    x_dones: torch.Tensor  # (T, E)
-    x_num_discounts: torch.Tensor  # (T, E) long: k in each step's discount, γ^k
-    state_batch_final: StateBatch  # E states
+    states: States[Live]        # B states
+    states_final: States[Live]  # E states
+
+    # Tensors
+    x_action: torch.Tensor             # (B, 3): action type, state-local selection offset, Monster rank
+    x_log_prob_behavior: torch.Tensor  # (B,) under the weights that played
+    x_reward: torch.Tensor             # (T, E, len(RewardStream))
+    x_done: torch.Tensor               # (T, E)
+    x_num_discount: torch.Tensor       # (T, E) long: k in each step's discount, γ^k
 
 
 @dataclass
 class RunState:
     """What a checkpoint resumes besides the weights, the optimizer and the iteration."""
 
-    total_steps: int  # Steps played so far, every rank's games counted
+    total_steps: int          # Steps played so far, every rank's games counted
     ascension_current: float  # The soft-curriculum position
-    streak: int  # The consecutive passes at ascension_current so far
-    lr_scale: float  # The Adaptive-KL learning rate scale
+    streak: int               # The consecutive passes at ascension_current so far
+    lr_scale: float           # The Adaptive-KL learning rate scale

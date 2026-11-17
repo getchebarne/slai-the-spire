@@ -21,16 +21,16 @@ _MAX_STEPS_EPISODE = 3000
 class EpisodeResult:
     """An episode's tally, zeroed by default; step_env fills the fields it settles at its end."""
 
-    length: int = 0  # Policy steps: step_scripted folds its scripted actions into one step
+    length: int = 0         # Policy steps: step_scripted folds its scripted actions into one step
     num_discounts: int = 0  # Discounts taken: each step's k in γ^k (step_scripted)
-    won: bool = False  # Beat the Heart (reward.game_won)
-    floor: int = 0  # GameState.floor at the end, 0..56
-    act: int = 0  # The last act reached
+    won: bool = False       # Beat the Heart (reward.game_won)
+    floor: int = 0          # GameState.floor at the end, 0..56
+    act: int = 0            # The last act reached
 
     reward_stream_rets: np.ndarray = field(default_factory=lambda: np.zeros(len(RewardStream)))
-    gold_gained: int = 0  # Per step, the gold delta plus the Shop spend, floored at 0
-    gold_spent: int = 0  # Gold spent at Shops (reward.shop_gold_spent) over the episode
-    deck_size: int = 0  # Deck size at episode end
+    gold_gained: int = 0     # Per step, the gold delta plus the Shop spend, floored at 0
+    gold_spent: int = 0      # Gold spent at Shops (reward.shop_gold_spent) over the episode
+    deck_size: int = 0       # Deck size at episode end
     truncated: bool = False  # Cut at _MAX_STEPS_EPISODE while the game still ran
 
     # Keys held at the episode's end
@@ -125,13 +125,13 @@ def _tally_step(
     game_state: GameState,
     game_state_next: GameState,
     action: Action,
-    reward: np.ndarray,
+    np_reward: np.ndarray,
     gamma: float,
     num_discounts: int,
     done: bool,
     truncated: bool,
 ) -> None:
-    """Add one policy step: `action` took game_state to game_state_next and paid `reward`.
+    """Add one policy step: `action` took game_state to game_state_next and paid `np_reward`.
 
     On the episode's last step it also sets the fields the episode settles at its end, from
     game_state_next: won, truncated, floor, act, heart_reached, heart_damage, deck_size and
@@ -147,7 +147,7 @@ def _tally_step(
         The state after the step.
     action : Action
         The action the policy took.
-    reward : np.ndarray
+    np_reward : np.ndarray
         (K,) float64. The step's reward, one per reward stream.
     gamma : float
         The discount, for the discounted returns.
@@ -160,7 +160,7 @@ def _tally_step(
     """
     # Increment 
     episode_result.length += 1
-    episode_result.reward_stream_rets += gamma**episode_result.num_discounts * reward
+    episode_result.reward_stream_rets += gamma**episode_result.num_discounts * np_reward
     episode_result.num_discounts += num_discounts
     
     # Gold spent

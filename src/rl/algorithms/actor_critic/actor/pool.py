@@ -30,8 +30,9 @@ from src.rl.algorithms.actor_critic.workers import stop_workers
 from src.rl.algorithms.actor_critic.workers import write_ascensions
 from src.rl.batches import cat_states
 from src.rl.models import ActorCritic
+from src.rl.types import Live
 from src.rl.types import Rollout
-from src.rl.types import StateBatch
+from src.rl.types import States
 from src.rl.utils import parent_alive
 
 
@@ -53,7 +54,7 @@ class Delivery:
     episode_results: list[EpisodeResult]
     seconds_collect: float
     seconds_wait_actor: float  # The Actor's idle time before it: waiting for weights or the Learner
-    bytes_reserved_peak: int  # The Actor's peak GPU memory; 0 on the CPU
+    bytes_reserved_peak: int   # The Actor's peak GPU memory; 0 on the CPU
 
 
 @dataclass
@@ -66,7 +67,7 @@ class ActorHandle:
 
     _process: BaseProcess
     _conn_read: Connection  # FIFO; holds at most two Deliveries
-    _x_stop: torch.Tensor  # () bool in shared memory, lock-free like the workers' stop flag
+    _x_stop: torch.Tensor   # () bool in shared memory, lock-free like the workers' stop flag
     _weight_buffer: _WeightBuffer
 
 
@@ -80,7 +81,7 @@ class _ActorConfig:
     gamma: float
 
     # The Learner process's state, which a spawned process doesn't inherit
-    seed: int  # The workers' seed, drawn from the Learner's stream
+    seed: int            # The workers' seed, drawn from the Learner's stream
     x_rng: torch.Tensor  # The Learner's global generator state on the device
     matmul_precision: str
     num_threads: int
@@ -396,48 +397,48 @@ def _collect_rollout(
     episode_results : list[EpisodeResult]
         The episodes finished during the rollout.
     """
-    state_batches: list[StateBatch] = []  # Per step, in state order
-    x_action_batches: list[torch.Tensor] = []  # Per step, (E, 3) on the device
-    x_log_prob_batches: list[torch.Tensor] = []  # Per step, (E,) on the device
-    x_reward_batches: list[torch.Tensor] = []  # Per step, (E, K) on the CPU
-    x_done_batches: list[torch.Tensor] = []  # Per step, (E,) on the CPU
-    x_num_discount_batches: list[torch.Tensor] = []  # Per step, (E,) long on the CPU
+    batch_states: list[States[Live]] = []  # Per step, in state order
+    batch_x_action: list[torch.Tensor] = []  # Per step, (E, 3) on the device
+    batch_x_log_prob: list[torch.Tensor] = []  # Per step, (E,) on the device
+    batch_x_reward: list[torch.Tensor] = []  # Per step, (E, K) on the CPU
+    batch_x_done: list[torch.Tensor] = []  # Per step, (E,) on the CPU
+    batch_x_num_discount: list[torch.Tensor] = []  # Per step, (E,) long on the CPU
     episode_results: list[EpisodeResult] = []
 
     # Turn off gradient computation
     with torch.no_grad():
-        state_batch, state_counts_cpu = snapshot_to_device(workers, device)
+        states, x_total_cpu = snapshot_to_device(workers, device)
         for _ in range(rollout_config.rollout_length):
             # Forward pass, policy only
-            policy_output = model.action_select(state_batch, state_counts_cpu, generator=generator)
-            x_step_actions = policy_output.x_actions
+            policy_output = model.action_select(states, x_total_cpu, generator=generator)
+            x_step_action = policy_output.x_action
 
             # Step the worker's environments
-            x_step_rewards, x_step_dones, x_step_num_discounts, step_episode_results = (
-                step_workers(workers, x_step_actions)
+            x_step_reward, x_step_done, x_step_num_discount, step_episode_results = (
+                step_workers(workers, x_step_action)
             )
 
             # Append the step's data
-            state_batches.append(state_batch)
-            x_action_batches.append(x_step_actions)
-            x_log_prob_batches.append(policy_output.x_log_prob.sum(-1))
-            x_reward_batches.append(x_step_rewards)
-            x_done_batches.append(x_step_dones)
-            x_num_discount_batches.append(x_step_num_discounts)
+            batch_states.append(states)
+            batch_x_action.append(x_step_action)
+            batch_x_log_prob.append(policy_output.x_log_prob.sum(-1))
+            batch_x_reward.append(x_step_reward)
+            batch_x_done.append(x_step_done)
+            batch_x_num_discount.append(x_step_num_discount)
             episode_results.extend(step_episode_results)
 
-            # Snapshot new state and its counts for the next step
-            state_batch, state_counts_cpu = snapshot_to_device(workers, device)
+            # Snapshot new state and its totals for the next step
+            states, x_total_cpu = snapshot_to_device(workers, device)
 
     return (
         Rollout(
-            state_batch=cat_states(state_batches),
-            x_actions=torch.cat(x_action_batches),
-            x_log_probs_behavior=torch.cat(x_log_prob_batches),
-            x_rewards=torch.stack(x_reward_batches).to(device),
-            x_dones=torch.stack(x_done_batches).to(device),
-            x_num_discounts=torch.stack(x_num_discount_batches).to(device),
-            state_batch_final=state_batch,
+            states=cat_states(batch_states),
+            states_final=states,
+            x_action=torch.cat(batch_x_action),
+            x_log_prob_behavior=torch.cat(batch_x_log_prob),
+            x_reward=torch.stack(batch_x_reward).to(device),
+            x_done=torch.stack(batch_x_done).to(device),
+            x_num_discount=torch.stack(batch_x_num_discount).to(device),
         ),
         episode_results,
     )
