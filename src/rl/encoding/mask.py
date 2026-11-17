@@ -4,27 +4,17 @@ from typing import cast
 
 import numpy as np
 import slai
-from slai import ActionType
 from slai import Card
-from slai import EffectRoomEnter
-from slai import EventName
-from slai import GameEnv
-from slai import PotionName
 
-from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.constants import TOKEN_KINDS_CARD
 from src.rl.encoding.card import card_key
 from src.rl.encoding.effect import effect_key
 from src.rl.encoding.focus import derive_focus
 from src.rl.tokens import draw_order_visible
-from src.rl.tokens import get_burning_path
-from src.rl.tokens import get_room_burning
 from src.rl.types import Token
 from src.rl.types import TokenKind
-from src.rl.utils import event_option_wasted
-from src.rl.utils import potion_discard_wasted
-from src.rl.utils import potion_take_wasted
+from src.rl.utils import action_masked
 
 
 def _card_identity(card: Card) -> tuple:
@@ -55,167 +45,6 @@ def _card_identity(card: Card) -> tuple:
     )
 
 
-def _misses_room_burning(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether a RoomSelect leaves the burning Room's path.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state `action` is legal in.
-    action : slai.Action
-        A legal RoomSelect.
-
-    Returns
-    -------
-    bool
-        True when the selected Room is off `get_burning_path` while another Room in its row is on
-        it.
-    """
-    id_room = action.ids[0]
-    rooms = game_state.map.rooms
-    room_selected = next(
-        room for row in rooms for room in row if room is not None and room.id == id_room
-    )
-    burning_path = get_burning_path(game_state)
-    return (room_selected.y, room_selected.x) not in burning_path and any(
-        y == room_selected.y for y, _ in burning_path
-    )
-
-
-def _escapes_room_burning(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether a PotionUse flees the burning Room's fight, which gives no key.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state `action` is legal in.
-    action : slai.Action
-        A legal PotionUse.
-
-    Returns
-    -------
-    bool
-        True for a Smoke Bomb in the burning Room.
-    """
-    id_potion = action.ids[0]
-    potion = next(potion for potion in game_state.potions if potion.id == id_potion)
-    if potion.name != PotionName.SmokeBomb:
-        return False
-
-    map_ = game_state.map
-    room_burning = get_room_burning(map_.rooms)
-    return (
-        room_burning is not None
-        and map_.y_current == room_burning.y
-        and map_.x_current == room_burning.x
-    )
-
-
-def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether a RoomExit or RewardTakeRelic gives up the Sapphire Key from row 8 on.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state `action` is legal in.
-    action : slai.Action
-        A legal RoomExit or RewardTakeRelic.
-
-    Returns
-    -------
-    bool
-        True for a RoomExit at a Chest or while `relic_linked` is set, and for taking the linked
-        Relic.
-    """
-    # Row 8 is always a Chest
-    y_current = game_state.map.y_current
-    if y_current is None or y_current < 8:
-        return False
-
-    # An opened Chest closes for its Reward
-    reward = game_state.reward
-    if reward is None:
-        return game_state.chest is not None
-
-    # Took the linked Relic instead of the key
-    relic_linked = reward.relic_linked
-    return relic_linked is not None and (
-        action.action_type is ActionType.RoomExit or action.ids[0] == relic_linked.id
-    )
-
-
-def _enters_secret_portal(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether an EventOptionSelect takes the Secret Portal, which skips the keys' rows.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state `action` is legal in.
-    action : slai.Action
-        A legal EventOptionSelect.
-
-    Returns
-    -------
-    bool
-        True when the Event is the Secret Portal and the option's Effects enter a Room.
-    """
-    event = game_state.event
-    if event is None or event.name != EventName.SecretPortal:
-        return False
-
-    id_option = action.ids[0]
-    option = next(option for option in event.options if option.id == id_option)
-    return any(isinstance(effect, EffectRoomEnter) for effect in option.effects)
-
-
-def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
-    """Return whether `action` gives up a key.
-
-    Only Act 3 can lose a key, with the final act on.
-
-    Parameters
-    ----------
-    game_state : slai.GameState
-        The state `action` is legal in.
-    action : slai.Action
-        One legal action.
-
-    Returns
-    -------
-    bool
-        True with a key missing in Act 3, for a rest option other than Recall at the last Rest Site
-        (Ruby Key), a move that gives up the Sapphire Key from row 8 on, a Room or a Smoke Bomb
-        that loses the burning Room (Emerald Key), and entering the Secret Portal (any key).
-    """
-    if (
-        game_state.act != GameEnv.ACT_FINAL - 1
-        or not game_state.final_act
-        or (game_state.key_emerald and game_state.key_ruby and game_state.key_sapphire)
-    ):
-        return False
-
-    match action.action_type:
-        case (
-            ActionType.Rest
-            | ActionType.RestDig
-            | ActionType.RestLift
-            | ActionType.RestSmith
-            | ActionType.RestToke
-        ):
-            # The Map's last row is always a Rest Site
-            return not game_state.key_ruby and game_state.map.y_current == MAP_HEIGHT - 1
-        case ActionType.RoomExit | ActionType.RewardTakeRelic:
-            return not game_state.key_sapphire and _leaves_key_sapphire(game_state, action)
-        case ActionType.RoomSelect:
-            return not game_state.key_emerald and _misses_room_burning(game_state, action)
-        case ActionType.PotionUse:
-            return not game_state.key_emerald and _escapes_room_burning(game_state, action)
-        case ActionType.EventOptionSelect:
-            return _enters_secret_portal(game_state, action)
-        case _:
-            return False
-
-
 # Action types already warned about dropped selections — truncation is never silent
 _WARNED_DROPPED: set[int] = set()
 
@@ -228,7 +57,7 @@ def encode_batch_masks(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Encode the masks from each state's legal actions.
 
-    Wasted Potion discards and actions that forfeit a key are engine-legal but masked.
+    The actions `action_masked` names are engine-legal but masked.
 
     The token pass gives each state's tokens, as (token kind, Entity) in window order, and each
     Entity id's first state-local row. The state's batch offset is added when writing a mask,
@@ -325,15 +154,7 @@ def encode_batch_masks_into(
         legal_token_kinds: set[tuple[int, TokenKind]] = set()
 
         for action in batch_legal_actions[b]:
-            if (
-                potion_discard_wasted(game_state, action)
-                or potion_take_wasted(game_state, action)
-                or (
-                    action.action_type is ActionType.EventOptionSelect
-                    and event_option_wasted(game_state, action.ids[0])
-                )
-                or _forfeits_key(game_state, action)
-            ):
+            if action_masked(game_state, action):
                 continue
 
             action_type = int(action.action_type)

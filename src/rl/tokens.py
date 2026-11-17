@@ -59,7 +59,7 @@ __all__ = [
     "get_potion_entities",
     "get_event_option_entities",
     "get_monster_entities",
-    "get_wing_boots_charges",
+    "relic_held",
     "draw_order_visible",
     "get_room_entities",
     "get_room_burning",
@@ -364,7 +364,7 @@ def get_monster_entities(game_state: GameState) -> list[Monster]:
     return combat.monsters if combat is not None else []
 
 
-def get_wing_boots_charges(game_state: GameState) -> int:
+def _get_wing_boots_charges(game_state: GameState) -> int:
     """Return the charges left on the Character's Wing Boots.
 
     With charges left, the engine offers every next-row Room, not just the edges.
@@ -384,6 +384,24 @@ def get_wing_boots_charges(game_state: GameState) -> int:
     )
 
 
+def relic_held(game_state: GameState, relic_name: RelicName) -> bool:
+    """Return whether the Character holds the Relic `relic_name`.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+    relic_name : RelicName
+        The Relic to look for.
+
+    Returns
+    -------
+    bool
+        Whether it is held.
+    """
+    return any(relic.name == relic_name for relic in game_state.relics)
+
+
 def draw_order_visible(game_state: GameState) -> bool:
     """Return whether Frozen Eye shows the draw pile's order.
 
@@ -397,7 +415,7 @@ def draw_order_visible(game_state: GameState) -> bool:
     bool
         True when the Character holds Frozen Eye.
     """
-    return any(relic.name == RelicName.FrozenEye for relic in game_state.relics)
+    return relic_held(game_state, RelicName.FrozenEye)
 
 
 def _next_row_candidate_cols(
@@ -458,7 +476,7 @@ def get_room_entities(game_state: GameState) -> list[Room]:
     map_ = game_state.map
     rooms = map_.rooms
     y_current = map_.y_current
-    winged = get_wing_boots_charges(game_state) > 0
+    winged = _get_wing_boots_charges(game_state) > 0
     cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
     if not cols:
         return []
@@ -508,7 +526,7 @@ def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
         return frozenset()
 
     map_ = game_state.map
-    wb_charges_left = get_wing_boots_charges(game_state)
+    wb_charges_left = _get_wing_boots_charges(game_state)
     cache_key = (map_.identity_hash, map_.y_current, map_.x_current, wb_charges_left)
     burning_path = _BURNING_PATH_CACHE.get(cache_key)
     if burning_path is None:

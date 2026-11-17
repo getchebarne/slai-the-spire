@@ -4,19 +4,31 @@ from slai import ChestKind
 from slai import EventName
 from slai import GameEnv
 from slai import GameState
+from slai import PotionName
 from slai import RelicName
 from slai import RelicTier
 from slai import Reward
 
-from src.rl.utils import potion_discard_wasted
-from src.rl.utils import potion_take_wasted
+from src.rl.tokens import relic_held
+from src.rl.utils import action_masked
+from src.rl.utils import curse_useful
 
 
 # Most scripted actions per policy step, so forced turn ends can't hang a worker
 _ACTIONS_SCRIPTED_MAX = 32
 
-# A Reward's gold costs no discount: every other action costs one step-discount
-_ACTION_TYPES_GOLD = frozenset({ActionType.RewardTakeGold, ActionType.RewardTakeGoldStolen})
+# A Reward's takes move no game time, so they cost no discount; every other action costs one
+_ACTION_TYPES_REWARD_TAKE = frozenset(
+    {
+        ActionType.RewardSingingBowl,
+        ActionType.RewardTakeCard,
+        ActionType.RewardTakeGold,
+        ActionType.RewardTakeGoldStolen,
+        ActionType.RewardTakePotion,
+        ActionType.RewardTakeRelic,
+        ActionType.RewardTakeSapphireKey,
+    }
+)
 
 # The Events whose first option runs for the policy, with the Relic that leaves it to the policy
 _EVENTS_OPTION_FIRST_SCRIPTED: dict[EventName, RelicName | None] = {
@@ -26,6 +38,9 @@ _EVENTS_OPTION_FIRST_SCRIPTED: dict[EventName, RelicName | None] = {
 
 # Free to take from a Reward; boss Relics exclude each other, a Special one can carry a cost
 _RELIC_TIERS_SCRIPTED = frozenset({RelicTier.Common, RelicTier.Uncommon, RelicTier.Rare})
+
+# The Potions Mark of the Bloom voids: Fairy can't revive, Regeneration can't heal
+_POTIONS_VOIDED_BY_MARK_OF_THE_BLOOM = frozenset({PotionName.Fairy, PotionName.Regeneration})
 
 # The Special Relics taken from a Reward; Cursed Tome's books aren't, as Necronomicon adds a Curse
 _RELICS_SPECIAL_SCRIPTED = frozenset({RelicName.OddMushroom, RelicName.RedMask})
@@ -59,33 +74,34 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
     -------
     bool
         True for the gold, for a scripted Special Relic, for a Relic of a scripted tier whose name
-        isn't unscripted, as long as no Sapphire Key is linked to it, it isn't Tiny Chest under
-        Cursed Key, Omamori with Du-Vu Doll or Darkstone Periapt held, or Peace Pipe with Coffee
-        Dripper held, and for a Potion when every offered one fits in the belt and Sozu isn't held.
+        isn't unscripted, as long as no Sapphire Key is linked to it and it isn't Tiny Chest under
+        Cursed Key, Omamori with a Relic that gives a Curse a use held, or Peace Pipe with Coffee
+        Dripper held, and for a
+        Potion when every offered one fits in the belt, no other Entropic Brew is held or offered,
+        and it isn't one that Mark of the Bloom voids while held.
     """
-    if action.action_type in _ACTION_TYPES_GOLD:
-        return True
-    
     match action.action_type:
+        # A Reward's gold is always free to take
+        case ActionType.RewardTakeGold | ActionType.RewardTakeGoldStolen:
+            return True
+
         case ActionType.RewardTakeRelic:
             relic = next(relic for relic in reward.relics if relic.id == action.ids[0])
             relic_linked = reward.relic_linked
 
             # Under Cursed Key, each Chest that Tiny Chest adds costs a Curse
-            tiny_chest_cursed = relic.name == RelicName.TinyChest and any(
-                relic_held.name == RelicName.CursedKey for relic_held in game_state.relics
+            tiny_chest_cursed = relic.name == RelicName.TinyChest and relic_held(
+                game_state, RelicName.CursedKey
             )
 
-            # Du-Vu Doll and Darkstone Periapt pay for each Curse, which Omamori would negate
-            omamori_negates_wanted = relic.name == RelicName.Omamori and any(
-                relic_held.name in (RelicName.DuVuDoll, RelicName.DarkstonePeriapt)
-                for relic_held in game_state.relics
-            )
+            # Omamori would negate the Curses a held Relic gives a use
+            omamori_negates_wanted = relic.name == RelicName.Omamori and curse_useful(game_state)
 
             # Under Coffee Dripper, Toke can be a Rest Site's only option, a forced Card removal
-            peace_pipe_forced = relic.name == RelicName.PeacePipe and any(
-                relic_held.name == RelicName.CoffeeDripper for relic_held in game_state.relics
+            peace_pipe_forced = relic.name == RelicName.PeacePipe and relic_held(
+                game_state, RelicName.CoffeeDripper
             )
+            
             return (
                 (relic.tier in _RELIC_TIERS_SCRIPTED or relic.name in _RELICS_SPECIAL_SCRIPTED)
                 and relic.name not in _RELICS_UNSCRIPTED
@@ -96,12 +112,26 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
             )
         
         case ActionType.RewardTakePotion:
-            # Under Sozu a take obtains nothing and still costs a discount
-            if potion_take_wasted(game_state, action):
-                return False
+            potion = next(potion for potion in reward.potions if potion.id == action.ids[0])
 
+            # Another Entropic Brew, held or offered, could fill the free slots with random Potions
+            entropic_brew_other = any(
+                potion_other.name == PotionName.EntropicBrew
+                for potion_other in (*game_state.potions, *reward.potions)
+                if potion_other.id != potion.id
+            )
+
+            # Under Mark of the Bloom it would only fill a slot
+            potion_voided = potion.name in _POTIONS_VOIDED_BY_MARK_OF_THE_BLOOM and relic_held(
+                game_state, RelicName.MarkOfTheBloom
+            )
             num_slots_free = game_state.potion_slots_max - len(game_state.potions)
-            return len(reward.potions) <= num_slots_free
+            
+            return (
+                not entropic_brew_other
+                and not potion_voided
+                and len(reward.potions) <= num_slots_free
+            )
         
         case _:
             return False
@@ -122,46 +152,38 @@ def _action_scripted(game_state: GameState, actions: list[Action]) -> Action | N
     Action | None
         The action to take, or None if the policy has a choice.
     """
+    # Only what the masks leave open, so no rule takes an action the policy couldn't
+    actions_open = [action for action in actions if not action_masked(game_state, action)]
+
     # A Reward's free takes, in the engine's order: Relics first, so a Potion Belt's slots count
     reward = game_state.reward
     if reward is not None:
-        for action in actions:
+        for action in actions_open:
             if _reward_take_free(game_state, reward, action):
                 return action
 
     # A Chest's opening, unless it adds Cursed Key's Curse, which a boss Chest's never does
     chest = game_state.chest
     if chest is not None and (
-        chest.kind == ChestKind.Boss
-        or not any(relic.name == RelicName.CursedKey for relic in game_state.relics)
+        chest.kind == ChestKind.Boss or not relic_held(game_state, RelicName.CursedKey)
     ):
-        for action in actions:
+        for action in actions_open:
             if action.action_type == ActionType.ChestOpen:
                 return action
 
     # An Event's first option, unless a held Relic leaves it to the policy
     event = game_state.event
-    if (
-        event is not None
-        and event.name in _EVENTS_OPTION_FIRST_SCRIPTED
-        and not any(
-            relic.name == _EVENTS_OPTION_FIRST_SCRIPTED[event.name] for relic in game_state.relics
-        )
-    ):
-        for action in actions:
-            if (
-                action.action_type == ActionType.EventOptionSelect
-                and action.ids[0] == event.options[0].id
-            ):
-                return action
+    if event is not None and event.name in _EVENTS_OPTION_FIRST_SCRIPTED:
+        relic_name_unscripting = _EVENTS_OPTION_FIRST_SCRIPTED[event.name]
+        if relic_name_unscripting is None or not relic_held(game_state, relic_name_unscripting):
+            for action in actions_open:
+                if (
+                    action.action_type == ActionType.EventOptionSelect
+                    and action.ids[0] == event.options[0].id
+                ):
+                    return action
 
-    # The only action left once wasted discards and takes are out
-    actions_open = [
-        action
-        for action in actions
-        if not potion_discard_wasted(game_state, action)
-        and not potion_take_wasted(game_state, action)
-    ]
+    # The only action left
     if len(actions_open) == 1:
         return actions_open[0]
     
@@ -187,10 +209,10 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int]:
     terminated : bool
         Whether the game ended.
     num_discounts : int
-        The actions taken, gold takes aside: k in the step's discount, γ^k.
+        The actions taken, Reward takes aside: k in the step's discount, γ^k.
     """
     game_state, terminated = env.step(action)
-    num_discounts = int(action.action_type not in _ACTION_TYPES_GOLD)
+    num_discounts = int(action.action_type not in _ACTION_TYPES_REWARD_TAKE)
     
     for _ in range(_ACTIONS_SCRIPTED_MAX):
         if terminated:
@@ -201,6 +223,6 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int]:
             break
         
         game_state, terminated = env.step(action_scripted)
-        num_discounts += action_scripted.action_type not in _ACTION_TYPES_GOLD
+        num_discounts += action_scripted.action_type not in _ACTION_TYPES_REWARD_TAKE
     
     return game_state, terminated, num_discounts

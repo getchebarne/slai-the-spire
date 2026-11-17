@@ -536,7 +536,7 @@ def _encode_tokens_into(
                 ]
 
             case Potion():
-                encode_potion_into_w_cache(entity, np_token_potion[row])
+                encode_potion_into_w_cache(game_state, entity, np_token_potion[row])
 
                 # Tags. Shared w/ Cards and Relics
                 for tag in TAGS_OF_POTION_NAME.get(entity.name, ()):
