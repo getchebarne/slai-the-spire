@@ -14,7 +14,7 @@ from slai import PlaySource
 from slai import get_card_templates
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
-from src.rl.encoding.effect_layout import catalog_effects
+from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.types import Tag
 

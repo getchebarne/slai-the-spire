@@ -26,11 +26,11 @@ from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
+from src.rl.encoding.effect import ENCODING_DIM_EFFECT
+from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.effect import encode_batch_effect_pending_into
 from src.rl.encoding.effect import encode_effect_row_into_w_cache
 from src.rl.encoding.effect import normalize_effect_rows
-from src.rl.encoding.effect_layout import ENCODING_DIM_EFFECT
-from src.rl.encoding.effect_layout import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.event import ENCODING_DIM_SPARSE_EVENT_OPTION
 from src.rl.encoding.event import encode_event_option_into

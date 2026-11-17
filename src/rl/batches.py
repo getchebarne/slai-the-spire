@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
-from dataclasses import fields
+from dataclasses import fields, replace
 from typing import Any, cast
 
 import torch
@@ -34,13 +34,13 @@ from src.rl.types import Tokens
 __all__ = [
     "allocate_states",
     "cat_states",
+    "gather_states",
     "get_owner_first_row",
     "get_row_owner",
     "iter_tensors",
     "map_tensors",
     "read_states",
     "slice_states",
-    "take_minibatch_states",
     "to_device",
 ]
 
@@ -66,7 +66,7 @@ def iter_tensors(value: Any) -> Iterator[torch.Tensor]:
 
 
 def map_tensors[T](value: T, fn: Callable[[torch.Tensor], torch.Tensor]) -> T:
-    """Rebuild data records with a function applied to each tensor leaf.
+    """Rebuild data records with a function applied to each distinct tensor leaf.
 
     Parameters
     ----------
@@ -78,14 +78,32 @@ def map_tensors[T](value: T, fn: Callable[[torch.Tensor], torch.Tensor]) -> T:
     Returns
     -------
     T
-        The transformed tensor or rebuilt record, preserving record types and nesting.
+        The transformed tensor or rebuilt record, preserving record types, nesting and shared
+        tensor references. Device placement follows `fn`; use `to_device` to transfer states
+        while keeping their CPU totals on the host.
     """
+    return _map_tensors(value, fn, {})
+
+
+def _map_tensors[T](
+    value: T,
+    fn: Callable[[torch.Tensor], torch.Tensor],
+    x_mapped: dict[int, torch.Tensor],
+) -> T:
+    """Map each tensor once, retaining aliases across the record's fields."""
     if isinstance(value, torch.Tensor):
-        return cast(T, fn(value))
+        key = id(value)
+        if key not in x_mapped:
+            x_mapped[key] = fn(value)
+        return cast(T, x_mapped[key])
 
     record = cast(Any, value)
+
     return type(record)(
-        **{field.name: map_tensors(getattr(record, field.name), fn) for field in fields(record)}
+        **{
+            field.name: _map_tensors(getattr(record, field.name), fn, x_mapped)
+            for field in fields(record)
+        }
     )
 
 
@@ -203,6 +221,9 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
         x_needs_target=torch.zeros(num_buffers, num_tokens, dtype=torch.bool),
     )
     effect_pending = _allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_SPARSE_EFFECT)
+    x_total = torch.zeros(
+        num_buffers, buffer_size, len(TokenKind) + len(StateCollection), dtype=torch.int32
+    )
 
     # Reserve memory for states
     return States(
@@ -217,9 +238,8 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
         x_legal_action_type=torch.zeros(
             num_buffers, buffer_size, NUM_ACTION_TYPES, dtype=torch.bool
         ),
-        x_total=torch.zeros(
-            num_buffers, buffer_size, len(TokenKind) + len(StateCollection), dtype=torch.int32
-        ),
+        x_total=x_total,
+        x_total_cpu=x_total,
     )
 
 
@@ -268,9 +288,7 @@ def read_states(states_reserved: States[Reserved]) -> States[Live]:
         raise ValueError("Select one buffer before reading states")
 
     # Every state of the buffer is written: its populated rows are the slice of all of them
-    return slice_states(
-        states_reserved, 0, len(states_reserved.x_context), states_reserved.x_total
-    )
+    return slice_states(states_reserved, 0, len(states_reserved.x_context))
 
 
 def cat_states(batch_states: list[States[Live]]) -> States[Live]:
@@ -289,17 +307,20 @@ def cat_states(batch_states: list[States[Live]]) -> States[Live]:
     if not batch_states:
         raise ValueError("`cat_states` requires at least one batch")
     
-    return _cat_records(batch_states)
+    return _cat_records(batch_states, {})
 
 
-def _cat_records(values: list[Any]) -> Any:
+def _cat_records(values: list[Any], x_joined: dict[tuple[int, ...], torch.Tensor]) -> Any:
     first = values[0]
     if isinstance(first, torch.Tensor):
-        return torch.cat(values)
+        key = tuple(id(value) for value in values)
+        if key not in x_joined:
+            x_joined[key] = torch.cat(values)
+        return x_joined[key]
     
     return type(first)(
         **{
-            field.name: _cat_records([getattr(v, field.name) for v in values])
+            field.name: _cat_records([getattr(v, field.name) for v in values], x_joined)
             for field in fields(first)
         }
     )
@@ -308,8 +329,9 @@ def _cat_records(values: list[Any]) -> Any:
 def to_device(states: States[Live], device: torch.device) -> States[Live]:
     """Make an independent snapshot, using one pinned transfer for CUDA.
 
-    Every result tensor is a view of the copied byte buffer. On CPU, the staging
-    buffer itself owns the snapshot; no result aliases a worker's reusable storage.
+    The device tensors are views of one copied byte buffer. CPU totals stay on the host, in
+    their own small allocation for a device snapshot. On CPU they alias the snapshot's totals.
+    No result aliases a worker's reusable storage.
 
     Parameters
     ----------
@@ -321,11 +343,14 @@ def to_device(states: States[Live], device: torch.device) -> States[Live]:
     Returns
     -------
     States[Live]
-        The states on the destination device, with their shapes and dtypes preserved and
-        storage independent of the source states.
+        The states on the destination device, with their shapes and dtypes preserved, totals
+        also available on the CPU, and storage independent of the source states.
     """
-    # Get all leaf Tensors
-    x_leaves = list(iter_tensors(states))
+    # Get distinct payload tensors; the CPU totals travel separately when already mirrored
+    x_payload = {id(x_tensor): x_tensor for x_tensor in iter_tensors(states)}
+    if states.x_total_cpu is not states.x_total:
+        del x_payload[id(states.x_total_cpu)]
+    x_leaves = list(x_payload.values())
 
     # Calculate total buffer size and start / end indexes of each leaf Tensor
     idx_starts = []
@@ -340,15 +365,26 @@ def to_device(states: States[Live], device: torch.device) -> States[Live]:
         _bytes_as(x_buffer, x_leaf, idx_start).copy_(x_leaf)
 
     # Send buffer to device 
-    x_buffer = x_buffer.to(device, non_blocking=True) if device.type == "cuda" else x_buffer
+    x_buffer = x_buffer.to(device, non_blocking=True) if device.type != "cpu" else x_buffer
 
-    # Define an iterator to get back each leaf Tensor from the buffer, and map it to `states`
-    iter_x_leaves = iter(_bytes_as(x_buffer, x_leaf, idx_start) for x_leaf, idx_start in zip(x_leaves, idx_starts))
-    return map_tensors(states, lambda _: next(iter_x_leaves))
+    # Get back each leaf Tensor from the buffer, and map it to `states`
+    x_copied = {
+        id(x_leaf): _bytes_as(x_buffer, x_leaf, idx_start)
+        for x_leaf, idx_start in zip(x_leaves, idx_starts)
+    }
+    x_total_cpu = (
+        x_copied[id(states.x_total)] if device.type == "cpu" else states.x_total_cpu.clone()
+    )
+    x_copied.setdefault(id(states.x_total_cpu), x_total_cpu)
+    
+    return replace(
+        map_tensors(states, lambda x_tensor: x_copied[id(x_tensor)]), x_total_cpu=x_total_cpu
+    )
 
 
 def _bytes_as(x_buffer: torch.Tensor, x_like: torch.Tensor, idx_start: int) -> torch.Tensor:
     size = x_like.numel() * x_like.element_size()
+    
     return x_buffer[idx_start : idx_start + size].view(x_like.dtype).view(x_like.shape)
 
 
@@ -410,26 +446,122 @@ def _select_owned_rows[TStorage](
     )
 
 
-def _select_states[TStorage](
+def slice_states[TStorage](
     states: States[TStorage],
-    selector_states: slice | torch.Tensor,
-    selectors: Mapping[StateCollection, slice | torch.Tensor],
+    idx_start: int,
+    idx_stop: int,
 ) -> States[Live]:
-    """Select states using a named selector for each of their collections.
+    """View consecutive states and every row they own.
 
     Parameters
     ----------
     states : States[TStorage]
-        The source states, live or reserved.
-    selector_states : slice | torch.Tensor
-        The states, in output order.
-    selectors : Mapping[StateCollection, slice | torch.Tensor]
-        Each collection's rows or entries belonging to those states, in output order.
+        The source states, live or one completed reserved buffer, with valid CPU totals.
+    idx_start : int
+        The first state, inclusive. Negative indexes count from the end of the batch.
+    idx_stop : int
+        The last state, exclusive. Bounds are clipped as in Python slicing.
 
     Returns
     -------
     States[Live]
-        The selected states and all their descendants.
+        Views of the selected states and their descendants, sharing source storage.
+    """
+    if idx_start > idx_stop:
+        raise ValueError(
+            f"`idx_start` ({idx_start}) must be smaller than or equal to `idx_stop` ({idx_stop})"
+        )
+    
+    x_total_cpu = states.x_total_cpu
+    idx_start, idx_stop, _ = slice(idx_start, idx_stop).indices(len(states.x_context))
+    selector_states = slice(idx_start, idx_stop)
+
+    # Each collection's rows before the first state, and before the stop
+    row_start = x_total_cpu[:selector_states.start].sum(0).tolist()
+    row_stop = x_total_cpu[:selector_states.stop].sum(0).tolist()
+    selectors = {
+        collection: slice(row_start[collection], row_stop[collection])
+        for collection in StateCollection
+    }
+
+    return _select_states(states, selector_states, selectors, x_total_cpu[selector_states])
+
+
+def gather_states[TStorage](
+    states: States[TStorage],
+    indices: tuple[torch.Tensor, torch.Tensor],
+) -> States[Live]:
+    """Gather states and every row they own, preserving index order and duplicates.
+
+    Parameters
+    ----------
+    states : States[TStorage]
+        The source states, live or one completed reserved buffer, with valid CPU totals.
+    indices : tuple[torch.Tensor, torch.Tensor]
+        The same one-dimensional long indexes on the CPU and the source states' device, in
+        that order. CPU states can use the same tensor twice. Indexes are used without
+        transfers; negative indexes count from the end of the batch.
+
+    Returns
+    -------
+    States[Live]
+        Independent copies of the selected states and their descendants. The source is unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the pair's first tensor is not on the CPU.
+    IndexError
+        If a gather index falls outside the source batch.
+    """
+    x_idx_state_cpu, x_idx_state = indices
+    if x_idx_state_cpu.device.type != "cpu":
+        raise ValueError("State indexes must be on the CPU")
+
+    # The selected states' rows in every collection, totalled on the host
+    x_total_cpu_selected = states.x_total_cpu[x_idx_state_cpu]
+    num_rows = x_total_cpu_selected.sum(0).tolist()
+
+    # Each state's rows in every collection, and where they start
+    x_total = states.x_total.long()
+    x_state_first_row = get_owner_first_row(x_total)
+
+    # Each collection's source rows, in output order
+    selectors = {
+        collection: _expand_ranges(
+            x_state_first_row[x_idx_state, collection],
+            x_total[x_idx_state, collection],
+            num_rows[collection],
+        )
+        for collection in StateCollection
+    }
+
+    return _select_states(states, x_idx_state, selectors, x_total_cpu_selected)
+
+
+def _select_states[TStorage](
+    states: States[TStorage],
+    selector_states: slice | torch.Tensor,
+    selectors: Mapping[StateCollection, slice | torch.Tensor],
+    x_total_cpu_selected: torch.Tensor,
+) -> States[Live]:
+    """Apply prepared state and collection selectors to every field.
+
+    Parameters
+    ----------
+    states : States[TStorage]
+        The source states, live or one completed reserved buffer.
+    selector_states : slice | torch.Tensor
+        The selected states, as a slice or indexes on the source device.
+    selectors : Mapping[StateCollection, slice | torch.Tensor]
+        Each collection's rows, in the selected state order.
+    x_total_cpu_selected : torch.Tensor
+        The selected states' totals on the CPU.
+
+    Returns
+    -------
+    States[Live]
+        The selected fields, retaining the shared CPU and device totals on CPU batches.
     """
     tokens = states.tokens
     selector_tokens = selectors[StateCollection.TOKENS]
@@ -465,46 +597,13 @@ def _select_states[TStorage](
         x_context=states.x_context[selector_states],
         x_map_grid=states.x_map_grid[selector_states],
         x_legal_action_type=states.x_legal_action_type[selector_states],
-        x_total=states.x_total[selector_states],
+        x_total=(
+            x_total_cpu_selected
+            if states.x_total.device.type == "cpu"
+            else states.x_total[selector_states]
+        ),
+        x_total_cpu=x_total_cpu_selected,
     )
-
-
-def take_minibatch_states(
-    states: States[Live], x_idx_state: torch.Tensor, x_total_cpu: torch.Tensor
-) -> States[Live]:
-    """Gather states and all their descendants.
-
-    Parameters
-    ----------
-    states : States[Live]
-        The source states.
-    x_idx_state : torch.Tensor
-        (batch_size,) long. The states to gather, in output order.
-    x_total_cpu : torch.Tensor
-        Those states' totals, on the CPU.
-
-    Returns
-    -------
-    States[Live]
-        The selected states and their descendants, preserving order and duplicate selections.
-    """
-    # The selected states' rows in every collection, totalled on the host
-    num_rows = x_total_cpu.sum(0).tolist()
-
-    # Each state's rows in every collection, and where they start
-    x_total = states.x_total.long()
-    x_state_first_row = get_owner_first_row(x_total)
-
-    # Each collection's source rows, in output order
-    selectors = {
-        collection: _expand_ranges(
-            x_state_first_row[x_idx_state, collection],
-            x_total[x_idx_state, collection],
-            num_rows[collection],
-        )
-        for collection in StateCollection
-    }
-    return _select_states(states, x_idx_state, selectors)
 
 
 def _expand_ranges(
@@ -541,34 +640,3 @@ def _expand_ranges(
 
     # Sum each row's indexes in the minibatch to the shifts to get their source-batch indexes
     return x_shift + torch.arange(num_rows, device=x_start.device)
-
-
-def slice_states[TStorage](
-    states: States[TStorage], idx_start: int, idx_stop: int, x_total_cpu: torch.Tensor
-) -> States[Live]:
-    """View consecutive states and their descendants using CPU totals.
-
-    Parameters
-    ----------
-    states : States[TStorage]
-        The source states, live or reserved.
-    idx_start : int
-        The first state's index, inclusive.
-    idx_stop : int
-        The last state's index, exclusive; at most the number of states.
-    x_total_cpu : torch.Tensor
-        The source states' totals, on the CPU.
-
-    Returns
-    -------
-    States[Live]
-        Views of the selected states and descendants, sharing the source tensors' storage.
-    """
-    # Each collection's rows before the first state, and before the stop
-    row_start = x_total_cpu[:idx_start].sum(0).tolist()
-    row_stop = x_total_cpu[:idx_stop].sum(0).tolist()
-    selectors = {
-        collection: slice(row_start[collection], row_stop[collection])
-        for collection in StateCollection
-    }
-    return _select_states(states, slice(idx_start, idx_stop), selectors)

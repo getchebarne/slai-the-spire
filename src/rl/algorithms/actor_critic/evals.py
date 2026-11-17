@@ -62,7 +62,7 @@ def _run_eval_episode(
         # Greedy step: Encode (masks included) -> Forward
         encode_states_into(states_reserved, [game_state], [legal_actions])
         states = read_states(states_reserved)
-        policy = model.action_select(states, states.x_total, greedy=True)
+        policy = model.action_select(states, greedy=True)
 
         # Game step
         idx_action_type, idx_selection, idx_target = policy.x_action[0].tolist()

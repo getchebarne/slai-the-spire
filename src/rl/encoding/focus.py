@@ -16,7 +16,7 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
 from src.rl.constants import MAX_SIZE_CARD_PILE_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
-from src.rl.encoding.effect_layout import catalog_effects
+from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
 
 

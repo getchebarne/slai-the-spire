@@ -104,7 +104,6 @@ class ActorCritic(nn.Module):
     def action_select(
         self,
         states: States[Live],
-        x_total_cpu: torch.Tensor,
         greedy: bool = False,
         generator: torch.Generator | None = None,
     ) -> PolicyOutput:
@@ -116,8 +115,6 @@ class ActorCritic(nn.Module):
         ----------
         states : States[Live]
             The game states.
-        x_total_cpu : torch.Tensor
-            (B, C) int32. The states' totals on the CPU, `states.x_total`.
         greedy : bool, default False
             Whether each level takes its argmax rather than a sample.
         generator : torch.Generator | None, default None
@@ -129,7 +126,7 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
-        core_output = self.core(states, x_total_cpu)
+        core_output = self.core(states)
         tokens_refined = core_output.tokens
         batch_size = tokens_refined.x_count.shape[0]
 
@@ -145,7 +142,7 @@ class ActorCritic(nn.Module):
         )
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(x_total_cpu[:, TokenKind.MONSTERS].sum())
+        num_monsters = int(states.x_total_cpu[:, TokenKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
         x_logit_target = self._head_target(
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
@@ -166,7 +163,6 @@ class ActorCritic(nn.Module):
     def action_evaluate(
         self,
         states: States[Live],
-        x_total_cpu: torch.Tensor,
         x_recorded_action: torch.Tensor,
     ) -> tuple[PolicyOutput, torch.Tensor]:
         """Score the recorded actions and compute the values.
@@ -177,8 +173,6 @@ class ActorCritic(nn.Module):
         ----------
         states : States[Live]
             The game states.
-        x_total_cpu : torch.Tensor
-            (B, C) int32. The states' totals on the CPU, `states.x_total`.
         x_recorded_action : torch.Tensor
             (B, 3) long. Each state's recorded action: action type, selection offset within that
             state, Monster target rank; -1 where a selection or target didn't apply.
@@ -190,7 +184,7 @@ class ActorCritic(nn.Module):
         x_value : torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        core_output = self.core(states, x_total_cpu)
+        core_output = self.core(states)
         x_value = self._head_value(core_output.x_global)
         tokens_refined = core_output.tokens
 
@@ -198,7 +192,7 @@ class ActorCritic(nn.Module):
         x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(x_total_cpu[:, TokenKind.MONSTERS].sum())
+        num_monsters = int(states.x_total_cpu[:, TokenKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
 
         # The recorded selections, each as a row of its level's logits
@@ -225,22 +219,20 @@ class ActorCritic(nn.Module):
         )
         return policy_output, x_value
 
-    def get_values(self, states: States[Live], x_total_cpu: torch.Tensor) -> torch.Tensor:
+    def get_values(self, states: States[Live]) -> torch.Tensor:
         """Compute the values.
 
         Parameters
         ----------
         states : States[Live]
             The game states.
-        x_total_cpu : torch.Tensor
-            (B, C) int32. The states' totals on the CPU, `states.x_total`.
 
         Returns
         -------
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(states, x_total_cpu).x_global)
+        return self._head_value(self.core(states).x_global)
 
 
 def compile_hot_paths(model: ActorCritic) -> None:

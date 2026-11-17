@@ -303,14 +303,12 @@ def _check_workers_alive(worker_handles: list[_WorkerHandle]) -> None:
         raise RuntimeError("The Learner died while waiting for rollout workers")
 
 
-def snapshot_to_device(
-    workers: Workers, device: torch.device
-) -> tuple[States[Live], torch.Tensor]:
+def snapshot_to_device(workers: Workers, device: torch.device) -> States[Live]:
     """Copy every game's state out of the step buffers onto the device.
 
-    The workers' rows are joined on the CPU and copied onto the device in one copy, with the
-    states' totals kept on the CPU. The copy is the snapshot: the rollout keeps it while the
-    workers overwrite the step on the next request.
+    The workers' rows are joined on the CPU and copied onto the device in one transfer. The
+    snapshot owns its device rows and CPU totals; the rollout keeps both while the workers
+    overwrite the step on the next request.
 
     Parameters
     ----------
@@ -321,10 +319,8 @@ def snapshot_to_device(
 
     Returns
     -------
-    states : States[Live]
-        Every game's state, on the device.
-    x_total_cpu : torch.Tensor
-        (E, C) int32. The games' totals, `states.x_total` on the CPU.
+    States[Live]
+        Every game's state, with device data and owned CPU totals.
     """
     if not workers._handles:
         raise RuntimeError("The workers have been stopped")
@@ -338,7 +334,7 @@ def snapshot_to_device(
     states = cat_states(batch_states)
 
     # Send the `States` to the device
-    return to_device(states, device), states.x_total
+    return to_device(states, device)
 
 
 def stop_workers(workers: Workers) -> None:
