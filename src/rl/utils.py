@@ -10,9 +10,22 @@ import yaml
 from slai import ActionType
 from slai import CardName
 from slai import EffectHealthDelta
+from slai import EffectRoomEnter
 from slai import EventName
+from slai import GameEnv
 from slai import PotionName
 from slai import RelicName
+
+from src.rl.constants import MAP_HEIGHT
+from src.rl.tokens import get_burning_path
+from src.rl.tokens import get_room_burning
+from src.rl.tokens import relic_held
+
+
+# The Relics that give a Curse a use
+_RELICS_CURSE_USEFUL = frozenset(
+    {RelicName.BlueCandle, RelicName.DarkstonePeriapt, RelicName.DuVuDoll}
+)
 
 
 def load_config(config_path: str) -> dict[str, Any]:
@@ -58,8 +71,8 @@ def parent_alive() -> bool:
 def _potion_can_arrive(game_state: slai.GameState) -> bool:
     """Return whether a free belt slot could take a Potion from this state.
 
-    A Potion comes from a Reward, a Shop the Character can pay or The Knowing Skull, and from none
-    of them under Sozu. Alchemize is `potion_discard_wasted`'s own case.
+    A Potion comes from a Reward, a Shop the Character can pay or The Knowing Skull. Sozu and
+    Alchemize are `_potion_discard_wasted`'s own cases.
 
     Parameters
     ----------
@@ -71,9 +84,6 @@ def _potion_can_arrive(game_state: slai.GameState) -> bool:
     bool
         Whether a Potion can arrive.
     """
-    if any(relic.name == RelicName.Sozu for relic in game_state.relics):
-        return False
-    
     reward = game_state.reward
     if reward is not None and reward.potions:
         return True
@@ -88,7 +98,7 @@ def _potion_can_arrive(game_state: slai.GameState) -> bool:
     return event is not None and event.name == EventName.KnowingSkull and not event.consumed
 
 
-def potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
+def _potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
     """Return whether `action` discards a Potion while nothing needs the room.
 
     No Potion can arrive under Sozu. An Entropic Brew held in another slot makes the discard pay as
@@ -114,7 +124,7 @@ def potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bo
     if action.action_type is not ActionType.PotionDiscard:
         return False
     
-    if any(relic.name == RelicName.Sozu for relic in game_state.relics):
+    if relic_held(game_state, RelicName.Sozu):
         return True
     
     potions = game_state.potions
@@ -133,7 +143,7 @@ def potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> bo
     return len(potions) < game_state.potion_slots_max or not _potion_can_arrive(game_state)
 
 
-def potion_take_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
+def _potion_take_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
     """Return whether `action` takes a Reward's Potion under Sozu, which obtains nothing.
 
     The Shop's Potions need no such check: the engine doesn't offer them under Sozu.
@@ -150,9 +160,27 @@ def potion_take_wasted(game_state: slai.GameState, action: slai.Action) -> bool:
     bool
         True for a Potion take while Sozu is held.
     """
-    return action.action_type is ActionType.RewardTakePotion and any(
-        relic.name == RelicName.Sozu for relic in game_state.relics
+    return action.action_type is ActionType.RewardTakePotion and relic_held(
+        game_state, RelicName.Sozu
     )
+
+
+def curse_useful(game_state: slai.GameState) -> bool:
+    """Return whether a held Relic gives a Curse a use.
+
+    Du-Vu Doll and Darkstone Periapt pay for each Curse, and Blue Candle makes one playable.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state to read.
+
+    Returns
+    -------
+    bool
+        Whether Blue Candle, Darkstone Periapt or Du-Vu Doll is held.
+    """
+    return not _RELICS_CURSE_USEFUL.isdisjoint(relic.name for relic in game_state.relics)
 
 
 def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
@@ -183,10 +211,7 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
     position = next(idx for idx, option in enumerate(event.options) if option.id == id_option)
     relic_names = {relic.name for relic in game_state.relics}
 
-    # Du-Vu Doll, Darkstone Periapt and Blue Candle give a Curse a use; Meat on the Bone, lost HP
-    curse_useful = not relic_names.isdisjoint(
-        {RelicName.BlueCandle, RelicName.DarkstonePeriapt, RelicName.DuVuDoll}
-    )
+    # Meat on the Bone gives lost HP a use
     hp_loss_useful = RelicName.MeatOnTheBone in relic_names
     match event.name:
         # Buy one, two or three Potions, or leave, for HP from A15 on
@@ -210,15 +235,218 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
 
         # Pray for gold, desecrate for more gold and Regret, or leave
         case EventName.GoldenShrine:
-            return position == 1 and RelicName.Ectoplasm in relic_names and not curse_useful
+            return (
+                position == 1
+                and RelicName.Ectoplasm in relic_names
+                and not curse_useful(game_state)
+            )
 
         # Accept gold and Doubt, or leave
         case EventName.TheSsssserpent:
-            return position == 0 and RelicName.Ectoplasm in relic_names and not curse_useful
+            return (
+                position == 0
+                and RelicName.Ectoplasm in relic_names
+                and not curse_useful(game_state)
+            )
 
         # Heal to full for max HP, give the Golden Idol for gold, or leave
         case EventName.TheMoaiHead:
             return position == 0 and RelicName.MarkOfTheBloom in relic_names
 
+        case _:
+            return False
+
+
+def action_masked(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether the masks remove `action`, an engine-legal action the policy never needs.
+
+    The encoder's masks, the scripted fold and the Potion `usable` column all read this one check,
+    so a new mask also changes that model input. The Card dedup is the encoder's own.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        One legal action.
+
+    Returns
+    -------
+    bool
+        True for a wasted Potion discard, a Potion take under Sozu, an Event option a held Relic
+        voids and an action that gives up a key.
+    """
+    return (
+        _potion_discard_wasted(game_state, action)
+        or _potion_take_wasted(game_state, action)
+        or (
+            action.action_type is ActionType.EventOptionSelect
+            and event_option_wasted(game_state, action.ids[0])
+        )
+        or _forfeits_key(game_state, action)
+    )
+
+
+def _misses_room_burning(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether a RoomSelect leaves the burning Room's path.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        A legal RoomSelect.
+
+    Returns
+    -------
+    bool
+        True when the selected Room is off `get_burning_path` while another Room in its row is on
+        it.
+    """
+    id_room = action.ids[0]
+    rooms = game_state.map.rooms
+    room_selected = next(
+        room for row in rooms for room in row if room is not None and room.id == id_room
+    )
+    burning_path = get_burning_path(game_state)
+    
+    return (room_selected.y, room_selected.x) not in burning_path and any(
+        y == room_selected.y for y, _ in burning_path
+    )
+
+
+def _escapes_room_burning(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether a PotionUse flees the burning Room's fight, which gives no key.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        A legal PotionUse.
+
+    Returns
+    -------
+    bool
+        True for a Smoke Bomb in the burning Room.
+    """
+    id_potion = action.ids[0]
+    potion = next(potion for potion in game_state.potions if potion.id == id_potion)
+    if potion.name != PotionName.SmokeBomb:
+        return False
+
+    map_ = game_state.map
+    room_burning = get_room_burning(map_.rooms)
+    
+    return (
+        room_burning is not None
+        and map_.y_current == room_burning.y
+        and map_.x_current == room_burning.x
+    )
+
+
+def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether a RoomExit or RewardTakeRelic gives up the Sapphire Key from row 8 on.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        A legal RoomExit or RewardTakeRelic.
+
+    Returns
+    -------
+    bool
+        True for a RoomExit at a Chest or while `relic_linked` is set, and for taking the linked
+        Relic.
+    """
+    # Row 8 is always a Chest
+    y_current = game_state.map.y_current
+    if y_current is None or y_current < 8:
+        return False
+
+    # An opened Chest closes for its Reward
+    reward = game_state.reward
+    if reward is None:
+        return game_state.chest is not None
+
+    # Took the linked Relic instead of the key
+    relic_linked = reward.relic_linked
+    
+    return relic_linked is not None and (
+        action.action_type is ActionType.RoomExit or action.ids[0] == relic_linked.id
+    )
+
+
+def _enters_secret_portal(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether an EventOptionSelect takes the Secret Portal, which skips the keys' rows.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        A legal EventOptionSelect.
+
+    Returns
+    -------
+    bool
+        True when the Event is the Secret Portal and the option's Effects enter a Room.
+    """
+    event = game_state.event
+    if event is None or event.name != EventName.SecretPortal:
+        return False
+
+    id_option = action.ids[0]
+    option = next(option for option in event.options if option.id == id_option)
+
+    return any(isinstance(effect, EffectRoomEnter) for effect in option.effects)
+
+
+def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether `action` gives up a key.
+
+    Only Act 3 can lose a key, with the final act on.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        One legal action.
+
+    Returns
+    -------
+    bool
+        True with a key missing in Act 3, for a rest option other than Recall at the last Rest Site
+        (Ruby Key), a move that gives up the Sapphire Key from row 8 on, a Room or a Smoke Bomb
+        that loses the burning Room (Emerald Key), and entering the Secret Portal (any key).
+    """
+    if (
+        game_state.act != GameEnv.ACT_FINAL - 1
+        or not game_state.final_act
+        or (game_state.key_emerald and game_state.key_ruby and game_state.key_sapphire)
+    ):
+        return False
+
+    match action.action_type:
+        case (
+            ActionType.Rest
+            | ActionType.RestDig
+            | ActionType.RestLift
+            | ActionType.RestSmith
+            | ActionType.RestToke
+        ):
+            # The Map's last row is always a Rest Site
+            return not game_state.key_ruby and game_state.map.y_current == MAP_HEIGHT - 1
+        case ActionType.RoomExit | ActionType.RewardTakeRelic:
+            return not game_state.key_sapphire and _leaves_key_sapphire(game_state, action)
+        case ActionType.RoomSelect:
+            return not game_state.key_emerald and _misses_room_burning(game_state, action)
+        case ActionType.PotionUse:
+            return not game_state.key_emerald and _escapes_room_burning(game_state, action)
+        case ActionType.EventOptionSelect:
+            return _enters_secret_portal(game_state, action)
         case _:
             return False

@@ -23,7 +23,6 @@ class MetricKey(StrEnum):
     ACT3_RATE = "act3_rate"
     ACT4_RATE = "act4_rate"
     ASCENSION = "ascension"
-    HEART_RATE = "heart_rate"
     COMPLETED_COUNT = "completed_count"
     DECK_SIZE_AVG = "deck_size_avg"
     ENTROPY_L1 = "entropy/l1"
@@ -34,6 +33,7 @@ class MetricKey(StrEnum):
     GOLD_SPENT_AVG = "gold_spent_avg"
     GRAD_NORM_PRECLIP = "grad/norm_preclip"
     HEART_DAMAGE_AVG = "heart_damage_avg"
+    HEART_RATE = "heart_rate"
     KEYS_END_AVG = "keys_end_avg"
     KL_UNIFORM_L1 = "kl_uniform/l1"
     KL_UNIFORM_L2 = "kl_uniform/l2"
@@ -339,8 +339,8 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
     -------
     dict[str, float]
         The metrics, keyed by `MetricKey`, with the episode count and each reward stream's
-        discounted return; the keys' only when a game died, and the Heart's only when a game got
-        there.
+        discounted return. Every average is over all the episodes: the Heart damage counts 0 for
+        an episode that never reached the Heart.
     """
     num_episodes = len(episode_results)
     returns = [float(episode.reward_stream_rets.sum()) for episode in episode_results]

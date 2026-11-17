@@ -33,10 +33,10 @@ class EpisodeResult:
     deck_size: int = 0  # Deck size at episode end
     truncated: bool = False  # Cut at _MAX_STEPS_EPISODE while the game still ran
 
-    # Keys held at death, a cut at the step limit included; `None` after a win
+    # Keys held at the episode's end
     keys_end: int = 0
 
-    # Share of its max HP gone, ending in its Room; None elsewhere
+    # Share of the Heart's max HP gone when the episode ends in its Room, else 0
     heart_damage: float = 0
     heart_reached: bool = False  # Reached the Heart's Room
 
@@ -116,7 +116,7 @@ def step_env(
         truncated,
     )
 
-    # Return next state, transition reward and done flag
+    # Return the next state, the step's reward, its discounts and the done flag
     return game_state_next, reward, num_discounts, done
 
 
@@ -134,7 +134,8 @@ def _tally_step(
     """Add one policy step: `action` took game_state to game_state_next and paid `reward`.
 
     On the episode's last step it also sets the fields the episode settles at its end, from
-    game_state_next: won, truncated, floor, act, heart_reached, heart_damage and deck_size.
+    game_state_next: won, truncated, floor, act, heart_reached, heart_damage, deck_size and
+    keys_end.
 
     Parameters
     ----------
@@ -159,8 +160,8 @@ def _tally_step(
     """
     # Increment 
     episode_result.length += 1
-    episode_result.num_discounts += num_discounts
     episode_result.reward_stream_rets += gamma**episode_result.num_discounts * reward
+    episode_result.num_discounts += num_discounts
     
     # Gold spent
     gold_spent = shop_gold_spent(game_state, action)
@@ -176,7 +177,7 @@ def _tally_step(
         episode_result.floor = game_state_next.floor
         episode_result.act = game_state_next.act
 
-        # The Heart's Room: reaching it splits the final act's plateau into reach x conversion
+        # The Heart's Room: the reach; the damage, 0 elsewhere, averages to reach x conversion
         episode_result.heart_reached = (
             game_state_next.act == GameEnv.ACT_FINAL
             and game_state_next.map.y_current == MAP_HEIGHT
