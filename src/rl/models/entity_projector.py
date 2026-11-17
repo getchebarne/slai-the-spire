@@ -62,7 +62,10 @@ class EntityProjector(nn.Module):
     """
 
     _x_hash_weight_entry: torch.Tensor
-    _x_hash_weight_field: torch.Tensor
+    _x_hash_weight_entity_kind: torch.Tensor
+    _x_hash_weight_effects: torch.Tensor
+    _x_hash_weight_modifiers: torch.Tensor
+    _x_hash_weight_mix: torch.Tensor
     _x_hash_weight_room: torch.Tensor
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
@@ -105,8 +108,23 @@ class EntityProjector(nn.Module):
             persistent=False,
         )
         self.register_buffer(
-            "_x_hash_weight_field",
-            torch.randint(1 << 62, (4,), generator=generator) | 1,
+            "_x_hash_weight_entity_kind",
+            torch.randint(1 << 62, (), generator=generator) | 1,
+            persistent=False,
+        )
+        self.register_buffer(
+            "_x_hash_weight_effects",
+            torch.randint(1 << 62, (), generator=generator) | 1,
+            persistent=False,
+        )
+        self.register_buffer(
+            "_x_hash_weight_modifiers",
+            torch.randint(1 << 62, (), generator=generator) | 1,
+            persistent=False,
+        )
+        self.register_buffer(
+            "_x_hash_weight_mix",
+            torch.randint(1 << 62, (), generator=generator) | 1,
             persistent=False,
         )
         self.register_buffer(
@@ -276,19 +294,14 @@ class EntityProjector(nn.Module):
             (N,) long. Each token's unique token, its index in `x_rep`.
         """
         x_weight_entry = self._x_hash_weight_entry
-        (
-            x_weight_entity_kind,
-            x_weight_effects,
-            x_weight_modifiers,
-            x_weight_mix,
-        ) = self._x_hash_weight_field.unbind()
+        x_weight_mix = self._x_hash_weight_mix
         x_hash_effects = _hash_owned(features.effects, x_weight_entry, x_weight_mix)
         x_hash_modifiers = _hash_owned(features.modifiers, x_weight_entry, x_weight_mix)
         x_hash = (
             _hash_sparse(features.sparse, x_weight_entry, x_weight_mix)
-            + x_entity_kind.long() * x_weight_entity_kind
-            + x_hash_effects * x_weight_effects
-            + x_hash_modifiers * x_weight_modifiers
+            + x_entity_kind.long() * self._x_hash_weight_entity_kind
+            + x_hash_effects * self._x_hash_weight_effects
+            + x_hash_modifiers * self._x_hash_weight_modifiers
         )  # (N,)
 
         # A Room token's node features, by their bits, each mixed before the weighted sum
