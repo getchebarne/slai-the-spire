@@ -11,7 +11,7 @@ from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
 from src.rl.batches import select_owned_rows
 from src.rl.batches import select_sparse
-from src.rl.constants import DEDUP_MIN_BATCH
+from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_EVENT_OPTION
 from src.rl.encoding import COL_START_HEALTH_BLOCK
@@ -188,7 +188,7 @@ class EntityProjector(nn.Module):
         x_room_row = torch.nonzero_static(tokens.x_token_kind == TokenKind.ROOMS, size=num_rooms)
         x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
 
-        if batch_size < DEDUP_MIN_BATCH:
+        if batch_size < MIN_BATCH_DEDUP:
             x_hidden = self._embed_tokens(
                 features, tokens.x_entity_kind, x_room_row, x_room_hidden
             )  # (N_tok, D)
@@ -293,12 +293,12 @@ class EntityProjector(nn.Module):
         x_inverse : torch.Tensor
             (N,) long. Each token's unique token, its index in `x_rep`.
         """
-        x_weight_entry = self._x_hash_weight_entry
-        x_weight_mix = self._x_hash_weight_mix
-        x_hash_effects = _hash_owned(features.effects, x_weight_entry, x_weight_mix)
-        x_hash_modifiers = _hash_owned(features.modifiers, x_weight_entry, x_weight_mix)
+        x_hash_weight_entry = self._x_hash_weight_entry
+        x_hash_weight_mix = self._x_hash_weight_mix
+        x_hash_effects = _hash_owned(features.effects, x_hash_weight_entry, x_hash_weight_mix)
+        x_hash_modifiers = _hash_owned(features.modifiers, x_hash_weight_entry, x_hash_weight_mix)
         x_hash = (
-            _hash_sparse(features.sparse, x_weight_entry, x_weight_mix)
+            _hash_sparse(features.sparse, x_hash_weight_entry, x_hash_weight_mix)
             + x_entity_kind.long() * self._x_hash_weight_entity_kind
             + x_hash_effects * self._x_hash_weight_effects
             + x_hash_modifiers * self._x_hash_weight_modifiers
@@ -306,8 +306,8 @@ class EntityProjector(nn.Module):
 
         # A Room token's node features, by their bits, each mixed before the weighted sum
         x_room_bit = x_room_hidden.detach().view(torch.int32).long()  # (N_rooms, dim_map)
-        x_room_hash = _mix_hash(x_room_bit, x_weight_mix) * self._x_hash_weight_room
-        x_hash[x_room_row] += x_room_hash.sum(1)
+        x_hash_room = _mix_hash(x_room_bit, x_hash_weight_mix) * self._x_hash_weight_room
+        x_hash[x_room_row] += x_hash_room.sum(1)
         x_uniq, x_inverse = torch.unique(x_hash, return_inverse=True)  # (U,), (N,)
         return get_unique_rep_row(x_inverse, x_uniq.shape[0]), x_inverse
 
@@ -432,14 +432,14 @@ def _count_owned_entries(owned_rows: OwnedRows[Live]) -> torch.Tensor:
     return x_count.index_add_(0, x_row_token, owned_rows.sparse.x_count.long())
 
 
-def _mix_hash(x_hash: torch.Tensor, x_weight_mix: torch.Tensor) -> torch.Tensor:
+def _mix_hash(x_hash: torch.Tensor, x_hash_weight_mix: torch.Tensor) -> torch.Tensor:
     """Scramble 64-bit hashes, so that a sum of them ties only by chance.
 
     Parameters
     ----------
     x_hash : torch.Tensor
         long, any shape. The hashes.
-    x_weight_mix : torch.Tensor
+    x_hash_weight_mix : torch.Tensor
         () long. The mix's multiplier.
 
     Returns
@@ -447,12 +447,13 @@ def _mix_hash(x_hash: torch.Tensor, x_weight_mix: torch.Tensor) -> torch.Tensor:
     torch.Tensor
         long, `x_hash`'s shape. The mixed hashes.
     """
-    x_hash = (x_hash ^ (x_hash >> 32)) * x_weight_mix
-    return x_hash ^ (x_hash >> 32)
+    # Logical shifts: `>>` on int64 copies the sign bit in, and the mask clears it
+    x_hash = (x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)) * x_hash_weight_mix
+    return x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)
 
 
 def _hash_sparse(
-    sparse: Sparse[Live], x_weight_entry: torch.Tensor, x_weight_mix: torch.Tensor
+    sparse: Sparse[Live], x_hash_weight_entry: torch.Tensor, x_hash_weight_mix: torch.Tensor
 ) -> torch.Tensor:
     """Hash each sparse row: its entries' columns and their values' bits, by place in the row.
 
@@ -462,9 +463,9 @@ def _hash_sparse(
     ----------
     sparse : Sparse[Live]
         The rows, R of them.
-    x_weight_entry : torch.Tensor
+    x_hash_weight_entry : torch.Tensor
         (2, _MAX_ENTRIES_HASH) long. The weights of a row's entries: columns, then values.
-    x_weight_mix : torch.Tensor
+    x_hash_weight_mix : torch.Tensor
         () long. The mix's multiplier.
 
     Returns
@@ -480,41 +481,44 @@ def _hash_sparse(
     x_entry_place = x_entry_place - get_owner_first_row(sparse.x_count)[x_entry_row]
 
     x_bit = sparse.x_value.view(torch.int32).long()
-    x_hash_entry = (sparse.x_col.long() + 1) * x_weight_entry[0, x_entry_place] + (
-        x_bit * x_weight_entry[1, x_entry_place]
+    x_hash_entry = (sparse.x_col.long() + 1) * x_hash_weight_entry[0, x_entry_place] + (
+        x_bit * x_hash_weight_entry[1, x_entry_place]
     )  # (F,)
-    x_hash_entry = _mix_hash(x_hash_entry, x_weight_mix)
+    x_hash_entry = _mix_hash(x_hash_entry, x_hash_weight_mix)
     x_hash = torch.zeros(sparse.x_count.shape[0], dtype=torch.long, device=x_hash_entry.device)
     return x_hash.index_add_(0, x_entry_row, x_hash_entry)
 
 
 def _hash_owned(
-    owned_rows: OwnedRows[Live], x_weight_entry: torch.Tensor, x_weight_mix: torch.Tensor
+    owned_rows: OwnedRows[Live], x_hash_weight_entry: torch.Tensor, x_hash_weight_mix: torch.Tensor
 ) -> torch.Tensor:
-    """Hash each token's owned rows: the sum of their mixed hashes, as `_add_owned` sums them.
+    """Hash each token's owned rows: their count plus the sum of their mixed hashes.
+
+    Both are what `_add_owned` reads: it sums the rows, each scaled by 1/sqrt(their count).
 
     Parameters
     ----------
     owned_rows : OwnedRows[Live]
         The owned row kind's rows, consecutive per token.
-    x_weight_entry : torch.Tensor
+    x_hash_weight_entry : torch.Tensor
         (2, _MAX_ENTRIES_HASH) long. The weights of a row's entries: columns, then values.
-    x_weight_mix : torch.Tensor
+    x_hash_weight_mix : torch.Tensor
         () long. The mix's multiplier.
 
     Returns
     -------
     torch.Tensor
-        (N,) long. Each token's hash, 0 if it owns no rows.
+        (N,) long. Each token's hash: its row count plus its rows' mixed hashes, 0 if it owns none.
     """
     # Mix first: a sum of linear hashes would tie two Modifiers that swap their stacks
-    x_hash_row = _hash_sparse(owned_rows.sparse, x_weight_entry, x_weight_mix)  # (M,)
-    x_hash_row = _mix_hash(x_hash_row, x_weight_mix)
+    x_hash_row = _hash_sparse(owned_rows.sparse, x_hash_weight_entry, x_hash_weight_mix)  # (M,)
+    x_hash_row = _mix_hash(x_hash_row, x_hash_weight_mix)
 
     # Each owned row's token
     x_row_token = get_row_owner(owned_rows.x_count, x_hash_row.shape[0])  # (M,)
-    x_hash = torch.zeros(owned_rows.x_count.shape[0], dtype=torch.long, device=x_hash_row.device)
-    return x_hash.index_add_(0, x_row_token, x_hash_row)
+
+    # Each token's sum starts from its row count, which `_add_owned`'s scale reads
+    return owned_rows.x_count.long().index_add(0, x_row_token, x_hash_row)
 
 
 def _project_sparse(mapper: nn.Linear | nn.Sequential, sparse: Sparse[Live]) -> torch.Tensor:
