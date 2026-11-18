@@ -132,19 +132,19 @@ MAX_SIZE_CARD_PILE_DECK = 80
 
 # Relics offered per Reward: boss Rewards roll mutually
 # exclusive Relics (taking one discards the others).
-MAX_RELIC_REWARDS = _slai.GameEnv.BOSS_RELIC_REWARD_COUNT
+MAX_RELIC_REWARDS = _slai.GameEnv.NUM_BOSS_RELIC_REWARDS
 
-# Cauldron stages CAULDRON_POTION_COUNT Potions as one Reward batch; Combat
+# Cauldron stages NUM_CAULDRON_POTIONS Potions as one Reward batch; Combat
 # Rewards offer at most 1.
-MAX_POTION_REWARDS = _slai.GameEnv.CAULDRON_POTION_COUNT
+MAX_POTION_REWARDS = _slai.GameEnv.NUM_CAULDRON_POTIONS
 
 # Engine slot counts + provisional headroom
-MAX_POTION_SLOTS = _slai.GameEnv.POTION_SLOTS_MAX  # Belt capacity; the FFI list is dense
+MAX_POTION_SLOTS = _slai.GameEnv.MAX_POTION_SLOTS  # Belt capacity; the FFI list is dense
 MAX_SIZE_SHOP_CARDS = _slai.GameEnv.SHOP_SLOTS_CARD_TOTAL + 1
 MAX_SHOP_RELICS = _slai.GameEnv.SHOP_SLOTS_RELIC + 1
 MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
-MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.DISCOVER_ROLL_COUNT + 2
+MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.NUM_DISCOVER_ROLLS + 2
 
 # Per-state caps on the Effect and Modifier rows, per state rather than per Entity since
 # Entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
@@ -177,7 +177,7 @@ MAX_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 # Normalization caps for scalar features; SHOP_PRICE_CAP is the exact pre-discount
 # ceiling from the engine's pricing (discounts only lower prices)
 SHOP_PRICE_CAP = max(
-    _slai.SHOP_PRICE_CARD_MAX, _slai.SHOP_PRICE_RELIC_MAX, _slai.SHOP_PRICE_POTION_MAX
+    _slai.MAX_SHOP_PRICE_CARD, _slai.MAX_SHOP_PRICE_RELIC, _slai.MAX_SHOP_PRICE_POTION
 )
 EVENT_STAGE_CAP = 10
 

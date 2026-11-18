@@ -39,7 +39,7 @@ _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 
 # Card-reward pity: starts at the base, falls by one per Common down to the min, resets on a Rare
-_REWARD_ROLL_OFFSET_MIN = GameEnv.CARD_REWARD_ROLL_OFFSET_MIN
+_REWARD_ROLL_OFFSET_MIN = GameEnv.MIN_CARD_REWARD_ROLL_OFFSET
 _REWARD_ROLL_OFFSET_BASE = GameEnv.CARD_REWARD_ROLL_OFFSET_BASE
 
 # This turn's discards only cut Eviscerate's cost and unlock Sneaky Strike's refund
@@ -53,7 +53,7 @@ _THIS_TURN_DISCARDS_MAX = max(
 # (src/consts.rs), which GameEnv doesn't expose
 _PANACHE_PLAYS = 5
 
-_THIS_TURN_PLAYS_LEFT_DIM = GameEnv.VELVET_CHOKER_PLAYS_MAX + 1
+_THIS_TURN_PLAYS_LEFT_DIM = GameEnv.MAX_VELVET_CHOKER_PLAYS + 1
 
 
 # Health / Block is not here: it is the combatants' health/block columns (health_block.py)
@@ -117,9 +117,9 @@ def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | No
     """
     hand = get_entities(game_state, combat.id_card_pile_hand, Card)
     if any(card.name == CardName.Normality for card in hand):
-        plays_max = GameEnv.NORMALITY_PLAYS_MAX
+        plays_max = GameEnv.MAX_NORMALITY_PLAYS
     elif relic_held(game_state, RelicName.VelvetChoker):
-        plays_max = GameEnv.VELVET_CHOKER_PLAYS_MAX
+        plays_max = GameEnv.MAX_VELVET_CHOKER_PLAYS
     else:
         return None
 
