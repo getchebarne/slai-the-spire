@@ -35,7 +35,7 @@ _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 
 # Card-reward pity: starts at the base, falls by one per Common down to the min, resets on a Rare
-_REWARD_ROLL_OFFSET_MIN = GameEnv.CARD_REWARD_ROLL_OFFSET_MIN
+_REWARD_ROLL_OFFSET_MIN = GameEnv.MIN_CARD_REWARD_ROLL_OFFSET
 _REWARD_ROLL_OFFSET_BASE = GameEnv.CARD_REWARD_ROLL_OFFSET_BASE
 
 # This turn's discards only cut Eviscerate's cost and unlock Sneaky Strike's refund
@@ -87,7 +87,7 @@ _OFF_CHARACTER_THIS_TURN_CARDS_PLAYED = _alloc(
     "this_turn_cards_played"
 )  # Normality caps the turn at 3
 _OFF_CHARACTER_THIS_TURN_PLAYS_LEFT = _alloc(
-    "this_turn_plays_left", GameEnv.VELVET_CHOKER_PLAYS_MAX + 1
+    "this_turn_plays_left", GameEnv.MAX_VELVET_CHOKER_PLAYS + 1
 )  # Under Normality's or Velvet Choker's cap; none without a cap
 _OFF_CHARACTER_PANACHE_COUNTDOWN = _alloc("panache_countdown")  # Plays left until Panache's hit
 _OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK = _alloc(
@@ -138,9 +138,9 @@ def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | No
         Choker's; None with neither.
     """
     if any(card.name == CardName.Normality for card in combat.card_pile_hand):
-        plays_max = GameEnv.NORMALITY_PLAYS_MAX
+        plays_max = GameEnv.MAX_NORMALITY_PLAYS
     elif relic_held(game_state, RelicName.VelvetChoker):
-        plays_max = GameEnv.VELVET_CHOKER_PLAYS_MAX
+        plays_max = GameEnv.MAX_VELVET_CHOKER_PLAYS
     else:
         return None
     return max(plays_max - combat.this_turn_cards_played, 0)
