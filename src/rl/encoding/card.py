@@ -69,7 +69,9 @@ _OFF_CARD_ETHEREAL = _alloc("ethereal")
 _OFF_CARD_RETAIN = _alloc("retain")
 _OFF_CARD_REQUIRES_TARGET = _alloc("requires_target")
 _OFF_CARD_PLAYABLE = _alloc("playable")
-_OFF_CARD_ENERGY_DELTA = _alloc("energy_delta")  # Signed: energy_current - cost
+_OFF_CARD_ENERGY_DELTA = _alloc(
+    "energy_delta"
+)  # Signed: energy_current - cost; outside Combat, max energy - cost
 _OFF_CARD_COST_BASE = _alloc("cost_base")
 _OFF_CARD_BOTTLED = _alloc("bottled")
 _OFF_CARD_COST_OFFSET = _alloc("cost_offset")  # X-Cost offset
@@ -154,9 +156,7 @@ def _cost_offset(card: Card) -> float:
     return float(card.cost_kind.offset if isinstance(card.cost_kind, CardCostKindXCost) else 0)
 
 
-def _encode_card_into(
-    card: Card, energy_current: int, draw_below: int | None, np_out: np.ndarray
-) -> None:
+def _encode_card_into(card: Card, energy: int, draw_below: int | None, np_out: np.ndarray) -> None:
     np_out[_OFF_CARD_NAME + _IDX_OF_CARD_NAME[card.name]] = 1.0
     np_out[_OFF_CARD_KIND + _IDX_OF_CARD_KIND[card.kind]] = 1.0
     np_out[_OFF_CARD_COLOR + _IDX_OF_CARD_COLOR[card.color]] = 1.0
@@ -177,7 +177,7 @@ def _encode_card_into(
     np_out[_OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
     np_out[_OFF_CARD_PLAYABLE] = float(card.playable)
     np_out[_OFF_CARD_ENERGY_DELTA] = (
-        max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
+        max(-_COST_MAX, min(energy - card.cost, _COST_MAX)) / _COST_MAX
     )
     np_out[_OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
     np_out[_OFF_CARD_BOTTLED] = float(card.bottled)
@@ -243,20 +243,20 @@ def card_key(card: Card) -> tuple:
 
 
 def encode_card_into_w_cache(
-    card: Card, energy_current: int, draw_pile_size: int, np_out: np.ndarray
+    card: Card, energy: int, draw_pile_size: int, np_out: np.ndarray
 ) -> None:
     # The Cards below it, when its draw depth shows
     draw_below = None if card.draw_depth is None else draw_pile_size - 1 - card.draw_depth
 
     # Try cache hit
-    cache_key = (card_key(card), energy_current, draw_below)
+    cache_key = (card_key(card), energy, draw_below)
     np_row = _CARD_ROW_CACHE.get(cache_key)
 
     # Cache miss
     if np_row is None:
         # Encode Card
         np_row = np.zeros(ENCODING_DIM_CARD, dtype=np.float32)
-        _encode_card_into(card, energy_current, draw_below, np_row)
+        _encode_card_into(card, energy, draw_below, np_row)
 
         # Write into cache
         np_row.flags.writeable = False

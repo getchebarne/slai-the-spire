@@ -60,6 +60,7 @@ __all__ = [
     "get_monster_entities",
     "relic_held",
     "get_room_entities",
+    "next_row_candidate_cols",
     "get_room_burning",
     "get_burning_path",
 ]
@@ -132,30 +133,30 @@ def iter_tokens(game_state: GameState) -> Iterator[Token]:
             yield token_kind, entity
 
 
-def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
-    """Cut `cards` to `cap`, warning once per token kind when that drops any.
+def _capped[E](token_kind: TokenKind, entities: list[E], cap: int) -> list[E]:
+    """Cut `entities` to `cap`, warning once per token kind when that drops any.
 
     Parameters
     ----------
     token_kind : TokenKind
-        The Cards' token kind.
-    cards : list[Card]
-        The Cards to cut.
+        The Entities' token kind.
+    entities : list[E]
+        The Entities to cut.
     cap : int
         The token kind's cap.
 
     Returns
     -------
-    list[Card]
-        The first `cap` Cards.
+    list[E]
+        The first `cap` Entities.
     """
-    if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
+    if len(entities) > cap and token_kind not in _WARNED_OVERFLOW:
         _WARNED_OVERFLOW.add(token_kind)
         warnings.warn(
-            f"{token_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
-            "dropped"
+            f"{token_kind.name} holds {len(entities)} entities; the ones past its cap of {cap} "
+            "are dropped"
         )
-    return cards[:cap]
+    return entities[:cap]
 
 
 def _get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Card]:
@@ -196,9 +197,9 @@ def _get_card_entities(token_kind: TokenKind, game_state: GameState) -> list[Car
                 return []
             return _capped(token_kind, combat.card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD)
         case TokenKind.CARD_PILE_EXHAUST:
-            return (
-                combat.card_pile_exhaust[:MAX_SIZE_CARD_PILE_EXHAUST] if combat is not None else []
-            )
+            if combat is None:
+                return []
+            return _capped(token_kind, combat.card_pile_exhaust, MAX_SIZE_CARD_PILE_EXHAUST)
         case TokenKind.CARD_PILE_STASIS:
             if combat is None:
                 return []
@@ -278,7 +279,7 @@ def get_relic_entities(token_kind: TokenKind, game_state: GameState) -> list[Rel
     # Each collection truncated to its own cap: a Relic past it has no token
     match token_kind:
         case TokenKind.RELIC_OWNED:
-            return game_state.relics[:MAX_RELICS]
+            return _capped(token_kind, game_state.relics, MAX_RELICS)
         case TokenKind.RELIC_REWARD:
             reward = game_state.reward
             return reward.relics[:MAX_RELIC_REWARDS] if reward is not None else []
@@ -398,7 +399,7 @@ def relic_held(game_state: GameState, relic_name: RelicName) -> bool:
     return any(relic.name == relic_name for relic in game_state.relics)
 
 
-def _next_row_candidate_cols(
+def next_row_candidate_cols(
     rooms: list[list[Room | None]], y_current: int | None, x_current: int | None, winged: bool
 ) -> list[int]:
     """Return the columns of reachable Rooms in the next Map row.
@@ -457,7 +458,7 @@ def get_room_entities(game_state: GameState) -> list[Room]:
     rooms = map_.rooms
     y_current = map_.y_current
     winged = _get_wing_boots_charges(game_state) > 0
-    cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
+    cols = next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
     if not cols:
         return []
 

@@ -11,6 +11,7 @@ from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_room_entities
+from src.rl.tokens import next_row_candidate_cols
 
 
 _IDX_OF_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
@@ -41,6 +42,9 @@ _OFF_MAP_EDGES = _alloc("edges", NUM_EDGE_CHANNELS)
 _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
 _OFF_MAP_BURNING_PATH = _alloc("burning_path")  # On a path that still reaches the burning Room
+_OFF_MAP_NEXT_ROOM = _alloc(
+    "next_room"
+)  # The next-row Rooms the current Room's edges reach, Wing Boots aside
 
 # The channels above are the Map network's node features; the one below names the Room tokens'
 # nodes
@@ -73,6 +77,9 @@ _OFF_MAP_ACT = _alloc(
     "act", GameEnv.ACT_FINAL
 )  # Each act is a fresh 15-row Map; depth alone is ambiguous
 _OFF_MAP_KEYS = _alloc("keys", 3)  # The keys held: Emerald, Ruby, Sapphire
+_OFF_MAP_ENCOUNTERS_EASY_LEFT = _alloc(
+    "encounters_easy_left"
+)  # Hallway fights left on the act's easy list
 # "?" Rooms
 _OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc(
     "unknown_chance_monster"
@@ -160,6 +167,9 @@ def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     # Act OHE (1-based)
     np_out[_OFF_MAP_ACT + (act - 1)] = 1.0
     _encode_keys_into(game_state, np_out)
+    np_out[_OFF_MAP_ENCOUNTERS_EASY_LEFT] = (
+        game_state.encounters_easy_left / GameEnv.NUM_ENCOUNTERS_EASY_ACT1
+    )
     _encode_unknown_room_into(game_state, np_out)
 
 
@@ -186,7 +196,7 @@ def _encode_unknown_room_into(game_state: GameState, np_out: np.ndarray) -> None
 
 
 def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Copy the cached static grid and stamp the position, burning path and selectable Rooms."""
+    """Copy the cached static grid; stamp the position, burning path, next and selectable Rooms."""
     map_ = game_state.map
     np_out[:] = _get_static_grid(map_.identity_hash, map_.rooms)
     y_current, x_current = map_.y_current, map_.x_current
@@ -196,6 +206,11 @@ def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
     # The Rooms that still reach the burning Room while the Emerald Key is missing
     for y, x in get_burning_path(game_state):
         np_out[y, x, _OFF_MAP_BURNING_PATH] = 1
+
+    # The next-row Rooms the position's edges reach, Wing Boots aside
+    y_next = 0 if y_current is None else y_current + 1
+    for x_next in next_row_candidate_cols(map_.rooms, y_current, x_current, winged=False):
+        np_out[y_next, x_next, _OFF_MAP_NEXT_ROOM] = 1
 
     # The Room tokens' nodes, in the tokens' order: node order
     for room in get_room_entities(game_state):
