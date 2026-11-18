@@ -109,20 +109,22 @@ def update_ppo(
     )
 
     # All shuffles are drawn and transferred before the first minibatch launches
-    minibatches = _plan_minibatches(
+    idxs_minibatch = _plan_minibatches(
         len(rollout.states.x_context),
         ppo_config.minibatch_size,
         ppo_config.num_epochs,
         device,
         generator,
     )
-    num_minibatches = len(minibatches) // ppo_config.num_epochs
+    num_minibatches = len(idxs_minibatch) // ppo_config.num_epochs
 
     batch_metrics = []
     batch_approx_kl = []
-    for indices in minibatches:
+    for indices in idxs_minibatch:
         # Select this minibatch's states, actions and targets
         states_mini = gather_states(rollout.states, indices)
+
+        # Select played actions and targets
         _, x_idx_state = indices
         x_action_mini = rollout.x_action[x_idx_state]
         targets_mini = _Targets(
@@ -132,6 +134,7 @@ def update_ppo(
             x_weight_capped=targets.x_weight_capped[x_idx_state],
         )
 
+        # Update policy and value networks
         metrics, approx_kl = _update_minibatch(
             model,
             optimizer,
@@ -140,7 +143,6 @@ def update_ppo(
             targets_mini,
             ppo_config,
         )
-        del states_mini, x_action_mini, targets_mini
         batch_metrics.append(metrics)
         batch_approx_kl.append(approx_kl)
 
@@ -350,19 +352,19 @@ def _plan_minibatches(
     )
 
     # Each shuffle cut into minibatches
-    minibatches = []
+    idxs_minibatch = []
     for idx_epoch in range(num_epochs):
         for idx_start in range(0, batch_size, minibatch_size):
             idx_stop = idx_start + minibatch_size
             x_idx_state_cpu_mini = x_idx_state_cpu[idx_epoch, idx_start:idx_stop]
-            minibatches.append(
+            idxs_minibatch.append(
                 (
                     x_idx_state_cpu_mini,
                     x_idx_state[idx_epoch, idx_start:idx_stop],
                 )
             )
 
-    return minibatches
+    return idxs_minibatch
 
 
 def _update_minibatch(
