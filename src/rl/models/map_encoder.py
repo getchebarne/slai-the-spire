@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.rl.batches import get_unique_rep_row
-from src.rl.constants import DEDUP_MIN_BATCH
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
+from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import EDGE_DELTAS
 from src.rl.encoding import NUM_CHANNELS
 from src.rl.encoding import NUM_EDGE_CHANNELS
@@ -148,7 +148,7 @@ class MapGNN(nn.Module):
         -------
         x_hidden_map : torch.Tensor
             (U, H * W, hidden). The node features of each Map the GNN ran on: the unique Maps
-            on a batch of DEDUP_MIN_BATCH states or more, every state's on a smaller one or with
+            on a batch of MIN_BATCH_DEDUP states or more, every state's on a smaller one or with
             `map_cache`.
         x_map_of_state : torch.Tensor
             (B,) long. Each state's Map, its index in `x_hidden_map`.
@@ -172,7 +172,7 @@ class MapGNN(nn.Module):
             map_cache.x_node = x_node
             return x_hidden, torch.arange(batch_size, device=x_node.device), x_readout
 
-        if batch_size < DEDUP_MIN_BATCH:
+        if batch_size < MIN_BATCH_DEDUP:
             x_hidden, x_readout = self._encode_forward_rooms(x_node)
             return x_hidden, torch.arange(batch_size, device=x_node.device), x_readout
 

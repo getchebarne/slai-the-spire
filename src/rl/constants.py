@@ -178,7 +178,7 @@ SHOP_PRICE_CAP = max(
 EVENT_STAGE_CAP = 10
 
 # Batches repeat Maps and tokens from here up: above any rollout batch, below any minibatch
-DEDUP_MIN_BATCH = 1024
+MIN_BATCH_DEDUP = 1024
 
 
 TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle, in bundle order
