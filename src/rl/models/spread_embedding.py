@@ -11,7 +11,7 @@ _SPREAD_COPIES = 256
 class SpreadEmbedding(torch.autograd.Function):
     """F.embedding, whose backward sums each table row's gradient over copies of the table.
 
-    There are `_SPREAD_COPIES` copies: the token at flat position `i` adds into copy
+    There are `_SPREAD_COPIES` copies: the lookup at flat position `i` adds into copy
     `i % _SPREAD_COPIES`, then the copies add up. The same sums in another order, in short loops.
     """
 
@@ -24,7 +24,7 @@ class SpreadEmbedding(torch.autograd.Function):
         x_weight : torch.Tensor
             (R, D). The table: R rows of width D.
         x_idx_emb : torch.Tensor
-            (...) long. The rows to look up, in any shape; both callers pass (N,), one per token.
+            (...) long. The rows to look up, in any shape.
 
         Returns
         -------
