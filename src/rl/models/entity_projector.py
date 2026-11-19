@@ -39,7 +39,7 @@ from src.rl.types import Tokens
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) Entity embedder.
 
-    One first layer over the shared columns plus each token's Entity kind bias, the Rooms' cell
+    One first layer over the token columns plus each token's Entity kind bias, the Rooms' cell
     features through their own, the owned row kinds (Effects, Modifiers) added into their owners,
     then one shared second layer + LayerNorm. Returns the token embeddings grouped by state and
     the embedded pending halt.
@@ -63,7 +63,7 @@ class EntityProjector(nn.Module):
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
 
-        # Every Entity kind's first layer: one projection over the shared columns
+        # Every Entity kind's first layer: one projection over the token columns
         self._pre_token = nn.Linear(ENCODING_DIM_TOKEN, dim_entity, bias=False)
 
         # Per-Entity kind bias
@@ -245,7 +245,7 @@ class EntityProjector(nn.Module):
         torch.Tensor
             (N, D). Each token's embedding.
         """
-        # First layer: the shared columns' projection, then each token's Entity kind bias
+        # First layer: the token columns' projection, then each token's Entity kind bias
         x_first = _project_sparse(self._pre_token, features.sparse) + SpreadEmbedding.apply(
             self._x_bias_entity_kind, x_entity_kind.long()
         )

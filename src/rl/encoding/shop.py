@@ -31,5 +31,6 @@ def encode_shop_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     shop = game_state.shop
     if shop is None:
         return
+    
     encode_price_into(shop.purge_cost, game_state.character.gold, np_out)
     np_out[_OFF_SHOP_PURGED] = float(shop.purged)

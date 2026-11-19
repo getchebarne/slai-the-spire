@@ -20,6 +20,8 @@ from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.encoding.shared import encode_shared_health_block_into
+from src.rl.encoding.shared import encode_shared_stasis_slot_into
 
 
 _IDX_OF_MONSTER_NAME = {name: int(name) for name in MonsterName.members()}
@@ -108,14 +110,36 @@ def encode_monster_into(
     character_block: int,
     get_outgoing_damage: int | None,
     ascension: int,
-    np_out: np.ndarray,
+    np_own: np.ndarray,
+    np_shared: np.ndarray,
 ) -> None:
-    np_out[_OFF_MONSTER_NAME + _IDX_OF_MONSTER_NAME[monster.name]] = 1.0
-    np_out[_OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
-    np_out[_OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
-    np_out[_OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
-    np_out[_OFF_MONSTER_HALF_DEAD] = float(monster.half_dead)
-    np_out[_OFF_MONSTER_ULTIMATE_USED] = float(monster.ultimate_used)
+    """Write a Monster's token: its own columns, then its health/block and its slot.
+
+    Parameters
+    ----------
+    monster : Monster
+        The Monster.
+    character_health : int
+        The Character's health.
+    character_block : int
+        The Character's block.
+    get_outgoing_damage : int | None
+        The total damage the Monsters' intents carry this turn, before block; None when Runic
+        Dome hides them.
+    ascension : int
+        The game's ascension, which sets Invincible's cap on the health a Poison tick takes.
+    np_own : np.ndarray
+        (ENCODING_DIM_MONSTER,) float32. The Monster's own range of its token row, written in
+        place.
+    np_shared : np.ndarray
+        (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
+    """
+    np_own[_OFF_MONSTER_NAME + _IDX_OF_MONSTER_NAME[monster.name]] = 1.0
+    np_own[_OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
+    np_own[_OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
+    np_own[_OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
+    np_own[_OFF_MONSTER_HALF_DEAD] = float(monster.half_dead)
+    np_own[_OFF_MONSTER_ULTIMATE_USED] = float(monster.ultimate_used)
 
     # Poison-is-lethal
     stacks_of_modifier_kind = {modifier.kind: modifier.stacks for modifier in monster.modifiers}
@@ -126,57 +150,63 @@ def encode_monster_into(
         poison_health_loss = min(poison_health_loss, 1)
     elif ModifierKind.Invincible in stacks_of_modifier_kind:
         poison_health_loss = min(poison_health_loss, INVINCIBLE_STACKS_OF_ASCENSION[ascension])
-    np_out[_OFF_MONSTER_POISON_IS_LETHAL] = float(
+    np_own[_OFF_MONSTER_POISON_IS_LETHAL] = float(
         poison_health_loss > 0 and poison_health_loss >= monster.health
     )
 
     # Stolen gold
-    np_out[_OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, GOLD_STOLEN_MAX)
+    np_own[_OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, GOLD_STOLEN_MAX)
 
     # Intent
     intent = monster.intent
     if intent is None:
-        np_out[_OFF_MONSTER_INTENT_HIDDEN] = 1.0
+        np_own[_OFF_MONSTER_INTENT_HIDDEN] = 1.0
     else:
         damage = intent.damage or 0
         damage_bucket = get_piecewise_bucket(damage, 0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
-        np_out[_OFF_MONSTER_INTENT_DAMAGE + damage_bucket] = 1.0
+        np_own[_OFF_MONSTER_INTENT_DAMAGE + damage_bucket] = 1.0
 
         total_damage = _intent_total_damage(monster)
-        np_out[_OFF_MONSTER_INTENT_DAMAGE_SCALAR] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
-        np_out[_OFF_MONSTER_INTENT_INSTANCES] = (
+        np_own[_OFF_MONSTER_INTENT_DAMAGE_SCALAR] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
+        np_own[_OFF_MONSTER_INTENT_INSTANCES] = (
             min(intent.instances or 0, _INSTANCES_MAX) / _INSTANCES_MAX
         )
         total_damage_bucket = get_piecewise_bucket(
             total_damage, 0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD
         )
-        np_out[_OFF_MONSTER_INTENT_DAMAGE_TOTAL + total_damage_bucket] = 1.0
-        np_out[_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = (
+        np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL + total_damage_bucket] = 1.0
+        np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = (
             min(total_damage, _DAMAGE_TOTAL_MAX) / _DAMAGE_TOTAL_MAX
         )
-        np_out[_OFF_MONSTER_INTENT_HAS_BLOCK] = float(intent.kind in _INTENT_BLOCK_KINDS)
-        np_out[_OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in _INTENT_BUFF_KINDS)
-        np_out[_OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in _INTENT_DEBUFF_KINDS)
-        np_out[_OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
-        np_out[_OFF_MONSTER_HIT_IS_LETHAL] = float(
+        np_own[_OFF_MONSTER_INTENT_HAS_BLOCK] = float(intent.kind in _INTENT_BLOCK_KINDS)
+        np_own[_OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in _INTENT_BUFF_KINDS)
+        np_own[_OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in _INTENT_DEBUFF_KINDS)
+        np_own[_OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
+        np_own[_OFF_MONSTER_HIT_IS_LETHAL] = float(
             get_outgoing_damage >= character_health + character_block
         )
 
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
-        np_out[_OFF_MONSTER_INTENT_KIND + _IDX_OF_INTENT_KIND[intent.kind]] = 1.0
+        np_own[_OFF_MONSTER_INTENT_KIND + _IDX_OF_INTENT_KIND[intent.kind]] = 1.0
 
     # Move identity: the current move + the two before it
     if monster.move_current is not None:
-        np_out[_OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
+        np_own[_OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
 
     # Under Runic Dome the history holds only the executed moves: no current
     # entry ends it, so the previous ones sit at [-1] and [-2]
     shift = 0 if intent is None else 1
     move_history = monster.move_history
     if len(move_history) >= 1 + shift:
-        np_out[_OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
+        np_own[_OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
     if len(move_history) >= 2 + shift:
-        np_out[_OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
+        np_own[_OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
+
+    # Health & Block
+    encode_shared_health_block_into(monster.health, monster.block, np_shared)
+
+    # Stasis slot. Shared w/ Cards in the stasis pile
+    encode_shared_stasis_slot_into(monster.slot, np_shared)
 
 
 def get_outgoing_damage(monsters: list[Monster]) -> int | None:
