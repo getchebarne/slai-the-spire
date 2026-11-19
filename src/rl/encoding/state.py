@@ -286,13 +286,14 @@ def _encode_totals_into(states_reserved: States[Reserved]) -> None:
     tokens = states_reserved.tokens
     features = tokens.features
     np_total = states_reserved.x_total.numpy()
-    np_total.fill(0)
 
     # Its tokens of each token kind
     np_count_token = tokens.x_count.numpy()  # (B,)
     np_token_state = np.repeat(np.arange(len(np_count_token)), np_count_token)  # (N_tok,)
     np_token_kind = tokens.x_token_kind[: len(np_token_state)].numpy()
-    np.add.at(np_total, (np_token_state, np_token_kind), 1)
+    np_total[:, : len(TokenKind)] = np.bincount(
+        np_token_state * len(TokenKind) + np_token_kind, minlength=len(np_total) * len(TokenKind)
+    ).reshape(-1, len(TokenKind))
 
     # Its tokens, their feature entries, and the rows those tokens own
     np_total[:, StateCollection.TOKENS] = np_count_token
@@ -406,9 +407,11 @@ def _encode_batch_tokens_into(
         # Accumulate the Entity ids
         batch_row_of_entity_id.append(row_of_entity_id)
 
-    # Each token's kind
+    # Each token's kind, through a bytearray: every TokenKind's value fits a byte
     np_token_kind = x_token_kind[:num_tokens].numpy()
-    np_token_kind[:] = [token_kind for tokens in batch_tokens for token_kind, _ in tokens]
+    np_token_kind[:] = bytearray(
+        [token_kind for tokens in batch_tokens for token_kind, _ in tokens]
+    )
 
     # Each token's Entity kind, its token kind's
     x_entity_kind[:num_tokens].numpy()[:] = _NP_ENTITY_KIND_OF_TOKEN_KIND[np_token_kind]
