@@ -9,7 +9,6 @@ from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding.map_ import EDGE_DELTAS
 from src.rl.encoding.map_ import NUM_CHANNELS
-from src.rl.encoding.map_ import NUM_EDGE_CHANNELS
 from src.rl.encoding.map_ import NUM_FEATURE_CHANNELS
 from src.rl.encoding.map_ import OFF_MAP_POSITION
 from src.rl.encoding.map_ import OFF_MAP_SELECTABLE
@@ -51,7 +50,6 @@ __all__ = [
     "ENCODING_DIM_SPARSE_TOKEN",
     "ENCODING_DIM_TOKEN",
     "NUM_CHANNELS",
-    "NUM_EDGE_CHANNELS",
     "NUM_FEATURE_CHANNELS",
     "OFF_MAP_POSITION",
     "OFF_MAP_SELECTABLE",
