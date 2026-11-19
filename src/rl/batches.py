@@ -144,7 +144,8 @@ def get_owner_first_row(x_count: torch.Tensor) -> torch.Tensor:
     torch.Tensor
         (num_owners, ...) long. Each owner's first row.
     """
-    return x_count.cumsum(0) - x_count
+    # Scanned along the last axis: CUDA's first-axis scan runs one serial thread per column
+    return x_count.movedim(0, -1).cumsum(-1).movedim(-1, 0) - x_count
 
 
 def get_entity_kind_rows(
