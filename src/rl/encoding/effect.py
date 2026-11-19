@@ -12,7 +12,7 @@ Two rules the layout depends on:
   name-vocabulary column, not Bite's own encoding. That makes the row depth-0 by
   construction, which matters because the engine's Effect-reference graph
   contains a self-loop (Endless Agony adds itself).
-- **Normalization is vectorized and scoped** — see `normalize_effect_rows`.
+- **Normalization is vectorized and scoped** — see `_normalize_effect_row`.
 """
 
 import math
@@ -58,21 +58,25 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.sparse import encode_sparse_rows_into
+from src.rl.encoding.sparse import ROW_EMPTY
+from src.rl.encoding.sparse import add_row
+from src.rl.encoding.sparse import encode_table_rows_into
+from src.rl.encoding.sparse import make_row_table
 from src.rl.types import EffectSource
 from src.rl.types import Reserved
 from src.rl.types import Sparse
 
 
 __all__ = [
+    "EFFECT_ROW_TABLE",
+    "EFFECT_TABLE_ROW_OF_EFFECT",
     "ENCODING_DIM_EFFECT",
     "ENCODING_DIM_SPARSE_EFFECT",
     "catalog_effects",
     "effect_key",
+    "effect_table_row",
     "encode_batch_effect_pending_into",
     "encode_effect_row_into",
-    "encode_effect_row_into_w_cache",
-    "normalize_effect_rows",
 ]
 
 
@@ -397,9 +401,7 @@ _OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
 _OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
-_OFF_EFFECT_SOURCE = _alloc(
-    "effect_source", len(EffectSource)
-)  # Written by encode_effect_row_into_w_cache, outside the row cache
+_OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))  # Written by effect_table_row
 
 # Categorical params, named for the engine type they one-hot
 _OFF_MODIFIER_KIND = _alloc("modifier_kind", len(_INDEX_MODIFIER_KIND))
@@ -927,9 +929,6 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
 def encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     """Write one Effect's RAW (un-normalized) features into `np_out`.
 
-    Callers that write many rows should normalize the whole block once with
-    `normalize_effect_rows`.
-
     Parameters
     ----------
     effect : Effect
@@ -968,10 +967,11 @@ def encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     np_out[_OFF_STACKS_NEGATIVE] = float(np_out[_OFF_STACKS] < 0)
 
 
-# Per-effect RAW row cache. Effect pyclasses are frozen and hash by field
-# value, so an Effect object is its own value-key
-_EFFECT_ROW_CACHE: dict[Effect, np.ndarray] = {}
-_EFFECT_ROW_CACHE_MAX = 100_000
+# Each distinct Effect row once, scaled and with its source's one-hot
+EFFECT_ROW_TABLE = make_row_table()
+
+# Each Effect's row in EFFECT_ROW_TABLE, under each source: an Effect hashes by field value
+EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
 
 
 def effect_key(effects: Iterable[Effect]) -> tuple[Effect, ...]:
@@ -990,49 +990,57 @@ def effect_key(effects: Iterable[Effect]) -> tuple[Effect, ...]:
     return tuple(effects)
 
 
-def encode_effect_row_into_w_cache(
-    effect: Effect, source: EffectSource, np_out: np.ndarray
-) -> None:
-    np_row = _EFFECT_ROW_CACHE.get(effect)
-    if np_row is None:
+def effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
+    """Find an Effect's row in the Effect row table, adding the row the first time it comes.
+
+    The row holds the Effect's features, scaled, and its source's one-hot.
+
+    Parameters
+    ----------
+    effect : Effect
+        The Effect.
+    effect_source : EffectSource
+        What applies the Effect.
+
+    Returns
+    -------
+    int
+        The row's index in EFFECT_ROW_TABLE.
+    """
+    key = (effect, effect_source)
+    table_row = EFFECT_TABLE_ROW_OF_EFFECT.get(key)
+    if table_row is None:
         np_row = np.zeros(ENCODING_DIM_EFFECT, dtype=np.float32)
         encode_effect_row_into(effect, np_row)
-        np_row.flags.writeable = False  # Guard the cached master copy
-        if len(_EFFECT_ROW_CACHE) >= _EFFECT_ROW_CACHE_MAX:
-            _EFFECT_ROW_CACHE.clear()
-        _EFFECT_ROW_CACHE[effect] = np_row
-    np_out[:] = np_row
-    np_out[_OFF_EFFECT_SOURCE + source] = 1.0
+        np_row[_OFF_EFFECT_SOURCE + effect_source] = 1.0
+        _normalize_effect_row(np_row)
+        table_row = add_row(EFFECT_ROW_TABLE, np_row, ENCODING_DIM_SPARSE_EFFECT)
+        EFFECT_TABLE_ROW_OF_EFFECT[key] = table_row
+
+    return table_row
 
 
-
-
-def normalize_effect_rows(np_effect: np.ndarray) -> None:
+def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
     """Scale the `_NORM_META` channels in place.
 
     Each is clipped to ±its cap, then divided by the cap or sqrt-compressed.
 
-    Run it once per block, over all its rows: per row, it costs far more. Fancy indexing copies,
-    so the transform runs on a gathered block and the final assignment scatters it back; `...`
-    keeps it rank-agnostic.
+    Fancy indexing copies, so the transform runs on the gathered channels and the final
+    assignment scatters them back.
 
     Parameters
     ----------
-    np_effect : np.ndarray
-        (..., ENCODING_DIM_EFFECT) float32. Raw Effect rows: any array whose LAST axis is the
-        channel axis.
+    np_effect_row : np.ndarray
+        (ENCODING_DIM_EFFECT,) float32. A raw Effect row.
     """
-    if not np_effect.size:
-        return
-
-    np_effect_gather = np_effect[..., _NP_IDX_SCALED]
+    np_effect_gather = np_effect_row[_NP_IDX_SCALED]
     np.clip(np_effect_gather, -_NP_SCALED_CAP, _NP_SCALED_CAP, out=np_effect_gather)
-    np_effect_gather[..., _NP_SCALED_LINEAR] /= _NP_SCALED_CAP[_NP_SCALED_LINEAR]
-    np_value_sqrt = np_effect_gather[..., _NP_SCALED_SQRT]
-    np_effect_gather[..., _NP_SCALED_SQRT] = np.sign(np_value_sqrt) * np.sqrt(
+    np_effect_gather[_NP_SCALED_LINEAR] /= _NP_SCALED_CAP[_NP_SCALED_LINEAR]
+    np_value_sqrt = np_effect_gather[_NP_SCALED_SQRT]
+    np_effect_gather[_NP_SCALED_SQRT] = np.sign(np_value_sqrt) * np.sqrt(
         np.abs(np_value_sqrt) / _NP_SCALED_CAP[_NP_SCALED_SQRT]
     )
-    np_effect[..., _NP_IDX_SCALED] = np_effect_gather
+    np_effect_row[_NP_IDX_SCALED] = np_effect_gather
 
 
 def encode_batch_effect_pending_into(
@@ -1048,11 +1056,13 @@ def encode_batch_effect_pending_into(
     batch_game_state : list[GameState]
         The states to encode, B of them.
     """
-    np_effect = np.zeros((len(batch_game_state), ENCODING_DIM_EFFECT), dtype=np.float32)
-    for game_state, np_effect_row in zip(batch_game_state, np_effect):
+    batch_effect_table_row = []
+    for game_state in batch_game_state:
         effect = game_state.effect_pending
-        if effect is not None:
-            encode_effect_row_into_w_cache(effect, EffectSource.PENDING, np_effect_row)
+        batch_effect_table_row.append(
+            ROW_EMPTY if effect is None else effect_table_row(effect, EffectSource.PENDING)
+        )
 
-    normalize_effect_rows(np_effect)
-    encode_sparse_rows_into(effect_pending, np_effect, ENCODING_DIM_SPARSE_EFFECT)
+    encode_table_rows_into(
+        effect_pending, EFFECT_ROW_TABLE, np.array(batch_effect_table_row, dtype=np.intp)
+    )
