@@ -67,7 +67,7 @@ type Token = tuple[TokenKind, Entity]
 class EffectSource(IntEnum):
     """What applies the Effect, and for Relics on which trigger.
 
-    Stamped into the row by the Effects encoder, outside the row cache.
+    Stamped into the row by the Effects encoder.
     """
 
     CARD_PLAY = 0

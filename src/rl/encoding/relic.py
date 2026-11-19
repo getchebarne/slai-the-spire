@@ -50,10 +50,6 @@ TAGS_OF_RELIC_NAME: dict[RelicName, tuple[Tag, ...]] = {
     RelicName.WristBlade: (Tag.NINJA,),
 }
 
-# Per-relic encoding cache keyed by (name, used_up, counter, linked) — mutable fields and the link
-_RELIC_ROW_CACHE: dict[tuple, np.ndarray] = {}
-_RELIC_ROW_CACHE_MAX = 100_000
-
 
 def encode_relic_into(relic: Relic, linked: bool, np_out: np.ndarray) -> None:
     np_out[_OFF_RELIC_NAME + _IDX_OF_RELIC_NAME[relic.name]] = 1.0
@@ -70,30 +66,3 @@ def encode_relic_into(relic: Relic, linked: bool, np_out: np.ndarray) -> None:
             np_out[_OFF_RELIC_COUNTER_REMAINING + counter_reset - relic.counter - 1] = 1.0
 
     np_out[_OFF_RELIC_LINKED] = float(linked)
-
-
-def encode_relic_into_w_cache(
-    relic: Relic, relic_linked: Relic | None, np_out: np.ndarray
-) -> None:
-    """Write the Relic encoding into `np_out`, cached by (name, used_up, counter, linked).
-
-    Parameters
-    ----------
-    relic : Relic
-        The Relic to encode.
-    relic_linked : Relic | None
-        The Relic the Sapphire Key is linked to, None without the key on offer.
-    np_out : np.ndarray
-        (ENCODING_DIM_RELIC,) float32. The Relic's row, overwritten.
-    """
-    linked = relic_linked is not None and relic.id == relic_linked.id
-    cache_key = (relic.name, relic.used_up, relic.counter, linked)
-    np_row = _RELIC_ROW_CACHE.get(cache_key)
-    if np_row is None:
-        np_row = np.zeros(ENCODING_DIM_RELIC, dtype=np.float32)
-        encode_relic_into(relic, linked, np_row)
-        np_row.flags.writeable = False
-        if len(_RELIC_ROW_CACHE) >= _RELIC_ROW_CACHE_MAX:
-            _RELIC_ROW_CACHE.clear()
-        _RELIC_ROW_CACHE[cache_key] = np_row
-    np_out[:] = np_row
