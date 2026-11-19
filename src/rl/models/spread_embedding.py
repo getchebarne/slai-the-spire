@@ -33,6 +33,7 @@ class SpreadEmbedding(torch.autograd.Function):
         """
         ctx.save_for_backward(x_idx_emb)
         ctx.num_embeddings = x_weight.shape[0]
+
         return F.embedding(x_idx_emb, x_weight)
 
     @staticmethod
@@ -73,4 +74,5 @@ class SpreadEmbedding(torch.autograd.Function):
             scale_grad_by_freq=False,
         )  # (_SPREAD_COPIES * R, D)
         x_weight_grad = x_grad_copy.view(_SPREAD_COPIES, ctx.num_embeddings, -1).sum(0)  # (R, D)
+
         return x_weight_grad, None

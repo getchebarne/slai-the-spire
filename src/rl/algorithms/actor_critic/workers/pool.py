@@ -489,6 +489,7 @@ def _wait_for_request(sph_request: Semaphore, x_stop: torch.Tensor) -> bool:
     while not sph_request.acquire(timeout=1.0):
         if not parent_alive():  # The Actor died without stopping this worker
             return False
+
     return not x_stop
 
 

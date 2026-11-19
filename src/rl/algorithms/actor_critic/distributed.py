@@ -118,6 +118,7 @@ def mean_over_ranks(x_value: torch.Tensor) -> float:
         return x_value.item()
     x_value_sum = x_value.detach().to(torch.float64)
     dist.all_reduce(x_value_sum)
+
     return x_value_sum.item() / dist.get_world_size()
 
 
@@ -140,6 +141,7 @@ def any_rank(flag: bool, device: torch.device) -> bool:
         return flag
     x_flag = torch.tensor([float(flag)], device=device)
     dist.all_reduce(x_flag, op=dist.ReduceOp.MAX)
+
     return bool(x_flag.item())
 
 
@@ -162,6 +164,7 @@ def broadcast_float(value: float, device: torch.device) -> float:
         return value
     x_value = torch.tensor([value], dtype=torch.float64, device=device)
     dist.broadcast(x_value, src=0)
+
     return x_value.item()
 
 
@@ -182,4 +185,5 @@ def gather_episode_results(episode_results: list[EpisodeResult]) -> list[Episode
         return episode_results
     gathered: list[list[EpisodeResult]] = [[] for _ in range(dist.get_world_size())]
     dist.all_gather_object(gathered, episode_results)
+
     return [episode for rank_episode_results in gathered for episode in rank_episode_results]

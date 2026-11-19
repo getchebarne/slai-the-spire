@@ -51,6 +51,7 @@ class HeadActionType(nn.Module):
             (B, NUM_ACTION_TYPES). The masked logits: -inf where the `ActionType` is illegal.
         """
         x_logit = self._scorer(core_output.x_global)
+
         return x_logit.masked_fill(~core_output.x_legal_action_type, float("-inf"))
 
 
@@ -158,6 +159,7 @@ class PointerLogits(nn.Module):
         """
         x_query = self._query_net(torch.cat([x_global, x_cond], dim=-1))  # (B, dim_key)
         x_logit = (x_keys * x_query[x_key_state]).sum(-1) * self._scale
+
         return x_logit.masked_fill(~x_mask, float("-inf"))
 
 

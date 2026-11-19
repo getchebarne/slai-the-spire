@@ -32,6 +32,7 @@ def get_piecewise_bucket(value: int, val_min: int, val_max: int, threshold: int)
     # Square root piece: floor(sqrt(threshold+1))..floor(sqrt(val_max))
     sqrt_start = int(math.sqrt(threshold + 1))
     sqrt_value = int(math.sqrt(value))
+
     return (threshold - val_min + 1) + (sqrt_value - sqrt_start)
 
 
@@ -74,4 +75,5 @@ def get_sqrt_norm(value: float, cap: float) -> float:
         The square root of |value| / `cap`, with |value| clamped to `cap`, signed like `value`.
     """
     clamped = min(max(value, -cap), cap)
+
     return math.copysign(math.sqrt(abs(clamped)) / math.sqrt(cap), clamped)

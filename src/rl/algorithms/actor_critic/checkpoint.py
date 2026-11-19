@@ -112,6 +112,7 @@ def load_checkpoint(
         ascension_current=ckpt["ascension_current"],
         streak=ckpt["streak"],
     )
+
     return ckpt["iteration"] + 1, run_state
 
 
@@ -129,4 +130,5 @@ def _saved_iterations(exp_dir: str) -> list[int]:
         The iterations of its checkpoints/iter-*.pth, in no order.
     """
     paths = glob.glob(f"{exp_dir}/checkpoints/iter-*.pth")
+
     return [int(os.path.basename(path)[len("iter-") : -len(".pth")]) for path in paths]

@@ -319,6 +319,7 @@ class EntityProjector(nn.Module):
         x_hash_room = (_mix_hash(x_room_bit, x_hash_weight_mix) + 1) * self._x_hash_weight_room
         x_hash[x_room_row] += x_hash_room.sum(1)
         x_uniq, x_inv = torch.unique(x_hash, return_inverse=True)  # (U,), (N,)
+
         return get_unique_rep_row(x_inv, x_uniq.shape[0]), x_inv
 
 
@@ -401,6 +402,7 @@ def _gather_tokens(
     # The Room tokens among them, and each one's cell features by its place among the Room tokens
     x_room_rep = torch.nonzero_static(x_is_room, size=num_rooms).squeeze(1)  # (U_rooms,)
     x_room_hidden_rep = x_room_hidden[torch.searchsorted(x_room_row, x_rep[x_room_rep])]
+
     return features_rep, tokens.x_entity_kind[x_rep], x_room_rep, x_room_hidden_rep
 
 
@@ -424,6 +426,7 @@ def _get_owner_rows(
         (num_rows,) long. Their rows, owner after owner.
     """
     x_first_row = get_owner_first_row(x_count)[x_idx_owner]
+
     return expand_ranges(x_first_row, x_count[x_idx_owner].long(), num_rows)
 
 
@@ -443,6 +446,7 @@ def _count_owned_entries(owned_rows: OwnedRows[Live]) -> torch.Tensor:
     num_tokens = owned_rows.x_count.shape[0]
     x_row_token = get_row_owner(owned_rows.x_count, owned_rows.sparse.x_count.shape[0])  # (M,)
     x_count = torch.zeros(num_tokens, dtype=torch.long, device=x_row_token.device)
+
     return x_count.index_add_(0, x_row_token, owned_rows.sparse.x_count.long())
 
 
@@ -463,6 +467,7 @@ def _mix_hash(x_hash: torch.Tensor, x_hash_weight_mix: torch.Tensor) -> torch.Te
     """
     # Logical shifts: `>>` on int64 copies the sign bit in, and the mask clears it
     x_hash = (x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)) * x_hash_weight_mix
+
     return x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)
 
 
@@ -497,6 +502,7 @@ def _hash_sparse(
     x_hash_entry = (sparse.x_col.long() + 1) * x_hash_weight_col + x_bit * x_hash_weight_value
     x_hash_entry = _mix_hash(x_hash_entry, x_hash_weight_mix)  # (F,)
     x_hash = torch.zeros(sparse.x_count.shape[0], dtype=torch.long, device=x_hash_entry.device)
+
     return x_hash.index_add_(0, x_entry_row, x_hash_entry)
 
 
@@ -567,6 +573,7 @@ def _project_sparse(mapper: nn.Linear | nn.Sequential, sparse: Sparse[Live]) -> 
     if isinstance(mapper, nn.Sequential):
         for idx_layer in range(1, len(mapper)):
             x_row = mapper[idx_layer](x_row)
+
     return x_row
 
 
@@ -676,4 +683,5 @@ class _SumSparseDenseBackward(torch.autograd.Function):
         x_dense.view(-1).scatter_add_(
             0, x_entry_row * ctx.num_cols + x_col.long(), x_value
         )
+
         return None, None, None, x_grad.t() @ x_dense  # (D, in)

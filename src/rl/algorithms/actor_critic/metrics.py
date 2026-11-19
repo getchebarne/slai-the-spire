@@ -157,6 +157,7 @@ def log_eval(
         writer, iteration_eval, _MetricPrefix.EVAL, episode_results_eval, ascension_current_eval
     )
     _print_eval(iteration_eval, ascension_current_eval, metrics_eval)
+
     return metrics_eval
 
 
@@ -209,6 +210,7 @@ def _log_behavior(
     metrics = _aggregate_episode_results(episode_results) if episode_results else {}
     metrics[MetricKey.ASCENSION] = ascension_current
     _write_metrics(writer, iteration, metric_prefix, metrics)
+
     return metrics
 
 

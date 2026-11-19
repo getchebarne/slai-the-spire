@@ -109,6 +109,7 @@ def get_monster_entities(game_state: GameState) -> list[Monster]:
         The Combat's Monsters; empty outside Combat.
     """
     combat = _read_combat(game_state)
+
     return _get_monsters(combat) if combat is not None else []
 
 
@@ -137,6 +138,7 @@ def _capped[TEntity: Entity](
             f"{token_kind.name} holds {len(entities)} Entities; the ones past its cap of {cap} "
             "are dropped"
         )
+
     return entities[:cap]
 
 
@@ -163,6 +165,7 @@ def _read_game_state(game_state: GameState) -> GameState:
 
 def _get_card_match_flipped(event: Event) -> list[Card]:
     card = event.card_match_flipped
+
     return [card] if card is not None else []
 
 
@@ -190,6 +193,7 @@ def _get_card_pile_draw(combat: Combat) -> list[Card]:
         combat.card_pile_draw,
         key=lambda card: (card.draw_depth is None, card.draw_depth or 0, card.id),
     )
+
     return _capped(TokenKind.CARD_PILE_DRAW, cards_draw, MAX_SIZE_CARD_PILE_DRAW)
 
 
@@ -220,6 +224,7 @@ def _get_card_pile_selected(game_state: GameState) -> list[Card]:
 def _get_card_pile_stasis(combat: Combat) -> list[Card]:
     # Index-aligned with the Monsters: a Monster holding no Card is None
     cards = [card for card in combat.card_pile_stasis if card is not None]
+
     return cards[:MAX_SIZE_CARD_PILE_STASIS]
 
 
@@ -229,6 +234,7 @@ def _get_card_play_queue(combat: Combat) -> list[Card]:
 
 def _get_card_reward_bundle(reward: Reward, idx_bundle: int, cap: int) -> list[Card]:
     cards = reward.cards
+
     return cards[idx_bundle][:cap] if idx_bundle < len(cards) else []
 
 
@@ -403,6 +409,7 @@ def get_room_entities(game_state: GameState) -> list[Room]:
         return []
 
     y_next = 0 if y_current is None else y_current + 1
+
     return [room for x, room in enumerate(rooms[y_next]) if x in cols and room is not None]
 
 
@@ -597,6 +604,7 @@ def _get_burning_path_uncached(map_: Map, wb_charges_left: int) -> frozenset[tup
                     )
 
     wb_charges_to = _wing_boots_charges_to_room_burning(rooms, room_burning)
+
     return frozenset(
         (y, room.x)
         for y in range(y_first, room_burning.y + 1)

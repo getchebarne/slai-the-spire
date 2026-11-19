@@ -246,6 +246,7 @@ def _evaluate_rollout(
         x_value_final = model.get_values(states_final)
 
     x_value = torch.cat(batch_x_value).reshape(rollout_length, num_envs, num_reward_streams)
+
     return torch.cat(batch_x_log_prob), x_value, x_value_final
 
 
@@ -449,6 +450,7 @@ def _update_minibatch(
 
     # Every rank stops on the same KL, or the others would wait in the next all-reduce
     approx_kl = mean_over_ranks(_approx_kl(x_log_ratio))
+
     return metrics, approx_kl
 
 
@@ -482,6 +484,7 @@ def _compute_loss_policy(
     """
     x_surrogate = x_ratio * x_advantage
     x_surrogate_clipped = torch.clamp(x_ratio, 1 - clip_eps, 1 + clip_eps) * x_advantage
+
     return -torch.mean(x_weight_capped * torch.min(x_surrogate, x_surrogate_clipped))
 
 
@@ -530,6 +533,7 @@ def _minibatch_metrics(
     """
     x_entropy_mean = x_entropy.mean(dim=0)
     x_kl_uniform_mean = x_kl_uniform.mean(dim=0)
+
     return _read_metrics(
         {
             # Loss
@@ -605,6 +609,7 @@ def _average_minibatch_metrics(
     """
     metrics = {key: sum(metrics[key] for metrics in records) / len(records) for key in records[0]}
     metrics[MetricKey.UPDATE_EPOCHS_RUN] = len(records) / num_minibatches
+
     return metrics
 
 
@@ -682,4 +687,5 @@ def _read_metrics(x_metrics: dict[str, torch.Tensor]) -> dict[str, float]:
     """
     # One read for all of them: each .item() would make the CPU wait for the GPU
     values = torch.stack([x_metric.detach() for x_metric in x_metrics.values()]).tolist()
+
     return dict(zip(x_metrics, values))

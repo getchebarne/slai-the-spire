@@ -125,6 +125,7 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
         _MAP_GRID_CACHE.clear()
 
     _MAP_GRID_CACHE[identity_hash] = np_grid
+
     return np_grid
 
 

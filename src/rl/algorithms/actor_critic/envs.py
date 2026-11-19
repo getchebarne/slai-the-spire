@@ -59,6 +59,7 @@ def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
         Its first state.
     """
     env = GameEnv(ascension=ascension, neow=NEOW)
+
     return env, env.reset(seed=seed)
 
 
@@ -214,4 +215,5 @@ def _heart_damage(game_state: GameState) -> float:
         return 1.0
     
     heart = monsters[0]
+
     return 1.0 - heart.health / heart.health_max
