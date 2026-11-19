@@ -39,7 +39,6 @@ from slai import CardRarity
 from slai import CostScope
 from slai import DeltaSign
 from slai import Effect
-from slai import GameState
 from slai import ModifierKind
 from slai import ReadAt
 from slai import RelicExclusion
@@ -58,24 +57,15 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.sparse import TABLE_ROW_EMPTY
-from src.rl.encoding.sparse import add_row
-from src.rl.encoding.sparse import encode_table_rows_into
-from src.rl.encoding.sparse import make_row_table
 from src.rl.types import EffectSource
-from src.rl.types import Reserved
-from src.rl.types import Sparse
 
 
 __all__ = [
-    "EFFECT_TABLE_ROW_OF_EFFECT",
     "ENCODING_DIM_EFFECT",
     "ENCODING_DIM_SPARSE_EFFECT",
-    "ROW_TABLE_EFFECT",
     "catalog_effects",
-    "effect_table_row",
-    "encode_batch_effect_pending_into",
     "encode_effect_row_into",
+    "make_effect_row",
 ]
 
 
@@ -400,7 +390,7 @@ _OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
 _OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
-_OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))  # Written by effect_table_row
+_OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))  # Written by make_effect_row
 
 # Categorical params, named for the engine type they one-hot
 _OFF_MODIFIER_KIND = _alloc("modifier_kind", len(_INDEX_MODIFIER_KIND))
@@ -966,17 +956,8 @@ def encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     np_out[_OFF_STACKS_NEGATIVE] = float(np_out[_OFF_STACKS] < 0)
 
 
-# The Effect rows, each scaled and with its source's one-hot
-ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
-
-# Each Effect's row in ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
-EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
-
-
-def effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
-    """Find an Effect's row in the Effect row table, keeping the row the first time it comes.
-
-    The row holds the Effect's features, scaled, and its source's one-hot.
+def make_effect_row(effect: Effect, effect_source: EffectSource) -> np.ndarray:
+    """Make an Effect's row: its features, scaled, and its source's one-hot.
 
     Parameters
     ----------
@@ -987,20 +968,15 @@ def effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
 
     Returns
     -------
-    int
-        The row's index in ROW_TABLE_EFFECT.
+    np.ndarray
+        (ENCODING_DIM_EFFECT,) float32. The row.
     """
-    key = (effect, effect_source)
-    table_row = EFFECT_TABLE_ROW_OF_EFFECT.get(key)
-    if table_row is None:
-        np_row = np.zeros(ENCODING_DIM_EFFECT, dtype=np.float32)
-        encode_effect_row_into(effect, np_row)
-        np_row[_OFF_EFFECT_SOURCE + effect_source] = 1.0
-        _normalize_effect_row(np_row)
-        table_row = add_row(ROW_TABLE_EFFECT, np_row)
-        EFFECT_TABLE_ROW_OF_EFFECT[key] = table_row
+    np_row = np.zeros(ENCODING_DIM_EFFECT, dtype=np.float32)
+    encode_effect_row_into(effect, np_row)
+    np_row[_OFF_EFFECT_SOURCE + effect_source] = 1.0
+    _normalize_effect_row(np_row)
 
-    return table_row
+    return np_row
 
 
 def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
@@ -1024,28 +1000,3 @@ def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
         np.abs(np_value_sqrt) / _NP_SCALED_CAP[_NP_SCALED_SQRT]
     )
     np_effect_row[_NP_IDX_SCALED] = np_effect_gather
-
-
-def encode_batch_effect_pending_into(
-    effect_pending: Sparse[Reserved],
-    batch_game_state: list[GameState],
-) -> None:
-    """Write each state's pending Effect as one sparse row, empty where no halt is pending.
-
-    Parameters
-    ----------
-    effect_pending : Sparse[Reserved]
-        The reserved per-state rows and their entries.
-    batch_game_state : list[GameState]
-        The states to encode, B of them.
-    """
-    batch_effect_table_row = []
-    for game_state in batch_game_state:
-        effect = game_state.effect_pending
-        batch_effect_table_row.append(
-            TABLE_ROW_EMPTY if effect is None else effect_table_row(effect, EffectSource.PENDING)
-        )
-
-    encode_table_rows_into(
-        effect_pending, ROW_TABLE_EFFECT, np.array(batch_effect_table_row, dtype=np.intp)
-    )
