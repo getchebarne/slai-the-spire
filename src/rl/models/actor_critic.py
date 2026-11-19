@@ -49,7 +49,7 @@ class ActorCritic(nn.Module):
         transformer_num_heads: int,
         transformer_num_blocks: int,
         gnn_num_layers: int,
-        map_encoder_dim: int,
+        dim_map: int,
         dim_ff_primary: int,
         dim_ff_value: int,
         dim_op: int,
@@ -65,7 +65,7 @@ class ActorCritic(nn.Module):
             transformer_num_heads=transformer_num_heads,
             transformer_num_blocks=transformer_num_blocks,
             gnn_num_layers=gnn_num_layers,
-            map_encoder_dim=map_encoder_dim,
+            dim_map=dim_map,
         )
 
         # Policy heads, one per level
