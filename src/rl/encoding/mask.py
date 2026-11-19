@@ -6,7 +6,6 @@ import numpy as np
 import slai
 from slai import Card
 
-from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.constants import TOKEN_KINDS_CARD
 from src.rl.encoding.focus import derive_focus
 from src.rl.types import Token
@@ -16,66 +15,6 @@ from src.rl.utils import action_masked
 
 # Action types already warned about dropped selections — truncation is never silent
 _WARNED_DROPPED: set[int] = set()
-
-
-def encode_batch_masks(
-    batch_game_state: list[slai.GameState],
-    batch_legal_actions: list[list[slai.Action]],
-    batch_tokens: list[list[Token]],
-    batch_row_of_entity_id: list[dict[int, int]],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Encode the masks from each state's legal actions.
-
-    The actions `action_masked` names are engine-legal but masked.
-
-    The token pass gives each state's tokens, as (token kind, Entity) in window order, and each
-    Entity id's first state-local row. The state's batch offset is added when writing a mask,
-    so the masks use the encoder's placement. An Entity the encoder dropped is unselectable.
-
-    Parameters
-    ----------
-    batch_game_state : list[slai.GameState]
-        The states, B of them.
-    batch_legal_actions : list[list[slai.Action]]
-        Each state's legal actions.
-    batch_tokens : list[list[Token]]
-        Each state's tokens, as (token kind, Entity) in window order.
-    batch_row_of_entity_id : list[dict[int, int]]
-        Each state's Entity ids, each mapped to its first row within that state's tokens.
-
-    Returns
-    -------
-    np_legal_selection : np.ndarray
-        (N, NUM_ACTION_TYPES) bool. The selectable tokens, per action type, deduped by Card
-        identity within each token kind. Monster rows are all False.
-    np_legal_target : np.ndarray
-        (N, NUM_ACTION_TYPES) bool. The legal Monster targets, per action type. All other
-        token rows are False.
-    np_needs_target : np.ndarray
-        (N,) bool. The tokens' needs-target bits: set where a legal action carries a Monster
-        target.
-    np_legal_action_type : np.ndarray
-        (B, NUM_ACTION_TYPES) bool. The states' legal action types.
-    """
-    num_tokens = sum(len(tokens) for tokens in batch_tokens)
-
-    # Initialize the masks to all-False
-    np_legal_selection = np.zeros((num_tokens, NUM_ACTION_TYPES), dtype=np.bool_)
-    np_legal_target = np.zeros((num_tokens, NUM_ACTION_TYPES), dtype=np.bool_)
-    np_legal_action_type = np.zeros((len(batch_game_state), NUM_ACTION_TYPES), dtype=np.bool_)
-    np_needs_target = np.zeros(num_tokens, dtype=np.bool_)
-
-    encode_batch_masks_into(
-        batch_game_state,
-        batch_legal_actions,
-        batch_tokens,
-        batch_row_of_entity_id,
-        np_legal_selection,
-        np_legal_target,
-        np_needs_target,
-        np_legal_action_type,
-    )
-    return np_legal_selection, np_legal_target, np_needs_target, np_legal_action_type
 
 
 def encode_batch_masks_into(

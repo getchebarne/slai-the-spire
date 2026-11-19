@@ -42,7 +42,7 @@ def encode_sparse_rows_into(
     sparse_out : Sparse[Reserved]
         The reserved row and entry arrays of one table.
     np_dense : np.ndarray
-        (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
+        (..., C) float32. Dense features with C columns. Leading dimensions flatten into R rows.
     max_entries : int
         The maximum number of nonzero feature entries allowed in one row.
     """

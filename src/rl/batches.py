@@ -494,13 +494,13 @@ def slice_states[TStorage](
     States[Live]
         Views of the selected states and their descendants, sharing source storage.
     """
+    idx_start, idx_stop, _ = slice(idx_start, idx_stop).indices(len(states.x_context))
     if idx_start > idx_stop:
         raise ValueError(
             f"`idx_start` ({idx_start}) must be smaller than or equal to `idx_stop` ({idx_stop})"
         )
     
     x_total_cpu = states.x_total_cpu
-    idx_start, idx_stop, _ = slice(idx_start, idx_stop).indices(len(states.x_context))
     selector_states = slice(idx_start, idx_stop)
 
     # Each collection's rows before the first state, and before the stop

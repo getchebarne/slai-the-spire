@@ -22,7 +22,7 @@ from collections.abc import Iterator
 from enum import StrEnum
 from enum import auto
 from types import UnionType
-from typing import Any, Protocol, SupportsInt, TypeVar, get_args
+from typing import Any, Protocol, SupportsInt, get_args
 
 import numpy as np
 import slai
@@ -64,7 +64,6 @@ __all__ = [
     "ENCODING_DIM_EFFECT",
     "ENCODING_DIM_SPARSE_EFFECT",
     "catalog_effects",
-    "encode_effect_row_into",
     "make_effect_row",
 ]
 
@@ -154,20 +153,13 @@ def _amount_parts(amount: Amount) -> tuple[float, float, bool]:
     raise ValueError(f"Unsupported Amount variant: {type(amount).__name__}")
 
 
-E = TypeVar("E")
-V = TypeVar("V")
-
-
 class _MirrorEnum(SupportsInt, Protocol):
     @staticmethod
     def members() -> "list[Any]":
         ...
 
 
-M = TypeVar("M", bound=_MirrorEnum)
-
-
-def _field(cls: type[E], get: Callable[[E], V]) -> Iterator[V]:
+def _field[E, V](cls: type[E], get: Callable[[E], V]) -> Iterator[V]:
     """Yield one field across every catalog instance of an Effect type.
 
     Parameters
@@ -215,7 +207,7 @@ def _cap(*specs: Iterable[Amount | float], floor: float = 1.0) -> float:
     return max_
 
 
-def _vocabulary(*specs: Iterable[M | list[M]]) -> dict[M, int]:
+def _vocabulary[M: _MirrorEnum](*specs: Iterable[M | list[M]]) -> dict[M, int]:
     """Build a catalog-derived identity vocabulary; index 0 is reserved as unseen.
 
     Parameters
@@ -236,7 +228,7 @@ def _vocabulary(*specs: Iterable[M | list[M]]) -> dict[M, int]:
     return {name: idx_name + 1 for idx_name, name in enumerate(sorted(names, key=int))}
 
 
-def _index_enum(enum: type[M]) -> dict[M, int]:
+def _index_enum[M: _MirrorEnum](enum: type[M]) -> dict[M, int]:
     """Index the engine enum's members by their integer discriminants.
 
     Parameters
@@ -915,7 +907,7 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
 }
 
 
-def encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
+def _encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     """Write one Effect's RAW (un-normalized) features into `np_out`.
 
     Parameters
@@ -972,7 +964,7 @@ def make_effect_row(effect: Effect, effect_source: EffectSource) -> np.ndarray:
         (ENCODING_DIM_EFFECT,) float32. The row.
     """
     np_row = np.zeros(ENCODING_DIM_EFFECT, dtype=np.float32)
-    encode_effect_row_into(effect, np_row)
+    _encode_effect_row_into(effect, np_row)
     np_row[_OFF_EFFECT_SOURCE + effect_source] = 1.0
     _normalize_effect_row(np_row)
 

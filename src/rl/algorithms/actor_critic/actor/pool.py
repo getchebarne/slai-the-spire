@@ -37,9 +37,6 @@ from src.rl.types import States
 from src.rl.utils import parent_alive
 
 
-_SPAWN = "spawn"
-
-
 @dataclass
 class RolloutConfig:
     num_envs: int
@@ -142,7 +139,7 @@ def start_actor(
     x_stop = torch.tensor(False).share_memory_()
 
     # Start Actor process and its loop
-    ctx = mp.get_context(_SPAWN)
+    ctx = mp.get_context("spawn")
     conn_read, conn_write = ctx.Pipe(duplex=False)
     process = ctx.Process(
         target=_actor_loop, args=(weight_buffer, x_stop, conn_write, actor_config)
@@ -241,7 +238,10 @@ def stop_actor(actor_handle: ActorHandle) -> None:
     actor_handle._conn_read.close()  # Ends a delivery it may be sending
     actor_handle._process.join(timeout=60.0)
     if actor_handle._process.is_alive():  # Likely stuck on a hung worker: kill its whole group
-        os.killpg(actor_handle._process.pid, signal.SIGKILL)
+        pid = actor_handle._process.pid
+        if pid is not None:
+            os.killpg(pid, signal.SIGKILL)
+
         actor_handle._process.join()
 
 
@@ -316,8 +316,8 @@ def _actor_loop(
 
         # Loop
         version_rolled, t_idle = version_first, time.perf_counter()
-        for rollout in itertools.count(version_first):
-            version = max(rollout - 1, version_first)
+        for idx_rollout in itertools.count(version_first):
+            version = max(idx_rollout - 1, version_first)
 
             # A version not played yet is waited for: its publish's release orders the reads below
             if bool(x_stop) or (
