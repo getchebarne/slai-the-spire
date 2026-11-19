@@ -8,40 +8,10 @@ from slai import Card
 
 from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.constants import TOKEN_KINDS_CARD
-from src.rl.encoding.card import card_key
-from src.rl.encoding.effect import effect_key
 from src.rl.encoding.focus import derive_focus
 from src.rl.types import Token
 from src.rl.types import TokenKind
 from src.rl.utils import action_masked
-
-
-def _card_identity(card: Card) -> tuple:
-    """Return the Card features and Effects that determine selection equivalence.
-
-    Same-name Cards with different Effects remain distinct, and so do copies at different prices or
-    with different cost overrides. The Card object itself is not a suitable key because its hash
-    includes its unique arena id.
-
-    Parameters
-    ----------
-    card : Card
-        The Card to key.
-
-    Returns
-    -------
-    tuple
-        The Card feature key, its cost override and price, and its play, discard and draw Effect
-        keys.
-    """
-    return (
-        card_key(card),
-        card.cost_override,
-        card.price,
-        effect_key(card.effects_play),
-        effect_key(card.effects_discard),
-        effect_key(card.effects_draw),
-    )
 
 
 # Action types already warned about dropped selections — truncation is never silent
@@ -210,7 +180,7 @@ def encode_batch_masks_into(
 
             seen_tokens = set()
             for row in rows:
-                identity = _card_identity(cast(Card, tokens[row - row_start][1]))
+                identity = cast(Card, tokens[row - row_start][1]).identity_hash
                 if identity in seen_tokens:
                     # An identical Card is already selectable for this `ActionType`
                     np_legal_selection[row, action_type] = False
