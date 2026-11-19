@@ -16,6 +16,10 @@ from slai import get_card_templates
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
 from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.shared import encode_shared_price_into
+from src.rl.encoding.shared import encode_shared_stasis_slot_into
+from src.rl.encoding.shared import encode_shared_tag_into
+from src.rl.encoding.shared import get_record_key_price
 from src.rl.types import Tag
 
 
@@ -95,7 +99,7 @@ ENCODING_DIM_CARD = sum(w for _, w in _CHANNEL_LAYOUT_CARD)
 ENCODING_DIM_SPARSE_CARD = len(_CHANNEL_LAYOUT_CARD)
 
 # Each tagged Card's Tags, by name: an upgraded Card keeps them
-TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {
+_TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {
     CardName.Accuracy: (Tag.NINJA,),
     CardName.Acrobatics: (Tag.DISCARD,),
     CardName.AfterImage: (Tag.NINJA,),
@@ -151,42 +155,113 @@ def _cost_offset(card: Card) -> float:
 
 
 def encode_card_into(
-    card: Card, energy_current: int, draw_below: int | None, np_out: np.ndarray
+    card: Card,
+    energy_current: int,
+    draw_below: int | None,
+    gold: int,
+    slot_holder: int | None,
+    np_own: np.ndarray,
+    np_shared: np.ndarray,
 ) -> None:
-    np_out[_OFF_CARD_NAME + _IDX_OF_CARD_NAME[card.name]] = 1.0
-    np_out[_OFF_CARD_KIND + _IDX_OF_CARD_KIND[card.kind]] = 1.0
-    np_out[_OFF_CARD_COLOR + _IDX_OF_CARD_COLOR[card.color]] = 1.0
-    np_out[_OFF_CARD_RARITY + _IDX_OF_CARD_RARITY[card.rarity]] = 1.0
-    np_out[_OFF_CARD_COST_KIND + _IDX_OF_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
+    """Write a Card's token: its own columns, then its price, its holder's slot and its Tags.
+
+    Every input besides the Card is in the Card's record key (`get_record_key_card`), so a new
+    input goes in the key too.
+
+    Parameters
+    ----------
+    card : Card
+        The Card.
+    energy_current : int
+        The Character's energy; 0 outside Combat.
+    draw_below : int | None
+        The Cards below it in the draw pile; None when its draw depth doesn't show.
+    gold : int
+        The Character's gold, which its price is read against.
+    slot_holder : int | None
+        The slot of the Monster holding it in stasis; None out of the stasis pile.
+    np_own : np.ndarray
+        (ENCODING_DIM_CARD,) float32. The Card's own range of its token row, written in place.
+    np_shared : np.ndarray
+        (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
+    """
+    np_own[_OFF_CARD_NAME + _IDX_OF_CARD_NAME[card.name]] = 1.0
+    np_own[_OFF_CARD_KIND + _IDX_OF_CARD_KIND[card.kind]] = 1.0
+    np_own[_OFF_CARD_COLOR + _IDX_OF_CARD_COLOR[card.color]] = 1.0
+    np_own[_OFF_CARD_RARITY + _IDX_OF_CARD_RARITY[card.rarity]] = 1.0
+    np_own[_OFF_CARD_COST_KIND + _IDX_OF_CARD_COST_KIND[type(card.cost_kind)]] = 1.0
     if card.cost_override_scope is not None:
-        np_out[_OFF_CARD_COST_SCOPE + _IDX_OF_COST_SCOPE[card.cost_override_scope]] = 1.0
+        np_own[_OFF_CARD_COST_SCOPE + _IDX_OF_COST_SCOPE[card.cost_override_scope]] = 1.0
 
     cost = max(_COST_MIN, min(card.cost, _COST_MAX))
-    np_out[_OFF_CARD_COST_VECTOR + cost] = 1.0
+    np_own[_OFF_CARD_COST_VECTOR + cost] = 1.0
 
-    np_out[_OFF_CARD_COST_SCALAR] = cost / _COST_MAX
-    np_out[_OFF_CARD_UPGRADED] = float(card.upgraded)
-    np_out[_OFF_CARD_EXHAUST] = float(card.exhaust)
-    np_out[_OFF_CARD_INNATE] = float(card.innate)
-    np_out[_OFF_CARD_ETHEREAL] = float(card.ethereal)
-    np_out[_OFF_CARD_RETAIN] = float(card.retain)
-    np_out[_OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
-    np_out[_OFF_CARD_PLAYABLE] = float(card.playable)
-    np_out[_OFF_CARD_ENERGY_DELTA] = (
+    np_own[_OFF_CARD_COST_SCALAR] = cost / _COST_MAX
+    np_own[_OFF_CARD_UPGRADED] = float(card.upgraded)
+    np_own[_OFF_CARD_EXHAUST] = float(card.exhaust)
+    np_own[_OFF_CARD_INNATE] = float(card.innate)
+    np_own[_OFF_CARD_ETHEREAL] = float(card.ethereal)
+    np_own[_OFF_CARD_RETAIN] = float(card.retain)
+    np_own[_OFF_CARD_REQUIRES_TARGET] = float(card.requires_target)
+    np_own[_OFF_CARD_PLAYABLE] = float(card.playable)
+    np_own[_OFF_CARD_ENERGY_DELTA] = (
         max(-_COST_MAX, min(energy_current - card.cost, _COST_MAX)) / _COST_MAX
     )
-    np_out[_OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
-    np_out[_OFF_CARD_BOTTLED] = float(card.bottled)
-    np_out[_OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
-    np_out[_OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
+    np_own[_OFF_CARD_COST_BASE] = max(_COST_MIN, min(card.cost_base, _COST_MAX)) / _COST_MAX
+    np_own[_OFF_CARD_BOTTLED] = float(card.bottled)
+    np_own[_OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
+    np_own[_OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
     if card.play_source is not None:
-        np_out[_OFF_CARD_PLAY_SOURCE + _IDX_OF_PLAY_SOURCE[card.play_source]] = 1.0
+        np_own[_OFF_CARD_PLAY_SOURCE + _IDX_OF_PLAY_SOURCE[card.play_source]] = 1.0
     if card.draw_depth is not None:
-        np_out[_OFF_CARD_DRAW_DEPTH + min(card.draw_depth, MAX_SIZE_CARD_PILE_DRAW - 1)] = 1.0
-        np_out[_OFF_CARD_DRAW_DEPTH_SCALAR] = (
+        np_own[_OFF_CARD_DRAW_DEPTH + min(card.draw_depth, MAX_SIZE_CARD_PILE_DRAW - 1)] = 1.0
+        np_own[_OFF_CARD_DRAW_DEPTH_SCALAR] = (
             min(card.draw_depth, MAX_SIZE_CARD_PILE_DRAW) / MAX_SIZE_CARD_PILE_DRAW
         )
     if draw_below is not None:
-        np_out[_OFF_CARD_DRAW_BELOW_SCALAR] = (
+        np_own[_OFF_CARD_DRAW_BELOW_SCALAR] = (
             min(draw_below, MAX_SIZE_CARD_PILE_DRAW) / MAX_SIZE_CARD_PILE_DRAW
         )
+
+    # Shop price
+    encode_shared_price_into(card.price, gold, np_shared)
+
+    # Stasis slot. Shared w/ Monsters
+    if slot_holder is not None:
+        encode_shared_stasis_slot_into(slot_holder, np_shared)
+
+    # Tags. Shared w/ Relics and Potions
+    encode_shared_tag_into(_TAGS_OF_CARD_NAME.get(card.name, ()), np_shared)
+
+
+def get_record_key_card(
+    card: Card, energy_current: int, draw_below: int | None, gold: int, slot_holder: int | None
+) -> tuple[int, int, int | None, int | None, int | None]:
+    """Make a Card's record key: its identity_hash and everything else its row reads.
+
+    Parameters
+    ----------
+    card : Card
+        The Card.
+    energy_current : int
+        The Character's energy; 0 outside Combat.
+    draw_below : int | None
+        The Cards below it in the draw pile; None when its draw depth doesn't show.
+    gold : int
+        The Character's gold, which its price is read against.
+    slot_holder : int | None
+        The slot of the Monster holding it in stasis; None out of the stasis pile.
+
+    Returns
+    -------
+    tuple[int, int, int | None, int | None, int | None]
+        Its identity_hash, the energy, the Cards below it, the gold when it has a price, and its
+        holder's slot while it is in stasis.
+    """
+    return (
+        card.identity_hash,
+        energy_current,
+        draw_below,
+        get_record_key_price(card.price, gold),
+        slot_holder,
+    )

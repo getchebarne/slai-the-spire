@@ -16,6 +16,7 @@ from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.encoding.shared import encode_shared_health_block_into
 
 
 # Widest catalog turn (damage x instances), Vulnerable-scaled; Strength ramps clamp
@@ -105,73 +106,91 @@ ENCODING_DIM_SPARSE_CHARACTER = len(_CHANNEL_LAYOUT_CHARACTER)
 
 
 def encode_character_into(
-    game_state: GameState, incoming_damage: int | None, np_out: np.ndarray
+    game_state: GameState, incoming_damage: int | None, np_own: np.ndarray, np_shared: np.ndarray
 ) -> None:
+    """Write the Character's token: its own columns, then its health/block.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    incoming_damage : int | None
+        The total damage the Monsters' intents carry this turn, before block; None when Runic
+        Dome hides them.
+    np_own : np.ndarray
+        (ENCODING_DIM_CHARACTER,) float32. The Character's own range of its token row, written
+        in place.
+    np_shared : np.ndarray
+        (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
+    """
     character = game_state.character
     deck = game_state.card_pile_deck
     gold_bucket = get_piecewise_bucket(
         character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD
     )
-    np_out[_OFF_CHARACTER_GOLD + gold_bucket] = 1.0
+    np_own[_OFF_CHARACTER_GOLD + gold_bucket] = 1.0
 
-    np_out[_OFF_CHARACTER_GOLD_SCALAR] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
-    np_out[_OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
-    np_out[_OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(
+    np_own[_OFF_CHARACTER_GOLD_SCALAR] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
+    np_own[_OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
+    np_own[_OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(
         character.health_max, _HEALTH_MAX_CAP
     )
-    np_out[_OFF_CHARACTER_DECK_SIZE] = get_sqrt_norm(len(deck), MAX_SIZE_CARD_PILE_DECK)
-    np_out[_OFF_CHARACTER_DECK_UPGRADED_FRACTION] = sum(card.upgraded for card in deck) / max(
+    np_own[_OFF_CHARACTER_DECK_SIZE] = get_sqrt_norm(len(deck), MAX_SIZE_CARD_PILE_DECK)
+    np_own[_OFF_CHARACTER_DECK_UPGRADED_FRACTION] = sum(card.upgraded for card in deck) / max(
         len(deck), 1
     )
-    np_out[_OFF_CHARACTER_REWARD_ROLL_OFFSET] = (
+    np_own[_OFF_CHARACTER_REWARD_ROLL_OFFSET] = (
         character.reward_roll_offset - _REWARD_ROLL_OFFSET_MIN
     ) / (_REWARD_ROLL_OFFSET_BASE - _REWARD_ROLL_OFFSET_MIN)
-    np_out[_OFF_CHARACTER_POTION_DROP_CHANCE] = (
+    np_own[_OFF_CHARACTER_POTION_DROP_CHANCE] = (
         min(max(GameEnv.POTION_DROP_CHANCE_BASE + game_state.potion_drop_mod, 0), 100) / 100
     )
-    np_out[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = (
+    np_own[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = (
         min(game_state.shop_purge_cost_run, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
     )
     combat = game_state.combat
     if combat is not None:
         if incoming_damage is None:
-            np_out[_OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
+            np_own[_OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
         else:
-            np_out[_OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
+            np_own[_OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
                 incoming_damage, _INCOMING_DAMAGE_MAX
             )
-            np_out[_OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(
+            np_own[_OFF_CHARACTER_BLOCK_COVERS_INCOMING] = float(
                 character.block >= incoming_damage
             )
-            np_out[_OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
+            np_own[_OFF_CHARACTER_INCOMING_IS_LETHAL] = float(
                 incoming_damage >= character.health + character.block
             )
-            np_out[_OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
+            np_own[_OFF_CHARACTER_NET_UNBLOCKED_DAMAGE] = get_sqrt_norm(
                 max(incoming_damage - character.block, 0), _INCOMING_DAMAGE_MAX
             )
-        np_out[_OFF_CHARACTER_THIS_TURN_DISCARDS] = (
+        np_own[_OFF_CHARACTER_THIS_TURN_DISCARDS] = (
             min(combat.this_turn_discards, _THIS_TURN_DISCARDS_MAX) / _THIS_TURN_DISCARDS_MAX
         )
-        np_out[_OFF_CHARACTER_THIS_TURN_ATTACKS] = get_sqrt_norm(
+        np_own[_OFF_CHARACTER_THIS_TURN_ATTACKS] = get_sqrt_norm(
             combat.this_turn_attacks, MAX_SIZE_CARD_PILE_DECK
         )
-        np_out[_OFF_CHARACTER_THIS_TURN_CARDS_PLAYED] = get_sqrt_norm(
+        np_own[_OFF_CHARACTER_THIS_TURN_CARDS_PLAYED] = get_sqrt_norm(
             combat.this_turn_cards_played, MAX_SIZE_CARD_PILE_DECK
         )
-        np_out[_OFF_CHARACTER_PANACHE_COUNTDOWN] = combat.panache_countdown / _PANACHE_PLAYS
-        np_out[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK] = float(
+        np_own[_OFF_CHARACTER_PANACHE_COUNTDOWN] = combat.panache_countdown / _PANACHE_PLAYS
+        np_own[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK] = float(
             combat.orange_pellets_played_attack
         )
-        np_out[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_SKILL] = float(
+        np_own[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_SKILL] = float(
             combat.orange_pellets_played_skill
         )
-        np_out[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(
+        np_own[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER] = float(
             combat.orange_pellets_played_power
         )
-        np_out[_OFF_CHARACTER_TURN_END_STARTED] = float(combat.turn_end_started)
-        np_out[_OFF_CHARACTER_TURN_END_PENDING] = float(combat.turn_end_pending)
-        np_out[_OFF_CHARACTER_TURN_ENDED] = float(combat.turn_ended)
-        np_out[_OFF_CHARACTER_BOSS_FIGHT] = float(combat.boss_fight)
-        np_out[_OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED] = float(combat.this_combat_thief_escaped)
-        np_out[_OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED] = float(combat.this_combat_monster_died)
-        np_out[_OFF_CHARACTER_GOLD_STOLEN] = get_sqrt_norm(combat.gold_stolen, GOLD_STOLEN_MAX)
+        np_own[_OFF_CHARACTER_TURN_END_STARTED] = float(combat.turn_end_started)
+        np_own[_OFF_CHARACTER_TURN_END_PENDING] = float(combat.turn_end_pending)
+        np_own[_OFF_CHARACTER_TURN_ENDED] = float(combat.turn_ended)
+        np_own[_OFF_CHARACTER_BOSS_FIGHT] = float(combat.boss_fight)
+        np_own[_OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED] = float(combat.this_combat_thief_escaped)
+        np_own[_OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED] = float(combat.this_combat_monster_died)
+        np_own[_OFF_CHARACTER_GOLD_STOLEN] = get_sqrt_norm(combat.gold_stolen, GOLD_STOLEN_MAX)
+
+    # Health & Block
+    encode_shared_health_block_into(character.health, character.block, np_shared)

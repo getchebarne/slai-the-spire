@@ -156,7 +156,7 @@ class OwnedRows[TStorage]:
 class EncodedFeatures[TStorage]:
     """The encoder's token features and the rows those tokens own.
 
-    Token entries index the shared column space, each Entity kind's columns from its COL_START,
+    Token entries index the token columns, each Entity kind's columns from its COL_START,
     then the health/block, price and slot columns Entity kinds share and the Tag columns Cards,
     Relics and Potions share. The projector embeds the owned rows and adds them into each token.
     """

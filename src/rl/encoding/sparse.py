@@ -164,25 +164,29 @@ def set_last_rows(row_table: RowTable, np_dense: np.ndarray) -> np.ndarray:
         (R,) intp. The rows' indexes in the row table.
     """
     np_count, np_entry_col, np_idx_nonzero = _scan_rows(np_dense, row_table.max_entries)
-    row_stop = row_table.num_rows + len(np_count)
-    entry_stop = row_table.num_entries + len(np_idx_nonzero)
-    row_table.np_row_first_entry = _reserve(row_table.np_row_first_entry, row_stop)
-    row_table.np_count = _reserve(row_table.np_count, row_stop)
-    row_table.np_col = _reserve(row_table.np_col, entry_stop)
-    row_table.np_value = _reserve(row_table.np_value, entry_stop)
+
+    # Increase number of rows and entries counters
+    stop_row = row_table.num_rows + len(np_count)
+    stop_entry = row_table.num_entries + len(np_idx_nonzero)
+
+    # Reserve space for the new rows
+    row_table.np_row_first_entry = _reserve(row_table.np_row_first_entry, stop_row)
+    row_table.np_count = _reserve(row_table.np_count, stop_row)
+    row_table.np_col = _reserve(row_table.np_col, stop_entry)
+    row_table.np_value = _reserve(row_table.np_value, stop_entry)
 
     # The entries go after the kept ones, row after row
-    row_table.np_col[row_table.num_entries : entry_stop] = np_entry_col
+    row_table.np_col[row_table.num_entries : stop_entry] = np_entry_col
     np.take(
         np_dense.reshape(-1),
         np_idx_nonzero,
-        out=row_table.np_value[row_table.num_entries : entry_stop],
+        out=row_table.np_value[row_table.num_entries : stop_entry],
     )
     np_row_first_entry = row_table.num_entries + np.cumsum(np_count) - np_count
-    row_table.np_row_first_entry[row_table.num_rows : row_stop] = np_row_first_entry
-    row_table.np_count[row_table.num_rows : row_stop] = np_count
+    row_table.np_row_first_entry[row_table.num_rows : stop_row] = np_row_first_entry
+    row_table.np_count[row_table.num_rows : stop_row] = np_count
 
-    return np.arange(row_table.num_rows, row_stop, dtype=np.intp)
+    return np.arange(row_table.num_rows, stop_row, dtype=np.intp)
 
 
 def _scan_rows(
