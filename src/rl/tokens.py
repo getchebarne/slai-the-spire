@@ -5,6 +5,7 @@ import warnings
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Sequence
+from inspect import formatannotation
 from inspect import signature
 from typing import Any, get_args
 
@@ -56,8 +57,8 @@ from src.rl.types import TokenKind
 
 
 __all__ = [
-    "get_entities_for_token_kind",
     "iter_tokens",
+    "get_monster_entities",
     "relic_held",
     "get_room_entities",
     "get_room_burning",
@@ -73,29 +74,6 @@ _BURNING_PATH_CACHE: dict[tuple[int | None, ...], frozenset[tuple[int, int]]] = 
 _BURNING_PATH_CACHE_MAX = 100_000
 
 
-def get_entities_for_token_kind(token_kind: TokenKind, game_state: GameState) -> Sequence[Entity]:
-    """Return the Entities of a token kind's tokens in rank order.
-
-    Encoding and action decoding use these same lists, so an Entity's id and its token share
-    one placement.
-
-    Parameters
-    ----------
-    token_kind : TokenKind
-        The token kind.
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    Sequence[Entity]
-        One Entity per token of the token kind, in rank order.
-    """
-    read_context, get_entities = _GETTER_OF_TOKEN_KIND[token_kind]
-    context = read_context(game_state)
-    return get_entities(context) if context is not None else []
-
-
 def iter_tokens(game_state: GameState) -> Iterator[Token]:
     """Yield a state's tokens in the shared order used by encoding and action decoding.
 
@@ -109,14 +87,29 @@ def iter_tokens(game_state: GameState) -> Iterator[Token]:
     Token
         Each token kind and Entity, in `TOKEN_KINDS_IN_WINDOW_ORDER` and then collection order.
     """
-    context_of_read_context = {
-        read_context: read_context(game_state) for read_context in _READ_CONTEXTS
-    }
-    for token_kind, read_context, get_entities in _GETTERS_IN_WINDOW_ORDER:
-        context = context_of_read_context[read_context]
+    context_of_reader = {reader: reader(game_state) for reader in _READERS}
+    for token_kind, reader, getter in _GETTERS_IN_WINDOW_ORDER:
+        context = context_of_reader[reader]
         if context is not None:
-            for entity in get_entities(context):
+            for entity in getter(context):
                 yield token_kind, entity
+
+
+def get_monster_entities(game_state: GameState) -> list[Monster]:
+    """Return the Monsters behind the Monster tokens, in slot order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[Monster]
+        The Combat's Monsters; empty outside Combat.
+    """
+    combat = _read_combat(game_state)
+    return _get_monsters(combat) if combat is not None else []
 
 
 def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
@@ -146,6 +139,8 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
 
 
 # Each context's reader: the state's Combat, Event, Reward or Shop, None while it is inactive
+
+
 def _read_combat(game_state: GameState) -> Combat | None:
     return game_state.combat
 
@@ -167,7 +162,9 @@ def _read_game_state(game_state: GameState) -> GameState:
     return game_state
 
 
-# Each collection truncated to its own cap: a Card past it has no token, so masks cannot name it
+# The Card getters: each pile cut to its cap; a Card past it has no token, so masks cannot name it
+
+
 def _get_card_match_flipped(event: Event) -> list[Card]:
     card = event.card_match_flipped
     return [card] if card is not None else []
@@ -262,6 +259,9 @@ def _get_card_shop(shop: Shop) -> list[Card]:
     return shop.cards[:MAX_SIZE_SHOP_CARDS]
 
 
+# The Character's, Event Options' and Monsters' getters
+
+
 def _get_character(game_state: GameState) -> list[Character]:
     return [game_state.character]
 
@@ -275,6 +275,8 @@ def _get_monsters(combat: Combat) -> list[Monster]:
 
 
 # Each collection truncated to its own cap (all engine-bounded, so never lossy)
+
+
 def _get_potion_event_roll(event: Event) -> list[Potion]:
     return event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
 
@@ -292,6 +294,8 @@ def _get_potion_shop(shop: Shop) -> list[Potion]:
 
 
 # Each collection truncated to its own cap: a Relic past it has no token
+
+
 def _get_relic_event_roll(event: Event) -> list[Relic]:
     return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
 
@@ -411,6 +415,93 @@ def get_room_entities(game_state: GameState) -> list[Room]:
 
     y_next = 0 if y_current is None else y_current + 1
     return [room for x, room in enumerate(rooms[y_next]) if x in cols and room is not None]
+
+
+# The reader of a token kind's context, then the token kind's getter
+type _GetterInContext = tuple[
+    Callable[[GameState], Combat | Event | Reward | Shop | GameState | None],
+    Callable[[Any], Sequence[Entity]],
+]
+
+# The reader of each token kind's context, then the token kind's getter
+_GETTER_OF_TOKEN_KIND: dict[TokenKind, _GetterInContext] = {
+    TokenKind.CARD_MATCH_FLIPPED: (_read_event, _get_card_match_flipped),
+    TokenKind.CARD_MATCH_PAIRS: (_read_event, _get_card_match_pairs),
+    TokenKind.CARD_PILE_DECK: (_read_game_state, _get_card_pile_deck),
+    TokenKind.CARD_PILE_DISCARD: (_read_combat, _get_card_pile_discard),
+    TokenKind.CARD_PILE_DISCOVER: (_read_combat, _get_card_pile_discover),
+    TokenKind.CARD_PILE_DRAW: (_read_combat, _get_card_pile_draw),
+    TokenKind.CARD_PILE_EVENT_ROLL: (_read_event, _get_card_pile_event_roll),
+    TokenKind.CARD_PILE_EXHAUST: (_read_combat, _get_card_pile_exhaust),
+    TokenKind.CARD_PILE_HAND: (_read_combat, _get_card_pile_hand),
+    TokenKind.CARD_PILE_NIGHTMARE: (_read_combat, _get_card_pile_nightmare),
+    TokenKind.CARD_PILE_SELECTED: (_read_game_state, _get_card_pile_selected),
+    TokenKind.CARD_PILE_STASIS: (_read_combat, _get_card_pile_stasis),
+    TokenKind.CARD_PLAY_QUEUE: (_read_combat, _get_card_play_queue),
+    TokenKind.CARD_REWARD_0: (_read_reward, _get_card_reward_0),
+    TokenKind.CARD_REWARD_1: (_read_reward, _get_card_reward_1),
+    TokenKind.CARD_REWARD_2: (_read_reward, _get_card_reward_2),
+    TokenKind.CARD_REWARD_3: (_read_reward, _get_card_reward_3),
+    TokenKind.CARD_REWARD_4: (_read_reward, _get_card_reward_4),
+    TokenKind.CARD_SHOP: (_read_shop, _get_card_shop),
+    TokenKind.CHARACTER: (_read_game_state, _get_character),
+    TokenKind.EVENT_OPTIONS: (_read_event, _get_event_options),
+    TokenKind.MONSTERS: (_read_combat, _get_monsters),
+    TokenKind.POTION_EVENT_ROLL: (_read_event, _get_potion_event_roll),
+    TokenKind.POTION_OWNED: (_read_game_state, _get_potion_owned),
+    TokenKind.POTION_REWARD: (_read_reward, _get_potion_reward),
+    TokenKind.POTION_SHOP: (_read_shop, _get_potion_shop),
+    TokenKind.RELIC_EVENT_ROLL: (_read_event, _get_relic_event_roll),
+    TokenKind.RELIC_OWNED: (_read_game_state, _get_relic_owned),
+    TokenKind.RELIC_REWARD: (_read_reward, _get_relic_reward),
+    TokenKind.RELIC_SHOP: (_read_shop, _get_relic_shop),
+    TokenKind.ROOMS: (_read_game_state, get_room_entities),
+}
+
+
+def _check_tables() -> None:
+    """Check that each token kind has its own getter, taking the context its reader returns."""
+    if set(_GETTER_OF_TOKEN_KIND) != set(TokenKind):
+        raise RuntimeError(
+            "A TokenKind has no entry in _GETTER_OF_TOKEN_KIND: "
+            f"{set(TokenKind) - set(_GETTER_OF_TOKEN_KIND)}"
+        )
+
+    token_kind_of_getter: dict[Callable[[Any], Sequence[Entity]], TokenKind] = {}
+    for token_kind, (reader, getter) in _GETTER_OF_TOKEN_KIND.items():
+        token_kind_first = token_kind_of_getter.setdefault(getter, token_kind)
+        if token_kind_first is not token_kind:
+            raise RuntimeError(
+                f"`{getter.__name__}` serves two token kinds: {token_kind_first.name} and "
+                f"{token_kind.name}"
+            )
+
+        parameters = signature(getter).parameters
+        if len(parameters) != 1:
+            raise RuntimeError(
+                f"{token_kind.name}'s getter `{getter.__name__}` takes {len(parameters)} "
+                "parameters, not its context alone"
+            )
+
+        # The reader's return type is its context, or a union of its context and None
+        type_returned = signature(reader).return_annotation
+        (parameter,) = parameters.values()
+        if parameter.annotation not in (type_returned, *get_args(type_returned)):
+            raise RuntimeError(
+                f"{token_kind.name}'s getter takes {formatannotation(parameter.annotation)}, "
+                f"which `{reader.__name__}` does not return"
+            )
+
+
+_check_tables()
+
+# Every reader a getter is paired with
+_READERS = frozenset(reader for reader, _ in _GETTER_OF_TOKEN_KIND.values())
+
+# Each token kind in window order, with its context's reader and its getter
+_GETTERS_IN_WINDOW_ORDER = tuple(
+    (token_kind, *_GETTER_OF_TOKEN_KIND[token_kind]) for token_kind in TOKEN_KINDS_IN_WINDOW_ORDER
+)
 
 
 def get_room_burning(rooms: list[list[Room | None]]) -> Room | None:
@@ -561,68 +652,3 @@ def _wing_boots_charges_to_room_burning(
                 )
                 
     return wb_charges
-
-
-# A token kind's getter, with the reader of the context the getter takes
-type _GetterInContext = tuple[
-    Callable[[GameState], Combat | Event | Reward | Shop | GameState | None],
-    Callable[[Any], Sequence[Entity]],
-]
-
-# Each token kind's getter, with the reader of the context it takes
-_GETTER_OF_TOKEN_KIND: dict[TokenKind, _GetterInContext] = {
-    TokenKind.CARD_MATCH_FLIPPED: (_read_event, _get_card_match_flipped),
-    TokenKind.CARD_MATCH_PAIRS: (_read_event, _get_card_match_pairs),
-    TokenKind.CARD_PILE_DECK: (_read_game_state, _get_card_pile_deck),
-    TokenKind.CARD_PILE_DISCARD: (_read_combat, _get_card_pile_discard),
-    TokenKind.CARD_PILE_DISCOVER: (_read_combat, _get_card_pile_discover),
-    TokenKind.CARD_PILE_DRAW: (_read_combat, _get_card_pile_draw),
-    TokenKind.CARD_PILE_EVENT_ROLL: (_read_event, _get_card_pile_event_roll),
-    TokenKind.CARD_PILE_EXHAUST: (_read_combat, _get_card_pile_exhaust),
-    TokenKind.CARD_PILE_HAND: (_read_combat, _get_card_pile_hand),
-    TokenKind.CARD_PILE_NIGHTMARE: (_read_combat, _get_card_pile_nightmare),
-    TokenKind.CARD_PILE_SELECTED: (_read_game_state, _get_card_pile_selected),
-    TokenKind.CARD_PILE_STASIS: (_read_combat, _get_card_pile_stasis),
-    TokenKind.CARD_PLAY_QUEUE: (_read_combat, _get_card_play_queue),
-    TokenKind.CARD_REWARD_0: (_read_reward, _get_card_reward_0),
-    TokenKind.CARD_REWARD_1: (_read_reward, _get_card_reward_1),
-    TokenKind.CARD_REWARD_2: (_read_reward, _get_card_reward_2),
-    TokenKind.CARD_REWARD_3: (_read_reward, _get_card_reward_3),
-    TokenKind.CARD_REWARD_4: (_read_reward, _get_card_reward_4),
-    TokenKind.CARD_SHOP: (_read_shop, _get_card_shop),
-    TokenKind.CHARACTER: (_read_game_state, _get_character),
-    TokenKind.EVENT_OPTIONS: (_read_event, _get_event_options),
-    TokenKind.MONSTERS: (_read_combat, _get_monsters),
-    TokenKind.POTION_EVENT_ROLL: (_read_event, _get_potion_event_roll),
-    TokenKind.POTION_OWNED: (_read_game_state, _get_potion_owned),
-    TokenKind.POTION_REWARD: (_read_reward, _get_potion_reward),
-    TokenKind.POTION_SHOP: (_read_shop, _get_potion_shop),
-    TokenKind.RELIC_EVENT_ROLL: (_read_event, _get_relic_event_roll),
-    TokenKind.RELIC_OWNED: (_read_game_state, _get_relic_owned),
-    TokenKind.RELIC_REWARD: (_read_reward, _get_relic_reward),
-    TokenKind.RELIC_SHOP: (_read_shop, _get_relic_shop),
-    TokenKind.ROOMS: (_read_game_state, get_room_entities),
-}
-
-# Every reader a getter is paired with
-_READ_CONTEXTS = frozenset(read_context for read_context, _ in _GETTER_OF_TOKEN_KIND.values())
-
-# Each token kind in window order, with its context's reader and its getter
-_GETTERS_IN_WINDOW_ORDER = tuple(
-    (token_kind, *_GETTER_OF_TOKEN_KIND[token_kind]) for token_kind in TOKEN_KINDS_IN_WINDOW_ORDER
-)
-
-
-def _check_tables() -> None:
-    """Check that each token kind's getter takes the context its reader returns."""
-    for token_kind, (read_context, get_entities) in _GETTER_OF_TOKEN_KIND.items():
-        type_returned = signature(read_context).return_annotation
-        (parameter,) = signature(get_entities).parameters.values()
-        if parameter.annotation not in (type_returned, *get_args(type_returned)):
-            raise RuntimeError(
-                f"{token_kind.name}'s getter takes a {parameter.annotation.__name__}, which "
-                f"`{read_context.__name__}` does not return"
-            )
-
-
-_check_tables()

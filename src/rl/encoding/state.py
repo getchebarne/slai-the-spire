@@ -1,7 +1,6 @@
 import warnings
 from collections.abc import Sequence
 from itertools import chain
-from typing import cast
 
 import numpy as np
 import torch
@@ -29,8 +28,8 @@ from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
-from src.rl.encoding.effect import EFFECT_ROW_TABLE
 from src.rl.encoding.effect import EFFECT_TABLE_ROW_OF_EFFECT
+from src.rl.encoding.effect import ROW_TABLE_EFFECT
 from src.rl.encoding.effect import effect_table_row
 from src.rl.encoding.effect import encode_batch_effect_pending_into
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
@@ -60,14 +59,14 @@ from src.rl.encoding.relic import encode_relic_into
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.shop import encode_price_into
-from src.rl.encoding.sparse import ROW_EMPTY
+from src.rl.encoding.sparse import TABLE_ROW_EMPTY
 from src.rl.encoding.sparse import add_row
-from src.rl.encoding.sparse import clear_row_table
-from src.rl.encoding.sparse import encode_owned_rows_into
+from src.rl.encoding.sparse import drop_rows
+from src.rl.encoding.sparse import encode_sparse_rows_into
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
 from src.rl.encoding.sparse import set_last_rows
-from src.rl.tokens import get_entities_for_token_kind
+from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
 from src.rl.types import Entity
@@ -83,11 +82,10 @@ from src.rl.types import TokenKind
 from src.rl.utils import action_masked
 
 
-type EffectRow = tuple[int, Effect, EffectSource]
 type ModifierRow = tuple[int, Modifier, ModifierOwner]
 
 # A token's row in the token row table, then its Effect rows in the Effect row table
-type Record = tuple[int, Sequence[int]]
+type _Record = tuple[int, Sequence[int]]
 
 
 # The stasis slot columns: a one-hot over the Monsters' roster posts (Monster.slot)
@@ -171,19 +169,27 @@ _NP_ENTITY_KIND_OF_TOKEN_KIND = np.array(
     [_ENTITY_KIND_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind], dtype=np.int16
 )
 
-# Each distinct token row once: a Card's, Relic's or Potion's own columns and its Tags
-_TOKEN_ROW_TABLE = make_row_table()
+# The records' token rows: a Card's, Relic's or Potion's own columns and its Tags
+_ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_SPARSE_TOKEN)
 
 # The kept records, by the Entity's identity_hash and whatever else its row reads
-_RECORD_OF_CARD: dict[tuple[int, int, int | None], Record] = {}  # With the energy and draw_below
-_RECORD_OF_RELIC: dict[tuple[int, bool], Record] = {}  # With whether the Sapphire Key links it
-_RECORD_OF_POTION: dict[tuple[int, bool], Record] = {}  # With whether the policy can drink it
+_RECORD_OF_CARD: dict[tuple[int, int, int | None], _Record] = {}  # With the energy and draw_below
+_RECORD_OF_RELIC: dict[tuple[int, bool], _Record] = {}  # With whether the Sapphire Key links it
+_RECORD_OF_POTION: dict[tuple[int, bool], _Record] = {}  # With whether the policy can drink it
+
+# The holders of the row tables' row indexes: the records and the Effects' table rows
+_TABLE_ROW_HOLDERS: tuple[dict, ...] = (
+    _RECORD_OF_CARD,
+    _RECORD_OF_RELIC,
+    _RECORD_OF_POTION,
+    EFFECT_TABLE_ROW_OF_EFFECT,
+)
 
 # Both row tables are dropped once the records and the Effects' table rows number this many
 _MAX_ROW_TABLE_KEYS = 100_000
 
 # A token's table row while its row is one of the write's dense rows
-_ROW_DENSE = -1
+_TABLE_ROW_DENSE = -1
 
 
 def encode_states_into(
@@ -258,21 +264,15 @@ def encode_states_into(
 
 def _drop_row_tables_when_full() -> None:
     """Drop both row tables and everything that holds their rows' indexes, once full."""
-    num_keys = (
-        len(_RECORD_OF_CARD)
-        + len(_RECORD_OF_RELIC)
-        + len(_RECORD_OF_POTION)
-        + len(EFFECT_TABLE_ROW_OF_EFFECT)
-    )
+    num_keys = sum(map(len, _TABLE_ROW_HOLDERS))
     if num_keys < _MAX_ROW_TABLE_KEYS:
         return
 
-    clear_row_table(_TOKEN_ROW_TABLE)
-    clear_row_table(EFFECT_ROW_TABLE)
-    _RECORD_OF_CARD.clear()
-    _RECORD_OF_RELIC.clear()
-    _RECORD_OF_POTION.clear()
-    EFFECT_TABLE_ROW_OF_EFFECT.clear()
+    for table_row_holder in _TABLE_ROW_HOLDERS:
+        table_row_holder.clear()
+
+    drop_rows(_ROW_TABLE_TOKEN)
+    drop_rows(ROW_TABLE_EFFECT)
 
 
 def _encode_totals_into(states_reserved: States[Reserved]) -> None:
@@ -381,7 +381,7 @@ def _encode_batch_tokens_into(
     if num_tokens > len(x_token_kind):
         raise IndexError("Token count exceeds the destination's capacity")
 
-    # Each token's row in the token row table, and the dense rows of the tokens outside it
+    # Each token's row in the token row table, and the dense rows of the tokens with no record
     batch_token_table_rows: list[int] = []
     batch_token_rows_dense: list[np.ndarray] = []
 
@@ -396,9 +396,17 @@ def _encode_batch_tokens_into(
     for game_state, tokens, row_start in zip(
         batch_game_state, batch_tokens, np.cumsum(np_count_token) - np_count_token
     ):
-        token_effect_table_rows, modifier_rows, row_of_entity_id = _encode_tokens_into(
-            game_state, tokens, row_start, batch_token_table_rows, batch_token_rows_dense
-        )
+        (
+            token_table_rows,
+            token_rows_dense,
+            token_effect_table_rows,
+            modifier_rows,
+            row_of_entity_id,
+        ) = _encode_tokens_into(game_state, tokens, row_start)
+
+        # Accumulate the tokens' table rows and dense rows
+        batch_token_table_rows += token_table_rows
+        batch_token_rows_dense += token_rows_dense
 
         # Accumlate Effect and Modifier rows
         batch_token_effect_table_rows += token_effect_table_rows
@@ -439,29 +447,25 @@ def _encode_batch_tokens_into(
     np_token_dense = np.array(batch_token_rows_dense, dtype=np.float32).reshape(
         -1, ENCODING_DIM_TOKEN
     )
-    set_last_rows(_TOKEN_ROW_TABLE, np_token_dense, ENCODING_DIM_SPARSE_TOKEN)
     np_token_table_row = np.array(batch_token_table_rows, dtype=np.intp)  # (N_tok,)
-    np_token_table_row[np_token_table_row == _ROW_DENSE] = np.arange(
-        _TOKEN_ROW_TABLE.num_rows, _TOKEN_ROW_TABLE.num_rows + len(np_token_dense)
+    np_token_table_row[np_token_table_row == _TABLE_ROW_DENSE] = set_last_rows(
+        _ROW_TABLE_TOKEN, np_token_dense
     )
+    encode_table_rows_into(sparse_token, _ROW_TABLE_TOKEN, np_token_table_row)
 
-    # Each state's token count, the tokens' feature entries and the rows the tokens own
-    encode_table_rows_into(sparse_token, _TOKEN_ROW_TABLE, np_token_table_row)
+    # Each state's token count and the rows the tokens own
     x_token_count[: len(np_count_token)].numpy()[:] = np_count_token
-    encode_table_rows_into(effects.sparse, EFFECT_ROW_TABLE, np_effect_table_row)
+    encode_table_rows_into(effects.sparse, ROW_TABLE_EFFECT, np_effect_table_row)
     effects.x_count[:num_tokens].numpy()[:] = np_count_effect
-    encode_owned_rows_into(modifiers, np_count_modifier, np_modifier, ENCODING_DIM_SPARSE_MODIFIER)
+    encode_sparse_rows_into(modifiers.sparse, np_modifier, ENCODING_DIM_SPARSE_MODIFIER)
+    modifiers.x_count[:num_tokens].numpy()[:] = np_count_modifier
 
     return batch_tokens, batch_row_of_entity_id
 
 
 def _encode_tokens_into(
-    game_state: GameState,
-    tokens: Sequence[Token],
-    row_start: int,
-    batch_token_table_rows: list[int],
-    batch_token_rows_dense: list[np.ndarray],
-) -> tuple[list[Sequence[int]], list[ModifierRow], dict[int, int]]:
+    game_state: GameState, tokens: Sequence[Token], row_start: int
+) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[ModifierRow], dict[int, int]]:
     """Give each of a state's tokens its row and its Effect rows.
 
     A Card, Relic or Potion with no price and out of the stasis pile reads its record: one lookup
@@ -481,15 +485,13 @@ def _encode_tokens_into(
         The state's tokens, as (token kind, Entity) in window order.
     row_start : int
         The state's first row in the batch.
-    batch_token_table_rows : list[int]
-        The batch's tokens' rows in the token row table; the state's are appended, _ROW_DENSE
-        for a token with a dense row.
-    batch_token_rows_dense : list[np.ndarray]
-        The batch's dense token rows, each (ENCODING_DIM_TOKEN,) float32; the state's are
-        appended, token after token.
 
     Returns
     -------
+    token_table_rows : list[int]
+        The tokens' rows in the token row table; _TABLE_ROW_DENSE for a token with a dense row.
+    token_rows_dense : list[np.ndarray]
+        The dense token rows, each (ENCODING_DIM_TOKEN,) float32, token after token.
     token_effect_table_rows : list[Sequence[int]]
         The Effect rows each token owns, at most MAX_EFFECTS over the state: their rows in the
         Effect row table.
@@ -500,13 +502,15 @@ def _encode_tokens_into(
         The first state-local row of each Entity id the masks look up: every token kind's but the
         Character's, the selected pile's and the play queue's (`_TOKEN_KINDS_ID_LOOKUP`).
     """
-    monsters = cast(list[Monster], get_entities_for_token_kind(TokenKind.MONSTERS, game_state))
+    monsters = get_monster_entities(game_state)
     damage = get_outgoing_damage(monsters)
     energy_current = (
         game_state.combat.energy.energy_current if game_state.combat is not None else 0
     )
     draw_pile_size = len(game_state.combat.card_pile_draw) if game_state.combat is not None else 0
     relic_linked = game_state.reward.relic_linked if game_state.reward is not None else None
+    token_table_rows: list[int] = []
+    token_rows_dense: list[np.ndarray] = []
     token_effect_table_rows: list[Sequence[int]] = []
     modifier_rows: list[ModifierRow] = []
     row_of_entity_id: dict[int, int] = {}
@@ -517,6 +521,7 @@ def _encode_tokens_into(
         if token_kind in _TOKEN_KINDS_ID_LOOKUP:
             row_of_entity_id.setdefault(entity.id, row_local)
 
+        record = None
         match entity:
             case Card():
                 # The Cards below it, when its draw depth shows
@@ -525,12 +530,12 @@ def _encode_tokens_into(
                 )
 
                 if entity.price is None and token_kind is not TokenKind.CARD_PILE_STASIS:
-                    card_record_key = (entity.identity_hash, energy_current, draw_below)
-                    record = _RECORD_OF_CARD.get(card_record_key)
+                    record_key_card = (entity.identity_hash, energy_current, draw_below)
+                    record = _RECORD_OF_CARD.get(record_key_card)
                     if record is None:
                         np_row = _make_card_row(entity, energy_current, draw_below)
-                        record = _make_record(np_row, entity, game_state.ascension)
-                        _RECORD_OF_CARD[card_record_key] = record
+                        record = _make_record(np_row, entity)
+                        _RECORD_OF_CARD[record_key_card] = record
                 else:
                     np_row = _make_card_row(entity, energy_current, draw_below)
 
@@ -547,21 +552,15 @@ def _encode_tokens_into(
                         monster_holder = monsters[game_state.combat.card_pile_stasis.index(entity)]
                         np_row[COL_START_STASIS_SLOT:COL_START_TAG][monster_holder.slot] = 1.0
 
-                    batch_token_rows_dense.append(np_row)
-
-                    # Effects
-                    effect_table_rows = _get_effect_table_rows(entity, game_state.ascension)
-                    record = (_ROW_DENSE, effect_table_rows)
-
             case Relic():
                 linked = relic_linked is not None and entity.id == relic_linked.id
                 if entity.price is None:
-                    relic_record_key = (entity.identity_hash, linked)
-                    record = _RECORD_OF_RELIC.get(relic_record_key)
+                    record_key_relic = (entity.identity_hash, linked)
+                    record = _RECORD_OF_RELIC.get(record_key_relic)
                     if record is None:
                         np_row = _make_relic_row(entity, linked)
-                        record = _make_record(np_row, entity, game_state.ascension)
-                        _RECORD_OF_RELIC[relic_record_key] = record
+                        record = _make_record(np_row, entity)
+                        _RECORD_OF_RELIC[record_key_relic] = record
                 else:
                     np_row = _make_relic_row(entity, linked)
 
@@ -572,24 +571,18 @@ def _encode_tokens_into(
                         np_row[COL_START_PRICE:COL_START_STASIS_SLOT],
                     )
 
-                    batch_token_rows_dense.append(np_row)
-
-                    # Effects
-                    effect_table_rows = _get_effect_table_rows(entity, game_state.ascension)
-                    record = (_ROW_DENSE, effect_table_rows)
-
             case Potion():
                 # A drink carries its target as a second id; the masks read the Potion's alone
                 usable = entity.usable and not action_masked(
                     game_state, Action(ActionType.PotionUse, [entity.id])
                 )
                 if entity.price is None:
-                    potion_record_key = (entity.identity_hash, usable)
-                    record = _RECORD_OF_POTION.get(potion_record_key)
+                    record_key_potion = (entity.identity_hash, usable)
+                    record = _RECORD_OF_POTION.get(record_key_potion)
                     if record is None:
                         np_row = _make_potion_row(entity, usable)
-                        record = _make_record(np_row, entity, game_state.ascension)
-                        _RECORD_OF_POTION[potion_record_key] = record
+                        record = _make_record(np_row, entity)
+                        _RECORD_OF_POTION[record_key_potion] = record
                 else:
                     np_row = _make_potion_row(entity, usable)
 
@@ -599,12 +592,6 @@ def _encode_tokens_into(
                         game_state.character.gold,
                         np_row[COL_START_PRICE:COL_START_STASIS_SLOT],
                     )
-
-                    batch_token_rows_dense.append(np_row)
-
-                    # Effects
-                    effect_table_rows = _get_effect_table_rows(entity, game_state.ascension)
-                    record = (_ROW_DENSE, effect_table_rows)
 
             case Monster():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
@@ -631,22 +618,12 @@ def _encode_tokens_into(
                     (row, modifier, ModifierOwner.MONSTER) for modifier in entity.modifiers
                 ]
 
-                batch_token_rows_dense.append(np_row)
-
-                # Effects
-                effect_table_rows = _get_effect_table_rows(entity, game_state.ascension)
-                record = (_ROW_DENSE, effect_table_rows)
-
             case EventOption():
+                # Everything it does lives in its Effect rows
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_event_option_into(
                     game_state, entity, np_row[COL_START_EVENT_OPTION:COL_START_HEALTH_BLOCK]
                 )
-                batch_token_rows_dense.append(np_row)
-
-                # Everything it does lives in its Effect rows
-                effect_table_rows = _get_effect_table_rows(entity, game_state.ascension)
-                record = (_ROW_DENSE, effect_table_rows)
 
             case Character():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
@@ -666,15 +643,24 @@ def _encode_tokens_into(
                         (row, modifier, ModifierOwner.CHARACTER) for modifier in entity.modifiers
                     ]
 
-                batch_token_rows_dense.append(np_row)
-                record = (_ROW_DENSE, ())
-
             case _:
                 # A Room has no columns and owns no rows
-                record = (ROW_EMPTY, ())
+                record = (TABLE_ROW_EMPTY, ())
 
-        batch_token_table_rows.append(record[0])
-        token_effect_table_rows.append(record[1])
+        # A record gives the token's table row and Effect rows; with none it takes a dense row
+        if record is not None:
+            table_row, effect_table_rows = record
+        else:
+            token_rows_dense.append(np_row)
+            table_row = _TABLE_ROW_DENSE
+
+            # Effects
+            effect_table_rows = _get_effect_table_rows(
+                _get_effects_by_source(entity, game_state.ascension)
+            )
+
+        token_table_rows.append(table_row)
+        token_effect_table_rows.append(effect_table_rows)
 
     # Cap Effect and Modifier rows and return them
     if sum(map(len, token_effect_table_rows)) > MAX_EFFECTS:
@@ -687,7 +673,7 @@ def _encode_tokens_into(
             warnings.warn(warning)
 
         # The rows first by their source's fill priority stay, still token after token
-        effect_rows: list[EffectRow] = [
+        effect_rows = [
             (row_local, effect, effect_source)
             for row_local, (_, entity) in enumerate(tokens)
             for effects, effect_source in _get_effects_by_source(entity, game_state.ascension)
@@ -723,7 +709,13 @@ def _encode_tokens_into(
         order = sorted(range(len(modifier_rows)), key=fill_priorities.__getitem__)
         modifier_rows = [modifier_rows[idx_row] for idx_row in sorted(order[:MAX_MODIFIERS])]
 
-    return token_effect_table_rows, modifier_rows, row_of_entity_id
+    return (
+        token_table_rows,
+        token_rows_dense,
+        token_effect_table_rows,
+        modifier_rows,
+        row_of_entity_id,
+    )
 
 
 def _make_card_row(card: Card, energy_current: int, draw_below: int | None) -> np.ndarray:
@@ -803,7 +795,7 @@ def _make_potion_row(potion: Potion, usable: bool) -> np.ndarray:
     return np_row
 
 
-def _make_record(np_row: np.ndarray, entity: Entity, ascension: int) -> Record:
+def _make_record(np_row: np.ndarray, entity: Entity) -> _Record:
     """Make a Card's, Relic's or Potion's record, keeping its rows in the row tables.
 
     Parameters
@@ -812,30 +804,28 @@ def _make_record(np_row: np.ndarray, entity: Entity, ascension: int) -> Record:
         (ENCODING_DIM_TOKEN,) float32. The Entity's token row.
     entity : Entity
         The Card, Relic or Potion.
-    ascension : int
-        The game's ascension.
 
     Returns
     -------
-    Record
+    _Record
         The row's index in the token row table, then the Entity's Effect rows' indexes in the
         Effect row table.
     """
     return (
-        add_row(_TOKEN_ROW_TABLE, np_row, ENCODING_DIM_SPARSE_TOKEN),
-        tuple(_get_effect_table_rows(entity, ascension)),
+        add_row(_ROW_TABLE_TOKEN, np_row),
+        tuple(_get_effect_table_rows(_get_effects_by_source_without_ascension(entity))),
     )
 
 
-def _get_effect_table_rows(entity: Entity, ascension: int) -> list[int]:
-    """Find the rows of the Effects an Entity's token owns.
+def _get_effect_table_rows(
+    effects_by_source: tuple[tuple[Sequence[Effect], EffectSource], ...]
+) -> list[int]:
+    """Find the rows of the Effects a token owns.
 
     Parameters
     ----------
-    entity : Entity
-        The token's Entity.
-    ascension : int
-        The game's ascension.
+    effects_by_source : tuple[tuple[Sequence[Effect], EffectSource], ...]
+        The Effects of each source and that source, in row order.
 
     Returns
     -------
@@ -844,7 +834,7 @@ def _get_effect_table_rows(entity: Entity, ascension: int) -> list[int]:
     """
     return [
         effect_table_row(effect, effect_source)
-        for effects, effect_source in _get_effects_by_source(entity, ascension)
+        for effects, effect_source in effects_by_source
         for effect in effects
     ]
 
@@ -860,6 +850,31 @@ def _get_effects_by_source(
         The token's Entity.
     ascension : int
         The game's ascension, which sets a Monster's moveset.
+
+    Returns
+    -------
+    tuple[tuple[Sequence[Effect], EffectSource], ...]
+        The Effects of each source and that source, in row order; empty for a Character or a Room.
+    """
+    match entity:
+        case Monster():
+            return (
+                (entity.move_effects, EffectSource.MONSTER_MOVE),
+                (moveset_effects(ascension)[entity.name], EffectSource.MONSTER_MOVESET),
+            )
+        case _:
+            return _get_effects_by_source_without_ascension(entity)
+
+
+def _get_effects_by_source_without_ascension(
+    entity: Entity,
+) -> tuple[tuple[Sequence[Effect], EffectSource], ...]:
+    """List the Effects an Entity's token owns whatever the ascension, source after source.
+
+    Parameters
+    ----------
+    entity : Entity
+        The token's Entity, not a Monster: its moveset changes with the ascension.
 
     Returns
     -------
@@ -885,11 +900,6 @@ def _get_effects_by_source(
             )
         case Potion():
             return ((entity.effects, EffectSource.POTION_USE),)
-        case Monster():
-            return (
-                (entity.move_effects, EffectSource.MONSTER_MOVE),
-                (moveset_effects(ascension)[entity.name], EffectSource.MONSTER_MOVESET),
-            )
         case EventOption():
             return ((entity.effects, EffectSource.EVENT_OPTION_SELECT),)
         case _:
