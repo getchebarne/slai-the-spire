@@ -73,7 +73,6 @@ __all__ = [
     "ENCODING_DIM_SPARSE_EFFECT",
     "ROW_TABLE_EFFECT",
     "catalog_effects",
-    "effect_key",
     "effect_table_row",
     "encode_batch_effect_pending_into",
     "encode_effect_row_into",
@@ -972,22 +971,6 @@ ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
 
 # Each Effect's row in ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
 EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
-
-
-def effect_key(effects: Iterable[Effect]) -> tuple[Effect, ...]:
-    """Return a value-key over an Effect list (frozen pyclasses hash by field).
-
-    Parameters
-    ----------
-    effects : Iterable[Effect]
-        The Effects to key.
-
-    Returns
-    -------
-    tuple[Effect, ...]
-        The Effects, in order.
-    """
-    return tuple(effects)
 
 
 def effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
