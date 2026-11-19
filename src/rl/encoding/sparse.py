@@ -3,56 +3,31 @@ from typing import final
 
 import numpy as np
 
-from src.rl.types import OwnedRows
 from src.rl.types import Reserved
 from src.rl.types import Sparse
 
 
 # Every row table's first row: the row with no entries
-ROW_EMPTY = 0
+TABLE_ROW_EMPTY = 0
 
 
 @final
 @dataclass
 class RowTable:
-    """Distinct sparse rows, each kept once and named by its index.
+    """Sparse rows, each named by its index.
 
     A row's entries sit together in the entry arrays, in the form a `Sparse` stores. The arrays
-    grow as rows come. A write's own rows sit past the kept ones: they last until the next ones
+    grow as rows come. A write's last rows sit past the kept ones: they hold until the next ones
     are set or a row is added.
     """
 
-    np_col: np.ndarray        # (entry capacity,) int16
-    np_value: np.ndarray      # (entry capacity,) float32
-    np_row_start: np.ndarray  # (row capacity,) int64, each row's first entry
-    np_count: np.ndarray      # (row capacity,) int64, each row's number of entries
-    num_rows: int             # The kept rows
-    num_entries: int          # The kept rows' entries
-
-    # Each kept row, by its entries' bytes
-    row_of_entries: dict[tuple[bytes, bytes], int]
-
-
-def encode_owned_rows_into(
-    owned_rows: OwnedRows[Reserved], np_count: np.ndarray, np_dense: np.ndarray, max_entries: int
-) -> None:
-    """Write each token's number of owned rows and those rows as flat nonzero entries.
-
-    `owned_rows.x_count` counts rows per token; `owned_rows.sparse.x_count` entries per row.
-
-    Parameters
-    ----------
-    owned_rows : OwnedRows[Reserved]
-        The reserved owner counts and sparse rows of one collection.
-    np_count : np.ndarray
-        (N,). Each token's number of owned rows.
-    np_dense : np.ndarray
-        (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
-    max_entries : int
-        The maximum number of nonzero feature entries allowed in one row.
-    """
-    encode_sparse_rows_into(owned_rows.sparse, np_dense, max_entries)
-    owned_rows.x_count[: len(np_count)].numpy()[:] = np_count
+    np_col: np.ndarray              # (entry capacity,) int16
+    np_value: np.ndarray            # (entry capacity,) float32
+    np_row_first_entry: np.ndarray  # (row capacity,) int64, each row's first entry
+    np_count: np.ndarray            # (row capacity,) int64, each row's number of entries
+    num_rows: int                   # The kept rows
+    num_entries: int                # The kept rows' entries
+    max_entries: int                # The most nonzero entries one row may hold
 
 
 def encode_sparse_rows_into(
@@ -100,8 +75,8 @@ def encode_table_rows_into(
     num_entries = int(np_count.sum())
     _check_capacity(sparse_out, num_rows, num_entries)
 
-    # Each entry's place in the row table: its row's shift from sparse_out, then its own place
-    np_shift = row_table.np_row_start[np_table_row] - (np.cumsum(np_count) - np_count)
+    # Each entry moves by its row's shift: row table entry = sparse_out entry + shift
+    np_shift = row_table.np_row_first_entry[np_table_row] - (np.cumsum(np_count) - np_count)
     np_idx_entry = np.repeat(np_shift, np_count) + np.arange(num_entries)
 
     sparse_out.x_count[:num_rows].numpy()[:] = np_count
@@ -109,29 +84,34 @@ def encode_table_rows_into(
     sparse_out.x_value[:num_entries].numpy()[:] = row_table.np_value[np_idx_entry]
 
 
-def make_row_table() -> RowTable:
+def make_row_table(max_entries: int) -> RowTable:
     """Make a row table that holds only the empty row.
+
+    Parameters
+    ----------
+    max_entries : int
+        The maximum number of nonzero feature entries allowed in one row.
 
     Returns
     -------
     RowTable
-        The row table, its row ROW_EMPTY the one with no entries.
+        The row table, its row TABLE_ROW_EMPTY the one with no entries.
     """
     return RowTable(
         np_col=np.zeros(0, dtype=np.int16),
         np_value=np.zeros(0, dtype=np.float32),
-        np_row_start=np.zeros(1, dtype=np.int64),
+        np_row_first_entry=np.zeros(1, dtype=np.int64),
         np_count=np.zeros(1, dtype=np.int64),
         num_rows=1,
         num_entries=0,
-        row_of_entries={},
+        max_entries=max_entries,
     )
 
 
-def clear_row_table(row_table: RowTable) -> None:
+def drop_rows(row_table: RowTable) -> None:
     """Drop every row of a row table but the empty one.
 
-    Whatever holds an index into the row table must be dropped with it.
+    Whatever holds an index into the row table must be dropped first.
 
     Parameters
     ----------
@@ -140,11 +120,10 @@ def clear_row_table(row_table: RowTable) -> None:
     """
     row_table.num_rows = 1
     row_table.num_entries = 0
-    row_table.row_of_entries.clear()
 
 
-def add_row(row_table: RowTable, np_row: np.ndarray, max_entries: int) -> int:
-    """Find a dense feature row's index in a row table, keeping the row the first time it comes.
+def add_row(row_table: RowTable, np_row: np.ndarray) -> int:
+    """Keep a dense feature row in a row table.
 
     Parameters
     ----------
@@ -152,32 +131,22 @@ def add_row(row_table: RowTable, np_row: np.ndarray, max_entries: int) -> int:
         The row table.
     np_row : np.ndarray
         (C,) float32. The dense row.
-    max_entries : int
-        The maximum number of nonzero feature entries allowed in the row.
 
     Returns
     -------
     int
         The row's index in the row table.
     """
-    # The row sits past the kept ones until it proves new
-    set_last_rows(row_table, np_row, max_entries)
-    entry_stop = row_table.num_entries + int(row_table.np_count[row_table.num_rows])
-    entries = (
-        row_table.np_col[row_table.num_entries : entry_stop].tobytes(),
-        row_table.np_value[row_table.num_entries : entry_stop].tobytes(),
-    )
-    row = row_table.row_of_entries.get(entries)
-    if row is None:
-        row = row_table.num_rows
-        row_table.row_of_entries[entries] = row
-        row_table.num_rows += 1
-        row_table.num_entries = entry_stop
+    # The row is set past the kept ones, then kept: the entries' counter first, the rows' last
+    set_last_rows(row_table, np_row)
+    row = row_table.num_rows
+    row_table.num_entries += int(row_table.np_count[row])
+    row_table.num_rows += 1
 
     return row
 
 
-def set_last_rows(row_table: RowTable, np_dense: np.ndarray, max_entries: int) -> None:
+def set_last_rows(row_table: RowTable, np_dense: np.ndarray) -> np.ndarray:
     """Scan dense feature rows into a row table's last rows, past the kept ones.
 
     Row r takes the index `num_rows + r`.
@@ -187,28 +156,33 @@ def set_last_rows(row_table: RowTable, np_dense: np.ndarray, max_entries: int) -
     row_table : RowTable
         The row table.
     np_dense : np.ndarray
-        (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
-    max_entries : int
-        The maximum number of nonzero feature entries allowed in one row.
+        (..., C) float32. Dense features with C columns. Leading dimensions flatten into R rows.
+
+    Returns
+    -------
+    np.ndarray
+        (R,) intp. The rows' indexes in the row table.
     """
-    np_count, np_entry_col, np_idx_nonzero = _scan_rows(np_dense, max_entries)
+    np_count, np_entry_col, np_idx_nonzero = _scan_rows(np_dense, row_table.max_entries)
     row_stop = row_table.num_rows + len(np_count)
     entry_stop = row_table.num_entries + len(np_idx_nonzero)
-    row_table.np_row_start = _reserve(row_table.np_row_start, row_stop)
+    row_table.np_row_first_entry = _reserve(row_table.np_row_first_entry, row_stop)
     row_table.np_count = _reserve(row_table.np_count, row_stop)
     row_table.np_col = _reserve(row_table.np_col, entry_stop)
     row_table.np_value = _reserve(row_table.np_value, entry_stop)
 
     # The entries go after the kept ones, row after row
-    np_row_start = row_table.num_entries + np.cumsum(np_count) - np_count
-    row_table.np_row_start[row_table.num_rows : row_stop] = np_row_start
-    row_table.np_count[row_table.num_rows : row_stop] = np_count
     row_table.np_col[row_table.num_entries : entry_stop] = np_entry_col
     np.take(
         np_dense.reshape(-1),
         np_idx_nonzero,
         out=row_table.np_value[row_table.num_entries : entry_stop],
     )
+    np_row_first_entry = row_table.num_entries + np.cumsum(np_count) - np_count
+    row_table.np_row_first_entry[row_table.num_rows : row_stop] = np_row_first_entry
+    row_table.np_count[row_table.num_rows : row_stop] = np_count
+
+    return np.arange(row_table.num_rows, row_stop, dtype=np.intp)
 
 
 def _scan_rows(
@@ -219,7 +193,7 @@ def _scan_rows(
     Parameters
     ----------
     np_dense : np.ndarray
-        (..., C). Dense features with C columns. Leading dimensions flatten into R rows.
+        (..., C) float32. Dense features with C columns. Leading dimensions flatten into R rows.
     max_entries : int
         The maximum number of nonzero feature entries allowed in one row.
 
