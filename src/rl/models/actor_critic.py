@@ -14,12 +14,12 @@ from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
 from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
+from src.rl.types import CollectionKind
 from src.rl.types import CoreOutput
 from src.rl.types import EntityKind
 from src.rl.types import Live
 from src.rl.types import PolicyOutput
 from src.rl.types import States
-from src.rl.types import TokenKind
 
 
 # Barrier probability floor
@@ -142,7 +142,7 @@ class ActorCritic(nn.Module):
         )
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(states.x_total_cpu[:, TokenKind.MONSTERS].sum())
+        num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
         x_logit_target = self._head_target(
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
@@ -192,7 +192,7 @@ class ActorCritic(nn.Module):
         x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(states.x_total_cpu[:, TokenKind.MONSTERS].sum())
+        num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
 
         # The recorded selections, each as a row of its level's logits
@@ -278,7 +278,7 @@ def _get_target_state(core_output: CoreOutput, num_monsters: int) -> torch.Tenso
         (M + B,) long. Each target row's state.
     """
     batch_size = core_output.tokens.x_count.shape[0]
-    x_count_monster = core_output.x_total[:, TokenKind.MONSTERS]
+    x_count_monster = core_output.x_total[:, CollectionKind.MONSTERS]
     x_monster_state = get_row_owner(x_count_monster, num_monsters)  # (M,)
     x_idx_state = torch.arange(batch_size, device=x_monster_state.device)
     return torch.cat([x_monster_state, x_idx_state])
@@ -333,7 +333,7 @@ def _row_of_target(
     x_idx_state = torch.arange(x_target.shape[0], device=x_target.device)
 
     # A target is a Monster's rank: its row is its state's first Monster row plus the rank
-    x_count_monster = core_output.x_total[:, TokenKind.MONSTERS]
+    x_count_monster = core_output.x_total[:, CollectionKind.MONSTERS]
     x_state_first_monster = get_owner_first_row(x_count_monster)  # (B,)
     return torch.where(x_target >= 0, x_state_first_monster + x_target, num_monsters + x_idx_state)
 
@@ -465,7 +465,9 @@ def _evaluate_selections(
 
     # Calculate offsets 
     x_selection_off = x_selection_row - get_owner_first_row(tokens_refined.x_count)
-    x_target_off = x_target_row - get_owner_first_row(core_output.x_total[:, TokenKind.MONSTERS])
+    x_target_off = x_target_row - get_owner_first_row(
+        core_output.x_total[:, CollectionKind.MONSTERS]
+    )
 
     # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
     x_action = torch.stack([x_action_type, x_selection_off, x_target_off], dim=1)

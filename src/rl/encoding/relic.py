@@ -73,7 +73,7 @@ def encode_relic_into(relic: Relic, linked: bool, np_out: np.ndarray) -> None:
 
 
 def encode_relic_into_w_cache(
-    relic: Relic, relic_linked: Relic | None, np_out: np.ndarray
+    relic: Relic, id_relic_linked: int | None, np_out: np.ndarray
 ) -> None:
     """Write the Relic encoding into `np_out`, cached by (name, used_up, counter, linked).
 
@@ -81,12 +81,12 @@ def encode_relic_into_w_cache(
     ----------
     relic : Relic
         The Relic to encode.
-    relic_linked : Relic | None
-        The Relic the Sapphire Key is linked to, None without the key on offer.
+    id_relic_linked : int | None
+        The id of the Relic the Sapphire Key is linked to, None without the key on offer.
     np_out : np.ndarray
         (ENCODING_DIM_RELIC,) float32. The Relic's row, overwritten.
     """
-    linked = relic_linked is not None and relic.id == relic_linked.id
+    linked = relic.id == id_relic_linked
     cache_key = (relic.name, relic.used_up, relic.counter, linked)
     np_row = _RELIC_ROW_CACHE.get(cache_key)
     if np_row is None:

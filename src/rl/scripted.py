@@ -4,11 +4,14 @@ from slai import ChestKind
 from slai import EventName
 from slai import GameEnv
 from slai import GameState
+from slai import Potion
 from slai import PotionName
+from slai import Relic
 from slai import RelicName
 from slai import RelicTier
 from slai import Reward
 
+from src.rl.tokens import get_entities
 from src.rl.tokens import relic_held
 from src.rl.utils import action_masked
 from src.rl.utils import curse_useful
@@ -86,8 +89,8 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
             return True
 
         case ActionType.RewardTakeRelic:
-            relic = next(relic for relic in reward.relics if relic.id == action.ids[0])
-            relic_linked = reward.relic_linked
+            (relic,) = get_entities(game_state, action.ids[:1], Relic)
+            id_relic_linked = reward.id_relic_linked
 
             # Under Cursed Key, each Chest that Tiny Chest adds costs a Curse
             tiny_chest_cursed = relic.name == RelicName.TinyChest and relic_held(
@@ -105,19 +108,21 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
             return (
                 (relic.tier in _RELIC_TIERS_SCRIPTED or relic.name in _RELICS_SPECIAL_SCRIPTED)
                 and relic.name not in _RELICS_UNSCRIPTED
-                and (relic_linked is None or relic_linked.id != relic.id)
+                and id_relic_linked != relic.id
                 and not tiny_chest_cursed
                 and not omamori_negates_wanted
                 and not peace_pipe_forced
             )
         
         case ActionType.RewardTakePotion:
-            potion = next(potion for potion in reward.potions if potion.id == action.ids[0])
+            (potion,) = get_entities(game_state, action.ids[:1], Potion)
 
             # Another Entropic Brew, held or offered, could fill the free slots with random Potions
             entropic_brew_other = any(
                 potion_other.name == PotionName.EntropicBrew
-                for potion_other in (*game_state.potions, *reward.potions)
+                for potion_other in get_entities(
+                    game_state, (*game_state.id_potions, *reward.id_potions), Potion
+                )
                 if potion_other.id != potion.id
             )
 
@@ -125,12 +130,12 @@ def _reward_take_free(game_state: GameState, reward: Reward, action: Action) -> 
             potion_voided = potion.name in _POTIONS_VOIDED_BY_MARK_OF_THE_BLOOM and relic_held(
                 game_state, RelicName.MarkOfTheBloom
             )
-            num_slots_free = game_state.potion_slots_max - len(game_state.potions)
+            num_slots_free = game_state.potion_slots_max - len(game_state.id_potions)
             
             return (
                 not entropic_brew_other
                 and not potion_voided
-                and len(reward.potions) <= num_slots_free
+                and len(reward.id_potions) <= num_slots_free
             )
         
         case _:
@@ -165,7 +170,7 @@ def _action_scripted(game_state: GameState, actions: list[Action]) -> Action | N
     # A Chest's opening, unless it adds Cursed Key's Curse, which a boss Chest's never does
     chest = game_state.chest
     if chest is not None and (
-        chest.kind == ChestKind.Boss or not relic_held(game_state, RelicName.CursedKey)
+        chest.chest_kind == ChestKind.Boss or not relic_held(game_state, RelicName.CursedKey)
     ):
         for action in actions_open:
             if action.action_type == ActionType.ChestOpen:
@@ -179,7 +184,7 @@ def _action_scripted(game_state: GameState, actions: list[Action]) -> Action | N
             for action in actions_open:
                 if (
                     action.action_type == ActionType.EventOptionSelect
-                    and action.ids[0] == event.options[0].id
+                    and action.ids[0] == event.id_event_options[0]
                 ):
                     return action
 

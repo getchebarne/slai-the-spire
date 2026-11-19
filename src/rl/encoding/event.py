@@ -84,10 +84,13 @@ def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     event = game_state.event
     if event is None:
         return
-    if len(event.options) > MAX_EVENT_OPTIONS and event.name not in _WARNED_EVENT_TRUNCATED:
+    if (
+        len(event.id_event_options) > MAX_EVENT_OPTIONS
+        and event.name not in _WARNED_EVENT_TRUNCATED
+    ):
         _WARNED_EVENT_TRUNCATED.add(event.name)
         warnings.warn(
-            f"Event {event.name!r} has {len(event.options)} options, truncated to"
+            f"Event {event.name!r} has {len(event.id_event_options)} options, truncated to"
             f" encoder cap ({MAX_EVENT_OPTIONS})"
         )
 

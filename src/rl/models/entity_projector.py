@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_owner_first_row
 from src.rl.batches import get_row_owner
 from src.rl.encoding import COL_START_CHARACTER
@@ -25,7 +26,6 @@ from src.rl.types import EntityKind
 from src.rl.types import Live
 from src.rl.types import Sparse
 from src.rl.types import States
-from src.rl.types import TokenKind
 from src.rl.types import Tokens
 
 
@@ -133,8 +133,7 @@ class EntityProjector(nn.Module):
 
         # Rooms: each Room token's node features, through _pre_room in place of the first layer
         num_rooms = x_room_hidden.shape[0]
-        x_room_row = torch.nonzero_static(tokens.x_token_kind == TokenKind.ROOMS, size=num_rooms)
-        x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
+        x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, num_rooms)
         x_first[x_room_row] = self._pre_room(x_room_hidden)
 
         # Project owned rows
@@ -156,7 +155,7 @@ class EntityProjector(nn.Module):
         return Tokens(
             features=Dense(x_value=x_hidden),
             x_count=tokens.x_count,
-            x_token_kind=tokens.x_token_kind,
+            x_collection_kind=tokens.x_collection_kind,
             x_entity_kind=tokens.x_entity_kind,
             x_legal_selection=tokens.x_legal_selection,
             x_legal_target=tokens.x_legal_target,

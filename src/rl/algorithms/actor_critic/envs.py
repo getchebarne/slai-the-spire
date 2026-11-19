@@ -12,6 +12,9 @@ from src.rl.reward import compute_reward
 from src.rl.reward import game_won
 from src.rl.reward import shop_gold_spent
 from src.rl.scripted import step_scripted
+from src.rl.tokens import get_character
+from src.rl.tokens import get_monster_entities
+from src.rl.tokens import get_y_x_current
 
 
 _MAX_STEPS_EPISODE = 3000
@@ -167,7 +170,7 @@ def _tally_step(
     gold_spent = shop_gold_spent(game_state, action)
     episode_result.gold_spent += gold_spent
     episode_result.gold_gained += max(
-        0, game_state_next.character.gold - game_state.character.gold + gold_spent
+        0, get_character(game_state_next).gold - get_character(game_state).gold + gold_spent
     )
 
     # The last step fills the fields an episode settles at its end, from its last snapshot
@@ -178,14 +181,15 @@ def _tally_step(
         episode_result.act = game_state_next.act
 
         # The Heart's Room: the reach; the damage, 0 elsewhere, averages to reach x conversion
+        y_current, _ = get_y_x_current(game_state_next.map)
         episode_result.heart_reached = (
             game_state_next.act == GameEnv.ACT_FINAL
-            and game_state_next.map.y_current == MAP_HEIGHT
+            and y_current == MAP_HEIGHT
         )
         episode_result.heart_damage = _heart_damage(game_state_next) if episode_result.heart_reached else 0.0
 
         # Final Deck size
-        episode_result.deck_size = len(game_state_next.card_pile_deck)
+        episode_result.deck_size = len(game_state_next.id_card_pile_deck)
 
         # Keys held at episode end
         episode_result.keys_end = (
@@ -209,7 +213,7 @@ def _heart_damage(game_state: GameState) -> float:
         The share; 1.0 with the Heart dead, as a win closes the Combat and a death in the killing
         play leaves it with no Monster.
     """
-    monsters = [] if game_state.combat is None else game_state.combat.monsters
+    monsters = get_monster_entities(game_state)
     if not monsters:
         return 1.0
     
