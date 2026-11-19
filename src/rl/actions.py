@@ -4,9 +4,8 @@ import slai
 from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.constants import ACTION_TYPES
-from src.rl.tokens import get_entities_for_token_kind
+from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
-from src.rl.types import TokenKind
 
 
 def engine_action(
@@ -49,7 +48,7 @@ def engine_action(
     
     ids = [token[1].id]
     if idx_target >= 0:
-        monsters = get_entities_for_token_kind(TokenKind.MONSTERS, game_state)
+        monsters = get_monster_entities(game_state)
         if idx_target >= len(monsters):
             raise IndexError(
                 f"Monster idx_target rank {idx_target} is outside this state's Monster tokens"
