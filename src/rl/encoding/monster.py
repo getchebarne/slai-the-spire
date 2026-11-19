@@ -101,6 +101,7 @@ def _intent_total_damage(monster: Monster) -> int:
     intent = monster.intent
     if intent is None:  # Runic Dome hides it
         return 0
+
     return (intent.damage or 0) * (intent.instances or 1)
 
 

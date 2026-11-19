@@ -135,6 +135,7 @@ def start_eval(model_config: dict[str, Any], gamma: float) -> Evaluator:
     process = ctx.Process(target=_eval_loop, args=(child, model_config, gamma), daemon=True)
     process.start()
     child.close()  # The eval process holds its own copy
+
     return Evaluator(process, conn, busy=False)
 
 
@@ -181,6 +182,7 @@ def poll_eval(evaluator: Evaluator) -> tuple[int, float, list[EpisodeResult]] | 
         return None
     
     evaluator.busy = False
+
     return evaluator.conn.recv()
 
 

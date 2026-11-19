@@ -273,4 +273,5 @@ def _reserve(np_array: np.ndarray, size: int) -> np.ndarray:
 
     np_reserved = np.zeros(max(size, 2 * len(np_array)), dtype=np_array.dtype)
     np_reserved[: len(np_array)] = np_array
+
     return np_reserved

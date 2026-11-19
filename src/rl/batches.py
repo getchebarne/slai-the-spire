@@ -99,6 +99,7 @@ def _map_tensors[T](
         key = id(value)
         if key not in x_mapped:
             x_mapped[key] = fn(value)
+
         return cast(T, x_mapped[key])
 
     record = cast(Any, value)
@@ -169,6 +170,7 @@ def get_unique_rep_row(x_inv: torch.Tensor, num_unique: int) -> torch.Tensor:
     """
     num_rows = x_inv.shape[0]
     x_row = torch.arange(num_rows, device=x_inv.device)
+
     return torch.full(
         (num_unique,), num_rows, dtype=torch.long, device=x_inv.device
     ).scatter_reduce_(0, x_inv, x_row, reduce="amin")
@@ -290,6 +292,7 @@ def _allocate_sparse(
         Reserved CPU arrays with a leading buffer axis and every count zero.
     """
     num_entries = num_rows * entries_per_row
+
     return Sparse(
         x_col=torch.zeros(num_buffers, num_entries, dtype=torch.int16),
         x_value=torch.zeros(num_buffers, num_entries, dtype=torch.float32),
@@ -343,6 +346,7 @@ def _cat_records(values: list[Any], x_joined: dict[tuple[int, ...], torch.Tensor
         key = tuple(id(value) for value in values)
         if key not in x_joined:
             x_joined[key] = torch.cat(values)
+
         return x_joined[key]
     
     return type(first)(

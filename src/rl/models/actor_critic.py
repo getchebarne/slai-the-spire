@@ -221,6 +221,7 @@ class ActorCritic(nn.Module):
             x_target_state,
             x_target_row,
         )
+
         return policy_output, x_value
 
     def get_values(self, states: States[Live]) -> torch.Tensor:
@@ -285,6 +286,7 @@ def _get_target_state(core_output: CoreOutput, num_monsters: int) -> torch.Tenso
     x_count_monster = core_output.x_total[:, TokenKind.MONSTERS]
     x_monster_state = get_row_owner(x_count_monster, num_monsters)  # (M,)
     x_idx_state = torch.arange(batch_size, device=x_monster_state.device)
+
     return torch.cat([x_monster_state, x_idx_state])
 
 
@@ -309,6 +311,7 @@ def _row_of_selection_off(core_output: CoreOutput, x_selection_off: torch.Tensor
     x_character_row = get_entity_kind_rows(
         core_output.tokens.x_entity_kind, EntityKind.CHARACTER, batch_size
     )  # (B,)
+
     return torch.where(
         x_selection_off >= 0, x_state_first_token + x_selection_off, x_character_row
     )
@@ -339,6 +342,7 @@ def _row_of_target(
     # A target is a Monster's rank: its row is its state's first Monster row plus the rank
     x_count_monster = core_output.x_total[:, TokenKind.MONSTERS]
     x_state_first_monster = get_owner_first_row(x_count_monster)  # (B,)
+
     return torch.where(x_target >= 0, x_state_first_monster + x_target, num_monsters + x_idx_state)
 
 
@@ -409,6 +413,7 @@ def _select_row(
     # Sample: Gumbel noise per row, masked after it is added, then each state's highest
     x_gumbel = -torch.empty_like(x_logit).exponential_(generator=generator).log()
     x_score = (x_logit + x_gumbel).masked_fill(x_logit == float("-inf"), float("-inf"))
+
     return _argmax_by_state(x_score, x_row_state, batch_size)
 
 

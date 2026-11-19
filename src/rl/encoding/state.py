@@ -361,6 +361,7 @@ def _sum_counts(np_count_parent: np.ndarray, np_count_child: np.ndarray) -> np.n
     """
     np_off = np.concatenate(([0], np.cumsum(np_count_parent, dtype=np.int64)))  # (B + 1,)
     np_total = np.concatenate(([0], np.cumsum(np_count_child[: np_off[-1]], dtype=np.int64)))
+
     return np.diff(np_total[np_off])
 
 

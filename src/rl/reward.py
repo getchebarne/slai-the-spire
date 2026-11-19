@@ -75,6 +75,7 @@ def shop_gold_spent(game_state: slai.GameState, action: slai.Action) -> int:
         return shop.purge_cost
     
     shop_stock: list[slai.Card | slai.Relic | slai.Potion] = [*shop.cards, *shop.relics, *shop.potions]
+
     return cast(int, next(entity.price for entity in shop_stock if entity.id == action.ids[0]))
 
 

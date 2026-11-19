@@ -65,6 +65,7 @@ def parent_alive() -> bool:
         Whether the parent process is alive; False when this process has none.
     """
     parent = mp.parent_process()
+
     return parent is not None and parent.is_alive()
 
 
@@ -95,6 +96,7 @@ def _potion_can_arrive(game_state: slai.GameState) -> bool:
         return True
     
     event = game_state.event
+
     return event is not None and event.name == EventName.KnowingSkull and not event.consumed
 
 
@@ -222,6 +224,7 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
             leave_free = not any(
                 isinstance(effect, EffectHealthDelta) for effect in option_leave.effects
             )
+
             return idx_option in (1, 2) or (idx_option == 0 and leave_free)
 
         # Wish for a Potion, gold or a Card, each for HP and a dearer next wish, or leave

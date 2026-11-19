@@ -42,6 +42,7 @@ def ascensions(ascension_current: float, num_envs: int) -> list[int]:
     """
     base = math.floor(ascension_current)
     n_frontier = round((ascension_current - base) * num_envs)
+
     return [base + 1] * n_frontier + [base] * (num_envs - n_frontier)
 
 
@@ -73,6 +74,7 @@ def step_curriculum(
         return
     if win_rate_eval < curriculum.promote_win_rate:
         run_state.streak = 0
+
         return
     run_state.streak += 1
     if run_state.streak < curriculum.promote_streak:

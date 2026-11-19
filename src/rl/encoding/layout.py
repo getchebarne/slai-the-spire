@@ -21,6 +21,7 @@ def make_channel_allocator() -> tuple[list[tuple[str, int]], Callable[..., int]]
     def alloc(channel: str, width: int = 1) -> int:
         offset = sum(w for _, w in layout)
         layout.append((channel, width))
+
         return offset
 
     return layout, alloc
