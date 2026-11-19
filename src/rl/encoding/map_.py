@@ -31,13 +31,12 @@ _IDX_OF_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.me
 
 # Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
 EDGE_DELTAS = (-1, 0, 1)
-NUM_EDGE_CHANNELS = len(EDGE_DELTAS)
 
 
 # Every channel of a cell must be 0 or 1: `map_encoder.py`'s dedup packs each into one bit
 _CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
 _OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
-_OFF_MAP_EDGES = _alloc("edges", NUM_EDGE_CHANNELS)
+_OFF_MAP_EDGES = _alloc("edges", len(EDGE_DELTAS))
 _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
 _OFF_MAP_BURNING_PATH = _alloc("burning_path")  # On a path that still reaches the burning Room
@@ -50,7 +49,7 @@ OFF_MAP_SELECTABLE = _alloc("selectable")
 NUM_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
 
 # GNN-facing view of the edge block (read by `map_encoder.py`)
-SLICE_MAP_EDGES = slice(_OFF_MAP_EDGES, _OFF_MAP_EDGES + NUM_EDGE_CHANNELS)
+SLICE_MAP_EDGES = slice(_OFF_MAP_EDGES, _OFF_MAP_EDGES + len(EDGE_DELTAS))
 
 SLICE_MAP_ROOM_KIND = slice(_OFF_MAP_ROOM_KIND, _OFF_MAP_ROOM_KIND + _MAP_NUM_ROOM_KINDS)
 

@@ -10,7 +10,6 @@ from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import EDGE_DELTAS
 from src.rl.encoding import NUM_CHANNELS
-from src.rl.encoding import NUM_EDGE_CHANNELS
 from src.rl.encoding import NUM_FEATURE_CHANNELS
 from src.rl.encoding import OFF_MAP_POSITION
 from src.rl.encoding import OFF_MAP_SELECTABLE
@@ -23,31 +22,9 @@ _NUM_CELLS = MAP_HEIGHT * MAP_WIDTH
 
 # The dedup's packed rows: the grid's bits, 63 to an int64 word
 _GRID_BITS = _NUM_CELLS * NUM_FEATURE_CHANNELS
-_WORD_BITS = 63  # An int64 less its sign bit, so every word is >= 0
-_NUM_WORDS = math.ceil(_GRID_BITS / _WORD_BITS)  # 24 words a grid
-_PAD_BITS = _NUM_WORDS * _WORD_BITS - _GRID_BITS  # 42 zero bits that fill the last word
-
-
-def _pack_rows(x_cell: torch.Tensor) -> torch.Tensor:
-    """Pack each grid into int64 words that sort as the grid does.
-
-    This way unique() groups and orders them alike at a fraction of the cost: the grid's bits most
-    significant first, every word non-negative.
-
-    Parameters
-    ----------
-    x_cell : torch.Tensor
-        (B, H * W, C) uint8. Each state's Map grid, flattened to cells.
-
-    Returns
-    -------
-    torch.Tensor
-        (B, words) long. Each grid's bits, 63 to a word.
-    """
-    batch_size, device = x_cell.shape[0], x_cell.device
-    x_bit_shift = torch.arange(_WORD_BITS - 1, -1, -1, device=device)  # 62 down to 0
-    x_bit = F.pad(x_cell.reshape(batch_size, _GRID_BITS).long(), (0, _PAD_BITS))
-    return (x_bit.view(batch_size, _NUM_WORDS, _WORD_BITS) << x_bit_shift).sum(-1)  # (B, words)
+_WORD_BITS = 63                                   # An int64 w/o its sign bit so every word is >= 0
+_NUM_WORDS = math.ceil(_GRID_BITS / _WORD_BITS)   # Number of words per grid
+_PAD_BITS = _NUM_WORDS * _WORD_BITS - _GRID_BITS  # Zero bits that fill the last word
 
 
 class MapGNN(nn.Module):
@@ -83,8 +60,7 @@ class MapGNN(nn.Module):
         )
         self.register_buffer("_x_edge_delta", torch.tensor(EDGE_DELTAS), persistent=False)
 
-        # The GNN's computation as a plain function, which actor_critic.compile_hot_paths swaps for
-        # its compiled version on the Learner's model
+        # The GNN's computation as a function; `compile_hot_paths` swaps in its compiled version
         self.message_passing = message_passing
 
     def forward(
@@ -127,6 +103,7 @@ class MapGNN(nn.Module):
         x_room_cell = x_room % _NUM_CELLS
         x_room_hidden = x_hidden[x_state_map[x_room_state], x_room_cell]
         x_map_readout = x_readout[x_state_map]
+
         return x_room_hidden, x_map_readout
 
     def _encode_maps(
@@ -166,6 +143,7 @@ class MapGNN(nn.Module):
 
         # Encode the unique Maps
         x_hidden, x_readout = self._encode_rooms_forward(x_cell[x_rep])
+
         return x_hidden, x_inv, x_readout
 
     def _encode_maps_cached(
@@ -200,6 +178,7 @@ class MapGNN(nn.Module):
             x_cell[x_idx_state]
         )
         map_cache.x_cell = x_cell
+
         return x_hidden, x_readout
 
     def _encode_rooms_forward(self, x_cell: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -227,11 +206,11 @@ class MapGNN(nn.Module):
         dim_map = self._in_proj.out_features
         x_cell = x_cell.float()
         x_is_room_forward = self._is_room_forward(x_cell).flatten()  # (U * H * W,)
-        x_cell = x_cell.flatten(0, 1)  # (U * H * W, C)
-        x_count_child = x_cell[:, SLICE_MAP_EDGES].sum(-1).long()  # (U * H * W,)
+        x_cell = x_cell.flatten(0, 1)                                # (U * H * W, C)
+        x_count_child = x_cell[:, SLICE_MAP_EDGES].sum(-1).long()    # (U * H * W,)
 
         # The forward Rooms with 0 to 3 children, in one host read
-        x_count = torch.zeros(NUM_EDGE_CHANNELS + 1, dtype=torch.long, device=x_cell.device)
+        x_count = torch.zeros(len(EDGE_DELTAS) + 1, dtype=torch.long, device=x_cell.device)
         num_0, num_1, num_2, num_3 = x_count.index_add_(
             0, x_count_child, x_is_room_forward.long()
         ).tolist()
@@ -244,12 +223,13 @@ class MapGNN(nn.Module):
                 num_maps, _NUM_CELLS, dim_map, dtype=dtype, device=x_cell.device
             )
             x_readout = torch.zeros(num_maps, dim_map, dtype=dtype, device=x_cell.device)
+
             return x_hidden, x_readout
 
-        # (N,) Each forward Room's cell, most children first
+        # Each forward Room's cell, most children first
         x_room_forward_cell = torch.nonzero_static(
             x_is_room_forward, size=num_rooms_forward
-        ).squeeze(1)
+        ).squeeze(1)  # (N,)
         x_room_forward_cell = x_room_forward_cell[
             torch.argsort(x_count_child[x_room_forward_cell], descending=True)
         ]
@@ -321,6 +301,7 @@ class MapGNN(nn.Module):
             ),  # (U,)
         )
         x_forward = self._x_row_of_cell.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
+
         return x_room_exists & x_forward  # (U, H * W)
 
 
@@ -344,7 +325,7 @@ def message_passing(
     torch.Tensor
         (N, dim_map). Each Room's features.
     """
-    x_hidden = gnn._in_proj(x_room_forward)
+    x_hidden = gnn._in_proj(x_room_forward)  # (N, dim_map)
 
     # The childless Rooms, which come last, read a zero mean
     num_rooms_childless = x_hidden.shape[0] - sum(
@@ -353,10 +334,37 @@ def message_passing(
     x_mean_childless = torch.zeros(
         num_rooms_childless, x_hidden.shape[1], dtype=x_hidden.dtype, device=x_hidden.device
     )
-    for lin, norm in zip(gnn._layers, gnn._norms):
+    for linear, norm in zip(gnn._layers, gnn._norms):
+        # (N, dim_map); mean = zero for childless Rooms
         x_mean = torch.cat(
             [x_hidden[x_child].mean(1) for x_child in x_children_by_count] + [x_mean_childless]
         )
-        x_hidden = norm(x_hidden + F.relu(lin(x_mean)))
+
+        # Linear projection -> ReLU -> Normalize
+        x_hidden = norm(x_hidden + F.relu(linear(x_mean)))
 
     return x_hidden
+
+
+def _pack_rows(x_cell: torch.Tensor) -> torch.Tensor:
+    """Pack each grid into int64 words that sort as the grid does.
+
+    This way unique() groups and orders them alike at a fraction of the cost: the grid's bits most
+    significant first, every word non-negative.
+
+    Parameters
+    ----------
+    x_cell : torch.Tensor
+        (B, H * W, C) uint8. Each state's Map grid, flattened to cells.
+
+    Returns
+    -------
+    torch.Tensor
+        (B, words) long. Each grid's bits, 63 to a word.
+    """
+    batch_size = x_cell.shape[0]
+    device = x_cell.device
+    x_bit_shift = torch.arange(_WORD_BITS - 1, -1, -1, device=device)  # _WORD_BITS - 1 down to 0
+    x_bit = F.pad(x_cell.reshape(batch_size, _GRID_BITS).long(), (0, _PAD_BITS))
+
+    return (x_bit.view(batch_size, _NUM_WORDS, _WORD_BITS) << x_bit_shift).sum(-1)  # (B, words)
