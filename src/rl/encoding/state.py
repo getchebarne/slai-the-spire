@@ -18,12 +18,11 @@ from slai import Relic
 
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
-from src.rl.constants import MAX_MONSTERS
 from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
-from src.rl.encoding.card import TAGS_OF_CARD_NAME
 from src.rl.encoding.card import encode_card_into
+from src.rl.encoding.card import get_record_key_card
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
@@ -33,9 +32,7 @@ from src.rl.encoding.effect import make_effect_row
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.event import ENCODING_DIM_SPARSE_EVENT_OPTION
 from src.rl.encoding.event import encode_event_option_into
-from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
-from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.map_ import encode_map_grid_into
 from src.rl.encoding.mask import encode_batch_masks_into
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
@@ -48,15 +45,20 @@ from src.rl.encoding.monster import get_outgoing_damage
 from src.rl.encoding.monster import moveset_effects
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.potion import ENCODING_DIM_SPARSE_POTION
-from src.rl.encoding.potion import TAGS_OF_POTION_NAME
 from src.rl.encoding.potion import encode_potion_into
+from src.rl.encoding.potion import get_record_key_potion
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
 from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
-from src.rl.encoding.relic import TAGS_OF_RELIC_NAME
 from src.rl.encoding.relic import encode_relic_into
-from src.rl.encoding.shop import ENCODING_DIM_PRICE
+from src.rl.encoding.relic import get_record_key_relic
+from src.rl.encoding.shared import ENCODING_DIM_SHARED
+from src.rl.encoding.shared import ENCODING_DIM_SPARSE_STASIS_SLOT
+from src.rl.encoding.shared import ENCODING_DIM_SPARSE_TAG
+from src.rl.encoding.shared import OFF_SHARED_HEALTH_BLOCK
+from src.rl.encoding.shared import OFF_SHARED_PRICE
+from src.rl.encoding.shared import OFF_SHARED_STASIS_SLOT
+from src.rl.encoding.shared import OFF_SHARED_TAG
 from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
-from src.rl.encoding.shop import encode_price_into
 from src.rl.encoding.sparse import TABLE_ROW_EMPTY
 from src.rl.encoding.sparse import add_row
 from src.rl.encoding.sparse import drop_rows
@@ -74,7 +76,6 @@ from src.rl.types import Reserved
 from src.rl.types import Sparse
 from src.rl.types import StateCollection
 from src.rl.types import States
-from src.rl.types import Tag
 from src.rl.types import Token
 from src.rl.types import TokenKind
 from src.rl.utils import action_masked
@@ -86,15 +87,7 @@ type ModifierRow = tuple[int, Modifier, ModifierOwner]
 type _Record = tuple[int, Sequence[int]]
 
 
-# The stasis slot columns: a one-hot over the Monsters' roster posts (Monster.slot)
-_ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
-_ENCODING_DIM_SPARSE_SLOT = 1
-
-# The Tag columns: a Multi-Hot over the Tags
-_ENCODING_DIM_TAG = len(Tag)
-_ENCODING_DIM_SPARSE_TAG = _ENCODING_DIM_TAG
-
-# Each Entity kind's first column in the shared space; Rooms have no columns
+# Each Entity kind's first token column; Rooms have no columns
 _COL_START_CARD = 0
 COL_START_RELIC = _COL_START_CARD + ENCODING_DIM_CARD
 COL_START_POTION = COL_START_RELIC + ENCODING_DIM_RELIC
@@ -103,25 +96,28 @@ COL_START_CHARACTER = COL_START_MONSTER + ENCODING_DIM_MONSTER
 COL_START_EVENT_OPTION = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
 
 # The ranges shared across tokens of different Entity kinds
-COL_START_HEALTH_BLOCK = COL_START_EVENT_OPTION + ENCODING_DIM_EVENT_OPTION
-COL_START_PRICE = COL_START_HEALTH_BLOCK + ENCODING_DIM_HEALTH_BLOCK
-COL_START_STASIS_SLOT = COL_START_PRICE + ENCODING_DIM_PRICE
+_COL_START_SHARED = COL_START_EVENT_OPTION + ENCODING_DIM_EVENT_OPTION
+COL_START_HEALTH_BLOCK = _COL_START_SHARED + OFF_SHARED_HEALTH_BLOCK
+COL_START_PRICE = _COL_START_SHARED + OFF_SHARED_PRICE
+COL_START_STASIS_SLOT = _COL_START_SHARED + OFF_SHARED_STASIS_SLOT
 
 # The range Cards, Relics and Potions share
-COL_START_TAG = COL_START_STASIS_SLOT + _ENCODING_DIM_STASIS_SLOT
+COL_START_TAG = _COL_START_SHARED + OFF_SHARED_TAG
 
 # Total token encoding dimension
-ENCODING_DIM_TOKEN = COL_START_TAG + _ENCODING_DIM_TAG
+ENCODING_DIM_TOKEN = _COL_START_SHARED + ENCODING_DIM_SHARED
 
 # Most nonzero columns a token row holds
 ENCODING_DIM_SPARSE_TOKEN = max(
     ENCODING_DIM_SPARSE_CARD
     + ENCODING_DIM_SPARSE_PRICE
-    + _ENCODING_DIM_SPARSE_SLOT
-    + _ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE + _ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + _ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_MONSTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK + _ENCODING_DIM_SPARSE_SLOT,
+    + ENCODING_DIM_SPARSE_STASIS_SLOT
+    + ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
+    ENCODING_DIM_SPARSE_MONSTER
+    + ENCODING_DIM_SPARSE_HEALTH_BLOCK
+    + ENCODING_DIM_SPARSE_STASIS_SLOT,
     ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
     ENCODING_DIM_SPARSE_EVENT_OPTION,
 )
@@ -167,16 +163,16 @@ _NP_ENTITY_KIND_OF_TOKEN_KIND = np.array(
     [_ENTITY_KIND_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind], dtype=np.int16
 )
 
-# The records' token rows: a Card's, Relic's or Potion's own columns and its Tags
+# The records' token rows: each a Card's, Relic's or Potion's whole token
 _ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_SPARSE_TOKEN)
 
 # The Effect rows, each scaled and with its source's one-hot
 _ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
 
-# The kept records, by the Entity's identity_hash and whatever else its row reads
-_RECORD_OF_CARD: dict[tuple[int, int, int | None], _Record] = {}  # With the energy and draw_below
-_RECORD_OF_RELIC: dict[tuple[int, bool], _Record] = {}  # With whether the Sapphire Key links it
-_RECORD_OF_POTION: dict[tuple[int, bool], _Record] = {}  # With whether the policy can drink it
+# The kept records of the Cards, Relics and Potions, by their record keys
+_RECORD_OF_CARD: dict[tuple[int, int, int | None, int | None, int | None], _Record] = {}
+_RECORD_OF_RELIC: dict[tuple[int, bool, int | None], _Record] = {}
+_RECORD_OF_POTION: dict[tuple[int, bool, int | None], _Record] = {}
 
 # Each Effect's row in _ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
 _EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
@@ -219,9 +215,11 @@ def encode_states_into(
     """
     if states_reserved.x_context.ndim != 2:
         raise ValueError("Select one buffer before encoding states")
+    
     batch_size = len(states_reserved.x_context)
     if len(batch_game_state) != batch_size or len(batch_legal_actions) != batch_size:
         raise ValueError("States and legal actions must match the buffer's number of states")
+
     tokens = states_reserved.tokens
 
     # Full row tables are dropped here, never while a write holds their rows' indexes
@@ -296,7 +294,9 @@ def _encode_batch_effect_pending_into(
     for game_state in batch_game_state:
         effect = game_state.effect_pending
         batch_effect_table_row.append(
-            TABLE_ROW_EMPTY if effect is None else _effect_table_row(effect, EffectSource.PENDING)
+            TABLE_ROW_EMPTY
+            if effect is None
+            else _get_effect_table_row(effect, EffectSource.PENDING)
         )
 
     encode_table_rows_into(
@@ -497,14 +497,13 @@ def _encode_tokens_into(
 ) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[ModifierRow], dict[int, int]]:
     """Give each of a state's tokens its row and its Effect rows.
 
-    A Card, Relic or Potion with no price and out of the stasis pile reads its record: one lookup
-    for its row in the token row table and its Effect rows in the Effect row table. Any other
-    token with columns gets a dense row.
+    A Card, Relic or Potion reads its record: one lookup for its row in the token row table and
+    its Effect rows in the Effect row table. A Monster, the Character and an Event Option get a
+    dense row.
 
-    Each token goes at its Entity kind's columns, a combatant's health/block at the health/block
-    columns, a Shop token's price at the price columns, a Monster's slot and a stasis Card's
-    holder's at the slot columns and a Card's, Relic's or Potion's Tags at the Tag columns. A
-    Room has no columns: the model reads the Map network's output there.
+    Each token goes at its Entity kind's columns and the shared block that ends the row, both
+    written by its kind's encoder; an Event Option writes no shared column. A Room has no
+    columns: the model reads the Map network's output there.
 
     Parameters
     ----------
@@ -532,12 +531,13 @@ def _encode_tokens_into(
         Character's, the selected pile's and the play queue's (`_TOKEN_KINDS_ID_LOOKUP`).
     """
     monsters = get_monster_entities(game_state)
-    damage = get_outgoing_damage(monsters)
+    damage = get_outgoing_damage(monsters) if game_state.combat is not None else None
     energy_current = (
         game_state.combat.energy.energy_current if game_state.combat is not None else 0
     )
     draw_pile_size = len(game_state.combat.card_pile_draw) if game_state.combat is not None else 0
     relic_linked = game_state.reward.relic_linked if game_state.reward is not None else None
+    gold = game_state.character.gold
     token_table_rows: list[int] = []
     token_rows_dense: list[np.ndarray] = []
     token_effect_table_rows: list[Sequence[int]] = []
@@ -558,69 +558,23 @@ def _encode_tokens_into(
                     None if entity.draw_depth is None else draw_pile_size - 1 - entity.draw_depth
                 )
 
-                if entity.price is None and token_kind is not TokenKind.CARD_PILE_STASIS:
-                    record_key_card = (entity.identity_hash, energy_current, draw_below)
-                    record = _RECORD_OF_CARD.get(record_key_card)
-                    if record is None:
-                        np_row = _make_card_row(entity, energy_current, draw_below)
-                        record = _make_record(np_row, entity)
-                        _RECORD_OF_CARD[record_key_card] = record
-                else:
-                    np_row = _make_card_row(entity, energy_current, draw_below)
+                # Its holder's slot, while it is in stasis
+                slot_holder = None
+                if token_kind is TokenKind.CARD_PILE_STASIS and game_state.combat is not None:
+                    slot_holder = monsters[game_state.combat.card_pile_stasis.index(entity)].slot
 
-                    # Shop price
-                    if entity.price is not None:
-                        encode_price_into(
-                            entity.price,
-                            game_state.character.gold,
-                            np_row[COL_START_PRICE:COL_START_STASIS_SLOT],
-                        )
-
-                    # Stasis slot. Shared w/ Monsters
-                    if token_kind is TokenKind.CARD_PILE_STASIS and game_state.combat is not None:
-                        monster_holder = monsters[game_state.combat.card_pile_stasis.index(entity)]
-                        np_row[COL_START_STASIS_SLOT:COL_START_TAG][monster_holder.slot] = 1.0
+                record = _get_record_card(entity, energy_current, draw_below, gold, slot_holder)
 
             case Relic():
                 linked = relic_linked is not None and entity.id == relic_linked.id
-                if entity.price is None:
-                    record_key_relic = (entity.identity_hash, linked)
-                    record = _RECORD_OF_RELIC.get(record_key_relic)
-                    if record is None:
-                        np_row = _make_relic_row(entity, linked)
-                        record = _make_record(np_row, entity)
-                        _RECORD_OF_RELIC[record_key_relic] = record
-                else:
-                    np_row = _make_relic_row(entity, linked)
-
-                    # Shop price
-                    encode_price_into(
-                        entity.price,
-                        game_state.character.gold,
-                        np_row[COL_START_PRICE:COL_START_STASIS_SLOT],
-                    )
+                record = _get_record_relic(entity, linked, gold)
 
             case Potion():
                 # A drink carries its target as a second id; the masks read the Potion's alone
                 usable = entity.usable and not action_masked(
                     game_state, Action(ActionType.PotionUse, [entity.id])
                 )
-                if entity.price is None:
-                    record_key_potion = (entity.identity_hash, usable)
-                    record = _RECORD_OF_POTION.get(record_key_potion)
-                    if record is None:
-                        np_row = _make_potion_row(entity, usable)
-                        record = _make_record(np_row, entity)
-                        _RECORD_OF_POTION[record_key_potion] = record
-                else:
-                    np_row = _make_potion_row(entity, usable)
-
-                    # Shop price
-                    encode_price_into(
-                        entity.price,
-                        game_state.character.gold,
-                        np_row[COL_START_PRICE:COL_START_STASIS_SLOT],
-                    )
+                record = _get_record_potion(entity, usable, gold)
 
             case Monster():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
@@ -631,15 +585,8 @@ def _encode_tokens_into(
                     damage,
                     game_state.ascension,
                     np_row[COL_START_MONSTER:COL_START_CHARACTER],
+                    np_row[_COL_START_SHARED:],
                 )
-
-                # Health & Block
-                encode_health_block_into(
-                    entity.health, entity.block, np_row[COL_START_HEALTH_BLOCK:COL_START_PRICE]
-                )
-
-                # Stasis slot. Shared w/ Cards in the stasis pile
-                np_row[COL_START_STASIS_SLOT:COL_START_TAG][entity.slot] = 1.0
 
                 # Modifiers
                 row = row_start + row_local
@@ -651,18 +598,16 @@ def _encode_tokens_into(
                 # Everything it does lives in its Effect rows
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_event_option_into(
-                    game_state, entity, np_row[COL_START_EVENT_OPTION:COL_START_HEALTH_BLOCK]
+                    game_state, entity, np_row[COL_START_EVENT_OPTION:_COL_START_SHARED]
                 )
 
             case Character():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_character_into(
-                    game_state, damage, np_row[COL_START_CHARACTER:COL_START_EVENT_OPTION]
-                )
-
-                # Health & Block
-                encode_health_block_into(
-                    entity.health, entity.block, np_row[COL_START_HEALTH_BLOCK:COL_START_PRICE]
+                    game_state,
+                    damage,
+                    np_row[COL_START_CHARACTER:COL_START_EVENT_OPTION],
+                    np_row[_COL_START_SHARED:],
                 )
 
                 # Modifiers
@@ -718,7 +663,7 @@ def _encode_tokens_into(
         effect_table_rows_of_row_local: dict[int, list[int]] = {}
         for row_local, effect, effect_source in effect_rows:
             effect_table_rows_of_row_local.setdefault(row_local, []).append(
-                _effect_table_row(effect, effect_source)
+                _get_effect_table_row(effect, effect_source)
             )
         token_effect_table_rows = [
             effect_table_rows_of_row_local.get(row_local, ()) for row_local in range(len(tokens))
@@ -747,8 +692,12 @@ def _encode_tokens_into(
     )
 
 
-def _make_card_row(card: Card, energy_current: int, draw_below: int | None) -> np.ndarray:
-    """Make a Card's token row: its own columns and its Tags.
+def _get_record_card(
+    card: Card, energy_current: int, draw_below: int | None, gold: int, slot_holder: int | None
+) -> _Record:
+    """Find a Card's record, making it the first time its key comes.
+
+    Its key is `get_record_key_card`'s and its row is the whole token `encode_card_into` writes.
 
     Parameters
     ----------
@@ -758,24 +707,42 @@ def _make_card_row(card: Card, energy_current: int, draw_below: int | None) -> n
         The Character's energy; 0 outside Combat.
     draw_below : int | None
         The Cards below it in the draw pile; None when its draw depth doesn't show.
+    gold : int
+        The Character's gold, which its price is read against.
+    slot_holder : int | None
+        The slot of the Monster holding it in stasis; None out of the stasis pile.
 
     Returns
     -------
-    np.ndarray
-        (ENCODING_DIM_TOKEN,) float32. The row.
+    _Record
+        Its row in the token row table, then its Effect rows in the Effect row table.
     """
+    record_key_card = get_record_key_card(card, energy_current, draw_below, gold, slot_holder)
+    record = _RECORD_OF_CARD.get(record_key_card)
+    if record is not None:
+        return record
+
     np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-    encode_card_into(card, energy_current, draw_below, np_row[_COL_START_CARD:COL_START_RELIC])
+    encode_card_into(
+        card,
+        energy_current,
+        draw_below,
+        gold,
+        slot_holder,
+        np_row[_COL_START_CARD:COL_START_RELIC],
+        np_row[_COL_START_SHARED:],
+    )
 
-    # Tags. Shared w/ Relics and Potions
-    for tag in TAGS_OF_CARD_NAME.get(card.name, ()):
-        np_row[COL_START_TAG:][tag] = 1.0
+    record = _make_record(np_row, card)
+    _RECORD_OF_CARD[record_key_card] = record
 
-    return np_row
+    return record
 
 
-def _make_relic_row(relic: Relic, linked: bool) -> np.ndarray:
-    """Make a Relic's token row: its own columns and its Tags.
+def _get_record_relic(relic: Relic, linked: bool, gold: int) -> _Record:
+    """Find a Relic's record, making it the first time its key comes.
+
+    Its key is `get_record_key_relic`'s and its row is the whole token `encode_relic_into` writes.
 
     Parameters
     ----------
@@ -783,24 +750,35 @@ def _make_relic_row(relic: Relic, linked: bool) -> np.ndarray:
         The Relic.
     linked : bool
         Whether the Sapphire Key is linked to it.
+    gold : int
+        The Character's gold, which its price is read against.
 
     Returns
     -------
-    np.ndarray
-        (ENCODING_DIM_TOKEN,) float32. The row.
+    _Record
+        Its row in the token row table, then its Effect rows in the Effect row table.
     """
+    record_key_relic = get_record_key_relic(relic, linked, gold)
+    record = _RECORD_OF_RELIC.get(record_key_relic)
+    if record is not None:
+        return record
+
     np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-    encode_relic_into(relic, linked, np_row[COL_START_RELIC:COL_START_POTION])
+    encode_relic_into(
+        relic, linked, gold, np_row[COL_START_RELIC:COL_START_POTION], np_row[_COL_START_SHARED:]
+    )
 
-    # Tags. Shared w/ Cards and Potions
-    for tag in TAGS_OF_RELIC_NAME.get(relic.name, ()):
-        np_row[COL_START_TAG:][tag] = 1.0
+    record = _make_record(np_row, relic)
+    _RECORD_OF_RELIC[record_key_relic] = record
 
-    return np_row
+    return record
 
 
-def _make_potion_row(potion: Potion, usable: bool) -> np.ndarray:
-    """Make a Potion's token row: its own columns and its Tags.
+def _get_record_potion(potion: Potion, usable: bool, gold: int) -> _Record:
+    """Find a Potion's record, making it the first time its key comes.
+
+    Its key is `get_record_key_potion`'s and its row is the whole token `encode_potion_into`
+    writes.
 
     Parameters
     ----------
@@ -808,20 +786,32 @@ def _make_potion_row(potion: Potion, usable: bool) -> np.ndarray:
         The Potion.
     usable : bool
         Whether the policy can drink it: the engine's `Potion.usable` with the masks folded in.
+    gold : int
+        The Character's gold, which its price is read against.
 
     Returns
     -------
-    np.ndarray
-        (ENCODING_DIM_TOKEN,) float32. The row.
+    _Record
+        Its row in the token row table, then its Effect rows in the Effect row table.
     """
+    record_key_potion = get_record_key_potion(potion, usable, gold)
+    record = _RECORD_OF_POTION.get(record_key_potion)
+    if record is not None:
+        return record
+
     np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-    encode_potion_into(potion, usable, np_row[COL_START_POTION:COL_START_MONSTER])
+    encode_potion_into(
+        potion,
+        usable,
+        gold,
+        np_row[COL_START_POTION:COL_START_MONSTER],
+        np_row[_COL_START_SHARED:],
+    )
 
-    # Tags. Shared w/ Cards and Relics
-    for tag in TAGS_OF_POTION_NAME.get(potion.name, ()):
-        np_row[COL_START_TAG:][tag] = 1.0
+    record = _make_record(np_row, potion)
+    _RECORD_OF_POTION[record_key_potion] = record
 
-    return np_row
+    return record
 
 
 def _make_record(np_row: np.ndarray, entity: Entity) -> _Record:
@@ -862,13 +852,13 @@ def _get_effect_table_rows(
         The rows' indexes in the Effect row table, in row order.
     """
     return [
-        _effect_table_row(effect, effect_source)
+        _get_effect_table_row(effect, effect_source)
         for effects, effect_source in effects_by_source
         for effect in effects
     ]
 
 
-def _effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
+def _get_effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
     """Find an Effect's row in the Effect row table, keeping the row the first time it comes.
 
     Parameters
@@ -883,13 +873,14 @@ def _effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
     int
         The row's index in _ROW_TABLE_EFFECT.
     """
-    key = (effect, effect_source)
-    table_row = _EFFECT_TABLE_ROW_OF_EFFECT.get(key)
-    if table_row is None:
-        table_row = add_row(_ROW_TABLE_EFFECT, make_effect_row(effect, effect_source))
-        _EFFECT_TABLE_ROW_OF_EFFECT[key] = table_row
+    effect_table_row = _EFFECT_TABLE_ROW_OF_EFFECT.get((effect, effect_source))
+    if effect_table_row is not None:
+        return effect_table_row
 
-    return table_row
+    effect_table_row = add_row(_ROW_TABLE_EFFECT, make_effect_row(effect, effect_source))
+    _EFFECT_TABLE_ROW_OF_EFFECT[effect, effect_source] = effect_table_row
+
+    return effect_table_row
 
 
 def _get_effects_by_source(

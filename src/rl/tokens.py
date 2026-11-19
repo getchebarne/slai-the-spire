@@ -138,9 +138,6 @@ def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
     return cards[:cap]
 
 
-# Each context's reader: the state's Combat, Event, Reward or Shop, None while it is inactive
-
-
 def _read_combat(game_state: GameState) -> Combat | None:
     return game_state.combat
 
@@ -160,9 +157,6 @@ def _read_shop(game_state: GameState) -> Shop | None:
 # The token kinds of no context read the state itself
 def _read_game_state(game_state: GameState) -> GameState:
     return game_state
-
-
-# The Card getters: each pile cut to its cap; a Card past it has no token, so masks cannot name it
 
 
 def _get_card_match_flipped(event: Event) -> list[Card]:
@@ -259,9 +253,6 @@ def _get_card_shop(shop: Shop) -> list[Card]:
     return shop.cards[:MAX_SIZE_SHOP_CARDS]
 
 
-# The Character's, Event Options' and Monsters' getters
-
-
 def _get_character(game_state: GameState) -> list[Character]:
     return [game_state.character]
 
@@ -272,9 +263,6 @@ def _get_event_options(event: Event) -> list[EventOption]:
 
 def _get_monsters(combat: Combat) -> list[Monster]:
     return combat.monsters
-
-
-# Each collection truncated to its own cap (all engine-bounded, so never lossy)
 
 
 def _get_potion_event_roll(event: Event) -> list[Potion]:
@@ -291,9 +279,6 @@ def _get_potion_reward(reward: Reward) -> list[Potion]:
 
 def _get_potion_shop(shop: Shop) -> list[Potion]:
     return shop.potions[:MAX_SHOP_POTIONS]
-
-
-# Each collection truncated to its own cap: a Relic past it has no token
 
 
 def _get_relic_event_roll(event: Event) -> list[Relic]:
