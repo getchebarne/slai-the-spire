@@ -177,7 +177,7 @@ SHOP_PRICE_CAP = max(
 )
 EVENT_STAGE_CAP = 10
 
-# Batches repeat Maps and tokens from here up: above any rollout batch, below any minibatch
+# Batches repeat Maps and tokens from here up: above an Actor step's batch, below any minibatch
 MIN_BATCH_DEDUP = 1024
 
 

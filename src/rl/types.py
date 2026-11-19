@@ -275,12 +275,14 @@ class MapCache:
     """The Map GNN's outputs for every game of a rollout, whose weights don't change.
 
     The GNN reruns only the games whose Map changed since `x_cell`, and writes their rows in
-    place; the others keep theirs. Empty until the rollout's first step.
+    place; the others keep theirs. Empty until the rollout's first step. The cache keeps the
+    caller's grid without copying it, so a caller must hand a new buffer each step (the Actor's
+    snapshots do).
     """
 
     x_cell: torch.Tensor | None = None     # (E, H * W, NUM_FEATURE_CHANNELS) uint8
-    x_hidden: torch.Tensor | None = None   # (E, H * W, hidden)
-    x_readout: torch.Tensor | None = None  # (E, hidden)
+    x_hidden: torch.Tensor | None = None   # (E, H * W, dim_map)
+    x_readout: torch.Tensor | None = None  # (E, dim_map)
 
 
 @dataclass

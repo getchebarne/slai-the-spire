@@ -45,7 +45,7 @@ model:
 
   # Map encoder
   gnn_num_layers: 15  # Equals `MAP_HEIGHT`; Full downstream lookahead per room
-  map_encoder_dim: 256  # GNN internal width (lifted to `dim_entity` in entity_projector)
+  dim_map: 256  # GNN internal width (lifted to `dim_entity` in entity_projector)
 
   # Head dimensions
   dim_ff_primary: 1024

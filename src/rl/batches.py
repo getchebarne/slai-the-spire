@@ -152,14 +152,12 @@ def get_owner_first_row(x_count: torch.Tensor) -> torch.Tensor:
     return x_count.movedim(0, -1).cumsum(-1).movedim(-1, 0) - x_count
 
 
-def get_unique_rep_row(x_inverse: torch.Tensor, num_unique: int) -> torch.Tensor:
-    """Find one row of each unique value: its representative.
-
-    Which of a value's rows comes out is unspecified.
+def get_unique_rep_row(x_inv: torch.Tensor, num_unique: int) -> torch.Tensor:
+    """Find each unique value's first row: its representative.
 
     Parameters
     ----------
-    x_inverse : torch.Tensor
+    x_inv : torch.Tensor
         (N,) long. Each row's unique value, as `torch.unique` returns it with `return_inverse`.
     num_unique : int
         The number of unique values.
@@ -169,9 +167,11 @@ def get_unique_rep_row(x_inverse: torch.Tensor, num_unique: int) -> torch.Tensor
     torch.Tensor
         (num_unique,) long. Each unique value's representative row.
     """
-    x_rep = torch.zeros(num_unique, dtype=torch.long, device=x_inverse.device)
-    x_rep[x_inverse] = torch.arange(x_inverse.shape[0], device=x_inverse.device)
-    return x_rep
+    num_rows = x_inv.shape[0]
+    x_row = torch.arange(num_rows, device=x_inv.device)
+    return torch.full(
+        (num_unique,), num_rows, dtype=torch.long, device=x_inv.device
+    ).scatter_reduce_(0, x_inv, x_row, reduce="amin")
 
 
 def get_entity_kind_rows(
@@ -662,8 +662,8 @@ def expand_ranges(
     # Every output row moves by its range's shift: source row = output row + shift
     x_shift = (x_start - x_start_output)
 
-    # Repeat the shift for each row in each state
+    # Repeat each range's shift for each of its rows
     x_shift = x_shift.repeat_interleave(x_count, output_size=num_rows)
 
-    # Sum each row's indexes in the minibatch to the shifts to get their source-batch indexes
+    # Add each output row's position to its shift to get its source row
     return x_shift + torch.arange(num_rows, device=x_start.device)

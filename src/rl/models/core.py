@@ -45,12 +45,12 @@ class Core(nn.Module):
         transformer_num_heads: int,
         transformer_num_blocks: int,
         gnn_num_layers: int,
-        map_encoder_dim: int,
+        dim_map: int,
     ) -> None:
         super().__init__()
 
         # Entity projector
-        self._entity_projector = EntityProjector(dim_entity, map_encoder_dim)
+        self._entity_projector = EntityProjector(dim_entity, dim_map)
 
         # Entity transformer
         self._entity_transformer = EntityTransformer(
@@ -61,13 +61,13 @@ class Core(nn.Module):
         self._token_kind_emb = nn.Embedding(len(TokenKind), dim_entity)
 
         # Map GNN
-        self._map_gnn = MapGNN(gnn_num_layers, map_encoder_dim)
+        self._map_gnn = MapGNN(gnn_num_layers, dim_map)
 
         # Global context: global token + Character + Map readout + token-kind counts + raw flats
         dim_global_input = (
             dim_entity                 # Global token (attention-aggregated Entities)
             + dim_entity               # Character (refined singleton)
-            + map_encoder_dim          # Map GNN readout (whole-graph summary)
+            + dim_map                  # Map GNN readout (whole-graph summary)
             + len(_COUNT_TOKEN_KINDS)  # Per-token-kind token counts, sqrt-normalized by their caps
             + ENCODING_DIM_CONTEXT     # Raw per-state features, in their established column order
             + dim_entity               # Embedded pending-halt Effect (EntityProjector)
@@ -133,7 +133,7 @@ class Core(nn.Module):
         # Each token's state
         x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
 
-        # Map GNN: the Room tokens' node features and the whole-graph readout
+        # Map GNN: the Room tokens' cell features and the whole-graph readout
         num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
         x_room_hidden, x_map_readout = self._map_gnn(states.x_map_grid, num_rooms, map_cache)
 

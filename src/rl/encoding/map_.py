@@ -34,7 +34,7 @@ EDGE_DELTAS = (-1, 0, 1)
 NUM_EDGE_CHANNELS = len(EDGE_DELTAS)
 
 
-# Every cell must be 0 or 1: `map_encoder.py`'s dedup packs the grid one bit per cell
+# Every channel of a cell must be 0 or 1: `map_encoder.py`'s dedup packs each into one bit
 _CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
 _OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_EDGES = _alloc("edges", NUM_EDGE_CHANNELS)
@@ -42,8 +42,8 @@ _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
 _OFF_MAP_BURNING_PATH = _alloc("burning_path")  # On a path that still reaches the burning Room
 
-# The channels above are the Map network's node features; the one below names the Room tokens'
-# nodes
+# The channels above are the Map network's cell features; the one below names the Room tokens'
+# cells
 NUM_FEATURE_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
 OFF_MAP_SELECTABLE = _alloc("selectable")
 
@@ -112,6 +112,9 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
             for x_next in room.edges:
                 delta = x_next - x  # -1, 0, or 1
                 if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
+                    if y + 1 >= MAP_HEIGHT or rooms[y + 1][x_next] is None:
+                        raise ValueError(f"Edge ({y}, {x})->({y + 1}, {x_next}) has no room")
+
                     np_grid[y, x, _OFF_MAP_EDGES + EDGE_DELTAS.index(delta)] = 1
 
             if room.burning:
@@ -197,6 +200,6 @@ def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
     for y, x in get_burning_path(game_state):
         np_out[y, x, _OFF_MAP_BURNING_PATH] = 1
 
-    # The Room tokens' nodes, in the tokens' order: node order
+    # The Room tokens' cells, in the tokens' order: cell order
     for room in get_room_entities(game_state):
         np_out[room.y, room.x, OFF_MAP_SELECTABLE] = 1
