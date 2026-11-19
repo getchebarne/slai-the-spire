@@ -28,10 +28,8 @@ from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
-from src.rl.encoding.effect import EFFECT_TABLE_ROW_OF_EFFECT
-from src.rl.encoding.effect import ROW_TABLE_EFFECT
-from src.rl.encoding.effect import effect_table_row
-from src.rl.encoding.effect import encode_batch_effect_pending_into
+from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding.effect import make_effect_row
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
 from src.rl.encoding.event import ENCODING_DIM_SPARSE_EVENT_OPTION
 from src.rl.encoding.event import encode_event_option_into
@@ -172,17 +170,23 @@ _NP_ENTITY_KIND_OF_TOKEN_KIND = np.array(
 # The records' token rows: a Card's, Relic's or Potion's own columns and its Tags
 _ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_SPARSE_TOKEN)
 
+# The Effect rows, each scaled and with its source's one-hot
+_ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
+
 # The kept records, by the Entity's identity_hash and whatever else its row reads
 _RECORD_OF_CARD: dict[tuple[int, int, int | None], _Record] = {}  # With the energy and draw_below
 _RECORD_OF_RELIC: dict[tuple[int, bool], _Record] = {}  # With whether the Sapphire Key links it
 _RECORD_OF_POTION: dict[tuple[int, bool], _Record] = {}  # With whether the policy can drink it
+
+# Each Effect's row in _ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
+_EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
 
 # The holders of the row tables' row indexes: the records and the Effects' table rows
 _TABLE_ROW_HOLDERS: tuple[dict, ...] = (
     _RECORD_OF_CARD,
     _RECORD_OF_RELIC,
     _RECORD_OF_POTION,
-    EFFECT_TABLE_ROW_OF_EFFECT,
+    _EFFECT_TABLE_ROW_OF_EFFECT,
 )
 
 # Both row tables are dropped once the records and the Effects' table rows number this many
@@ -256,7 +260,7 @@ def encode_states_into(
         encode_context_into(game_state, np_context_row)
         encode_map_grid_into(game_state, np_grid)
 
-    encode_batch_effect_pending_into(states_reserved.effect_pending, batch_game_state)
+    _encode_batch_effect_pending_into(states_reserved.effect_pending, batch_game_state)
 
     # The totals last: they total the rows written above
     _encode_totals_into(states_reserved)
@@ -272,7 +276,32 @@ def _drop_row_tables_when_full() -> None:
         table_row_holder.clear()
 
     drop_rows(_ROW_TABLE_TOKEN)
-    drop_rows(ROW_TABLE_EFFECT)
+    drop_rows(_ROW_TABLE_EFFECT)
+
+
+def _encode_batch_effect_pending_into(
+    effect_pending: Sparse[Reserved],
+    batch_game_state: list[GameState],
+) -> None:
+    """Write each state's pending Effect as one sparse row, empty where no halt is pending.
+
+    Parameters
+    ----------
+    effect_pending : Sparse[Reserved]
+        The reserved per-state rows and their entries.
+    batch_game_state : list[GameState]
+        The states to encode, B of them.
+    """
+    batch_effect_table_row = []
+    for game_state in batch_game_state:
+        effect = game_state.effect_pending
+        batch_effect_table_row.append(
+            TABLE_ROW_EMPTY if effect is None else _effect_table_row(effect, EffectSource.PENDING)
+        )
+
+    encode_table_rows_into(
+        effect_pending, _ROW_TABLE_EFFECT, np.array(batch_effect_table_row, dtype=np.intp)
+    )
 
 
 def _encode_totals_into(states_reserved: States[Reserved]) -> None:
@@ -455,7 +484,7 @@ def _encode_batch_tokens_into(
 
     # Each state's token count and the rows the tokens own
     x_token_count[: len(np_count_token)].numpy()[:] = np_count_token
-    encode_table_rows_into(effects.sparse, ROW_TABLE_EFFECT, np_effect_table_row)
+    encode_table_rows_into(effects.sparse, _ROW_TABLE_EFFECT, np_effect_table_row)
     effects.x_count[:num_tokens].numpy()[:] = np_count_effect
     encode_sparse_rows_into(modifiers.sparse, np_modifier, ENCODING_DIM_SPARSE_MODIFIER)
     modifiers.x_count[:num_tokens].numpy()[:] = np_count_modifier
@@ -689,7 +718,7 @@ def _encode_tokens_into(
         effect_table_rows_of_row_local: dict[int, list[int]] = {}
         for row_local, effect, effect_source in effect_rows:
             effect_table_rows_of_row_local.setdefault(row_local, []).append(
-                effect_table_row(effect, effect_source)
+                _effect_table_row(effect, effect_source)
             )
         token_effect_table_rows = [
             effect_table_rows_of_row_local.get(row_local, ()) for row_local in range(len(tokens))
@@ -833,10 +862,34 @@ def _get_effect_table_rows(
         The rows' indexes in the Effect row table, in row order.
     """
     return [
-        effect_table_row(effect, effect_source)
+        _effect_table_row(effect, effect_source)
         for effects, effect_source in effects_by_source
         for effect in effects
     ]
+
+
+def _effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
+    """Find an Effect's row in the Effect row table, keeping the row the first time it comes.
+
+    Parameters
+    ----------
+    effect : Effect
+        The Effect.
+    effect_source : EffectSource
+        What applies the Effect.
+
+    Returns
+    -------
+    int
+        The row's index in _ROW_TABLE_EFFECT.
+    """
+    key = (effect, effect_source)
+    table_row = _EFFECT_TABLE_ROW_OF_EFFECT.get(key)
+    if table_row is None:
+        table_row = add_row(_ROW_TABLE_EFFECT, make_effect_row(effect, effect_source))
+        _EFFECT_TABLE_ROW_OF_EFFECT[key] = table_row
+
+    return table_row
 
 
 def _get_effects_by_source(
