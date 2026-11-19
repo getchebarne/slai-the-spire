@@ -209,7 +209,7 @@ TOKEN_KINDS_CARD = (
 )
 
 # The Relic token kinds in window order: decision pools first, the owned Relics last
-TOKEN_KINDS_RELIC = (
+_TOKEN_KINDS_RELIC = (
     TokenKind.RELIC_REWARD,
     TokenKind.RELIC_SHOP,
     TokenKind.RELIC_EVENT_ROLL,
@@ -217,7 +217,7 @@ TOKEN_KINDS_RELIC = (
 )
 
 # The Potion token kinds in window order; every source is engine-bounded
-TOKEN_KINDS_POTION = (
+_TOKEN_KINDS_POTION = (
     TokenKind.POTION_OWNED,
     TokenKind.POTION_REWARD,
     TokenKind.POTION_SHOP,
@@ -227,8 +227,8 @@ TOKEN_KINDS_POTION = (
 # The Entity kinds in window order, each its token kinds; the last four hold a single token kind
 TOKEN_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[TokenKind, ...]] = {
     EntityKind.CARD: TOKEN_KINDS_CARD,
-    EntityKind.RELIC: TOKEN_KINDS_RELIC,
-    EntityKind.POTION: TOKEN_KINDS_POTION,
+    EntityKind.RELIC: _TOKEN_KINDS_RELIC,
+    EntityKind.POTION: _TOKEN_KINDS_POTION,
     EntityKind.MONSTER: (TokenKind.MONSTERS,),
     EntityKind.EVENT_OPTION: (TokenKind.EVENT_OPTIONS,),
     EntityKind.CHARACTER: (TokenKind.CHARACTER,),

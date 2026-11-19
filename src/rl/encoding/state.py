@@ -1,6 +1,7 @@
 import warnings
 from collections.abc import Sequence
 from itertools import chain
+from typing import cast
 
 import numpy as np
 import torch
@@ -66,7 +67,7 @@ from src.rl.encoding.sparse import encode_owned_rows_into
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
 from src.rl.encoding.sparse import set_last_rows
-from src.rl.tokens import get_monster_entities
+from src.rl.tokens import get_entities_for_token_kind
 from src.rl.tokens import iter_tokens
 from src.rl.types import EffectSource
 from src.rl.types import Entity
@@ -496,7 +497,7 @@ def _encode_tokens_into(
         The first state-local row of each Entity id the masks look up: every token kind's but the
         Character's, the selected pile's and the play queue's (`_TOKEN_KINDS_ID_LOOKUP`).
     """
-    monsters = get_monster_entities(game_state)
+    monsters = cast(list[Monster], get_entities_for_token_kind(TokenKind.MONSTERS, game_state))
     damage = get_outgoing_damage(monsters)
     energy_current = (
         game_state.combat.energy.energy_current if game_state.combat is not None else 0
