@@ -541,9 +541,10 @@ def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
         env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
 
         # Neow's boss Relic swap: the option that loses a Relic and grants a random one
+        options = [] if game_state.event is None else game_state.event.options
         option_swap = next(
             option
-            for option in game_state.event.options
+            for option in options
             if {type(effect) for effect in option.effects}
             >= {EffectRelicLose, EffectRelicGrantRandom}
         )

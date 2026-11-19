@@ -182,9 +182,10 @@ def encode_monster_into(
         np_own[_OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in _INTENT_BUFF_KINDS)
         np_own[_OFF_MONSTER_INTENT_HAS_DEBUFF] = float(intent.kind in _INTENT_DEBUFF_KINDS)
         np_own[_OFF_MONSTER_HIT_FULLY_BLOCKED] = float(total_damage <= character_block)
-        np_own[_OFF_MONSTER_HIT_IS_LETHAL] = float(
-            get_outgoing_damage >= character_health + character_block
-        )
+        if get_outgoing_damage is not None:
+            np_own[_OFF_MONSTER_HIT_IS_LETHAL] = float(
+                get_outgoing_damage >= character_health + character_block
+            )
 
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
         np_own[_OFF_MONSTER_INTENT_KIND + _IDX_OF_INTENT_KIND[intent.kind]] = 1.0

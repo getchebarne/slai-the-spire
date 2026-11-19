@@ -149,7 +149,7 @@ def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     np_out[_OFF_MAP_BOSS_FIGHTS_AFTER] = boss_fights_after
 
     # Current `RoomKind` OHE
-    if y_current is not None and y_current < MAP_HEIGHT:
+    if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
         room = rooms[y_current][x_current]
         if room is not None:
             np_out[_OFF_MAP_CURRENT_ROOM_KIND + _IDX_OF_ROOM_KIND[room.room_kind]] = 1.0

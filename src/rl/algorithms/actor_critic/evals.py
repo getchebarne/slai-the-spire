@@ -72,7 +72,7 @@ def _run_eval_episode(
     return episode_result
 
 
-def run_eval_battery(
+def _run_eval_battery(
     model: ActorCritic, gamma: float, ascension_current: float
 ) -> list[EpisodeResult]:
     """Run the battery at curriculum position ascension_current, `model` on the CPU.
@@ -263,7 +263,7 @@ def _eval_loop(conn: Connection, model_config: dict[str, Any], gamma: float) -> 
             return
         
         model.load_state_dict(state_dict)
-        episode_results = run_eval_battery(model, gamma, ascension_current)
+        episode_results = _run_eval_battery(model, gamma, ascension_current)
         try:
             conn.send((iteration, ascension_current, episode_results))
         except BrokenPipeError:

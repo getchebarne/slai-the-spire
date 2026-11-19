@@ -112,30 +112,32 @@ def get_monster_entities(game_state: GameState) -> list[Monster]:
     return _get_monsters(combat) if combat is not None else []
 
 
-def _capped(token_kind: TokenKind, cards: list[Card], cap: int) -> list[Card]:
-    """Cut `cards` to `cap`, warning once per token kind when that drops any.
+def _capped[TEntity: Entity](
+    token_kind: TokenKind, entities: list[TEntity], cap: int
+) -> list[TEntity]:
+    """Cut `entities` to `cap`, warning once per token kind when that drops any.
 
     Parameters
     ----------
     token_kind : TokenKind
-        The Cards' token kind.
-    cards : list[Card]
-        The Cards to cut.
+        The Entities' token kind.
+    entities : list[TEntity]
+        The Entities to cut.
     cap : int
         The token kind's cap.
 
     Returns
     -------
-    list[Card]
-        The first `cap` Cards.
+    list[TEntity]
+        The first `cap` Entities.
     """
-    if len(cards) > cap and token_kind not in _WARNED_OVERFLOW:
+    if len(entities) > cap and token_kind not in _WARNED_OVERFLOW:
         _WARNED_OVERFLOW.add(token_kind)
         warnings.warn(
-            f"{token_kind.name} holds {len(cards)} cards; the ones past its cap of {cap} are "
-            "dropped"
+            f"{token_kind.name} holds {len(entities)} Entities; the ones past its cap of {cap} "
+            "are dropped"
         )
-    return cards[:cap]
+    return entities[:cap]
 
 
 def _read_combat(game_state: GameState) -> Combat | None:
@@ -196,7 +198,9 @@ def _get_card_pile_event_roll(event: Event) -> list[Card]:
 
 
 def _get_card_pile_exhaust(combat: Combat) -> list[Card]:
-    return combat.card_pile_exhaust[:MAX_SIZE_CARD_PILE_EXHAUST]
+    return _capped(
+        TokenKind.CARD_PILE_EXHAUST, combat.card_pile_exhaust, MAX_SIZE_CARD_PILE_EXHAUST
+    )
 
 
 def _get_card_pile_hand(combat: Combat) -> list[Card]:
@@ -286,7 +290,7 @@ def _get_relic_event_roll(event: Event) -> list[Relic]:
 
 
 def _get_relic_owned(game_state: GameState) -> list[Relic]:
-    return game_state.relics[:MAX_RELICS]
+    return _capped(TokenKind.RELIC_OWNED, game_state.relics, MAX_RELICS)
 
 
 def _get_relic_reward(reward: Reward) -> list[Relic]:
@@ -360,7 +364,7 @@ def _next_row_candidate_cols(
     if y_next >= MAP_HEIGHT:
         return []
 
-    if y_current is None or winged:
+    if y_current is None or x_current is None or winged:
         return [x for x in range(MAP_WIDTH) if rooms[y_next][x] is not None]
 
     # Agent always stands on a real Room; cur is never None here, so fail loud if it is

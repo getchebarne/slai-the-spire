@@ -70,7 +70,11 @@ _MULTI_STAB_HIT_MAX = max(
     move.damage for move in _MONSTER_MOVES if move.name == "Multi-Stab" and move.damage is not None
 )
 INTENT_DAMAGE_TOTAL_MAX = max(
-    max(move.damage * move.instances for move in _MONSTER_MOVES if move.damage is not None),
+    max(
+        move.damage * move.instances
+        for move in _MONSTER_MOVES
+        if move.damage is not None and move.instances is not None
+    ),
     _DIVIDER_HIT_MAX * _slai.GameEnv.HEXAGHOST_DIVIDER_HITS,
     _MULTI_STAB_HIT_MAX * MULTI_STAB_INSTANCES_MAX,
 )
@@ -242,7 +246,7 @@ TOKEN_KINDS_IN_WINDOW_ORDER = tuple(
     for token_kind in token_kinds_entity_kind
 )
 
-# Each token kind's token cap: the slice token traversal applies to that collection
+# Each token kind's token cap: the most tokens of that token kind a state holds
 MAX_TOKENS_OF_TOKEN_KIND: dict[TokenKind, int] = {
     TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
     TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,

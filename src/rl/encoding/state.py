@@ -81,7 +81,7 @@ from src.rl.types import TokenKind
 from src.rl.utils import action_masked
 
 
-type ModifierRow = tuple[int, Modifier, ModifierOwner]
+type _ModifierRow = tuple[int, Modifier, ModifierOwner]
 
 # A token's row in the token row table, then its Effect rows in the Effect row table
 type _Record = tuple[int, Sequence[int]]
@@ -416,7 +416,7 @@ def _encode_batch_tokens_into(
 
     # Initialize lists to store owned rows (Effects, Modifiers)
     batch_token_effect_table_rows: list[Sequence[int]] = []
-    batch_modifier_rows: list[ModifierRow] = []
+    batch_modifier_rows: list[_ModifierRow] = []
 
     # Each state's Entity ids map to their first state-local token row for the masks
     batch_row_of_entity_id: list[dict[int, int]] = []
@@ -494,7 +494,7 @@ def _encode_batch_tokens_into(
 
 def _encode_tokens_into(
     game_state: GameState, tokens: Sequence[Token], row_start: int
-) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[ModifierRow], dict[int, int]]:
+) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[_ModifierRow], dict[int, int]]:
     """Give each of a state's tokens its row and its Effect rows.
 
     A Card, Relic or Potion reads its record: one lookup for its row in the token row table and
@@ -523,7 +523,7 @@ def _encode_tokens_into(
     token_effect_table_rows : list[Sequence[int]]
         The Effect rows each token owns, at most MAX_EFFECTS over the state: their rows in the
         Effect row table.
-    modifier_rows : list[ModifierRow]
+    modifier_rows : list[_ModifierRow]
         The Modifier rows the tokens own, token after token, at most MAX_MODIFIERS: each its
         token's batch row, Modifier, and explicit owner kind.
     row_of_entity_id : dict[int, int]
@@ -541,7 +541,7 @@ def _encode_tokens_into(
     token_table_rows: list[int] = []
     token_rows_dense: list[np.ndarray] = []
     token_effect_table_rows: list[Sequence[int]] = []
-    modifier_rows: list[ModifierRow] = []
+    modifier_rows: list[_ModifierRow] = []
     row_of_entity_id: dict[int, int] = {}
 
     # Iterate over tokens; `row_start` gives the offset this state's tokens start from
