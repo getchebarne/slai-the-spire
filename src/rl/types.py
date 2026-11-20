@@ -3,6 +3,7 @@ from enum import IntEnum
 from typing import Literal
 from typing import final
 
+import numpy as np
 import torch
 from slai import Card
 from slai import Character
@@ -283,6 +284,29 @@ class MapCache:
     x_cell: torch.Tensor | None = None     # (E, H * W, NUM_FEATURE_CHANNELS) uint8
     x_hidden: torch.Tensor | None = None   # (E, H * W, dim_map)
     x_readout: torch.Tensor | None = None  # (E, dim_map)
+
+
+@final
+@dataclass
+class MapPlan:
+    """An update's unique Maps, found once over the states of its rollout and read to the host.
+
+    Its states are the rollout's B states, then its E final states; its U Maps are the distinct
+    ones among them, in the order `torch.unique` sorts their packed grids.
+    """
+
+    np_state_map: np.ndarray           # (B + E,) int64: each state's Map, by its index among the U
+    np_count_room_forward: np.ndarray  # (U, 4) int64: forward Rooms with 0 to 3 children, per Map
+
+
+@final
+@dataclass
+class MapDedup:
+    """The U Maps a forward runs the Map GNN on, taken on the host from its update's `MapPlan`."""
+
+    x_rep: torch.Tensor                # (U,) long, on the device: each Map's first state
+    x_state_map: torch.Tensor          # (B,) long, on the device: each state's Map, by its index
+    np_count_room_forward: np.ndarray  # (4,) int64: their forward Rooms with 0 to 3 children
 
 
 @dataclass
