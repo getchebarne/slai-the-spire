@@ -21,6 +21,7 @@ from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import PolicyOutput
 from src.rl.types import States
+from src.rl.types import TokenDedup
 from src.rl.types import TokenKind
 
 
@@ -170,6 +171,7 @@ class ActorCritic(nn.Module):
         states: States[Live],
         x_recorded_action: torch.Tensor,
         map_dedup: MapDedup,
+        token_dedup: TokenDedup | None,
     ) -> tuple[PolicyOutput, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
@@ -184,6 +186,9 @@ class ActorCritic(nn.Module):
             state, Monster target rank; -1 where a selection or target didn't apply.
         map_dedup : MapDedup
             The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+        token_dedup : TokenDedup | None
+            The unique tokens the projector runs, planned on the host for an update, or None to
+            run every token (see `EntityProjector.forward`).
 
         Returns
         -------
@@ -192,7 +197,7 @@ class ActorCritic(nn.Module):
         x_value : torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        core_output = self.core(states, map_dedup=map_dedup)
+        core_output = self.core(states, map_dedup=map_dedup, token_dedup=token_dedup)
         x_value = self._head_value(core_output.x_global)
         tokens_refined = core_output.tokens
 
@@ -228,7 +233,9 @@ class ActorCritic(nn.Module):
 
         return policy_output, x_value
 
-    def get_values(self, states: States[Live], map_dedup: MapDedup) -> torch.Tensor:
+    def get_values(
+        self, states: States[Live], map_dedup: MapDedup, token_dedup: TokenDedup | None
+    ) -> torch.Tensor:
         """Compute the values.
 
         Parameters
@@ -237,13 +244,18 @@ class ActorCritic(nn.Module):
             The game states.
         map_dedup : MapDedup
             The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+        token_dedup : TokenDedup | None
+            The unique tokens the projector runs, planned on the host for an update, or None to
+            run every token (see `EntityProjector.forward`).
 
         Returns
         -------
         torch.Tensor
             (B, len(RewardStream)). The values.
         """
-        return self._head_value(self.core(states, map_dedup=map_dedup).x_global)
+        return self._head_value(
+            self.core(states, map_dedup=map_dedup, token_dedup=token_dedup).x_global
+        )
 
 
 def compile_hot_paths(model: ActorCritic) -> None:

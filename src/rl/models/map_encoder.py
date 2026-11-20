@@ -103,10 +103,7 @@ class MapGNN(nn.Module):
             x_state_map = torch.arange(batch_size, device=x_grid.device)
 
         # The selectable Rooms' cells, state after state and each state's in cell order
-        x_selectable = x_cell[:, :, OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
-        x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
-        x_room_state = x_room // _NUM_CELLS
-        x_room_cell = x_room % _NUM_CELLS
+        x_room_state, x_room_cell = get_room_cells(x_grid, num_rooms)
         x_room_hidden = x_hidden[x_state_map[x_room_state], x_room_cell]
         x_map_readout = x_readout[x_state_map]
 
@@ -417,6 +414,32 @@ def dedup_maps(map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device
         x_state_map=x_buffer[num_maps:],
         np_count_room_forward=map_plan.np_count_room_forward[np_map].sum(0),
     )
+
+
+def get_room_cells(x_grid: torch.Tensor, num_rooms: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Find each Room token's state and cell, in the Room tokens' order.
+
+    The Room tokens' cells are the selectable Rooms', state after state and each state's in cell
+    order.
+
+    Parameters
+    ----------
+    x_grid : torch.Tensor
+        (B, H, W, C) uint8. Each state's Map.
+    num_rooms : int
+        The number of selectable Rooms over the batch, N_rooms.
+
+    Returns
+    -------
+    x_room_state : torch.Tensor
+        (N_rooms,) long. Each Room token's state.
+    x_room_cell : torch.Tensor
+        (N_rooms,) long. Each Room token's cell on its state's grid, flattened to H * W.
+    """
+    x_selectable = x_grid[..., OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
+    x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
+
+    return x_room // _NUM_CELLS, x_room % _NUM_CELLS
 
 
 def _is_room_forward(x_cell: torch.Tensor) -> torch.Tensor:
