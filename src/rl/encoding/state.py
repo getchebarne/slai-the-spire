@@ -71,6 +71,7 @@ from src.rl.tokens import get_character
 from src.rl.tokens import iter_tokens
 from src.rl.types import CollectionKind
 from src.rl.types import EffectSource
+from src.rl.types import EntityKind
 from src.rl.types import ModifierOwner
 from src.rl.types import OwnedRows
 from src.rl.types import Reserved
@@ -123,29 +124,15 @@ ENCODING_DIM_SPARSE_TOKEN = max(
 # The owned row kinds that have already warned about overflow — truncation is never silent
 _WARNED_OVERFLOW: set[StateCollection] = set()
 
-# Each Effect source's fill priority: past MAX_EFFECTS, a state keeps the lowest first
-_FILL_PRIORITY_OF_EFFECT_SOURCE = {
-    EffectSource.EVENT_OPTION_SELECT: 0,
-    EffectSource.MONSTER_MOVE: 1,
-    EffectSource.POTION_USE: 2,
-    EffectSource.RELIC_COMBAT_START: 3,
-    EffectSource.RELIC_TURN_START: 3,
-    EffectSource.RELIC_TURN_END: 3,
-    EffectSource.RELIC_COMBAT_END: 3,
-    EffectSource.RELIC_PICKUP: 3,
-    EffectSource.RELIC_REST: 3,
-    EffectSource.RELIC_COUNTER: 3,
-    EffectSource.MONSTER_MOVESET: 4,
-    EffectSource.CARD_PLAY: 5,
-    EffectSource.CARD_DISCARD: 5,
-    EffectSource.CARD_DRAW: 5,
-    EffectSource.PENDING: 0,  # No token owns the pending Effect's row: it is never cut
-}
-
-# Each Modifier owner's fill priority: past MAX_MODIFIERS, a state keeps the lowest first
-_FILL_PRIORITY_OF_MODIFIER_OWNER = {
-    ModifierOwner.CHARACTER: 0,
-    ModifierOwner.MONSTER: 1,
+# Each Entity kind's fill priority: past MAX_EFFECTS or MAX_MODIFIERS, a state keeps the lowest
+_FILL_PRIORITY_OF_ENTITY_KIND = {
+    EntityKind.CHARACTER: 0,
+    EntityKind.EVENT_OPTION: 1,
+    EntityKind.MONSTER: 2,
+    EntityKind.POTION: 3,
+    EntityKind.RELIC: 4,
+    EntityKind.CARD: 5,
+    EntityKind.ROOM: 6,  # A Room owns no rows
 }
 
 # Each collection kind's Entity kind
@@ -183,10 +170,6 @@ _EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
 # Each Modifier's row in _ROW_TABLE_MODIFIER, under each owner: a Modifier hashes by field value
 _MODIFIER_TABLE_ROW_OF_MODIFIER: dict[tuple[Modifier, ModifierOwner], int] = {}
 
-# Each Effect row's and each Modifier row's fill priority, by its row in its row table
-_FILL_PRIORITY_OF_EFFECT_TABLE_ROW: dict[int, int] = {}
-_FILL_PRIORITY_OF_MODIFIER_TABLE_ROW: dict[int, int] = {}
-
 # The holders of the row tables' row indexes, cleared when the row tables are dropped
 _TABLE_ROW_HOLDERS: tuple[dict, ...] = (
     _RECORD_OF_CARD,
@@ -194,8 +177,6 @@ _TABLE_ROW_HOLDERS: tuple[dict, ...] = (
     _RECORD_OF_POTION,
     _EFFECT_TABLE_ROW_OF_EFFECT,
     _MODIFIER_TABLE_ROW_OF_MODIFIER,
-    _FILL_PRIORITY_OF_EFFECT_TABLE_ROW,
-    _FILL_PRIORITY_OF_MODIFIER_TABLE_ROW,
 )
 
 # The row tables are dropped once they hold this many rows between them
@@ -450,9 +431,8 @@ def _encode_batch_tokens_into(
     )
 
     # Each token's Entity kind, its collection kinds'
-    x_entity_kind[:num_tokens].numpy()[:] = _NP_ENTITY_KIND_OF_COLLECTION_KIND[
-        np_collection_kind.argmax(1)
-    ]
+    np_entity_kind = x_entity_kind[:num_tokens].numpy()
+    np_entity_kind[:] = _NP_ENTITY_KIND_OF_COLLECTION_KIND[np_collection_kind.argmax(1)]
 
     # Each state's token count, the tokens' rows and the rows the tokens own
     x_token_count[: len(np_count_token)].numpy()[:] = np_count_token
@@ -466,7 +446,7 @@ def _encode_batch_tokens_into(
         _ROW_TABLE_EFFECT,
         [effect_table_rows for _, effect_table_rows, _ in batch_record],
         np_count_token,
-        _FILL_PRIORITY_OF_EFFECT_TABLE_ROW,
+        np_entity_kind,
         MAX_EFFECTS,
     )
     _encode_owned_rows_into(
@@ -475,7 +455,7 @@ def _encode_batch_tokens_into(
         _ROW_TABLE_MODIFIER,
         [modifier_table_rows for _, _, modifier_table_rows in batch_record],
         np_count_token,
-        _FILL_PRIORITY_OF_MODIFIER_TABLE_ROW,
+        np_entity_kind,
         MAX_MODIFIERS,
     )
 
@@ -742,9 +722,6 @@ def _get_effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
 
     effect_table_row = add_row(_ROW_TABLE_EFFECT, make_effect_row(effect, effect_source))
     _EFFECT_TABLE_ROW_OF_EFFECT[effect, effect_source] = effect_table_row
-    _FILL_PRIORITY_OF_EFFECT_TABLE_ROW[effect_table_row] = _FILL_PRIORITY_OF_EFFECT_SOURCE[
-        effect_source
-    ]
 
     return effect_table_row
 
@@ -770,9 +747,6 @@ def _get_modifier_table_row(modifier: Modifier, modifier_owner: ModifierOwner) -
 
     modifier_table_row = add_row(_ROW_TABLE_MODIFIER, make_modifier_row(modifier, modifier_owner))
     _MODIFIER_TABLE_ROW_OF_MODIFIER[modifier, modifier_owner] = modifier_table_row
-    _FILL_PRIORITY_OF_MODIFIER_TABLE_ROW[modifier_table_row] = _FILL_PRIORITY_OF_MODIFIER_OWNER[
-        modifier_owner
-    ]
 
     return modifier_table_row
 
@@ -783,7 +757,7 @@ def _encode_owned_rows_into(
     row_table: RowTable,
     batch_table_rows: list[Sequence[int]],
     np_count_token: np.ndarray,
-    fill_priority_of_table_row: dict[int, int],
+    np_entity_kind: np.ndarray,
     max_rows: int,
 ) -> None:
     """Write the rows the tokens own from their row table, at most `max_rows` to a state.
@@ -800,9 +774,9 @@ def _encode_owned_rows_into(
         Each token's rows in the row table.
     np_count_token : np.ndarray
         (B,) int64. Each state's number of tokens.
-    fill_priority_of_table_row : dict[int, int]
-        The fill priority of each row of the row table: past `max_rows`, a state keeps the
-        lowest first.
+    np_entity_kind : np.ndarray
+        (N_tok,) int16. Each token's Entity kind, whose fill priority its rows take: past
+        `max_rows`, a state keeps the lowest first.
     max_rows : int
         The most rows a state keeps.
     """
@@ -820,23 +794,20 @@ def _encode_owned_rows_into(
                 "by fill priority are dropped"
             )
 
+        # Each row's token, and its fill priority: its token's Entity kind's
+        np_row_token = np.repeat(np.arange(len(np_count)), np_count)  # (M,)
+        np_fill_priority = _NP_FILL_PRIORITY_OF_ENTITY_KIND[np_entity_kind[np_row_token]]
+
         # The rows first by their fill priority stay, still token after token
         np_keep = np.ones(len(np_table_row), dtype=np.bool_)
         np_row_start = np.cumsum(np_count_row) - np_count_row  # (B,)
         for idx_state in np.flatnonzero(np_count_row > max_rows):
             row_start = np_row_start[idx_state]
             row_stop = row_start + np_count_row[idx_state]
-            np_fill_priority = np.array(
-                [
-                    fill_priority_of_table_row[table_row]
-                    for table_row in np_table_row[row_start:row_stop].tolist()
-                ]
-            )
-            np_order = np.argsort(np_fill_priority, kind="stable")
+            np_order = np.argsort(np_fill_priority[row_start:row_stop], kind="stable")
             np_keep[row_start + np_order[max_rows:]] = False
 
         # Each token's rows that stay
-        np_row_token = np.repeat(np.arange(len(np_count)), np_count)  # (M,)
         np_count = np.bincount(np_row_token[np_keep], minlength=len(np_count))
         np_table_row = np_table_row[np_keep]
 
@@ -845,17 +816,16 @@ def _encode_owned_rows_into(
 
 
 def _check_tables() -> None:
-    if set(_FILL_PRIORITY_OF_EFFECT_SOURCE) != set(EffectSource):
+    if set(_FILL_PRIORITY_OF_ENTITY_KIND) != set(EntityKind):
         raise RuntimeError(
-            "_FILL_PRIORITY_OF_EFFECT_SOURCE drifted from EffectSource: "
-            f"{set(_FILL_PRIORITY_OF_EFFECT_SOURCE) ^ set(EffectSource)}"
-        )
-
-    if set(_FILL_PRIORITY_OF_MODIFIER_OWNER) != set(ModifierOwner):
-        raise RuntimeError(
-            "_FILL_PRIORITY_OF_MODIFIER_OWNER drifted from ModifierOwner: "
-            f"{set(_FILL_PRIORITY_OF_MODIFIER_OWNER) ^ set(ModifierOwner)}"
+            "_FILL_PRIORITY_OF_ENTITY_KIND drifted from EntityKind: "
+            f"{set(_FILL_PRIORITY_OF_ENTITY_KIND) ^ set(EntityKind)}"
         )
 
 
 _check_tables()
+
+# The fill priorities as the table the caps index by Entity kind, once the check has passed
+_NP_FILL_PRIORITY_OF_ENTITY_KIND = np.array(
+    [_FILL_PRIORITY_OF_ENTITY_KIND[entity_kind] for entity_kind in EntityKind], dtype=np.int64
+)
