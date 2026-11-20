@@ -37,9 +37,6 @@ from src.rl.utils import init_optimizer
 from src.rl.utils import set_rng_seeds
 
 
-_DEVICE_TYPE_CUDA = "cuda"
-
-
 @dataclass
 class CadenceConfig:
     """The run's cadences, in iterations.
@@ -158,9 +155,8 @@ def train(
         # The weights the Actor plays: the Learner publishes them, the Actor reads them
         publish(actor_handle, model, iteration_start, run_state.ascension_current)
 
-        # Compile Learner's model only iff training on GPU: the Actor's model stays eager
-        if rank_info.device.type == _DEVICE_TYPE_CUDA:
-            compile_hot_paths(model)
+        # Compile Learner's model (on GPU only): the Actor compiles its own
+        compile_hot_paths(model)
 
         # Instance generator for batch sampling 
         generator = torch.Generator().manual_seed(random.randint(0, 2**31 - 1))
