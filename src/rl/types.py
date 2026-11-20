@@ -318,12 +318,12 @@ class TokenPlan:
     Its N tokens belong to the rollout's B states followed by its E final states, state after
     state. Its U distinct tokens follow the order in which `torch.unique` sorts their hashes.
     For each unique token, `_gather_tokens` needs its counts of entries, Effects, Effect entries,
-    Modifiers and Modifier entries, followed by 1 for a Room token and 0 otherwise.
+    Modifiers and Modifier entries.
     """
 
     np_state_first_token: np.ndarray  # (B + E + 1,) int64: each state's first token, then N
     np_token_unique: np.ndarray       # (N,) int64: each token's unique token, by index among the U
-    np_size: np.ndarray               # (U, 6) int64: each unique token's sizes
+    np_size: np.ndarray               # (U, 5) int64: each unique token's sizes
 
 
 @final
@@ -333,7 +333,7 @@ class TokenDedup:
 
     x_rep: torch.Tensor           # (U,) long, on the device: each unique token's first token
     x_token_unique: torch.Tensor  # (N,) long, on the device: each token's unique token, by index
-    np_size: np.ndarray           # (6,) int64: their sizes, summed
+    np_size: np.ndarray           # (5,) int64: their sizes, summed
 
 
 @dataclass
