@@ -43,10 +43,8 @@ ENCODING_DIM_MODIFIER = sum(w for _, w in _CHANNEL_LAYOUT_MODIFIER)
 ENCODING_DIM_SPARSE_MODIFIER = len(_CHANNEL_LAYOUT_MODIFIER)
 
 
-def encode_modifier_row_into(
-    modifier: Modifier, modifier_owner: ModifierOwner, np_out: np.ndarray
-) -> None:
-    """Write a Modifier row: its kind, whether it is a buff, its stacks and its owner.
+def make_modifier_row(modifier: Modifier, modifier_owner: ModifierOwner) -> np.ndarray:
+    """Make a Modifier row: its kind, whether it is a buff, its stacks and its owner.
 
     Parameters
     ----------
@@ -54,23 +52,30 @@ def encode_modifier_row_into(
         The Modifier.
     modifier_owner : ModifierOwner
         The kind of combatant carrying it.
-    np_out : np.ndarray
-        (ENCODING_DIM_MODIFIER,) float32. The Modifier's row, written in place.
+
+    Returns
+    -------
+    np.ndarray
+        (ENCODING_DIM_MODIFIER,) float32. The row.
     """
+    np_row = np.zeros(ENCODING_DIM_MODIFIER, dtype=np.float32)
+
     # Modifier kind
-    np_out[_OFF_MODIFIER_KIND + _IDX_OF_MODIFIER_KIND[modifier.kind]] = 1.0
+    np_row[_OFF_MODIFIER_KIND + _IDX_OF_MODIFIER_KIND[modifier.kind]] = 1.0
 
     # Buff or debuff
-    np_out[_OFF_MODIFIER_BUFF] = float(modifier.kind.is_buff)
+    np_row[_OFF_MODIFIER_BUFF] = float(modifier.kind.is_buff)
 
     # Stacks: signed float + sign bit + magnitude-only linear-sqrt buckets
     stacks_max = _STACKS_MAX_OF_MODIFIER_KIND.get(modifier.kind, _STACKS_MAX)
-    np_out[_OFF_MODIFIER_STACKS] = get_sqrt_norm(modifier.stacks, stacks_max)
-    np_out[_OFF_MODIFIER_STACKS_NEGATIVE] = float(modifier.stacks < 0)
+    np_row[_OFF_MODIFIER_STACKS] = get_sqrt_norm(modifier.stacks, stacks_max)
+    np_row[_OFF_MODIFIER_STACKS_NEGATIVE] = float(modifier.stacks < 0)
     stacks_bucket = get_piecewise_bucket(
         abs(modifier.stacks), 0, stacks_max, _LINEAR_SQRT_THRESHOLD
     )
-    np_out[_OFF_MODIFIER_STACKS_OHE + stacks_bucket] = 1.0
+    np_row[_OFF_MODIFIER_STACKS_OHE + stacks_bucket] = 1.0
 
     # The combatant carrying this modifier
-    np_out[_OFF_MODIFIER_OWNER + modifier_owner] = 1.0
+    np_row[_OFF_MODIFIER_OWNER + modifier_owner] = 1.0
+
+    return np_row

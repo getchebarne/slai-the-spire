@@ -38,9 +38,8 @@ from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.incoming import project_incoming
 from src.rl.encoding.map_ import encode_map_grid_into
 from src.rl.encoding.mask import encode_batch_masks_into
-from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
-from src.rl.encoding.modifier import encode_modifier_row_into
+from src.rl.encoding.modifier import make_modifier_row
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.monster import ENCODING_DIM_SPARSE_MONSTER
 from src.rl.encoding.monster import encode_monster_into
@@ -63,17 +62,15 @@ from src.rl.encoding.shared import OFF_SHARED_STASIS_SLOT
 from src.rl.encoding.shared import OFF_SHARED_TAG
 from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
 from src.rl.encoding.sparse import TABLE_ROW_EMPTY
+from src.rl.encoding.sparse import RowTable
 from src.rl.encoding.sparse import add_row
 from src.rl.encoding.sparse import drop_rows
-from src.rl.encoding.sparse import encode_sparse_rows_into
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
-from src.rl.encoding.sparse import set_last_rows
 from src.rl.tokens import get_character
 from src.rl.tokens import iter_tokens
 from src.rl.types import CollectionKind
 from src.rl.types import EffectSource
-from src.rl.types import Entity
 from src.rl.types import ModifierOwner
 from src.rl.types import OwnedRows
 from src.rl.types import Reserved
@@ -84,10 +81,8 @@ from src.rl.types import Token
 from src.rl.utils import action_masked
 
 
-type _ModifierRow = tuple[int, Modifier, ModifierOwner]
-
-# A token's row in the token row table, then its Effect rows in the Effect row table
-type _Record = tuple[int, Sequence[int]]
+# A token's row in the token row table, then its Effect rows and its Modifier rows in theirs
+type _Record = tuple[int, Sequence[int], Sequence[int]]
 
 
 # Each Entity kind's first token column; Rooms have no columns
@@ -126,7 +121,7 @@ ENCODING_DIM_SPARSE_TOKEN = max(
 )
 
 # The owned row kinds that have already warned about overflow — truncation is never silent
-_WARNED_OVERFLOW: set[str] = set()
+_WARNED_OVERFLOW: set[StateCollection] = set()
 
 # Each Effect source's fill priority: past MAX_EFFECTS, a state keeps the lowest first
 _FILL_PRIORITY_OF_EFFECT_SOURCE = {
@@ -144,6 +139,13 @@ _FILL_PRIORITY_OF_EFFECT_SOURCE = {
     EffectSource.CARD_PLAY: 5,
     EffectSource.CARD_DISCARD: 5,
     EffectSource.CARD_DRAW: 5,
+    EffectSource.PENDING: 0,  # No token owns the pending Effect's row: it is never cut
+}
+
+# Each Modifier owner's fill priority: past MAX_MODIFIERS, a state keeps the lowest first
+_FILL_PRIORITY_OF_MODIFIER_OWNER = {
+    ModifierOwner.CHARACTER: 0,
+    ModifierOwner.MONSTER: 1,
 }
 
 # Each collection kind's Entity kind
@@ -159,11 +161,14 @@ _NP_ENTITY_KIND_OF_COLLECTION_KIND = np.array(
     dtype=np.int16,
 )
 
-# The records' token rows: each a Card's, Relic's or Potion's whole token
+# The token rows, each a token's whole row
 _ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_SPARSE_TOKEN)
 
 # The Effect rows, each scaled and with its source's one-hot
 _ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
+
+# The Modifier rows, each with its owner's one-hot
+_ROW_TABLE_MODIFIER = make_row_table(ENCODING_DIM_SPARSE_MODIFIER)
 
 # The kept records of the Cards, Relics and Potions, by their record keys
 _RECORD_OF_CARD: dict[
@@ -175,19 +180,26 @@ _RECORD_OF_POTION: dict[tuple[int, bool, int | None], _Record] = {}
 # Each Effect's row in _ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
 _EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
 
-# The holders of the row tables' row indexes: the records and the Effects' table rows
+# Each Modifier's row in _ROW_TABLE_MODIFIER, under each owner: a Modifier hashes by field value
+_MODIFIER_TABLE_ROW_OF_MODIFIER: dict[tuple[Modifier, ModifierOwner], int] = {}
+
+# Each Effect row's and each Modifier row's fill priority, by its row in its row table
+_FILL_PRIORITY_OF_EFFECT_TABLE_ROW: dict[int, int] = {}
+_FILL_PRIORITY_OF_MODIFIER_TABLE_ROW: dict[int, int] = {}
+
+# The holders of the row tables' row indexes, cleared when the row tables are dropped
 _TABLE_ROW_HOLDERS: tuple[dict, ...] = (
     _RECORD_OF_CARD,
     _RECORD_OF_RELIC,
     _RECORD_OF_POTION,
     _EFFECT_TABLE_ROW_OF_EFFECT,
+    _MODIFIER_TABLE_ROW_OF_MODIFIER,
+    _FILL_PRIORITY_OF_EFFECT_TABLE_ROW,
+    _FILL_PRIORITY_OF_MODIFIER_TABLE_ROW,
 )
 
-# Both row tables are dropped once the records and the Effects' table rows number this many
-_MAX_ROW_TABLE_KEYS = 100_000
-
-# A token's table row while its row is one of the write's dense rows
-_TABLE_ROW_DENSE = -1
+# The row tables are dropped once they hold this many rows between them
+_MAX_ROW_TABLE_ROWS = 100_000
 
 
 def encode_states_into(
@@ -262,9 +274,15 @@ def encode_states_into(
 
 
 def _drop_row_tables_when_full() -> None:
-    """Drop both row tables and everything that holds their rows' indexes, once full."""
-    num_keys = sum(map(len, _TABLE_ROW_HOLDERS))
-    if num_keys < _MAX_ROW_TABLE_KEYS:
+    """Drop the row tables and everything that holds their rows' indexes, once full.
+
+    The token row table fills with the rows made on every write, the Monsters', the Event
+    Options' and the Character's, which no later write reads.
+    """
+    num_rows = (
+        _ROW_TABLE_TOKEN.num_rows + _ROW_TABLE_EFFECT.num_rows + _ROW_TABLE_MODIFIER.num_rows
+    )
+    if num_rows < _MAX_ROW_TABLE_ROWS:
         return
 
     for table_row_holder in _TABLE_ROW_HOLDERS:
@@ -272,6 +290,7 @@ def _drop_row_tables_when_full() -> None:
 
     drop_rows(_ROW_TABLE_TOKEN)
     drop_rows(_ROW_TABLE_EFFECT)
+    drop_rows(_ROW_TABLE_MODIFIER)
 
 
 def _encode_batch_effect_pending_into(
@@ -410,32 +429,12 @@ def _encode_batch_tokens_into(
     if num_tokens > len(x_collection_kind):
         raise IndexError("Token count exceeds the destination's capacity")
 
-    # Each token's row in the token row table, and the dense rows of the tokens with no record
-    batch_token_table_rows: list[int] = []
-    batch_token_rows_dense: list[np.ndarray] = []
-
-    # Initialize lists to store owned rows (Effects, Modifiers)
-    batch_token_effect_table_rows: list[Sequence[int]] = []
-    batch_modifier_rows: list[_ModifierRow] = []
+    # Each token's record: its row in the token row table, and the rows it owns in theirs
+    batch_record: list[_Record] = []
 
     # Iterate over states
-    for game_state, tokens, row_start in zip(
-        batch_game_state, batch_tokens, np.cumsum(np_count_token) - np_count_token
-    ):
-        (
-            token_table_rows,
-            token_rows_dense,
-            token_effect_table_rows,
-            modifier_rows,
-        ) = _encode_tokens_into(game_state, tokens, row_start)
-
-        # Accumulate the tokens' table rows and dense rows
-        batch_token_table_rows += token_table_rows
-        batch_token_rows_dense += token_rows_dense
-
-        # Accumlate Effect and Modifier rows
-        batch_token_effect_table_rows += token_effect_table_rows
-        batch_modifier_rows += modifier_rows
+    for game_state, tokens in zip(batch_game_state, batch_tokens):
+        batch_record += _encode_tokens_into(game_state, tokens)
 
     # Each token's collection kinds, 1 at each collection holding its Entity
     np_collection_kind = x_collection_kind[:num_tokens].numpy()  # (N_tok, len(CollectionKind))
@@ -455,53 +454,41 @@ def _encode_batch_tokens_into(
         np_collection_kind.argmax(1)
     ]
 
-    # Each token's count of Effect rows, and each of those rows' index in the Effect row table
-    np_count_effect = np.array(
-        [len(effect_table_rows) for effect_table_rows in batch_token_effect_table_rows],
-        dtype=np.int64,
-    )
-    np_effect_table_row = np.array(
-        list(chain.from_iterable(batch_token_effect_table_rows)), dtype=np.intp
-    )
-
-    # The Modifier rows and each token's count of them
-    np_modifier = np.zeros(
-        (len(batch_modifier_rows), ENCODING_DIM_MODIFIER), dtype=np.float32
-    )
-    for np_modifier_row, (_, modifier, owner) in zip(np_modifier, batch_modifier_rows):
-        encode_modifier_row_into(modifier, owner, np_modifier_row)
-    np_count_modifier = np.bincount(
-        [row for row, _, _ in batch_modifier_rows], minlength=num_tokens
-    )
-
-    # The dense rows are the token row table's last rows for this write, in token order
-    np_token_dense = np.array(batch_token_rows_dense, dtype=np.float32).reshape(
-        -1, ENCODING_DIM_TOKEN
-    )
-    np_token_table_row = np.array(batch_token_table_rows, dtype=np.intp)  # (N_tok,)
-    np_token_table_row[np_token_table_row == _TABLE_ROW_DENSE] = set_last_rows(
-        _ROW_TABLE_TOKEN, np_token_dense
-    )
-    encode_table_rows_into(sparse_token, _ROW_TABLE_TOKEN, np_token_table_row)
-
-    # Each state's token count and the rows the tokens own
+    # Each state's token count, the tokens' rows and the rows the tokens own
     x_token_count[: len(np_count_token)].numpy()[:] = np_count_token
-    encode_table_rows_into(effects.sparse, _ROW_TABLE_EFFECT, np_effect_table_row)
-    effects.x_count[:num_tokens].numpy()[:] = np_count_effect
-    encode_sparse_rows_into(modifiers.sparse, np_modifier, ENCODING_DIM_SPARSE_MODIFIER)
-    modifiers.x_count[:num_tokens].numpy()[:] = np_count_modifier
+    np_token_table_row = np.array(
+        [token_table_row for token_table_row, _, _ in batch_record], dtype=np.intp
+    )  # (N_tok,)
+    encode_table_rows_into(sparse_token, _ROW_TABLE_TOKEN, np_token_table_row)
+    _encode_owned_rows_into(
+        effects,
+        StateCollection.EFFECTS,
+        _ROW_TABLE_EFFECT,
+        [effect_table_rows for _, effect_table_rows, _ in batch_record],
+        np_count_token,
+        _FILL_PRIORITY_OF_EFFECT_TABLE_ROW,
+        MAX_EFFECTS,
+    )
+    _encode_owned_rows_into(
+        modifiers,
+        StateCollection.MODIFIERS,
+        _ROW_TABLE_MODIFIER,
+        [modifier_table_rows for _, _, modifier_table_rows in batch_record],
+        np_count_token,
+        _FILL_PRIORITY_OF_MODIFIER_TABLE_ROW,
+        MAX_MODIFIERS,
+    )
 
     return batch_tokens
 
 
-def _encode_tokens_into(
-    game_state: GameState, tokens: Sequence[Token], row_start: int
-) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[_ModifierRow]]:
-    """Give each of a state's tokens its row and its Effect rows.
+def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[_Record]:
+    """Give each of a state's tokens its record: its row and the rows it owns, in the row tables.
 
-    A Card, Relic or Potion reads its record: one lookup for its row in the token row table and
-    its Effect rows in the Effect row table. A Monster, the Character and an Event Option get a
-    dense row.
+    A Card, Relic or Potion keeps its record under its record key: one lookup finds its row and
+    its Effect rows. A Monster's, an Event Option's and the Character's rows read the state
+    around them, so their records are made on every write; those rows then stay in the token
+    row table, unread, until the row tables are dropped.
 
     Each token goes at its Entity kind's columns and the shared block that ends the row, both
     written by its kind's encoder; an Event Option writes no shared column. A Room has no
@@ -515,21 +502,12 @@ def _encode_tokens_into(
         The state to encode.
     tokens : Sequence[Token]
         The state's tokens, as (collection kinds, Entity) in window order.
-    row_start : int
-        The state's first row in the batch.
 
     Returns
     -------
-    token_table_rows : list[int]
-        The tokens' rows in the token row table; _TABLE_ROW_DENSE for a token with a dense row.
-    token_rows_dense : list[np.ndarray]
-        The dense token rows, each (ENCODING_DIM_TOKEN,) float32, token after token.
-    token_effect_table_rows : list[Sequence[int]]
-        The Effect rows each token owns, at most MAX_EFFECTS over the state: their rows in the
-        Effect row table.
-    modifier_rows : list[_ModifierRow]
-        The Modifier rows the tokens own, token after token, at most MAX_MODIFIERS: each its
-        token's batch row, Modifier, and explicit owner kind.
+    list[_Record]
+        Each token's row in the token row table, then its Effect rows and its Modifier rows in
+        theirs.
     """
     character = get_character(game_state)
     incoming = project_incoming(game_state)
@@ -545,19 +523,15 @@ def _encode_tokens_into(
     )
     id_relic_linked = game_state.reward.id_relic_linked if game_state.reward is not None else None
     gold = character.gold
-    token_table_rows: list[int] = []
-    token_rows_dense: list[np.ndarray] = []
-    token_effect_table_rows: list[Sequence[int]] = []
-    modifier_rows: list[_ModifierRow] = []
+    records: list[_Record] = []
 
     # Each queued Card's play source: its first CardPlay's
     play_source_of_card_id: dict[int, PlaySource] = {}
     for card_play in game_state.card_play_queue:
         play_source_of_card_id.setdefault(card_play.id_card, card_play.play_source)
 
-    # Iterate over tokens; `row_start` gives the offset this state's tokens start from
-    for row_local, (collection_kinds, entity) in enumerate(tokens):
-        record = None
+    # Iterate over tokens
+    for collection_kinds, entity in tokens:
         match entity:
             case Card():
                 # The Cards below it, when its draw depth shows
@@ -578,23 +552,86 @@ def _encode_tokens_into(
                 if CollectionKind.CARD_PLAY_QUEUE in collection_kinds:
                     play_source = play_source_of_card_id[entity.id]
 
-                record = _get_record_card(
+                record_key_card = get_record_key_card(
                     entity, energy, draw_below, gold, slot_holder, play_source
                 )
+                record = _RECORD_OF_CARD.get(record_key_card)
+                if record is None:
+                    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
+                    encode_card_into(
+                        entity,
+                        energy,
+                        draw_below,
+                        gold,
+                        slot_holder,
+                        play_source,
+                        np_row[_COL_START_CARD:COL_START_RELIC],
+                        np_row[_COL_START_SHARED:],
+                    )
+
+                    # Effects
+                    effect_table_rows = _get_effect_table_rows(
+                        (entity.effects_play, EffectSource.CARD_PLAY),
+                        (entity.effects_discard, EffectSource.CARD_DISCARD),
+                        (entity.effects_draw, EffectSource.CARD_DRAW),
+                    )
+                    record = (add_row(_ROW_TABLE_TOKEN, np_row), effect_table_rows, ())
+                    _RECORD_OF_CARD[record_key_card] = record
 
             case Relic():
                 linked = entity.id == id_relic_linked
                 armed = CollectionKind.RELIC_OWNED in collection_kinds and is_relic_armed(
                     entity, game_state
                 )
-                record = _get_record_relic(entity, linked, armed, gold)
+                record_key_relic = get_record_key_relic(entity, linked, armed, gold)
+                record = _RECORD_OF_RELIC.get(record_key_relic)
+                if record is None:
+                    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
+                    encode_relic_into(
+                        entity,
+                        linked,
+                        armed,
+                        gold,
+                        np_row[COL_START_RELIC:COL_START_POTION],
+                        np_row[_COL_START_SHARED:],
+                    )
+
+                    # Effects
+                    effect_table_rows = _get_effect_table_rows(
+                        (entity.effects_combat_start, EffectSource.RELIC_COMBAT_START),
+                        (entity.effects_turn_start, EffectSource.RELIC_TURN_START),
+                        (entity.effects_turn_end, EffectSource.RELIC_TURN_END),
+                        (entity.effects_pickup, EffectSource.RELIC_PICKUP),
+                        (entity.effects_rest, EffectSource.RELIC_REST),
+                        (entity.effects_counter, EffectSource.RELIC_COUNTER),
+                        (entity.effects_combat_end, EffectSource.RELIC_COMBAT_END),
+                    )
+                    record = (add_row(_ROW_TABLE_TOKEN, np_row), effect_table_rows, ())
+                    _RECORD_OF_RELIC[record_key_relic] = record
 
             case Potion():
                 # A drink carries its target as a second id; the masks read the Potion's alone
                 usable = entity.usable and not action_masked(
                     game_state, Action(ActionType.PotionUse, [entity.id])
                 )
-                record = _get_record_potion(entity, usable, gold)
+                record_key_potion = get_record_key_potion(entity, usable, gold)
+                record = _RECORD_OF_POTION.get(record_key_potion)
+                if record is None:
+                    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
+                    encode_potion_into(
+                        entity,
+                        usable,
+                        gold,
+                        np_row[COL_START_POTION:COL_START_MONSTER],
+                        np_row[_COL_START_SHARED:],
+                    )
+
+                    # Effects
+                    effect_table_rows = _get_effect_table_rows(
+                        (entity.effects, EffectSource.POTION_USE)
+                    )
+                    record = (add_row(_ROW_TABLE_TOKEN, np_row), effect_table_rows, ())
+                    _RECORD_OF_POTION[record_key_potion] = record
 
             case Monster():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
@@ -606,18 +643,35 @@ def _encode_tokens_into(
                     np_row[_COL_START_SHARED:],
                 )
 
+                # Effects
+                effects_moveset = moveset_effects(game_state.ascension)[entity.name]
+                effect_table_rows = _get_effect_table_rows(
+                    (entity.move_effects, EffectSource.MONSTER_MOVE),
+                    (effects_moveset, EffectSource.MONSTER_MOVESET),
+                )
+
                 # Modifiers
-                row = row_start + row_local
-                modifier_rows += [
-                    (row, modifier, ModifierOwner.MONSTER) for modifier in entity.modifiers
+                modifier_table_rows = [
+                    _get_modifier_table_row(modifier, ModifierOwner.MONSTER)
+                    for modifier in entity.modifiers
                 ]
+                record = (
+                    add_row(_ROW_TABLE_TOKEN, np_row),
+                    effect_table_rows,
+                    modifier_table_rows,
+                )
 
             case EventOption():
-                # Everything it does lives in its Effect rows
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_event_option_into(
                     game_state, entity, np_row[COL_START_EVENT_OPTION:_COL_START_SHARED]
                 )
+
+                # Everything it does lives in its Effect rows
+                effect_table_rows = _get_effect_table_rows(
+                    (entity.effects, EffectSource.EVENT_OPTION_SELECT)
+                )
+                record = (add_row(_ROW_TABLE_TOKEN, np_row), effect_table_rows, ())
 
             case Character():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
@@ -629,253 +683,30 @@ def _encode_tokens_into(
                 )
 
                 # Modifiers
+                modifier_table_rows = []
                 if game_state.combat is not None:
-                    row = row_start + row_local
-                    modifier_rows += [
-                        (row, modifier, ModifierOwner.CHARACTER) for modifier in entity.modifiers
+                    modifier_table_rows = [
+                        _get_modifier_table_row(modifier, ModifierOwner.CHARACTER)
+                        for modifier in entity.modifiers
                     ]
+
+                record = (add_row(_ROW_TABLE_TOKEN, np_row), (), modifier_table_rows)
 
             case _:
                 # A Room has no columns and owns no rows
-                record = (TABLE_ROW_EMPTY, ())
+                record = (TABLE_ROW_EMPTY, (), ())
 
-        # A record gives the token's table row and Effect rows; with none it takes a dense row
-        if record is not None:
-            table_row, effect_table_rows = record
-        else:
-            token_rows_dense.append(np_row)
-            table_row = _TABLE_ROW_DENSE
+        records.append(record)
 
-            # Effects
-            effect_table_rows = _get_effect_table_rows(
-                _get_effects_by_source(entity, game_state.ascension)
-            )
-
-        token_table_rows.append(table_row)
-        token_effect_table_rows.append(effect_table_rows)
-
-    # Cap Effect and Modifier rows and return them
-    if sum(map(len, token_effect_table_rows)) > MAX_EFFECTS:
-        warning = (
-            f"Effect rows exceeded {MAX_EFFECTS} in one state; "
-            "deep Card piles dropped (constants.MAX_EFFECTS)"
-        )
-        if warning not in _WARNED_OVERFLOW:
-            _WARNED_OVERFLOW.add(warning)
-            warnings.warn(warning)
-
-        # The rows first by their source's fill priority stay, still token after token
-        effect_rows = [
-            (row_local, effect, effect_source)
-            for row_local, (_, entity) in enumerate(tokens)
-            for effects, effect_source in _get_effects_by_source(entity, game_state.ascension)
-            for effect in effects
-        ]
-        fill_priorities = [
-            _FILL_PRIORITY_OF_EFFECT_SOURCE[effect_source] for _, _, effect_source in effect_rows
-        ]
-        order = sorted(range(len(effect_rows)), key=fill_priorities.__getitem__)
-        effect_rows = [effect_rows[idx_row] for idx_row in sorted(order[:MAX_EFFECTS])]
-
-        # Each token's rows that stay
-        effect_table_rows_of_row_local: dict[int, list[int]] = {}
-        for row_local, effect, effect_source in effect_rows:
-            effect_table_rows_of_row_local.setdefault(row_local, []).append(
-                _get_effect_table_row(effect, effect_source)
-            )
-        token_effect_table_rows = [
-            effect_table_rows_of_row_local.get(row_local, ()) for row_local in range(len(tokens))
-        ]
-
-    if len(modifier_rows) > MAX_MODIFIERS:
-        warning = (
-            f"Modifier rows exceeded {MAX_MODIFIERS} in one state; "
-            "dropped (constants.MAX_MODIFIERS)"
-        )
-        if warning not in _WARNED_OVERFLOW:
-            _WARNED_OVERFLOW.add(warning)
-            warnings.warn(warning)
-
-        # The Character's rows stay first, then the Monsters' by slot
-        fill_priorities = [owner != ModifierOwner.CHARACTER for _, _, owner in modifier_rows]
-        order = sorted(range(len(modifier_rows)), key=fill_priorities.__getitem__)
-        modifier_rows = [modifier_rows[idx_row] for idx_row in sorted(order[:MAX_MODIFIERS])]
-
-    return (
-        token_table_rows,
-        token_rows_dense,
-        token_effect_table_rows,
-        modifier_rows,
-    )
+    return records
 
 
-def _get_record_card(
-    card: Card,
-    energy: int,
-    draw_below: int | None,
-    gold: int,
-    slot_holder: int | None,
-    play_source: PlaySource | None,
-) -> _Record:
-    """Find a Card's record, making it the first time its key comes.
-
-    Its key is `get_record_key_card`'s and its row is the whole token `encode_card_into` writes.
-
-    Parameters
-    ----------
-    card : Card
-        The Card.
-    energy : int
-        What its cost weighs against: the Character's energy in Combat, a turn's outside it.
-    draw_below : int | None
-        The Cards below it in the draw pile; None when its draw depth doesn't show.
-    gold : int
-        The Character's gold, which its price is read against.
-    slot_holder : int | None
-        The slot of the Monster holding it in stasis; None out of the stasis pile.
-    play_source : PlaySource | None
-        Its first CardPlay's source while it is queued; None out of the play queue.
-
-    Returns
-    -------
-    _Record
-        Its row in the token row table, then its Effect rows in the Effect row table.
-    """
-    record_key_card = get_record_key_card(card, energy, draw_below, gold, slot_holder, play_source)
-    record = _RECORD_OF_CARD.get(record_key_card)
-    if record is not None:
-        return record
-
-    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-    encode_card_into(
-        card,
-        energy,
-        draw_below,
-        gold,
-        slot_holder,
-        play_source,
-        np_row[_COL_START_CARD:COL_START_RELIC],
-        np_row[_COL_START_SHARED:],
-    )
-
-    record = _make_record(np_row, card)
-    _RECORD_OF_CARD[record_key_card] = record
-
-    return record
-
-
-def _get_record_relic(relic: Relic, linked: bool, armed: bool, gold: int) -> _Record:
-    """Find a Relic's record, making it the first time its key comes.
-
-    Its key is `get_record_key_relic`'s and its row is the whole token `encode_relic_into` writes.
-
-    Parameters
-    ----------
-    relic : Relic
-        The Relic.
-    linked : bool
-        Whether the Sapphire Key is linked to it.
-    armed : bool
-        Whether what an owned Relic waits for holds now (is_relic_armed).
-    gold : int
-        The Character's gold, which its price is read against.
-
-    Returns
-    -------
-    _Record
-        Its row in the token row table, then its Effect rows in the Effect row table.
-    """
-    record_key_relic = get_record_key_relic(relic, linked, armed, gold)
-    record = _RECORD_OF_RELIC.get(record_key_relic)
-    if record is not None:
-        return record
-
-    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-    encode_relic_into(
-        relic,
-        linked,
-        armed,
-        gold,
-        np_row[COL_START_RELIC:COL_START_POTION],
-        np_row[_COL_START_SHARED:],
-    )
-
-    record = _make_record(np_row, relic)
-    _RECORD_OF_RELIC[record_key_relic] = record
-
-    return record
-
-
-def _get_record_potion(potion: Potion, usable: bool, gold: int) -> _Record:
-    """Find a Potion's record, making it the first time its key comes.
-
-    Its key is `get_record_key_potion`'s and its row is the whole token `encode_potion_into`
-    writes.
-
-    Parameters
-    ----------
-    potion : Potion
-        The Potion.
-    usable : bool
-        Whether the policy can drink it: the engine's `Potion.usable` with the masks folded in.
-    gold : int
-        The Character's gold, which its price is read against.
-
-    Returns
-    -------
-    _Record
-        Its row in the token row table, then its Effect rows in the Effect row table.
-    """
-    record_key_potion = get_record_key_potion(potion, usable, gold)
-    record = _RECORD_OF_POTION.get(record_key_potion)
-    if record is not None:
-        return record
-
-    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-    encode_potion_into(
-        potion,
-        usable,
-        gold,
-        np_row[COL_START_POTION:COL_START_MONSTER],
-        np_row[_COL_START_SHARED:],
-    )
-
-    record = _make_record(np_row, potion)
-    _RECORD_OF_POTION[record_key_potion] = record
-
-    return record
-
-
-def _make_record(np_row: np.ndarray, entity: Entity) -> _Record:
-    """Make a Card's, Relic's or Potion's record, keeping its rows in the row tables.
-
-    Parameters
-    ----------
-    np_row : np.ndarray
-        (ENCODING_DIM_TOKEN,) float32. The Entity's token row.
-    entity : Entity
-        The Card, Relic or Potion.
-
-    Returns
-    -------
-    _Record
-        The row's index in the token row table, then the Entity's Effect rows' indexes in the
-        Effect row table.
-    """
-    return (
-        add_row(_ROW_TABLE_TOKEN, np_row),
-        tuple(_get_effect_table_rows(_get_effects_by_source_without_ascension(entity))),
-    )
-
-
-def _get_effect_table_rows(
-    effects_by_source: tuple[tuple[Sequence[Effect], EffectSource], ...]
-) -> list[int]:
+def _get_effect_table_rows(*effects_by_source: tuple[Sequence[Effect], EffectSource]) -> list[int]:
     """Find the rows of the Effects a token owns.
 
     Parameters
     ----------
-    effects_by_source : tuple[tuple[Sequence[Effect], EffectSource], ...]
+    *effects_by_source : tuple[Sequence[Effect], EffectSource]
         The Effects of each source and that source, in row order.
 
     Returns
@@ -891,7 +722,7 @@ def _get_effect_table_rows(
 
 
 def _get_effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
-    """Find an Effect's row in the Effect row table, keeping the row the first time it comes.
+    """Find an Effect's row in the Effect row table, adding the row the first time it comes.
 
     Parameters
     ----------
@@ -911,83 +742,119 @@ def _get_effect_table_row(effect: Effect, effect_source: EffectSource) -> int:
 
     effect_table_row = add_row(_ROW_TABLE_EFFECT, make_effect_row(effect, effect_source))
     _EFFECT_TABLE_ROW_OF_EFFECT[effect, effect_source] = effect_table_row
+    _FILL_PRIORITY_OF_EFFECT_TABLE_ROW[effect_table_row] = _FILL_PRIORITY_OF_EFFECT_SOURCE[
+        effect_source
+    ]
 
     return effect_table_row
 
 
-def _get_effects_by_source(
-    entity: Entity, ascension: int
-) -> tuple[tuple[Sequence[Effect], EffectSource], ...]:
-    """List the Effects an Entity's token owns, source after source.
+def _get_modifier_table_row(modifier: Modifier, modifier_owner: ModifierOwner) -> int:
+    """Find a Modifier's row in the Modifier row table, adding the row the first time it comes.
 
     Parameters
     ----------
-    entity : Entity
-        The token's Entity.
-    ascension : int
-        The game's ascension, which sets a Monster's moveset.
+    modifier : Modifier
+        The Modifier.
+    modifier_owner : ModifierOwner
+        The combatant carrying the Modifier.
 
     Returns
     -------
-    tuple[tuple[Sequence[Effect], EffectSource], ...]
-        The Effects of each source and that source, in row order; empty for a Character or a Room.
+    int
+        The row's index in _ROW_TABLE_MODIFIER.
     """
-    match entity:
-        case Monster():
-            return (
-                (entity.move_effects, EffectSource.MONSTER_MOVE),
-                (moveset_effects(ascension)[entity.name], EffectSource.MONSTER_MOVESET),
-            )
-        case _:
-            return _get_effects_by_source_without_ascension(entity)
+    modifier_table_row = _MODIFIER_TABLE_ROW_OF_MODIFIER.get((modifier, modifier_owner))
+    if modifier_table_row is not None:
+        return modifier_table_row
+
+    modifier_table_row = add_row(_ROW_TABLE_MODIFIER, make_modifier_row(modifier, modifier_owner))
+    _MODIFIER_TABLE_ROW_OF_MODIFIER[modifier, modifier_owner] = modifier_table_row
+    _FILL_PRIORITY_OF_MODIFIER_TABLE_ROW[modifier_table_row] = _FILL_PRIORITY_OF_MODIFIER_OWNER[
+        modifier_owner
+    ]
+
+    return modifier_table_row
 
 
-def _get_effects_by_source_without_ascension(
-    entity: Entity,
-) -> tuple[tuple[Sequence[Effect], EffectSource], ...]:
-    """List the Effects an Entity's token owns whatever the ascension, source after source.
+def _encode_owned_rows_into(
+    owned_rows: OwnedRows[Reserved],
+    state_collection: StateCollection,
+    row_table: RowTable,
+    batch_table_rows: list[Sequence[int]],
+    np_count_token: np.ndarray,
+    fill_priority_of_table_row: dict[int, int],
+    max_rows: int,
+) -> None:
+    """Write the rows the tokens own from their row table, at most `max_rows` to a state.
 
     Parameters
     ----------
-    entity : Entity
-        The token's Entity, not a Monster: its moveset changes with the ascension.
-
-    Returns
-    -------
-    tuple[tuple[Sequence[Effect], EffectSource], ...]
-        The Effects of each source and that source, in row order; empty for a Character or a Room.
+    owned_rows : OwnedRows[Reserved]
+        One count per token and one row per owned row, written in place.
+    state_collection : StateCollection
+        The rows' collection, EFFECTS or MODIFIERS, which the overflow warning names.
+    row_table : RowTable
+        The row table that holds the rows.
+    batch_table_rows : list[Sequence[int]]
+        Each token's rows in the row table.
+    np_count_token : np.ndarray
+        (B,) int64. Each state's number of tokens.
+    fill_priority_of_table_row : dict[int, int]
+        The fill priority of each row of the row table: past `max_rows`, a state keeps the
+        lowest first.
+    max_rows : int
+        The most rows a state keeps.
     """
-    match entity:
-        case Card():
-            return (
-                (entity.effects_play, EffectSource.CARD_PLAY),
-                (entity.effects_discard, EffectSource.CARD_DISCARD),
-                (entity.effects_draw, EffectSource.CARD_DRAW),
+    # Each token's count of rows, and each of those rows' index in the row table
+    np_count = np.array([len(table_rows) for table_rows in batch_table_rows], dtype=np.int64)
+    np_table_row = np.array(list(chain.from_iterable(batch_table_rows)), dtype=np.intp)
+
+    # Cap the rows of the states past `max_rows`
+    np_count_row = _sum_counts(np_count_token, np_count)  # (B,)
+    if np_count_row.max(initial=0) > max_rows:
+        if state_collection not in _WARNED_OVERFLOW:
+            _WARNED_OVERFLOW.add(state_collection)
+            warnings.warn(
+                f"A state's {state_collection.name.capitalize()} exceeded {max_rows}; the last "
+                "by fill priority are dropped"
             )
-        case Relic():
-            return (
-                (entity.effects_combat_start, EffectSource.RELIC_COMBAT_START),
-                (entity.effects_turn_start, EffectSource.RELIC_TURN_START),
-                (entity.effects_turn_end, EffectSource.RELIC_TURN_END),
-                (entity.effects_pickup, EffectSource.RELIC_PICKUP),
-                (entity.effects_rest, EffectSource.RELIC_REST),
-                (entity.effects_counter, EffectSource.RELIC_COUNTER),
-                (entity.effects_combat_end, EffectSource.RELIC_COMBAT_END),
+
+        # The rows first by their fill priority stay, still token after token
+        np_keep = np.ones(len(np_table_row), dtype=np.bool_)
+        np_row_start = np.cumsum(np_count_row) - np_count_row  # (B,)
+        for idx_state in np.flatnonzero(np_count_row > max_rows):
+            row_start = np_row_start[idx_state]
+            row_stop = row_start + np_count_row[idx_state]
+            np_fill_priority = np.array(
+                [
+                    fill_priority_of_table_row[table_row]
+                    for table_row in np_table_row[row_start:row_stop].tolist()
+                ]
             )
-        case Potion():
-            return ((entity.effects, EffectSource.POTION_USE),)
-        case EventOption():
-            return ((entity.effects, EffectSource.EVENT_OPTION_SELECT),)
-        case _:
-            return ()
+            np_order = np.argsort(np_fill_priority, kind="stable")
+            np_keep[row_start + np_order[max_rows:]] = False
+
+        # Each token's rows that stay
+        np_row_token = np.repeat(np.arange(len(np_count)), np_count)  # (M,)
+        np_count = np.bincount(np_row_token[np_keep], minlength=len(np_count))
+        np_table_row = np_table_row[np_keep]
+
+    encode_table_rows_into(owned_rows.sparse, row_table, np_table_row)
+    owned_rows.x_count[: len(np_count)].numpy()[:] = np_count
 
 
 def _check_tables() -> None:
-    sources = set(EffectSource) - {EffectSource.PENDING}
-    if set(_FILL_PRIORITY_OF_EFFECT_SOURCE) != sources:
+    if set(_FILL_PRIORITY_OF_EFFECT_SOURCE) != set(EffectSource):
         raise RuntimeError(
             "_FILL_PRIORITY_OF_EFFECT_SOURCE drifted from EffectSource: "
-            f"{set(_FILL_PRIORITY_OF_EFFECT_SOURCE) ^ sources}"
+            f"{set(_FILL_PRIORITY_OF_EFFECT_SOURCE) ^ set(EffectSource)}"
+        )
+
+    if set(_FILL_PRIORITY_OF_MODIFIER_OWNER) != set(ModifierOwner):
+        raise RuntimeError(
+            "_FILL_PRIORITY_OF_MODIFIER_OWNER drifted from ModifierOwner: "
+            f"{set(_FILL_PRIORITY_OF_MODIFIER_OWNER) ^ set(ModifierOwner)}"
         )
 
 
