@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import fields, replace
 from typing import Any, cast
 
+import numpy as np
 import torch
 
 from src.rl.constants import MAP_HEIGHT
@@ -37,6 +38,7 @@ __all__ = [
     "expand_ranges",
     "gather_states",
     "get_owner_first_row",
+    "get_plan_unique",
     "get_row_owner",
     "get_unique_rep_row",
     "iter_tensors",
@@ -174,6 +176,25 @@ def get_unique_rep_row(x_inv: torch.Tensor, num_unique: int) -> torch.Tensor:
     return torch.full(
         (num_unique,), num_rows, dtype=torch.long, device=x_inv.device
     ).scatter_reduce_(0, x_inv, x_row, reduce="amin")
+
+
+def get_plan_unique(
+    np_ids: np.ndarray, num_plan_ids: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Find the plan IDs present in a forward, in plan order.
+
+    The input is a 1-D int64 array of IDs in [0, num_plan_ids). Return the IDs present,
+    their first positions in the input, and each input's index among the IDs present.
+    """
+    # A missing ID keeps the scatter's initial value, one past the last input position.
+    x_ids = torch.from_numpy(np.ascontiguousarray(np_ids))
+    np_first = get_unique_rep_row(x_ids, num_plan_ids).numpy()
+    np_unique = np.flatnonzero(np_first < len(np_ids))
+    np_rep = np_first[np_unique]
+
+    # Reuse the table to look up the compact index of each ID present in this forward.
+    np_first[np_unique] = np.arange(len(np_unique))
+    return np_unique, np_rep, np_first[np_ids]
 
 
 def get_entity_kind_rows(
