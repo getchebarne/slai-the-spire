@@ -14,7 +14,7 @@ from src.rl.types import Tokens
 
 
 # FlexAttention's block: on the GPU, the sequence is padded to a multiple of it
-_FLEX_BLOCK = 128
+_FLEX_BLOCK = 64
 
 # Fixed kernel options: max-autotune leaves the forward's untuned, and tunes only the backward
 _FLEX_KERNEL_OPTIONS = {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}
