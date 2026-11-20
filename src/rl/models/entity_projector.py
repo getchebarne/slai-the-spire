@@ -1,10 +1,12 @@
 import math
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.batches import cat_states
 from src.rl.batches import expand_ranges
 from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_owner_first_row
@@ -12,6 +14,8 @@ from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
 from src.rl.batches import select_owned_rows
 from src.rl.batches import select_sparse
+from src.rl.constants import MAP_HEIGHT
+from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_EVENT_OPTION
@@ -25,15 +29,34 @@ from src.rl.encoding import COL_START_TAG
 from src.rl.encoding import ENCODING_DIM_EFFECT
 from src.rl.encoding import ENCODING_DIM_MODIFIER
 from src.rl.encoding import ENCODING_DIM_TOKEN
+from src.rl.models.map_encoder import get_room_cells
 from src.rl.models.spread_embedding import SpreadEmbedding
+from src.rl.types import CollectionKind
 from src.rl.types import Dense
 from src.rl.types import EncodedFeatures
 from src.rl.types import EntityKind
 from src.rl.types import Live
+from src.rl.types import MapPlan
 from src.rl.types import OwnedRows
+from src.rl.types import Rollout
 from src.rl.types import Sparse
+from src.rl.types import StateCollection
 from src.rl.types import States
+from src.rl.types import TokenDedup
+from src.rl.types import TokenPlan
 from src.rl.types import Tokens
+
+
+# The dedup hash's odd weights, from a generator of their own; excluded from checkpoints
+(
+    _HASH_WEIGHT_COL,
+    _HASH_WEIGHT_VALUE,
+    _HASH_WEIGHT_ENTITY_KIND,
+    _HASH_WEIGHT_EFFECT,
+    _HASH_WEIGHT_MODIFIER,
+    _HASH_WEIGHT_MIX,
+    _HASH_WEIGHT_ROOM,
+) = (torch.randint(1 << 62, (7,), generator=torch.Generator().manual_seed(0)) | 1).tolist()
 
 
 class EntityProjector(nn.Module):
@@ -51,14 +74,6 @@ class EntityProjector(nn.Module):
     dim_map : int
         The width of the Map GNN's cell features.
     """
-
-    _x_hash_weight_col: torch.Tensor
-    _x_hash_weight_value: torch.Tensor
-    _x_hash_weight_entity_kind: torch.Tensor
-    _x_hash_weight_effect: torch.Tensor
-    _x_hash_weight_modifier: torch.Tensor
-    _x_hash_weight_mix: torch.Tensor
-    _x_hash_weight_room: torch.Tensor
 
     def __init__(self, dim_entity: int, dim_map: int) -> None:
         super().__init__()
@@ -92,44 +107,6 @@ class EntityProjector(nn.Module):
         # LayerNorm cuz LayerNorm
         self._layer_norm = nn.LayerNorm(dim_entity)
 
-        # The dedup hash's odd weights, from a generator of their own; excluded from checkpoints
-        generator = torch.Generator().manual_seed(0)
-        self.register_buffer(
-            "_x_hash_weight_col",
-            torch.randint(1 << 62, (), generator=generator) | 1,
-            persistent=False,
-        )
-        self.register_buffer(
-            "_x_hash_weight_value",
-            torch.randint(1 << 62, (), generator=generator) | 1,
-            persistent=False,
-        )
-        self.register_buffer(
-            "_x_hash_weight_entity_kind",
-            torch.randint(1 << 62, (), generator=generator) | 1,
-            persistent=False,
-        )
-        self.register_buffer(
-            "_x_hash_weight_effect",
-            torch.randint(1 << 62, (), generator=generator) | 1,
-            persistent=False,
-        )
-        self.register_buffer(
-            "_x_hash_weight_modifier",
-            torch.randint(1 << 62, (), generator=generator) | 1,
-            persistent=False,
-        )
-        self.register_buffer(
-            "_x_hash_weight_mix",
-            torch.randint(1 << 62, (), generator=generator) | 1,
-            persistent=False,
-        )
-        self.register_buffer(
-            "_x_hash_weight_room",
-            torch.randint(1 << 62, (dim_map,), generator=generator) | 1,
-            persistent=False,
-        )
-
     def init_token_weights(self) -> None:
         """Initialize each token feature range independently after the general linear init.
 
@@ -155,7 +132,10 @@ class EntityProjector(nn.Module):
                 nn.init.orthogonal_(x_weight_range, gain=math.sqrt(2))
 
     def forward(
-        self, states: States[Live], x_room_hidden: torch.Tensor
+        self,
+        states: States[Live],
+        x_room_hidden: torch.Tensor,
+        token_dedup: TokenDedup | None = None,
     ) -> tuple[Tokens[Dense], torch.Tensor]:
         """Embed `states`' window.
 
@@ -166,6 +146,9 @@ class EntityProjector(nn.Module):
         x_room_hidden : torch.Tensor
             (N_rooms, dim_map). Each Room token's cell features from the Map GNN, in the Room
             tokens' order (see `MapGNN.forward`).
+        token_dedup : TokenDedup | None, default None
+            The unique tokens to run, planned on the host for an update with the Maps the Map
+            GNN ran (see `plan_tokens`), or None to run every token.
 
         Returns
         -------
@@ -178,28 +161,24 @@ class EntityProjector(nn.Module):
         # Shapes: B = batch, D = embedding width, N_tok = number of tokens
         tokens = states.tokens
         features = tokens.features
-        batch_size = tokens.x_count.shape[0]
 
         # Rooms: the Room tokens' rows, in the order of their cell features
         num_rooms = x_room_hidden.shape[0]
         x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, num_rooms)
 
-        if batch_size < MIN_BATCH_DEDUP:
+        if token_dedup is None:
             x_hidden = self._embed_tokens(
                 features, tokens.x_entity_kind, x_room_row, x_room_hidden
             )  # (N_tok, D)
         else:
             # Each unique token runs once and gathers back, up to a hash collision and rounding
-            x_rep, x_inv = self._unique_tokens(
-                features, tokens.x_entity_kind, x_room_row, x_room_hidden
-            )
             features_rep, x_entity_kind_rep, x_room_rep, x_room_hidden_rep = _gather_tokens(
-                tokens, x_rep, x_room_row, x_room_hidden
+                tokens, token_dedup, x_room_row, x_room_hidden
             )
             x_hidden = self._embed_tokens(
                 features_rep, x_entity_kind_rep, x_room_rep, x_room_hidden_rep
             )
-            x_hidden = x_hidden.index_select(0, x_inv)  # (N_tok, D)
+            x_hidden = x_hidden.index_select(0, token_dedup.x_token_unique)  # (N_tok, D)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
         effect_pending = states.effect_pending
@@ -225,7 +204,7 @@ class EntityProjector(nn.Module):
     ) -> torch.Tensor:
         """Embed the tokens: all of what the projector does per token.
 
-        Whatever this reads per token, `_unique_tokens` must hash.
+        Whatever this reads per token, `plan_tokens` must hash.
 
         Parameters
         ----------
@@ -263,79 +242,161 @@ class EntityProjector(nn.Module):
         # Shared second layer + norm on the rows
         return self._layer_norm(self._post_shared(F.relu(x_first)))
 
-    def _unique_tokens(
-        self,
-        features: EncodedFeatures[Live],
-        x_entity_kind: torch.Tensor,
-        x_room_row: torch.Tensor,
-        x_room_hidden: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Find the unique tokens, by a 64-bit hash of everything `_embed_tokens` reads per token.
 
-        The hash reads values as 32-bit words, so the dedup path is float32-only.
+def plan_tokens(rollout: Rollout, map_plan: MapPlan) -> TokenPlan:
+    """Find an update's unique tokens once, over its rollout's states and final states.
 
-        Parameters
-        ----------
-        features : EncodedFeatures[Live]
-            The tokens' sparse features, one row per token, and the Effect and Modifier rows
-            they own.
-        x_entity_kind : torch.Tensor
-            (N,) int16. Each token's Entity kind.
-        x_room_row : torch.Tensor
-            (N_rooms,) long. The Room tokens' rows.
-        x_room_hidden : torch.Tensor
-            (N_rooms, dim_map). Each Room token's cell features.
+    One unique and one host read for the whole update: each of its forwards then takes its
+    `TokenDedup` from the plan on the host, with `dedup_tokens`. A token's 64-bit hash reads
+    everything `_embed_tokens` reads per token, with a Room token's cell features hashed as its
+    state's Map in `map_plan` and its cell: a forward that dedups its tokens dedups its Maps too,
+    and runs the Map GNN once per Map, so the same Map at the same cell gives the same features.
+    The hash reads values as 32-bit words, so the plan is float32-only.
 
-        Returns
-        -------
-        x_rep : torch.Tensor
-            (U,) long. One token of each unique token: the one that runs.
-        x_inv : torch.Tensor
-            (N,) long. Each token's unique token, its index in `x_rep`.
-        """
-        x_hash_weight_col = self._x_hash_weight_col
-        x_hash_weight_value = self._x_hash_weight_value
-        x_hash_weight_mix = self._x_hash_weight_mix
-        x_hash_effect = _hash_owned(
-            features.effects, x_hash_weight_col, x_hash_weight_value, x_hash_weight_mix
-        )
-        x_hash_modifier = _hash_owned(
-            features.modifiers, x_hash_weight_col, x_hash_weight_value, x_hash_weight_mix
-        )
-        x_hash = (
-            _hash_sparse(
-                features.sparse, x_hash_weight_col, x_hash_weight_value, x_hash_weight_mix
-            )
-            + x_entity_kind.long() * self._x_hash_weight_entity_kind
-            + x_hash_effect * self._x_hash_weight_effect
-            + x_hash_modifier * self._x_hash_weight_modifier
-        )  # (N,)
+    Parameters
+    ----------
+    rollout : Rollout
+        The rollout the update trains on.
+    map_plan : MapPlan
+        The update's unique Maps, over the same states.
 
-        # A Room token's cell features, by their bits, each mixed before the weighted sum
-        x_room_bit = x_room_hidden.detach().view(torch.int32).long()  # (N_rooms, dim_map)
+    Returns
+    -------
+    TokenPlan
+        Each state's first token, the rollout's states then its final states, each token's
+        unique token, and each unique token's sizes.
+    """
+    # The rollout's states, then its final states: the plan's tokens, state after state
+    states = cat_states([rollout.states, rollout.states_final])
+    tokens = states.tokens
+    features = tokens.features
+    device = tokens.x_count.device
 
-        # The 1 hashes being a Room token, whatever its features
-        x_hash_room = (_mix_hash(x_room_bit, x_hash_weight_mix) + 1) * self._x_hash_weight_room
-        x_hash[x_room_row] += x_hash_room.sum(1)
-        x_uniq, x_inv = torch.unique(x_hash, return_inverse=True)  # (U,), (N,)
+    # Everything `_embed_tokens` reads per token, but a Room token's cell features
+    x_hash = (
+        _hash_sparse(features.sparse)
+        + tokens.x_entity_kind.long() * _HASH_WEIGHT_ENTITY_KIND
+        + _hash_owned(features.effects) * _HASH_WEIGHT_EFFECT
+        + _hash_owned(features.modifiers) * _HASH_WEIGHT_MODIFIER
+    )  # (N,)
 
-        return get_unique_rep_row(x_inv, x_uniq.shape[0]), x_inv
+    # Each state's Map, from pinned memory without blocking on CUDA
+    x_state_map_cpu = torch.from_numpy(map_plan.np_state_map)
+    x_state_map = (x_state_map_cpu.pin_memory() if device.type == "cuda" else x_state_map_cpu).to(
+        device, non_blocking=True
+    )
+
+    # A Room token's cell features, by its state's Map and its cell, mixed before the weighting
+    num_rooms = int(states.x_total_cpu[:, CollectionKind.ROOMS].sum())
+    x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, num_rooms)
+    x_room_state, x_room_cell = get_room_cells(states.x_map_grid, num_rooms)
+    x_room_key = x_state_map[x_room_state] * (MAP_HEIGHT * MAP_WIDTH) + x_room_cell  # (N_rooms,)
+
+    # The 1 hashes being a Room token, whatever its Map and cell
+    x_hash[x_room_row] += (_mix_hash(x_room_key) + 1) * _HASH_WEIGHT_ROOM
+
+    # x_uniq: (U,)
+    # x_inv: (N,) / x_inv[n] ∈ [0, U). Maps each token to its unique ID
+    x_uniq, x_inv = torch.unique(x_hash, return_inverse=True)
+    x_rep = get_unique_rep_row(x_inv, x_uniq.shape[0])  # (U,)
+
+    # Each unique token's sizes, in the order `_gather_tokens` reads them
+    x_size = torch.stack(
+        (
+            features.sparse.x_count[x_rep].long(),
+            features.effects.x_count[x_rep].long(),
+            _count_owned_entries(features.effects)[x_rep],
+            features.modifiers.x_count[x_rep].long(),
+            _count_owned_entries(features.modifiers)[x_rep],
+            (tokens.x_entity_kind[x_rep] == EntityKind.ROOM).long(),
+        ),
+        dim=1,
+    )  # (U, 6)
+
+    # The tokens' unique tokens and the sizes in one host read
+    num_tokens = x_inv.shape[0]
+    np_buffer = torch.cat([x_inv, x_size.flatten()]).cpu().numpy()
+
+    # Each state's first token, then N, from the totals on the host
+    np_count_token = states.x_total_cpu[:, StateCollection.TOKENS].numpy().astype(np.int64)
+
+    return TokenPlan(
+        np_state_first_token=np.concatenate([[0], np.cumsum(np_count_token)]),
+        np_token_unique=np_buffer[:num_tokens],
+        np_size=np_buffer[num_tokens:].reshape(x_size.shape),
+    )
+
+
+def dedup_tokens(
+    token_plan: TokenPlan, np_idx_state: np.ndarray, device: torch.device
+) -> TokenDedup | None:
+    """Take one forward's `TokenDedup` from its update's plan, on the host.
+
+    A forward of MIN_BATCH_DEDUP states or more runs its unique tokens, in the plan's order, each
+    from its first token; a smaller one runs every token, without a `TokenDedup`.
+
+    Parameters
+    ----------
+    token_plan : TokenPlan
+        The update's plan.
+    np_idx_state : np.ndarray
+        (B,) int64. The forward's states, by their index among the plan's.
+    device : torch.device
+        The forward's device.
+
+    Returns
+    -------
+    TokenDedup | None
+        The tokens the forward runs, each token's among them, and their sizes; None for a
+        forward under MIN_BATCH_DEDUP states.
+    """
+    if len(np_idx_state) < MIN_BATCH_DEDUP:
+        return None
+
+    # The forward's tokens, by their index among the plan's: each state's, state after state
+    np_state_first_token = token_plan.np_state_first_token[np_idx_state]  # (B,)
+    np_count_token = (
+        token_plan.np_state_first_token[np_idx_state + 1] - np_state_first_token
+    )  # (B,)
+    np_idx_token = expand_ranges(
+        torch.from_numpy(np_state_first_token),
+        torch.from_numpy(np_count_token),
+        int(np_count_token.sum()),
+    ).numpy()  # (N,)
+
+    # The unique tokens in the plan's order, each one's first token and each token's unique token
+    np_unique, np_rep, np_token_unique = np.unique(
+        token_plan.np_token_unique[np_idx_token], return_index=True, return_inverse=True
+    )
+    num_unique = len(np_unique)
+
+    # Both index arrays in one copy to the device, from pinned memory without blocking on CUDA
+    x_buffer_cpu = torch.from_numpy(np.concatenate([np_rep, np_token_unique]))
+    x_buffer = (x_buffer_cpu.pin_memory() if device.type == "cuda" else x_buffer_cpu).to(
+        device, non_blocking=True
+    )
+
+    return TokenDedup(
+        x_rep=x_buffer[:num_unique],
+        x_token_unique=x_buffer[num_unique:],
+        np_size=token_plan.np_size[np_unique].sum(0),
+    )
 
 
 def _gather_tokens(
     tokens: Tokens[EncodedFeatures[Live]],
-    x_rep: torch.Tensor,
+    token_dedup: TokenDedup,
     x_room_row: torch.Tensor,
     x_room_hidden: torch.Tensor,
 ) -> tuple[EncodedFeatures[Live], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Gather some tokens with all their rows, and the cell features of the Room ones.
+    """Gather the unique tokens with all their rows, and the cell features of the Room ones.
 
     Parameters
     ----------
     tokens : Tokens[EncodedFeatures[Live]]
         The tokens, N of them.
-    x_rep : torch.Tensor
-        (U,) long. The tokens to gather, in output order.
+    token_dedup : TokenDedup
+        The U tokens to gather, in output order, and their sizes.
     x_room_row : torch.Tensor
         (N_rooms,) long. The Room tokens' rows, in increasing order.
     x_room_hidden : torch.Tensor
@@ -354,9 +415,10 @@ def _gather_tokens(
     """
     features = tokens.features
     effects, modifiers = features.effects, features.modifiers
+    x_rep = token_dedup.x_rep
     x_is_room = tokens.x_entity_kind[x_rep] == EntityKind.ROOM  # (U,)
 
-    # Every size the gathers need, in one read
+    # Every size the gathers need, as the plan counted them
     (
         num_token_entries,
         num_effects,
@@ -364,16 +426,7 @@ def _gather_tokens(
         num_modifiers,
         num_modifier_entries,
         num_rooms,
-    ) = torch.stack(
-        (
-            features.sparse.x_count[x_rep].sum(),
-            effects.x_count[x_rep].sum(),
-            _count_owned_entries(effects)[x_rep].sum(),
-            modifiers.x_count[x_rep].sum(),
-            _count_owned_entries(modifiers)[x_rep].sum(),
-            x_is_room.sum(),
-        )
-    ).tolist()
+    ) = token_dedup.np_size.tolist()
 
     # Each collection's source rows under the tokens, in output order
     x_effect_row = _get_owner_rows(effects.x_count, x_rep, num_effects)
@@ -449,15 +502,13 @@ def _count_owned_entries(owned_rows: OwnedRows[Live]) -> torch.Tensor:
     return x_count.index_add_(0, x_row_token, owned_rows.sparse.x_count.long())
 
 
-def _mix_hash(x_hash: torch.Tensor, x_hash_weight_mix: torch.Tensor) -> torch.Tensor:
+def _mix_hash(x_hash: torch.Tensor) -> torch.Tensor:
     """Scramble 64-bit hashes, so that a sum of them ties only by chance.
 
     Parameters
     ----------
     x_hash : torch.Tensor
         long, any shape. The hashes.
-    x_hash_weight_mix : torch.Tensor
-        () long. The mix's multiplier.
 
     Returns
     -------
@@ -465,17 +516,12 @@ def _mix_hash(x_hash: torch.Tensor, x_hash_weight_mix: torch.Tensor) -> torch.Te
         long, `x_hash`'s shape. The mixed hashes.
     """
     # Logical shifts: `>>` on int64 copies the sign bit in, and the mask clears it
-    x_hash = (x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)) * x_hash_weight_mix
+    x_hash = (x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)) * _HASH_WEIGHT_MIX
 
     return x_hash ^ ((x_hash >> 32) & 0xFFFFFFFF)
 
 
-def _hash_sparse(
-    sparse: Sparse[Live],
-    x_hash_weight_col: torch.Tensor,
-    x_hash_weight_value: torch.Tensor,
-    x_hash_weight_mix: torch.Tensor,
-) -> torch.Tensor:
+def _hash_sparse(sparse: Sparse[Live]) -> torch.Tensor:
     """Hash each sparse row: its entries' columns and their values' bits.
 
     Each entry's hash is mixed before the row sums them.
@@ -484,12 +530,6 @@ def _hash_sparse(
     ----------
     sparse : Sparse[Live]
         The rows, R of them.
-    x_hash_weight_col : torch.Tensor
-        () long. The weight of an entry's column.
-    x_hash_weight_value : torch.Tensor
-        () long. The weight of an entry's value bits.
-    x_hash_weight_mix : torch.Tensor
-        () long. The mix's multiplier.
 
     Returns
     -------
@@ -498,19 +538,14 @@ def _hash_sparse(
     """
     x_entry_row = get_row_owner(sparse.x_count, sparse.x_col.shape[0])  # (F,)
     x_bit = sparse.x_value.view(torch.int32).long()
-    x_hash_entry = (sparse.x_col.long() + 1) * x_hash_weight_col + x_bit * x_hash_weight_value
-    x_hash_entry = _mix_hash(x_hash_entry, x_hash_weight_mix)  # (F,)
+    x_hash_entry = (sparse.x_col.long() + 1) * _HASH_WEIGHT_COL + x_bit * _HASH_WEIGHT_VALUE
+    x_hash_entry = _mix_hash(x_hash_entry)  # (F,)
     x_hash = torch.zeros(sparse.x_count.shape[0], dtype=torch.long, device=x_hash_entry.device)
 
     return x_hash.index_add_(0, x_entry_row, x_hash_entry)
 
 
-def _hash_owned(
-    owned_rows: OwnedRows[Live],
-    x_hash_weight_col: torch.Tensor,
-    x_hash_weight_value: torch.Tensor,
-    x_hash_weight_mix: torch.Tensor,
-) -> torch.Tensor:
+def _hash_owned(owned_rows: OwnedRows[Live]) -> torch.Tensor:
     """Hash each token's owned rows: their count plus the sum of their mixed hashes.
 
     Both are what `_add_owned` reads: it sums the rows, each scaled by 1/sqrt(their count).
@@ -519,12 +554,6 @@ def _hash_owned(
     ----------
     owned_rows : OwnedRows[Live]
         The owned row kind's rows, consecutive per token.
-    x_hash_weight_col : torch.Tensor
-        () long. The weight of an entry's column.
-    x_hash_weight_value : torch.Tensor
-        () long. The weight of an entry's value bits.
-    x_hash_weight_mix : torch.Tensor
-        () long. The mix's multiplier.
 
     Returns
     -------
@@ -532,10 +561,8 @@ def _hash_owned(
         (N,) long. Each token's hash: its row count plus its rows' mixed hashes, 0 if it owns none.
     """
     # Mix first: a row's hash sums its entries, so two Modifiers that swap their stacks would tie
-    x_hash_row = _hash_sparse(
-        owned_rows.sparse, x_hash_weight_col, x_hash_weight_value, x_hash_weight_mix
-    )  # (M,)
-    x_hash_row = _mix_hash(x_hash_row, x_hash_weight_mix)
+    x_hash_row = _hash_sparse(owned_rows.sparse)  # (M,)
+    x_hash_row = _mix_hash(x_hash_row)
 
     # Each owned row's token
     x_row_token = get_row_owner(owned_rows.x_count, x_hash_row.shape[0])  # (M,)
