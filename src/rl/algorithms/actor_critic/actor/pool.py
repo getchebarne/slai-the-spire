@@ -30,6 +30,7 @@ from src.rl.algorithms.actor_critic.workers import stop_workers
 from src.rl.algorithms.actor_critic.workers import write_ascensions
 from src.rl.batches import cat_states
 from src.rl.models import ActorCritic
+from src.rl.models.actor_critic import compile_hot_paths
 from src.rl.types import Live
 from src.rl.types import MapCache
 from src.rl.types import Rollout
@@ -291,6 +292,9 @@ def _actor_loop(
     # Instance model
     model = ActorCritic(**actor_config.model_config).to(device)
     model.eval()
+
+    # Compile Actor's model (on GPU only), as the Learner's
+    compile_hot_paths(model)
 
     # Its sampling continues the Learner's global stream, which the run seeds per rank and resume
     generator = torch.Generator(device)
