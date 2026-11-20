@@ -147,9 +147,12 @@ class Core(nn.Module):
         x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
 
         # Map GNN: the Room tokens' cell features and the whole-graph readout
-        num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
         x_room_hidden, x_map_readout = self._map_gnn(
-            states.x_map_grid, num_rooms, map_cache, map_dedup
+            states.x_map_grid,
+            states.x_room_cell,
+            states.x_total[:, TokenKind.ROOMS],
+            map_cache,
+            map_dedup,
         )
 
         # Token embeddings grouped by state, and the embedded pending halt

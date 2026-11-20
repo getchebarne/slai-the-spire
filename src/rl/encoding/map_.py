@@ -41,12 +41,7 @@ _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
 _OFF_MAP_BURNING_PATH = _alloc("burning_path")  # On a path that still reaches the burning Room
 
-# The channels above are the Map network's cell features; the one below names the Room tokens'
-# cells
 NUM_FEATURE_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
-OFF_MAP_SELECTABLE = _alloc("selectable")
-
-NUM_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
 
 # GNN-facing view of the edge block (read by `map_encoder.py`)
 SLICE_MAP_EDGES = slice(_OFF_MAP_EDGES, _OFF_MAP_EDGES + len(EDGE_DELTAS))
@@ -99,7 +94,7 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
         return np_grid
 
     # Initialize empty grid
-    np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.uint8)
+    np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_FEATURE_CHANNELS), dtype=np.uint8)
 
     # Iterate over Rooms
     for y, row in enumerate(rooms):
@@ -189,7 +184,7 @@ def _encode_unknown_room_into(game_state: GameState, np_out: np.ndarray) -> None
 
 
 def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Copy the cached static grid and stamp the position, burning path and selectable Rooms."""
+    """Copy the cached static grid and stamp the position and burning path."""
     map_ = game_state.map
     np_out[:] = _get_static_grid(map_.identity_hash, map_.rooms)
     y_current, x_current = map_.y_current, map_.x_current
@@ -199,7 +194,3 @@ def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
     # The Rooms that still reach the burning Room while the Emerald Key is missing
     for y, x in get_burning_path(game_state):
         np_out[y, x, _OFF_MAP_BURNING_PATH] = 1
-
-    # The Room tokens' cells, in the tokens' order: cell order
-    for room in get_room_entities(game_state):
-        np_out[room.y, room.x, OFF_MAP_SELECTABLE] = 1

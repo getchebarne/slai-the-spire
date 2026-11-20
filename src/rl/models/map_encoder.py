@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.rl.batches import dedup_rows
+from src.rl.batches import get_row_owner
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
@@ -13,8 +14,6 @@ from src.rl.encoding import OFF_MAP_POSITION
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
 from src.rl.maps import UniqueMaps
-from src.rl.maps import get_map_features
-from src.rl.maps import get_room_cells
 from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import MapPlan
@@ -58,7 +57,8 @@ class MapGNN(nn.Module):
     def forward(
         self,
         x_grid: torch.Tensor,
-        num_rooms: int,
+        x_room_cell: torch.Tensor,
+        x_count_room: torch.Tensor,
         map_cache: MapCache | None = None,
         map_dedup: MapDedup | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -68,8 +68,10 @@ class MapGNN(nn.Module):
         ----------
         x_grid : torch.Tensor
             (B, H, W, C) uint8. Each state's Map.
-        num_rooms : int
-            The number of selectable Rooms over the batch, N_rooms.
+        x_room_cell : torch.Tensor
+            (N_rooms,) long. Each Room token's cell in its state's Map.
+        x_count_room : torch.Tensor
+            (B,) int32. Each state's number of Room tokens.
         map_cache : MapCache | None, default None
             The outputs of this rollout's last step, to reuse and update, or None to run them all.
         map_dedup : MapDedup | None, default None
@@ -85,15 +87,14 @@ class MapGNN(nn.Module):
         """
         batch_size = x_grid.shape[0]
 
-        x_cell_feature = get_map_features(x_grid)  # (B, H * W, NUM_FEATURE_CHANNELS)
+        x_cell_feature = x_grid.flatten(1, 2)  # (B, H * W, NUM_FEATURE_CHANNELS)
         if map_cache is None:
             x_hidden, x_state_map, x_readout = self._encode_maps(x_cell_feature, map_dedup)
         else:
             x_hidden, x_readout = self._encode_maps_cached(x_cell_feature, map_cache)
             x_state_map = torch.arange(batch_size, device=x_grid.device)
 
-        # The selectable Rooms' cells, state after state and each state's in cell order
-        x_room_state, x_room_cell = get_room_cells(x_grid, num_rooms)
+        x_room_state = get_row_owner(x_count_room, x_room_cell.numel())
         x_room_hidden = x_hidden[x_state_map[x_room_state], x_room_cell]
         x_map_readout = x_readout[x_state_map]
 

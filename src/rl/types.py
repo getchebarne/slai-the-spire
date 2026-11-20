@@ -228,10 +228,11 @@ class States[TStorage]:
 
     tokens: Tokens[EncodedFeatures[TStorage]]
     effect_pending: Sparse[TStorage]
+    x_room_cell: torch.Tensor          # (N_rooms,) long, each Room token's cell in its state's Map
 
     # One row per state
     x_context: torch.Tensor            # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
-    x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
+    x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_FEATURE_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     x_total: torch.Tensor              # (B, len(TokenKind) + len(StateCollection)) int32
     x_total_cpu: torch.Tensor          # Same totals on CPU; aliases x_total for CPU states

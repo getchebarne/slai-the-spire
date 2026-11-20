@@ -6,12 +6,11 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
+from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
-from src.rl.encoding import NUM_CHANNELS
 from src.rl.encoding import NUM_FEATURE_CHANNELS
-from src.rl.encoding import OFF_MAP_SELECTABLE
 from src.rl.types import Live
 from src.rl.types import States
 from src.rl.types import TokenKind
@@ -36,37 +35,17 @@ class UniqueMaps:
     x_room_key: torch.Tensor   # (N_rooms,) long. Map ID * (H * W) + cell for each Room token.
 
 
-def get_map_features(x_grid: torch.Tensor) -> torch.Tensor:
-    """View the feature channels of each state's Map as (B, H * W, NUM_FEATURE_CHANNELS)."""
-    x_cell = x_grid.reshape(x_grid.shape[0], _NUM_CELLS, NUM_CHANNELS)
-
-    return x_cell[:, :, :NUM_FEATURE_CHANNELS]
-
-
-def get_room_cells(x_grid: torch.Tensor, num_rooms: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the state index and flattened cell index of each selectable Room.
-
-    The encoder emits Room tokens state after state, in cell order within each state.
-    `num_rooms` is their total from the batch's CPU counts.
-    """
-    x_selectable = x_grid[..., OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
-    x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
-
-    return x_room // _NUM_CELLS, x_room % _NUM_CELLS
-
-
 def get_unique_maps(states: States[Live]) -> UniqueMaps:
     """Group equal Map feature grids and give each Room token a key for its Map and cell.
 
-    The Map ID covers the features used in message passing. The selectable channel determines
-    which cells each state reads from its Map.
+    Map IDs cover the features used in message passing. Each Room token names its Map cell.
     """
-    x_cell = get_map_features(states.x_map_grid)
+    x_cell = states.x_map_grid.flatten(1, 2)
     x_unique, x_state_map = torch.unique(_pack_rows(x_cell), dim=0, return_inverse=True)
     x_rep = get_unique_rep_row(x_state_map, x_unique.shape[0])
 
-    num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
-    x_room_state, x_room_cell = get_room_cells(states.x_map_grid, num_rooms)
+    x_room_cell = states.x_room_cell
+    x_room_state = get_row_owner(states.x_total[:, TokenKind.ROOMS], x_room_cell.numel())
 
     return UniqueMaps(
         x_state_map=x_state_map,
