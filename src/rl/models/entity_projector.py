@@ -10,6 +10,7 @@ from src.rl.batches import cat_states
 from src.rl.batches import expand_ranges
 from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_owner_first_row
+from src.rl.batches import get_plan_unique
 from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
 from src.rl.batches import select_owned_rows
@@ -365,8 +366,8 @@ def dedup_tokens(
     ).numpy()  # (N,)
 
     # The unique tokens in the plan's order, each one's first token and each token's unique token
-    np_unique, np_rep, np_token_unique = np.unique(
-        token_plan.np_token_unique[np_idx_token], return_index=True, return_inverse=True
+    np_unique, np_rep, np_token_unique = get_plan_unique(
+        token_plan.np_token_unique[np_idx_token], len(token_plan.np_size)
     )
     num_unique = len(np_unique)
 
