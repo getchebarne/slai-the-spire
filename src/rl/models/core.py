@@ -22,6 +22,7 @@ from src.rl.types import Live
 from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import States
+from src.rl.types import TokenDedup
 
 
 # Count features: one per collection kind except the Character singleton (a constant 1.0), each
@@ -125,6 +126,7 @@ class Core(nn.Module):
         states: States[Live],
         map_cache: MapCache | None = None,
         map_dedup: MapDedup | None = None,
+        token_dedup: TokenDedup | None = None,
     ) -> CoreOutput:
         """Compute the core's output.
 
@@ -136,6 +138,9 @@ class Core(nn.Module):
             The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
         map_dedup : MapDedup | None, default None
             The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+        token_dedup : TokenDedup | None, default None
+            The unique tokens the projector runs, planned on the host for an update (see
+            `EntityProjector.forward`).
 
         Returns
         -------
@@ -158,7 +163,9 @@ class Core(nn.Module):
         )
 
         # Token embeddings grouped by state, and the embedded pending halt
-        tokens_projected, x_effect_pending = self._entity_projector(states, x_room_hidden)
+        tokens_projected, x_effect_pending = self._entity_projector(
+            states, x_room_hidden, token_dedup
+        )
 
         # The tokens' memberships, their collection kinds, counted on the host
         num_memberships = int(states.x_total_cpu[:, : len(CollectionKind)].sum())
