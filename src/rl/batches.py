@@ -35,10 +35,10 @@ from src.rl.types import Tokens
 __all__ = [
     "allocate_states",
     "cat_states",
+    "dedup_rows",
     "expand_ranges",
     "gather_states",
     "get_owner_first_row",
-    "get_plan_unique",
     "get_row_owner",
     "get_unique_rep_row",
     "iter_tensors",
@@ -189,23 +189,56 @@ def get_unique_rep_row(x_inv: torch.Tensor, num_unique: int) -> torch.Tensor:
     ).scatter_reduce_(0, x_inv, x_row, reduce="amin")
 
 
-def get_plan_unique(
-    np_ids: np.ndarray, num_plan_ids: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Find the plan IDs present in a forward, in plan order.
+def dedup_rows(
+    np_id: np.ndarray, np_size_of_id: np.ndarray, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor, np.ndarray]:
+    """Select one row per plan ID present in a forward and sum those IDs' sizes.
 
-    The input is a 1-D int64 array of IDs in [0, num_plan_ids). Return the IDs present,
-    their first positions in the input, and each input's index among the IDs present.
+    Parameters
+    ----------
+    np_id : np.ndarray
+        (N,) int64. Each row's plan ID.
+    np_size_of_id : np.ndarray
+        (U_plan, K) int64. Each plan ID's K sizes.
+    device : torch.device
+        The forward's device.
+
+    Returns
+    -------
+    x_rep : torch.Tensor
+        (U,) long. The first row of each plan ID present, in plan order.
+    x_inv : torch.Tensor
+        (N,) long. Each row's index among the U plan IDs present.
+    np_size_sum : np.ndarray
+        (K,) int64. The total sizes across the plan IDs present, counting each once.
     """
-    # A missing ID keeps the scatter's initial value, one past the last input position.
-    x_ids = torch.from_numpy(np.ascontiguousarray(np_ids))
-    np_first = get_unique_rep_row(x_ids, num_plan_ids).numpy()
-    np_unique = np.flatnonzero(np_first < len(np_ids))
-    np_rep = np_first[np_unique]
+    num_rows, num_ids = len(np_id), len(np_size_of_id)  # A plan ID is a row of np_size_of_id
 
-    # Reuse the table to look up the compact index of each ID present in this forward.
-    np_first[np_unique] = np.arange(len(np_unique))
-    return np_unique, np_rep, np_first[np_ids]
+    # Per plan ID: its first row in this forward, or num_rows where it is absent
+    x_id = torch.from_numpy(np.ascontiguousarray(np_id))
+    np_first_row_of_id = get_unique_rep_row(x_id, num_ids).numpy()  # (U_plan,)
+
+    # The plan IDs present, ascending, and each one's first row
+    np_id_present = np.flatnonzero(np_first_row_of_id < num_rows)  # (U,)
+    num_id_present = len(np_id_present)
+    np_rep = np_first_row_of_id[np_id_present]  # (U,)
+
+    # Each present plan ID's index among them, then each row's through its plan ID
+    np_idx_present_of_id = np.empty(num_ids, dtype=np.int64)  # Absent IDs are never read
+    np_idx_present_of_id[np_id_present] = np.arange(num_id_present)
+    np_inv = np_idx_present_of_id[np_id]  # (N,)
+
+    # Both index arrays in one copy to the device, from pinned memory without blocking on CUDA
+    x_buffer_cpu = torch.from_numpy(np.concatenate([np_rep, np_inv]))
+    x_buffer = (x_buffer_cpu.pin_memory() if device.type == "cuda" else x_buffer_cpu).to(
+        device, non_blocking=True
+    )
+
+    return (
+        x_buffer[:num_id_present],
+        x_buffer[num_id_present:],
+        np_size_of_id[np_id_present].sum(0),
+    )
 
 
 def get_entity_kind_rows(
