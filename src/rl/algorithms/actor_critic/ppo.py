@@ -11,8 +11,10 @@ from src.rl.algorithms.actor_critic.distributed import average_gradient_buckets
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.distributed import read_rank_mean
 from src.rl.algorithms.actor_critic.metrics import MetricKey
+from src.rl.batches import cat_states
 from src.rl.batches import gather_states
 from src.rl.batches import slice_states
+from src.rl.maps import get_unique_maps
 from src.rl.models import ActorCritic
 from src.rl.models.entity_projector import dedup_tokens
 from src.rl.models.entity_projector import plan_tokens
@@ -93,11 +95,7 @@ def update_ppo(
     """
     num_reward_streams = rollout.x_reward.shape[-1]
 
-    # The rollout's unique Maps, found once: each forward of the update dedups its Maps from them
-    map_plan = plan_maps(rollout)
-
-    # The rollout's unique tokens, found once: each forward dedups its tokens from them
-    token_plan = plan_tokens(rollout, map_plan)
+    map_plan, token_plan = _plan_dedup(rollout)
 
     # Calculate the rollout's log-probabilities and values under the current weights
     x_log_prob_prox, x_value_prox, x_value_final = _evaluate_rollout(
@@ -226,6 +224,14 @@ def adapt_lr(lr: float, approx_kl: float, target_kl: float) -> float:
         return min(lr * 1.5, 1e-3)
     
     return lr
+
+
+def _plan_dedup(rollout: Rollout) -> tuple[MapPlan, TokenPlan]:
+    """Build both host plans from the same Map identities over all the rollout's states."""
+    states = cat_states([rollout.states, rollout.states_final])
+    maps = get_unique_maps(states)
+
+    return plan_maps(maps), plan_tokens(states, maps.x_room_key)
 
 
 def _evaluate_rollout(

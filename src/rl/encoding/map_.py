@@ -38,7 +38,7 @@ _IDX_OF_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.me
 EDGE_DELTAS = (-1, 0, 1)
 
 
-# Every channel of a cell must be 0 or 1: `map_encoder.py`'s dedup packs each into one bit
+# Every channel of a cell must be 0 or 1 so Map dedup can pack each feature into one bit
 _CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
 _OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_EDGES = _alloc("edges", len(EDGE_DELTAS))

@@ -322,10 +322,10 @@ class MapDedup:
 class TokenPlan:
     """An update's unique tokens, found once over the tokens of its rollout and read to the host.
 
-    Its states are `MapPlan`'s, the rollout's B states then its E final states, and its N tokens
-    are theirs, state after state; its U tokens are the distinct ones among them, in the order
-    `torch.unique` sorts their hashes. A token's sizes are what `_gather_tokens` reads: its
-    entries, Effects, Effect entries, Modifiers and Modifier entries, then 1 for a Room token.
+    Its N tokens belong to the rollout's B states followed by its E final states, state after
+    state. Its U distinct tokens follow the order in which `torch.unique` sorts their hashes.
+    For each unique token, `_gather_tokens` needs its counts of entries, Effects, Effect entries,
+    Modifiers and Modifier entries, followed by 1 for a Room token and 0 otherwise.
     """
 
     np_state_first_token: np.ndarray  # (B + E + 1,) int64: each state's first token, then N
