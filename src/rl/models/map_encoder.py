@@ -346,10 +346,10 @@ def plan_maps(rollout: Rollout) -> MapPlan:
     x_grid = torch.cat([rollout.states.x_map_grid, rollout.states_final.x_map_grid])
     num_states = x_grid.shape[0]
     x_cell = x_grid.reshape(num_states, _NUM_CELLS, NUM_CHANNELS)[:, :, :NUM_FEATURE_CHANNELS]
-    x_packed = _pack_rows(x_cell)  # (B, words)
+    x_packed = _pack_rows(x_cell)  # (B + E, words)
 
     # x_uniq: (U, words)
-    # x_inv: (B,) / x_inv[b] ∈ [0, U). Maps each state to its unique ID
+    # x_inv: (B + E,) / x_inv[b] ∈ [0, U). Maps each state to its unique ID
     x_uniq, x_inv = torch.unique(x_packed, dim=0, return_inverse=True)
     x_rep = get_unique_rep_row(x_inv, x_uniq.shape[0])  # (U,)
 
