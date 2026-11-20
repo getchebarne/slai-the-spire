@@ -6,16 +6,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.batches import cat_states
+from src.rl.batches import dedup_rows
 from src.rl.batches import expand_ranges
 from src.rl.batches import get_owner_first_row
-from src.rl.batches import get_plan_unique
 from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
 from src.rl.batches import select_owned_rows
 from src.rl.batches import select_sparse
-from src.rl.constants import MAP_HEIGHT
-from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_EVENT_OPTION
@@ -29,15 +26,12 @@ from src.rl.encoding import COL_START_TAG
 from src.rl.encoding import ENCODING_DIM_EFFECT
 from src.rl.encoding import ENCODING_DIM_MODIFIER
 from src.rl.encoding import ENCODING_DIM_TOKEN
-from src.rl.models.map_encoder import get_room_cells
 from src.rl.models.spread_embedding import SpreadEmbedding
 from src.rl.types import Dense
 from src.rl.types import EncodedFeatures
 from src.rl.types import EntityKind
 from src.rl.types import Live
-from src.rl.types import MapPlan
 from src.rl.types import OwnedRows
-from src.rl.types import Rollout
 from src.rl.types import Sparse
 from src.rl.types import StateCollection
 from src.rl.types import States
@@ -244,34 +238,25 @@ class EntityProjector(nn.Module):
         return self._layer_norm(self._post_shared(F.relu(x_first)))
 
 
-def plan_tokens(rollout: Rollout, map_plan: MapPlan) -> TokenPlan:
-    """Find an update's unique tokens once, over its rollout's states and final states.
-
-    One unique and one host read for the whole update: each of its forwards then takes its
-    `TokenDedup` from the plan on the host, with `dedup_tokens`. A token's 64-bit hash reads
-    everything `_embed_tokens` reads per token, with a Room token's cell features hashed as its
-    state's Map in `map_plan` and its cell: a forward that dedups its tokens dedups its Maps too,
-    and runs the Map GNN once per Map, so the same Map at the same cell gives the same features.
-    The hash reads values as 32-bit words, so the plan is float32-only.
+def plan_tokens(states: States[Live], x_room_key: torch.Tensor) -> TokenPlan:
+    """Find the update's unique tokens and the sizes needed to gather their features.
 
     Parameters
     ----------
-    rollout : Rollout
-        The rollout the update trains on.
-    map_plan : MapPlan
-        The update's unique Maps, over the same states.
+    states : States[Live]
+        The rollout's states followed by its final states.
+    x_room_key : torch.Tensor
+        (N_rooms,) long. An ID for each (Map, cell) pair, in Room token order. Equal keys
+        identify the same input to the projector's Room layer for any given model weights.
 
     Returns
     -------
     TokenPlan
-        Each state's first token, the rollout's states then its final states, each token's
-        unique token, and each unique token's sizes.
+        Each state's first token, each token's unique ID and each unique token's sizes.
+        The hash reads values as 32-bit words, so the plan is float32-only.
     """
-    # The rollout's states, then its final states: the plan's tokens, state after state
-    states = cat_states([rollout.states, rollout.states_final])
     tokens = states.tokens
     features = tokens.features
-    device = tokens.x_count.device
 
     # Everything `_embed_tokens` reads per token, but a Room token's cell features
     x_hash = (
@@ -281,18 +266,9 @@ def plan_tokens(rollout: Rollout, map_plan: MapPlan) -> TokenPlan:
         + _hash_owned(features.modifiers) * _HASH_WEIGHT_MODIFIER
     )  # (N,)
 
-    # Each state's Map, from pinned memory without blocking on CUDA
-    x_state_map_cpu = torch.from_numpy(map_plan.np_state_map)
-    x_state_map = (x_state_map_cpu.pin_memory() if device.type == "cuda" else x_state_map_cpu).to(
-        device, non_blocking=True
-    )
-
-    # A Room token's cell features, by its state's Map and its cell, mixed before the weighting
-    num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
-    x_room_row = torch.nonzero_static(tokens.x_token_kind == TokenKind.ROOMS, size=num_rooms)
-    x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
-    x_room_state, x_room_cell = get_room_cells(states.x_map_grid, num_rooms)
-    x_room_key = x_state_map[x_room_state] * (MAP_HEIGHT * MAP_WIDTH) + x_room_cell  # (N_rooms,)
+    x_room_row = torch.nonzero_static(
+        tokens.x_token_kind == TokenKind.ROOMS, size=x_room_key.numel()
+    ).squeeze(1)  # (N_rooms,)
 
     # The 1 hashes being a Room token, whatever its Map and cell
     x_hash[x_room_row] += (_mix_hash(x_room_key) + 1) * _HASH_WEIGHT_ROOM
@@ -366,23 +342,11 @@ def dedup_tokens(
         int(np_count_token.sum()),
     ).numpy()  # (N,)
 
-    # The unique tokens in the plan's order, each one's first token and each token's unique token
-    np_unique, np_rep, np_token_unique = get_plan_unique(
-        token_plan.np_token_unique[np_idx_token], len(token_plan.np_size)
-    )
-    num_unique = len(np_unique)
-
-    # Both index arrays in one copy to the device, from pinned memory without blocking on CUDA
-    x_buffer_cpu = torch.from_numpy(np.concatenate([np_rep, np_token_unique]))
-    x_buffer = (x_buffer_cpu.pin_memory() if device.type == "cuda" else x_buffer_cpu).to(
-        device, non_blocking=True
+    x_rep, x_token_unique, np_size = dedup_rows(
+        token_plan.np_token_unique[np_idx_token], token_plan.np_size, device
     )
 
-    return TokenDedup(
-        x_rep=x_buffer[:num_unique],
-        x_token_unique=x_buffer[num_unique:],
-        np_size=token_plan.np_size[np_unique].sum(0),
-    )
+    return TokenDedup(x_rep=x_rep, x_token_unique=x_token_unique, np_size=np_size)
 
 
 def _gather_tokens(
