@@ -1,34 +1,26 @@
-import math
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.rl.batches import get_unique_rep_row
+from src.rl.batches import dedup_rows
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import EDGE_DELTAS
-from src.rl.encoding import NUM_CHANNELS
 from src.rl.encoding import NUM_FEATURE_CHANNELS
 from src.rl.encoding import OFF_MAP_POSITION
-from src.rl.encoding import OFF_MAP_SELECTABLE
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
+from src.rl.maps import UniqueMaps
+from src.rl.maps import get_map_features
+from src.rl.maps import get_room_cells
 from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import MapPlan
-from src.rl.types import Rollout
 
 
 _NUM_CELLS = MAP_HEIGHT * MAP_WIDTH
-
-# The dedup's packed rows: the grid's bits, 63 to an int64 word
-_GRID_BITS = _NUM_CELLS * NUM_FEATURE_CHANNELS
-_WORD_BITS = 63                                   # An int64 w/o its sign bit so every word is >= 0
-_NUM_WORDS = math.ceil(_GRID_BITS / _WORD_BITS)   # Number of words per grid
-_PAD_BITS = _NUM_WORDS * _WORD_BITS - _GRID_BITS  # Zero bits that fill the last word
 
 
 class MapGNN(nn.Module):
@@ -93,9 +85,7 @@ class MapGNN(nn.Module):
         """
         batch_size = x_grid.shape[0]
 
-        # Flatten grid from (B, H, W, C) -> (B, H * W, C)
-        x_cell = x_grid.reshape(batch_size, _NUM_CELLS, NUM_CHANNELS)
-        x_cell_feature = x_cell[:, :, :NUM_FEATURE_CHANNELS]  # (B, H * W, NUM_FEATURE_CHANNELS)
+        x_cell_feature = get_map_features(x_grid)  # (B, H * W, NUM_FEATURE_CHANNELS)
         if map_cache is None:
             x_hidden, x_state_map, x_readout = self._encode_maps(x_cell_feature, map_dedup)
         else:
@@ -103,10 +93,7 @@ class MapGNN(nn.Module):
             x_state_map = torch.arange(batch_size, device=x_grid.device)
 
         # The selectable Rooms' cells, state after state and each state's in cell order
-        x_selectable = x_cell[:, :, OFF_MAP_SELECTABLE].reshape(-1)  # (B * H * W,)
-        x_room = torch.nonzero_static(x_selectable, size=num_rooms).squeeze(1)  # (N_rooms,)
-        x_room_state = x_room // _NUM_CELLS
-        x_room_cell = x_room % _NUM_CELLS
+        x_room_state, x_room_cell = get_room_cells(x_grid, num_rooms)
         x_room_hidden = x_hidden[x_state_map[x_room_state], x_room_cell]
         x_map_readout = x_readout[x_state_map]
 
@@ -325,42 +312,14 @@ def message_passing(
     return x_hidden
 
 
-def plan_maps(rollout: Rollout) -> MapPlan:
-    """Find an update's unique Maps once, over its rollout's states and final states.
-
-    One unique and one host read for the whole update: each of its forwards then takes its
-    `MapDedup` from the plan on the host, with `dedup_maps`.
-
-    Parameters
-    ----------
-    rollout : Rollout
-        The rollout the update trains on.
-
-    Returns
-    -------
-    MapPlan
-        Each state's Map, the rollout's states then its final states, and each Map's forward
-        Rooms with 0 to 3 children.
-    """
-    # The rollout's Maps, then its final states', flattened to their feature cells
-    x_grid = torch.cat([rollout.states.x_map_grid, rollout.states_final.x_map_grid])
-    num_states = x_grid.shape[0]
-    x_cell = x_grid.reshape(num_states, _NUM_CELLS, NUM_CHANNELS)[:, :, :NUM_FEATURE_CHANNELS]
-    x_packed = _pack_rows(x_cell)  # (B + E, words)
-
-    # x_uniq: (U, words)
-    # x_inv: (B + E,) / x_inv[b] ∈ [0, U). Maps each state to its unique ID
-    x_uniq, x_inv = torch.unique(x_packed, dim=0, return_inverse=True)
-    x_rep = get_unique_rep_row(x_inv, x_uniq.shape[0])  # (U,)
-
-    # Each unique Map's forward Rooms with 0 to 3 children
-    x_cell_rep = x_cell[x_rep].float()  # (U, H * W, NUM_FEATURE_CHANNELS)
-    x_count_room_forward = _count_rooms_forward(
-        _is_room_forward(x_cell_rep), _count_children(x_cell_rep)
-    )  # (U, 4)
+def plan_maps(maps: UniqueMaps) -> MapPlan:
+    """Count each distinct Map's forward Rooms and read the plan to the host."""
+    x_cell = maps.x_cell.float()  # (U, H * W, NUM_FEATURE_CHANNELS)
+    x_count_room_forward = _count_rooms_forward(_is_room_forward(x_cell), _count_children(x_cell))
 
     # The states' Maps and the counts in one host read
-    np_buffer = torch.cat([x_inv, x_count_room_forward.flatten()]).cpu().numpy()
+    num_states = maps.x_state_map.shape[0]
+    np_buffer = torch.cat([maps.x_state_map, x_count_room_forward.flatten()]).cpu().numpy()
 
     return MapPlan(
         np_state_map=np_buffer[:num_states],
@@ -400,22 +359,12 @@ def dedup_maps(map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device
             np_count_room_forward=map_plan.np_count_room_forward[np_state_map_plan].sum(0),
         )
 
-    # The forward's unique Maps in the plan's order, each one's first state and each state's Map
-    np_map, np_rep, np_state_map = np.unique(
-        np_state_map_plan, return_index=True, return_inverse=True
-    )
-    num_maps = len(np_map)
-
-    # Both index arrays in one copy to the device, from pinned memory without blocking on CUDA
-    x_buffer_cpu = torch.from_numpy(np.concatenate([np_rep, np_state_map]))
-    x_buffer = (x_buffer_cpu.pin_memory() if device.type == "cuda" else x_buffer_cpu).to(
-        device, non_blocking=True
+    x_rep, x_state_map, np_count_room_forward = dedup_rows(
+        np_state_map_plan, map_plan.np_count_room_forward, device
     )
 
     return MapDedup(
-        x_rep=x_buffer[:num_maps],
-        x_state_map=x_buffer[num_maps:],
-        np_count_room_forward=map_plan.np_count_room_forward[np_map].sum(0),
+        x_rep=x_rep, x_state_map=x_state_map, np_count_room_forward=np_count_room_forward
     )
 
 
@@ -493,27 +442,3 @@ def _count_rooms_forward(
     )
 
     return x_count.scatter_add_(-1, x_count_child, x_is_room_forward.long())
-
-
-def _pack_rows(x_cell: torch.Tensor) -> torch.Tensor:
-    """Pack each grid into int64 words that sort as the grid does.
-
-    This way unique() groups and orders them alike at a fraction of the cost: the grid's bits most
-    significant first, every word non-negative.
-
-    Parameters
-    ----------
-    x_cell : torch.Tensor
-        (B, H * W, C) uint8. Each state's Map grid, flattened to cells.
-
-    Returns
-    -------
-    torch.Tensor
-        (B, words) long. Each grid's bits, 63 to a word.
-    """
-    batch_size = x_cell.shape[0]
-    device = x_cell.device
-    x_bit_shift = torch.arange(_WORD_BITS - 1, -1, -1, device=device)  # _WORD_BITS - 1 down to 0
-    x_bit = F.pad(x_cell.reshape(batch_size, _GRID_BITS).long(), (0, _PAD_BITS))
-
-    return (x_bit.view(batch_size, _NUM_WORDS, _WORD_BITS) << x_bit_shift).sum(-1)  # (B, words)

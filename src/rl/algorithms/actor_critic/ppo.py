@@ -10,9 +10,13 @@ from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
 from src.rl.algorithms.actor_critic.distributed import read_rank_mean
 from src.rl.algorithms.actor_critic.metrics import MetricKey
+from src.rl.batches import cat_states
 from src.rl.batches import gather_states
 from src.rl.batches import slice_states
+from src.rl.maps import get_unique_maps
 from src.rl.models import ActorCritic
+from src.rl.models.entity_projector import dedup_tokens
+from src.rl.models.entity_projector import plan_tokens
 from src.rl.models.map_encoder import dedup_maps
 from src.rl.models.map_encoder import plan_maps
 from src.rl.reward import RewardStream
@@ -21,6 +25,8 @@ from src.rl.types import MapDedup
 from src.rl.types import MapPlan
 from src.rl.types import Rollout
 from src.rl.types import States
+from src.rl.types import TokenDedup
+from src.rl.types import TokenPlan
 
 
 @dataclass
@@ -85,12 +91,11 @@ def update_ppo(
     """
     num_reward_streams = rollout.x_reward.shape[-1]
 
-    # The rollout's unique Maps, found once: each forward of the update dedups its Maps from them
-    map_plan = plan_maps(rollout)
+    map_plan, token_plan = _plan_dedup(rollout)
 
     # Calculate the rollout's log-probabilities and values under the current weights
     x_log_prob_prox, x_value_prox, x_value_final = _evaluate_rollout(
-        model, rollout, ppo_config.minibatch_size, map_plan, device
+        model, rollout, ppo_config.minibatch_size, map_plan, token_plan, device
     )
 
     # Compute GAE returns and advantages
@@ -144,8 +149,10 @@ def update_ppo(
             x_weight_capped=targets.x_weight_capped[x_idx_state],
         )
 
-        # The minibatch's Maps, deduped from the plan
-        map_dedup_mini = dedup_maps(map_plan, x_idx_state_cpu.numpy(), device)
+        # The minibatch's Maps and tokens, deduped from the plans
+        np_idx_state = x_idx_state_cpu.numpy()
+        map_dedup_mini = dedup_maps(map_plan, np_idx_state, device)
+        token_dedup_mini = dedup_tokens(token_plan, np_idx_state, device)
 
         # Update policy and value networks
         x_metrics, rank_mean_approx_kl = _update_minibatch(
@@ -156,6 +163,7 @@ def update_ppo(
             targets_mini,
             ppo_config,
             map_dedup_mini,
+            token_dedup_mini,
         )
         batch_x_metrics.append(x_metrics)
         batch_approx_kl.append(read_rank_mean(rank_mean_approx_kl))
@@ -170,7 +178,7 @@ def update_ppo(
     approx_kl_update: float | None = None
     if ppo_config.target_kl is not None:
         x_log_prob_updated, _, _ = _evaluate_rollout(
-            model, rollout, ppo_config.minibatch_size, map_plan, device
+            model, rollout, ppo_config.minibatch_size, map_plan, token_plan, device
         )
         approx_kl_update = read_rank_mean(
             mean_over_ranks(_approx_kl(x_log_prob_updated - x_log_prob_prox))
@@ -213,11 +221,20 @@ def adapt_lr(lr: float, approx_kl: float, target_kl: float) -> float:
     return lr
 
 
+def _plan_dedup(rollout: Rollout) -> tuple[MapPlan, TokenPlan]:
+    """Build both host plans from the same Map identities over all the rollout's states."""
+    states = cat_states([rollout.states, rollout.states_final])
+    maps = get_unique_maps(states)
+
+    return plan_maps(maps), plan_tokens(states, maps.x_room_key)
+
+
 def _evaluate_rollout(
     model: ActorCritic,
     rollout: Rollout,
     minibatch_size: int,
     map_plan: MapPlan,
+    token_plan: TokenPlan,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
@@ -234,6 +251,8 @@ def _evaluate_rollout(
         The most states per forward.
     map_plan : MapPlan
         The rollout's unique Maps, which each forward's Maps are deduped from.
+    token_plan : TokenPlan
+        The rollout's unique tokens, which each forward's tokens are deduped from.
     device : torch.device
         The Learner's device.
 
@@ -259,12 +278,14 @@ def _evaluate_rollout(
             states_slice = slice_states(rollout.states, idx_start, idx_stop)
             x_action_slice = rollout.x_action[idx_start:idx_stop]
 
-            # The slice's Maps, deduped from the plan
-            map_dedup_slice = dedup_maps(map_plan, np.arange(idx_start, idx_stop), device)
+            # The slice's Maps and tokens, deduped from the plans
+            np_idx_state = np.arange(idx_start, idx_stop)
+            map_dedup_slice = dedup_maps(map_plan, np_idx_state, device)
+            token_dedup_slice = dedup_tokens(token_plan, np_idx_state, device)
 
             # Evaluate actions on the slice's states
             policy_output, x_value_slice = model.action_evaluate(
-                states_slice, x_action_slice, map_dedup_slice
+                states_slice, x_action_slice, map_dedup_slice, token_dedup_slice
             )
 
             # Append log-probabilities and values
@@ -273,10 +294,10 @@ def _evaluate_rollout(
 
         # Bootstrap value i.e. value of the rollout's final state for each environment
         states_final = rollout.states_final
-        map_dedup_final = dedup_maps(
-            map_plan, np.arange(batch_size, batch_size + num_envs), device
-        )
-        x_value_final = model.get_values(states_final, map_dedup_final)
+        np_idx_state_final = np.arange(batch_size, batch_size + num_envs)
+        map_dedup_final = dedup_maps(map_plan, np_idx_state_final, device)
+        token_dedup_final = dedup_tokens(token_plan, np_idx_state_final, device)
+        x_value_final = model.get_values(states_final, map_dedup_final, token_dedup_final)
 
     x_value = torch.cat(batch_x_value).reshape(rollout_length, num_envs, num_reward_streams)
 
@@ -409,6 +430,7 @@ def _update_minibatch(
     targets: _Targets,
     ppo_config: PPOConfig,
     map_dedup: MapDedup,
+    token_dedup: TokenDedup | None,
 ) -> tuple[dict[str, torch.Tensor], RankMean]:
     """Take one optimizer step on the selected states, actions and targets.
 
@@ -428,6 +450,8 @@ def _update_minibatch(
         The PPO settings.
     map_dedup : MapDedup
         The Maps the Map GNN runs for these states.
+    token_dedup : TokenDedup | None
+        The unique tokens the projector runs for these states, or None to run every token.
 
     Returns
     -------
@@ -438,7 +462,7 @@ def _update_minibatch(
         early stops' input, on its way to the host.
     """
     # Forward pass, under the weights so far
-    policy_output, x_value = model.action_evaluate(states, x_action, map_dedup)
+    policy_output, x_value = model.action_evaluate(states, x_action, map_dedup, token_dedup)
 
     # Policy Loss
     x_log_ratio = policy_output.x_log_prob.sum(-1) - targets.x_log_prob_prox
