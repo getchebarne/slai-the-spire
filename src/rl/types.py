@@ -308,12 +308,13 @@ class MapCache:
 class MapPlan:
     """An update's unique Maps, found once over the states of its rollout and read to the host.
 
-    Its states are the rollout's B states, then its E final states; its U Maps are the distinct
-    ones among them, in the order `torch.unique` sorts their packed grids.
+    Its states are the rollout's B states, then its E final states; its U_plan Maps are the
+    distinct ones among them, in the order `torch.unique` sorts their packed grids. A Map's
+    plan ID is its index among them, and its row in `np_count_room_forward`.
     """
 
-    np_state_map: np.ndarray           # (B + E,) int64: each state's Map, by its index among the U
-    np_count_room_forward: np.ndarray  # (U, 4) int64: forward Rooms with 0 to 3 children, per Map
+    np_state_map: np.ndarray           # (B + E,) int64: each state's Map, by its plan ID
+    np_count_room_forward: np.ndarray  # (U_plan, 4) int64: forward Rooms with 0 to 3 children
 
 
 @final
@@ -331,15 +332,16 @@ class MapDedup:
 class TokenPlan:
     """An update's unique tokens, found once over the tokens of its rollout and read to the host.
 
-    Its states are `MapPlan`'s, the rollout's B states then its E final states, and its N tokens
-    are theirs, state after state; its U tokens are the distinct ones among them, in the order
-    `torch.unique` sorts their hashes. A token's sizes are what `_gather_tokens` reads: its
-    entries, Effects, Effect entries, Modifiers and Modifier entries, then 1 for a Room token.
+    Its N tokens belong to the rollout's B states followed by its E final states, state after
+    state. Its U_plan distinct tokens follow the order in which `torch.unique` sorts their hashes;
+    a unique token's plan ID is its index among them, and its row in `np_size`. For each unique
+    token, `_gather_tokens` needs its counts of entries, Effects, Effect entries, Modifiers and
+    Modifier entries, followed by 1 for a Room token and 0 otherwise.
     """
 
     np_state_first_token: np.ndarray  # (B + E + 1,) int64: each state's first token, then N
-    np_token_unique: np.ndarray       # (N,) int64: each token's unique token, by index among the U
-    np_size: np.ndarray               # (U, 6) int64: each unique token's sizes
+    np_token_unique: np.ndarray       # (N,) int64: each token's unique token, by its plan ID
+    np_size: np.ndarray               # (U_plan, 6) int64: each unique token's sizes
 
 
 @final
