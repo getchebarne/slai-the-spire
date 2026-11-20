@@ -241,17 +241,22 @@ class ActorCritic(nn.Module):
 
 
 def compile_hot_paths(model: ActorCritic) -> None:
-    """Fuse the update's hot paths.
+    """Fuse the hot paths of the Learner's update and the Actor's rollout.
 
     They are each transformer block, the Map GNN's message passing, the key net, each policy head
-    and the selections' statistics. The first two are autotuned, so the first update compiles for
-    a minute or two.
+    and the selections' statistics. The first two are autotuned, so the Learner's first update
+    and the Actor's first rollout each compile for a minute or two.
+
+    It compiles only on CUDA: a model on any other device stays eager.
 
     Parameters
     ----------
     model : ActorCritic
         The model, compiled in place.
     """
+    if not next(model.parameters()).is_cuda:
+        return
+
     mode = "max-autotune-no-cudagraphs"
     for block in model.core._entity_transformer._entity_transformer_blocks:
         block.compile(dynamic=True, mode=mode)

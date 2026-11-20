@@ -19,7 +19,7 @@ _FLEX_BLOCK = 128
 # Fixed kernel options: max-autotune leaves the forward's untuned, and tunes only the backward
 _FLEX_KERNEL_OPTIONS = {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 3}
 
-# On the GPU even the eager Actor calls FlexAttention compiled
+# On the GPU even a block past its recompile limit calls FlexAttention compiled
 _flex_attention_compiled = torch.compile(flex_attention, dynamic=True, fullgraph=True)
 
 
