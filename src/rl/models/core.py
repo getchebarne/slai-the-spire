@@ -19,6 +19,7 @@ from src.rl.types import Dense
 from src.rl.types import EntityKind
 from src.rl.types import Live
 from src.rl.types import MapCache
+from src.rl.types import MapDedup
 from src.rl.types import States
 from src.rl.types import TokenKind
 
@@ -109,7 +110,12 @@ class Core(nn.Module):
         """Initialize the projector's token feature ranges after the general linear init."""
         self._entity_projector.init_token_weights()
 
-    def forward(self, states: States[Live], map_cache: MapCache | None = None) -> CoreOutput:
+    def forward(
+        self,
+        states: States[Live],
+        map_cache: MapCache | None = None,
+        map_dedup: MapDedup | None = None,
+    ) -> CoreOutput:
         """Compute the core's output.
 
         Parameters
@@ -118,6 +124,8 @@ class Core(nn.Module):
             The game states.
         map_cache : MapCache | None, default None
             The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
+        map_dedup : MapDedup | None, default None
+            The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
 
         Returns
         -------
@@ -135,7 +143,9 @@ class Core(nn.Module):
 
         # Map GNN: the Room tokens' cell features and the whole-graph readout
         num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
-        x_room_hidden, x_map_readout = self._map_gnn(states.x_map_grid, num_rooms, map_cache)
+        x_room_hidden, x_map_readout = self._map_gnn(
+            states.x_map_grid, num_rooms, map_cache, map_dedup
+        )
 
         # Token embeddings grouped by state, and the embedded pending halt
         tokens_projected, x_effect_pending = self._entity_projector(states, x_room_hidden)

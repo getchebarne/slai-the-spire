@@ -1,17 +1,24 @@
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.rl.algorithms.actor_critic.distributed import RankMean
 from src.rl.algorithms.actor_critic.distributed import average_gradients
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
+from src.rl.algorithms.actor_critic.distributed import read_rank_mean
 from src.rl.algorithms.actor_critic.metrics import MetricKey
 from src.rl.batches import gather_states
 from src.rl.batches import slice_states
 from src.rl.models import ActorCritic
+from src.rl.models.map_encoder import dedup_maps
+from src.rl.models.map_encoder import plan_maps
 from src.rl.reward import RewardStream
 from src.rl.types import Live
+from src.rl.types import MapDedup
+from src.rl.types import MapPlan
 from src.rl.types import Rollout
 from src.rl.types import States
 
@@ -78,9 +85,12 @@ def update_ppo(
     """
     num_reward_streams = rollout.x_reward.shape[-1]
 
+    # The rollout's unique Maps, found once: each forward of the update dedups its Maps from them
+    map_plan = plan_maps(rollout)
+
     # Calculate the rollout's log-probabilities and values under the current weights
     x_log_prob_prox, x_value_prox, x_value_final = _evaluate_rollout(
-        model, rollout, ppo_config.minibatch_size
+        model, rollout, ppo_config.minibatch_size, map_plan, device
     )
 
     # Compute GAE returns and advantages
@@ -118,14 +128,14 @@ def update_ppo(
     )
     num_minibatches = len(idxs_minibatch) // ppo_config.num_epochs
 
-    batch_metrics = []
+    batch_x_metrics = []
     batch_approx_kl = []
     for indices in idxs_minibatch:
         # Select this minibatch's states, actions and targets
         states_mini = gather_states(rollout.states, indices)
 
         # Select played actions and targets
-        _, x_idx_state = indices
+        x_idx_state_cpu, x_idx_state = indices
         x_action_mini = rollout.x_action[x_idx_state]
         targets_mini = _Targets(
             x_log_prob_prox=targets.x_log_prob_prox[x_idx_state],
@@ -134,17 +144,21 @@ def update_ppo(
             x_weight_capped=targets.x_weight_capped[x_idx_state],
         )
 
+        # The minibatch's Maps, deduped from the plan
+        map_dedup_mini = dedup_maps(map_plan, x_idx_state_cpu.numpy(), device)
+
         # Update policy and value networks
-        metrics, approx_kl = _update_minibatch(
+        x_metrics, rank_mean_approx_kl = _update_minibatch(
             model,
             optimizer,
             states_mini,
             x_action_mini,
             targets_mini,
             ppo_config,
+            map_dedup_mini,
         )
-        batch_metrics.append(metrics)
-        batch_approx_kl.append(approx_kl)
+        batch_x_metrics.append(x_metrics)
+        batch_approx_kl.append(read_rank_mean(rank_mean_approx_kl))
 
         # Trust-region early stop check
         if ppo_config.target_kl is not None and _left_trust_region(
@@ -152,17 +166,22 @@ def update_ppo(
         ):
             break
 
-    # Each per-minibatch metric averaged over the minibatches run, then the once-per-update ones
-    metrics_update = _average_minibatch_metrics(batch_metrics, num_minibatches) | _anchor_metrics(
-        targets.x_return, x_value_prox, x_log_weight, x_weight, ppo_config.is_clip
-    )
-
     # With a target KL, the update's approx KL: its total, from π_prox to the updated weights
+    approx_kl_update: float | None = None
     if ppo_config.target_kl is not None:
-        x_log_prob_updated, _, _ = _evaluate_rollout(model, rollout, ppo_config.minibatch_size)
-        metrics_update[MetricKey.UPDATE_APPROX_KL] = mean_over_ranks(
-            _approx_kl(x_log_prob_updated - x_log_prob_prox)
+        x_log_prob_updated, _, _ = _evaluate_rollout(
+            model, rollout, ppo_config.minibatch_size, map_plan, device
         )
+        approx_kl_update = read_rank_mean(
+            mean_over_ranks(_approx_kl(x_log_prob_updated - x_log_prob_prox))
+        )
+
+    # Each per-minibatch metric averaged over the minibatches run, then the once-per-update ones
+    metrics_update = _average_minibatch_metrics(
+        _read_metrics(*batch_x_metrics), num_minibatches
+    ) | _anchor_metrics(targets.x_return, x_value_prox, x_log_weight, x_weight, ppo_config.is_clip)
+    if approx_kl_update is not None:
+        metrics_update[MetricKey.UPDATE_APPROX_KL] = approx_kl_update
 
     return metrics_update
 
@@ -195,7 +214,11 @@ def adapt_lr(lr: float, approx_kl: float, target_kl: float) -> float:
 
 
 def _evaluate_rollout(
-    model: ActorCritic, rollout: Rollout, minibatch_size: int
+    model: ActorCritic,
+    rollout: Rollout,
+    minibatch_size: int,
+    map_plan: MapPlan,
+    device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Recompute the rollout's log-probs and values under the Learner's current weights.
 
@@ -209,6 +232,10 @@ def _evaluate_rollout(
         The rollout: `rollout_length` steps of `num_envs` games.
     minibatch_size : int
         The most states per forward.
+    map_plan : MapPlan
+        The rollout's unique Maps, which each forward's Maps are deduped from.
+    device : torch.device
+        The Learner's device.
 
     Returns
     -------
@@ -232,9 +259,12 @@ def _evaluate_rollout(
             states_slice = slice_states(rollout.states, idx_start, idx_stop)
             x_action_slice = rollout.x_action[idx_start:idx_stop]
 
+            # The slice's Maps, deduped from the plan
+            map_dedup_slice = dedup_maps(map_plan, np.arange(idx_start, idx_stop), device)
+
             # Evaluate actions on the slice's states
             policy_output, x_value_slice = model.action_evaluate(
-                states_slice, x_action_slice
+                states_slice, x_action_slice, map_dedup_slice
             )
 
             # Append log-probabilities and values
@@ -243,7 +273,10 @@ def _evaluate_rollout(
 
         # Bootstrap value i.e. value of the rollout's final state for each environment
         states_final = rollout.states_final
-        x_value_final = model.get_values(states_final)
+        map_dedup_final = dedup_maps(
+            map_plan, np.arange(batch_size, batch_size + num_envs), device
+        )
+        x_value_final = model.get_values(states_final, map_dedup_final)
 
     x_value = torch.cat(batch_x_value).reshape(rollout_length, num_envs, num_reward_streams)
 
@@ -375,7 +408,8 @@ def _update_minibatch(
     x_action: torch.Tensor,
     targets: _Targets,
     ppo_config: PPOConfig,
-) -> tuple[dict[str, float], float]:
+    map_dedup: MapDedup,
+) -> tuple[dict[str, torch.Tensor], RankMean]:
     """Take one optimizer step on the selected states, actions and targets.
 
     Parameters
@@ -392,17 +426,19 @@ def _update_minibatch(
         What the update trains against, one row per selected state.
     ppo_config : PPOConfig
         The PPO settings.
+    map_dedup : MapDedup
+        The Maps the Map GNN runs for these states.
 
     Returns
     -------
-    metrics : dict[str, float]
-        The minibatch's metrics, keyed by their TensorBoard scalar names.
-    approx_kl : float
+    x_metrics : dict[str, torch.Tensor]
+        The minibatch's metrics, keyed by their TensorBoard scalar names, unread on the device.
+    rank_mean_approx_kl : RankMean
         The approx KL from π_prox to the weights before this step, averaged over the ranks: the
-        early stops' input.
+        early stops' input, on its way to the host.
     """
     # Forward pass, under the weights so far
-    policy_output, x_value = model.action_evaluate(states, x_action)
+    policy_output, x_value = model.action_evaluate(states, x_action, map_dedup)
 
     # Policy Loss
     x_log_ratio = policy_output.x_log_prob.sum(-1) - targets.x_log_prob_prox
@@ -428,6 +464,9 @@ def _update_minibatch(
         + ppo_config.coef_kl_uniform * x_loss_kl_uniform
     )
 
+    # Every rank stops on the same KL, or the others would wait in the next all-reduce
+    rank_mean_approx_kl = mean_over_ranks(_approx_kl(x_log_ratio))
+
     # Optimizer step, on the gradient averaged over the ranks
     optimizer.zero_grad()
     x_loss.backward()
@@ -436,7 +475,7 @@ def _update_minibatch(
     optimizer.step()
 
     # Compute metrics
-    metrics = _minibatch_metrics(
+    x_metrics = _minibatch_metrics(
         x_loss_policy,
         x_loss_value,
         x_loss_entropy,
@@ -448,10 +487,7 @@ def _update_minibatch(
         ppo_config.clip_eps,
     )
 
-    # Every rank stops on the same KL, or the others would wait in the next all-reduce
-    approx_kl = mean_over_ranks(_approx_kl(x_log_ratio))
-
-    return metrics, approx_kl
+    return x_metrics, rank_mean_approx_kl
 
 
 def _compute_loss_policy(
@@ -498,8 +534,8 @@ def _minibatch_metrics(
     x_ratio: torch.Tensor,
     x_grad_norm: torch.Tensor,
     clip_eps: float,
-) -> dict[str, float]:
-    """Return the per-minibatch TensorBoard scalars (minibatch means).
+) -> dict[str, torch.Tensor]:
+    """Return the per-minibatch TensorBoard scalars (minibatch means), unread on their device.
 
     Clip fraction = share of moved-off ratios; grad norm is the pre-clip total (otherwise
     discarded by clip_grad_norm_).
@@ -528,35 +564,33 @@ def _minibatch_metrics(
 
     Returns
     -------
-    dict[str, float]
-        Each scalar under its TensorBoard name.
+    dict[str, torch.Tensor]
+        (). Each scalar under its TensorBoard name.
     """
     x_entropy_mean = x_entropy.mean(dim=0)
     x_kl_uniform_mean = x_kl_uniform.mean(dim=0)
 
-    return _read_metrics(
-        {
-            # Loss
-            MetricKey.LOSS_POLICY: x_loss_policy,
-            MetricKey.LOSS_VALUE: x_loss_value,
-            MetricKey.LOSS_ENTROPY: x_loss_entropy,
-            MetricKey.LOSS_KL_UNIFORM: x_loss_kl_uniform,
+    return {
+        # Loss
+        MetricKey.LOSS_POLICY: x_loss_policy,
+        MetricKey.LOSS_VALUE: x_loss_value,
+        MetricKey.LOSS_ENTROPY: x_loss_entropy,
+        MetricKey.LOSS_KL_UNIFORM: x_loss_kl_uniform,
 
-            # Entropy
-            MetricKey.ENTROPY_L1: x_entropy_mean[0],
-            MetricKey.ENTROPY_L2: x_entropy_mean[1],
-            MetricKey.ENTROPY_L3: x_entropy_mean[2],
+        # Entropy
+        MetricKey.ENTROPY_L1: x_entropy_mean[0],
+        MetricKey.ENTROPY_L2: x_entropy_mean[1],
+        MetricKey.ENTROPY_L3: x_entropy_mean[2],
 
-            # KL-Uniform
-            MetricKey.KL_UNIFORM_L1: x_kl_uniform_mean[0],
-            MetricKey.KL_UNIFORM_L2: x_kl_uniform_mean[1],
-            MetricKey.KL_UNIFORM_L3: x_kl_uniform_mean[2],
+        # KL-Uniform
+        MetricKey.KL_UNIFORM_L1: x_kl_uniform_mean[0],
+        MetricKey.KL_UNIFORM_L2: x_kl_uniform_mean[1],
+        MetricKey.KL_UNIFORM_L3: x_kl_uniform_mean[2],
 
-            # Other
-            MetricKey.UPDATE_CLIP_FRACTION: ((x_ratio - 1).abs() > clip_eps).float().mean(),
-            MetricKey.GRAD_NORM_PRECLIP: x_grad_norm,
-        }
-    )
+        # Other
+        MetricKey.UPDATE_CLIP_FRACTION: ((x_ratio - 1).abs() > clip_eps).float().mean(),
+        MetricKey.GRAD_NORM_PRECLIP: x_grad_norm,
+    }
 
 
 def _left_trust_region(
@@ -652,7 +686,7 @@ def _anchor_metrics(
             MetricKey.OFFPOLICY_IS_WEIGHT_TRUNCATED: (x_weight > is_clip).float().mean(),
             MetricKey.OFFPOLICY_KL_BEHAVIOR_PROX: _approx_kl(x_log_weight),
         }
-    )
+    )[0]
 
 
 def _approx_kl(x_log_ratio: torch.Tensor) -> torch.Tensor:
@@ -672,20 +706,28 @@ def _approx_kl(x_log_ratio: torch.Tensor) -> torch.Tensor:
     return ((x_log_ratio.exp() - 1) - x_log_ratio).mean()
 
 
-def _read_metrics(x_metrics: dict[str, torch.Tensor]) -> dict[str, float]:
-    """Read named 0-d tensors as floats in one transfer.
+def _read_metrics(*batch_x_metrics: dict[str, torch.Tensor]) -> list[dict[str, float]]:
+    """Read records of named 0-d tensors as floats in one transfer.
 
     Parameters
     ----------
-    x_metrics : dict[str, torch.Tensor]
-        (). Each scalar, on any one device, under its TensorBoard name.
+    *batch_x_metrics : dict[str, torch.Tensor]
+        (). Each record's scalars, all on one device, each under its TensorBoard name; every
+        record has as many.
 
     Returns
     -------
-    dict[str, float]
-        The same scalars as floats.
+    list[dict[str, float]]
+        The same records, their scalars as floats.
     """
     # One read for all of them: each .item() would make the CPU wait for the GPU
-    values = torch.stack([x_metric.detach() for x_metric in x_metrics.values()]).tolist()
+    batch_values = torch.stack(
+        [
+            torch.stack([x_metric.detach() for x_metric in x_metrics.values()])
+            for x_metrics in batch_x_metrics
+        ]
+    ).tolist()
 
-    return dict(zip(x_metrics, values))
+    return [
+        dict(zip(x_metrics, values)) for x_metrics, values in zip(batch_x_metrics, batch_values)
+    ]

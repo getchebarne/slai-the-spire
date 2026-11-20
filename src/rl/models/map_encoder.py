@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,6 +17,9 @@ from src.rl.encoding import OFF_MAP_SELECTABLE
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
 from src.rl.types import MapCache
+from src.rl.types import MapDedup
+from src.rl.types import MapPlan
+from src.rl.types import Rollout
 
 
 _NUM_CELLS = MAP_HEIGHT * MAP_WIDTH
@@ -47,7 +51,6 @@ class MapGNN(nn.Module):
     """
 
     _x_edge_delta: torch.Tensor
-    _x_row_of_cell: torch.Tensor
 
     def __init__(self, num_layers: int, dim_map: int) -> None:
         super().__init__()
@@ -55,16 +58,17 @@ class MapGNN(nn.Module):
         self._layers = nn.ModuleList(nn.Linear(dim_map, dim_map) for _ in range(num_layers))
         self._norms = nn.ModuleList(nn.LayerNorm(dim_map) for _ in range(num_layers))
 
-        self.register_buffer(
-            "_x_row_of_cell", (torch.arange(_NUM_CELLS) // MAP_WIDTH).float(), persistent=False
-        )
         self.register_buffer("_x_edge_delta", torch.tensor(EDGE_DELTAS), persistent=False)
 
         # The GNN's computation as a function; `compile_hot_paths` swaps in its compiled version
         self.message_passing = message_passing
 
     def forward(
-        self, x_grid: torch.Tensor, num_rooms: int, map_cache: MapCache | None = None
+        self,
+        x_grid: torch.Tensor,
+        num_rooms: int,
+        map_cache: MapCache | None = None,
+        map_dedup: MapDedup | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the message passing over `x_grid`'s Maps.
 
@@ -76,6 +80,8 @@ class MapGNN(nn.Module):
             The number of selectable Rooms over the batch, N_rooms.
         map_cache : MapCache | None, default None
             The outputs of this rollout's last step, to reuse and update, or None to run them all.
+        map_dedup : MapDedup | None, default None
+            The Maps to run without a cache, planned on the host, or None to run every state's.
 
         Returns
         -------
@@ -91,7 +97,7 @@ class MapGNN(nn.Module):
         x_cell = x_grid.reshape(batch_size, _NUM_CELLS, NUM_CHANNELS)
         x_cell_feature = x_cell[:, :, :NUM_FEATURE_CHANNELS]  # (B, H * W, NUM_FEATURE_CHANNELS)
         if map_cache is None:
-            x_hidden, x_state_map, x_readout = self._encode_maps(x_cell_feature)
+            x_hidden, x_state_map, x_readout = self._encode_maps(x_cell_feature, map_dedup)
         else:
             x_hidden, x_readout = self._encode_maps_cached(x_cell_feature, map_cache)
             x_state_map = torch.arange(batch_size, device=x_grid.device)
@@ -107,20 +113,22 @@ class MapGNN(nn.Module):
         return x_room_hidden, x_map_readout
 
     def _encode_maps(
-        self, x_cell: torch.Tensor
+        self, x_cell: torch.Tensor, map_dedup: MapDedup | None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run the message passing over the Maps, each distinct one once on a large batch.
+        """Run the message passing over the Maps, each distinct one once when `map_dedup` says so.
 
         Parameters
         ----------
         x_cell : torch.Tensor
             (B, H * W, NUM_FEATURE_CHANNELS) uint8. Each state's Map, flattened to cells.
+        map_dedup : MapDedup | None
+            The Maps to run and their forward Rooms by child count, or None to run every state's.
 
         Returns
         -------
         x_hidden : torch.Tensor
-            (U, H * W, dim_map). The cell features of each Map the GNN ran on: the unique Maps
-            on a batch of MIN_BATCH_DEDUP states or more, every state's on a smaller one.
+            (U, H * W, dim_map). The cell features of each Map the GNN ran on: `map_dedup`'s
+            Maps, or every state's without it.
         x_inv : torch.Tensor
             (B,) long. Each state's Map, its index in `x_hidden`.
         x_readout : torch.Tensor
@@ -128,21 +136,18 @@ class MapGNN(nn.Module):
         """
         batch_size = x_cell.shape[0]
 
-        if batch_size < MIN_BATCH_DEDUP:
+        np_count_room_forward: np.ndarray | None = None
+        if map_dedup is None:
             x_rep = torch.arange(batch_size, device=x_cell.device)  # Every state's own Map
             x_inv = x_rep
         else:
             # The game sits on one Room for many steps, so its grid repeats across a minibatch:
             # run the GNN on unique grids once and gather back (exact)
-            x_packed = _pack_rows(x_cell)  # (B, words)
-
-            # x_uniq: (U, words)
-            # x_inv: (B,) / x_inv[b] ∈ [0, U). Maps each state to its unique ID
-            x_uniq, x_inv = torch.unique(x_packed, dim=0, return_inverse=True)
-            x_rep = get_unique_rep_row(x_inv, x_uniq.shape[0])  # (U,)
+            x_rep, x_inv = map_dedup.x_rep, map_dedup.x_state_map
+            np_count_room_forward = map_dedup.np_count_room_forward
 
         # Encode the unique Maps
-        x_hidden, x_readout = self._encode_rooms_forward(x_cell[x_rep])
+        x_hidden, x_readout = self._encode_rooms_forward(x_cell[x_rep], np_count_room_forward)
 
         return x_hidden, x_inv, x_readout
 
@@ -181,7 +186,9 @@ class MapGNN(nn.Module):
 
         return x_hidden, x_readout
 
-    def _encode_rooms_forward(self, x_cell: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _encode_rooms_forward(
+        self, x_cell: torch.Tensor, np_count_room_forward: np.ndarray | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the message passing over the Maps' forward Rooms, and put them back on the grid.
 
         A cell is a position along the U Maps' grids flattened together (U * H * W); an index is a
@@ -192,6 +199,9 @@ class MapGNN(nn.Module):
         ----------
         x_cell : torch.Tensor
             (U, H * W, C) uint8. The Maps.
+        np_count_room_forward : np.ndarray | None, default None
+            (4,) int64. The Maps' forward Rooms with 0 to 3 children, as their `MapDedup` counted
+            them, or None to count them here.
 
         Returns
         -------
@@ -205,15 +215,16 @@ class MapGNN(nn.Module):
         num_cells = num_maps * _NUM_CELLS
         dim_map = self._in_proj.out_features
         x_cell = x_cell.float()
-        x_is_room_forward = self._is_room_forward(x_cell).flatten()  # (U * H * W,)
+        x_is_room_forward = _is_room_forward(x_cell).flatten()       # (U * H * W,)
         x_cell = x_cell.flatten(0, 1)                                # (U * H * W, C)
-        x_count_child = x_cell[:, SLICE_MAP_EDGES].sum(-1).long()    # (U * H * W,)
+        x_count_child = _count_children(x_cell)                      # (U * H * W,)
 
         # The forward Rooms with 0 to 3 children, in one host read
-        x_count = torch.zeros(len(EDGE_DELTAS) + 1, dtype=torch.long, device=x_cell.device)
-        num_0, num_1, num_2, num_3 = x_count.index_add_(
-            0, x_count_child, x_is_room_forward.long()
-        ).tolist()
+        if np_count_room_forward is None:
+            np_count_room_forward = (
+                _count_rooms_forward(x_is_room_forward, x_count_child).cpu().numpy()
+            )
+        num_0, num_1, num_2, num_3 = np_count_room_forward.tolist()
         num_rooms_forward = num_0 + num_1 + num_2 + num_3
 
         # No forward Room on any Map: every feature and readout is zero
@@ -272,38 +283,6 @@ class MapGNN(nn.Module):
 
         return x_hidden, x_readout
 
-    def _is_room_forward(self, x_cell: torch.Tensor) -> torch.Tensor:
-        """Find the forward Rooms: the cells holding a Room above the current floor.
-
-        Parameters
-        ----------
-        x_cell : torch.Tensor
-            (U, H * W, C) float32. Each Map's cells.
-
-        Returns
-        -------
-        torch.Tensor
-            (U, H * W) bool. Whether each cell holds a forward Room.
-        """
-
-        # The encoder sets one Room-kind bit per Room, none elsewhere, and at most one
-        # position bit, on the current Room
-        x_room_exists = x_cell[:, :, SLICE_MAP_ROOM_KIND].sum(-1) > 0  # (U, H * W)
-        x_position = x_cell[:, :, OFF_MAP_POSITION]  # Current-position bit: (U, H * W)
-        x_row_current = (x_position * self._x_row_of_cell).sum(
-            -1
-        )  # (U,) / Current floor, 0 if none
-        x_row_current = torch.where(
-            condition=x_position.sum(-1) > 0,  # (U,)
-            input=x_row_current,  # (U,)
-            other=torch.full(
-                (), -1.0, dtype=x_row_current.dtype, device=x_row_current.device
-            ),  # (U,)
-        )
-        x_forward = self._x_row_of_cell.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
-
-        return x_room_exists & x_forward  # (U, H * W)
-
 
 def message_passing(
     gnn: MapGNN, x_room_forward: torch.Tensor, x_children_by_count: tuple[torch.Tensor, ...]
@@ -344,6 +323,176 @@ def message_passing(
         x_hidden = norm(x_hidden + F.relu(linear(x_mean)))
 
     return x_hidden
+
+
+def plan_maps(rollout: Rollout) -> MapPlan:
+    """Find an update's unique Maps once, over its rollout's states and final states.
+
+    One unique and one host read for the whole update: each of its forwards then takes its
+    `MapDedup` from the plan on the host, with `dedup_maps`.
+
+    Parameters
+    ----------
+    rollout : Rollout
+        The rollout the update trains on.
+
+    Returns
+    -------
+    MapPlan
+        Each state's Map, the rollout's states then its final states, and each Map's forward
+        Rooms with 0 to 3 children.
+    """
+    # The rollout's Maps, then its final states', flattened to their feature cells
+    x_grid = torch.cat([rollout.states.x_map_grid, rollout.states_final.x_map_grid])
+    num_states = x_grid.shape[0]
+    x_cell = x_grid.reshape(num_states, _NUM_CELLS, NUM_CHANNELS)[:, :, :NUM_FEATURE_CHANNELS]
+    x_packed = _pack_rows(x_cell)  # (B, words)
+
+    # x_uniq: (U, words)
+    # x_inv: (B,) / x_inv[b] ∈ [0, U). Maps each state to its unique ID
+    x_uniq, x_inv = torch.unique(x_packed, dim=0, return_inverse=True)
+    x_rep = get_unique_rep_row(x_inv, x_uniq.shape[0])  # (U,)
+
+    # Each unique Map's forward Rooms with 0 to 3 children
+    x_cell_rep = x_cell[x_rep].float()  # (U, H * W, NUM_FEATURE_CHANNELS)
+    x_count_room_forward = _count_rooms_forward(
+        _is_room_forward(x_cell_rep), _count_children(x_cell_rep)
+    )  # (U, 4)
+
+    # The states' Maps and the counts in one host read
+    np_buffer = torch.cat([x_inv, x_count_room_forward.flatten()]).cpu().numpy()
+
+    return MapPlan(
+        np_state_map=np_buffer[:num_states],
+        np_count_room_forward=np_buffer[num_states:].reshape(x_count_room_forward.shape),
+    )
+
+
+def dedup_maps(map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device) -> MapDedup:
+    """Take one forward's `MapDedup` from its update's plan, on the host.
+
+    A forward of MIN_BATCH_DEDUP states or more runs its unique Maps, in the plan's order, each
+    from its first state; a smaller one runs every state's.
+
+    Parameters
+    ----------
+    map_plan : MapPlan
+        The update's plan.
+    np_idx_state : np.ndarray
+        (B,) int64. The forward's states, by their index among the plan's.
+    device : torch.device
+        The forward's device.
+
+    Returns
+    -------
+    MapDedup
+        The Maps the forward runs, each state's among them, and their forward Rooms with 0 to 3
+        children.
+    """
+    batch_size = len(np_idx_state)
+    np_state_map_plan = map_plan.np_state_map[np_idx_state]  # (B,)
+    if batch_size < MIN_BATCH_DEDUP:
+        x_rep = torch.arange(batch_size, device=device)  # Every state's own Map
+
+        return MapDedup(
+            x_rep=x_rep,
+            x_state_map=x_rep,
+            np_count_room_forward=map_plan.np_count_room_forward[np_state_map_plan].sum(0),
+        )
+
+    # The forward's unique Maps in the plan's order, each one's first state and each state's Map
+    np_map, np_rep, np_state_map = np.unique(
+        np_state_map_plan, return_index=True, return_inverse=True
+    )
+    num_maps = len(np_map)
+
+    # Both index arrays in one copy to the device, from pinned memory without blocking on CUDA
+    x_buffer_cpu = torch.from_numpy(np.concatenate([np_rep, np_state_map]))
+    x_buffer = (x_buffer_cpu.pin_memory() if device.type == "cuda" else x_buffer_cpu).to(
+        device, non_blocking=True
+    )
+
+    return MapDedup(
+        x_rep=x_buffer[:num_maps],
+        x_state_map=x_buffer[num_maps:],
+        np_count_room_forward=map_plan.np_count_room_forward[np_map].sum(0),
+    )
+
+
+def _is_room_forward(x_cell: torch.Tensor) -> torch.Tensor:
+    """Find the forward Rooms: the cells holding a Room above the current floor.
+
+    Parameters
+    ----------
+    x_cell : torch.Tensor
+        (U, H * W, C) float32. Each Map's cells.
+
+    Returns
+    -------
+    torch.Tensor
+        (U, H * W) bool. Whether each cell holds a forward Room.
+    """
+    # Each cell's row on the grid
+    x_row_of_cell = torch.arange(_NUM_CELLS, device=x_cell.device) // MAP_WIDTH  # (H * W,)
+
+    # The encoder sets one Room-kind bit per Room, none elsewhere, and at most one
+    # position bit, on the current Room
+    x_room_exists = x_cell[:, :, SLICE_MAP_ROOM_KIND].sum(-1) > 0  # (U, H * W)
+    x_position = x_cell[:, :, OFF_MAP_POSITION]  # Current-position bit: (U, H * W)
+    x_row_current = (x_position * x_row_of_cell).sum(-1)  # (U,) / Current floor, 0 if none
+    x_row_current = torch.where(
+        condition=x_position.sum(-1) > 0,  # (U,)
+        input=x_row_current,  # (U,)
+        other=torch.full(
+            (), -1.0, dtype=x_row_current.dtype, device=x_row_current.device
+        ),  # (U,)
+    )
+    x_forward = x_row_of_cell.unsqueeze(0) > x_row_current.unsqueeze(1)  # (U, H * W)
+
+    return x_room_exists & x_forward  # (U, H * W)
+
+
+def _count_children(x_cell: torch.Tensor) -> torch.Tensor:
+    """Count each cell's children: its edges to the next row.
+
+    Parameters
+    ----------
+    x_cell : torch.Tensor
+        (..., C) float32. Map cells, along any leading axes.
+
+    Returns
+    -------
+    torch.Tensor
+        (...) long. Each cell's number of children.
+    """
+    return x_cell[..., SLICE_MAP_EDGES].sum(-1).long()
+
+
+def _count_rooms_forward(
+    x_is_room_forward: torch.Tensor, x_count_child: torch.Tensor
+) -> torch.Tensor:
+    """Count the forward Rooms with 0 to 3 children along the last axis, the cells'.
+
+    Parameters
+    ----------
+    x_is_room_forward : torch.Tensor
+        (..., N) bool. Whether each of N cells holds a forward Room.
+    x_count_child : torch.Tensor
+        (..., N) long. Each cell's number of children.
+
+    Returns
+    -------
+    torch.Tensor
+        (..., 4) long. The forward Rooms with 0 to 3 children.
+    """
+    x_count = torch.zeros(
+        *x_count_child.shape[:-1],
+        len(EDGE_DELTAS) + 1,
+        dtype=torch.long,
+        device=x_count_child.device,
+    )
+
+    return x_count.scatter_add_(-1, x_count_child, x_is_room_forward.long())
 
 
 def _pack_rows(x_cell: torch.Tensor) -> torch.Tensor:

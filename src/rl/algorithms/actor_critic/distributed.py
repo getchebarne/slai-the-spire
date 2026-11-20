@@ -21,6 +21,15 @@ class RankInfo:
     device: torch.device
 
 
+@dataclass
+class RankMean:
+    """A scalar's mean over the ranks on its way to the host, as `mean_over_ranks` starts it."""
+
+    x_value_sum_cpu: torch.Tensor   # () float64, on the host: every rank's value summed
+    num_ranks: int                  # The number of ranks the sum is over
+    event: torch.cuda.Event | None  # The sum's copy to the host on CUDA; None on the CPU
+
+
 def init() -> RankInfo:
     """Start the process group under torchrun; return the rank, the world size and the device.
 
@@ -79,30 +88,39 @@ def average_gradients(model: nn.Module) -> None:
         return
     
     params = list(model.parameters())
+    device = params[0].device
+
+    # Whether this rank reached each parameter, sent from pinned memory without blocking on CUDA
+    batch_reached = [float(x_param.grad is not None) for x_param in params]
+    x_reached = torch.tensor(batch_reached, pin_memory=device.type == "cuda").to(
+        device, non_blocking=True
+    )
     x_flat = torch.cat(
         [
             (x_param.grad if x_param.grad is not None else torch.zeros_like(x_param)).flatten()
             for x_param in params
         ]
-        + [
-            torch.tensor(
-                [float(x_param.grad is not None) for x_param in params],
-                device=params[0].device,
-            )
-        ]
+        + [x_reached]
     )
     dist.all_reduce(x_flat)
     x_grad = x_flat[: -len(params)] / dist.get_world_size()
+
+    # A parameter this rank reached counts as reached on every rank: read the sums only for a miss
+    batch_reached_any = batch_reached if all(batch_reached) else x_flat[-len(params) :].tolist()
     offset = 0
-    for x_param, reached in zip(params, x_flat[-len(params) :].tolist()):
+    for x_param, reached in zip(params, batch_reached_any):
         x_param.grad = (
             x_grad[offset : offset + x_param.numel()].view_as(x_param) if reached else None
         )
         offset += x_param.numel()
 
 
-def mean_over_ranks(x_value: torch.Tensor) -> float:
-    """Average a scalar over the ranks, read once: the same number on every rank.
+def mean_over_ranks(x_value: torch.Tensor) -> RankMean:
+    """Start averaging a scalar over the ranks, for `read_rank_mean` to read.
+
+    The mean is the same number on every rank. On CUDA the all-reduce and the sum's copy to the
+    host are waited for on a side stream: neither the host nor the compute stream waits for them;
+    `read_rank_mean` waits for the copy.
 
     Parameters
     ----------
@@ -111,15 +129,57 @@ def mean_over_ranks(x_value: torch.Tensor) -> float:
 
     Returns
     -------
-    float
-        The mean of every rank's `x_value`.
+    RankMean
+        The sum of every rank's `x_value` on its way to the host, and the number of ranks.
     """
-    if not dist.is_initialized():
-        return x_value.item()
     x_value_sum = x_value.detach().to(torch.float64)
-    dist.all_reduce(x_value_sum)
+    num_ranks = 1
+    work = None
+    if dist.is_initialized():
+        work = dist.all_reduce(x_value_sum, async_op=True)
+        num_ranks = dist.get_world_size()
+    if x_value_sum.device.type != "cuda":
+        if work is not None:
+            work.wait()
 
-    return x_value_sum.item() / dist.get_world_size()
+        return RankMean(x_value_sum_cpu=x_value_sum, num_ranks=num_ranks, event=None)
+
+    # A side stream waits for the value, then for the all-reduce, while the compute stream goes on
+    stream = torch.cuda.Stream(device=x_value_sum.device)
+    stream.wait_stream(torch.cuda.current_stream(x_value_sum.device))
+    x_value_sum_cpu = torch.empty((), dtype=torch.float64, pin_memory=True)
+    event = torch.cuda.Event()
+    with torch.cuda.stream(stream):
+        if work is not None:
+            work.wait()
+
+        # The sum into pinned memory, then an event that marks the copy's end
+        x_value_sum_cpu.copy_(x_value_sum, non_blocking=True)
+        event.record(stream)
+
+    # The sum's memory is not reused before the side stream is done with it
+    x_value_sum.record_stream(stream)
+
+    return RankMean(x_value_sum_cpu=x_value_sum_cpu, num_ranks=num_ranks, event=event)
+
+
+def read_rank_mean(rank_mean: RankMean) -> float:
+    """Wait for a mean over the ranks to reach the host, and read it.
+
+    Parameters
+    ----------
+    rank_mean : RankMean
+        The mean, as `mean_over_ranks` started it.
+
+    Returns
+    -------
+    float
+        The mean of every rank's value.
+    """
+    if rank_mean.event is not None:
+        rank_mean.event.synchronize()
+
+    return rank_mean.x_value_sum_cpu.item() / rank_mean.num_ranks
 
 
 def any_rank(flag: bool, device: torch.device) -> bool:
