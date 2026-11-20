@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from slai import MAP_HEIGHT
 from slai import MAP_WIDTH
 
+from src.rl.batches import get_plan_unique
 from src.rl.batches import get_unique_rep_row
 from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import EDGE_DELTAS
@@ -398,8 +399,8 @@ def dedup_maps(map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device
         )
 
     # The forward's unique Maps in the plan's order, each one's first state and each state's Map
-    np_map, np_rep, np_state_map = np.unique(
-        np_state_map_plan, return_index=True, return_inverse=True
+    np_map, np_rep, np_state_map = get_plan_unique(
+        np_state_map_plan, len(map_plan.np_count_room_forward)
     )
     num_maps = len(np_map)
 
