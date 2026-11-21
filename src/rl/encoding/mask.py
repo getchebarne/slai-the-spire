@@ -6,10 +6,10 @@ import numpy as np
 import slai
 from slai import Card
 
-from src.rl.constants import TOKEN_KINDS_CARD
+from src.rl.constants import COLLECTION_KINDS_CARD
 from src.rl.encoding.focus import derive_focus
+from src.rl.types import CollectionKind
 from src.rl.types import Token
-from src.rl.types import TokenKind
 from src.rl.utils import action_masked
 
 
@@ -21,13 +21,15 @@ def encode_batch_masks_into(
     batch_game_state: list[slai.GameState],
     batch_legal_actions: list[list[slai.Action]],
     batch_tokens: list[list[Token]],
-    batch_row_of_entity_id: list[dict[int, int]],
     np_legal_selection: np.ndarray,
     np_legal_target: np.ndarray,
     np_needs_target: np.ndarray,
     np_legal_action_type: np.ndarray,
 ) -> None:
     """Reset and write the masks into the supplied token and state rows.
+
+    A legal action names its Entity's one token, found by the Entity's id. An Entity with no
+    token, past its collection's cap, is unselectable.
 
     Parameters
     ----------
@@ -36,11 +38,10 @@ def encode_batch_masks_into(
     batch_legal_actions : list[list[slai.Action]]
         Each state's legal actions.
     batch_tokens : list[list[Token]]
-        Each state's tokens, as (token kind, Entity) in window order.
-    batch_row_of_entity_id : list[dict[int, int]]
-        Each state's Entity ids, each mapped to its first state-local token row.
+        Each state's tokens, as (collection kinds, Entity) in window order, one per Entity.
     np_legal_selection : np.ndarray
-        (N, NUM_ACTION_TYPES) bool. The selectable tokens, written in place.
+        (N, NUM_ACTION_TYPES) bool. The selectable tokens, deduped by Card identity among the
+        tokens held by the same collections, written in place.
     np_legal_target : np.ndarray
         (N, NUM_ACTION_TYPES) bool. The legal Monster targets, written in place.
     np_needs_target : np.ndarray
@@ -56,10 +57,12 @@ def encode_batch_masks_into(
     row_start = 0
     for idx_state, game_state in enumerate(batch_game_state):
         tokens = batch_tokens[idx_state]
-        row_of_entity_id = batch_row_of_entity_id[idx_state]
 
-        # The (`ActionType`, `TokenKind`) pairs whose legal ids set a bit, for the dedup
-        legal_token_kinds: set[tuple[int, TokenKind]] = set()
+        # Each Entity id's state-local row: its one token's
+        row_of_entity_id = {entity.id: row_local for row_local, (_, entity) in enumerate(tokens)}
+
+        # The (`ActionType`, `CollectionKind`s) pairs whose legal ids set a bit, for the dedup
+        legal_collection_kinds: set[tuple[int, tuple[CollectionKind, ...]]] = set()
 
         for action in batch_legal_actions[idx_state]:
             if action_masked(game_state, action):
@@ -70,7 +73,7 @@ def encode_batch_masks_into(
             if ids:
                 row_local = row_of_entity_id.get(ids[0])
                 if row_local is None:
-                    # Unselectable Entity (e.g., Character). See `src.rl.encoding.state._TOKEN_KINDS_ID_LOOKUP`
+                    # Unselectable Entity (e.g., past its collection's cap)
                     if action_type not in _WARNED_DROPPED:
                         _WARNED_DROPPED.add(action_type)
                         warnings.warn(
@@ -82,7 +85,7 @@ def encode_batch_masks_into(
                 np_legal_selection[row_start + row_local, action_type] = True
 
                 # Add 
-                legal_token_kinds.add((action_type, tokens[row_local][0]))
+                legal_collection_kinds.add((action_type, tokens[row_local][0]))
 
                 # Monster targeting (only relevant for Card play and Potion use)
                 if len(ids) == 2:
@@ -100,19 +103,19 @@ def encode_batch_masks_into(
                 f"{[(int(a.action_type), list(a.ids)) for a in batch_legal_actions[idx_state]]}"
             )
 
-        # Keep the first legal copy of each Card identity, separately per kind and action type
-        for action_type, token_kind in legal_token_kinds:
-            if token_kind not in TOKEN_KINDS_CARD:
+        # Keep the first legal copy of each Card identity per action type and collection kinds
+        for action_type, collection_kinds in legal_collection_kinds:
+            if collection_kinds[0] not in COLLECTION_KINDS_CARD:
                 continue
 
             rows = [
                 row
-                for row, (kind, _) in enumerate(tokens, row_start)
-                if kind == token_kind and np_legal_selection[row, action_type]
+                for row, token in enumerate(tokens, row_start)
+                if token[0] == collection_kinds and np_legal_selection[row, action_type]
             ]
 
             # Draw order hidden: scan in an order keyed on the pile, so the kept copy is random
-            if token_kind is TokenKind.CARD_PILE_DRAW:
+            if CollectionKind.CARD_PILE_DRAW in collection_kinds:
                 random.Random(hash(tuple(tokens[row - row_start][1].id for row in rows))).shuffle(
                     rows
                 )

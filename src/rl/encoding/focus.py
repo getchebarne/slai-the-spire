@@ -76,7 +76,7 @@ _OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc(
 )  # Per fuse turn left: the damage the bombs deal then
 _OFF_FOCUS_CHEST_KIND = _alloc("chest_kind", _NUM_CHEST_KINDS)
 _OFF_FOCUS_CHEST_OPENED = _alloc("chest_opened")
-_OFF_FOCUS_REST_DONE = _alloc("rest_done")
+_OFF_FOCUS_REST_CONSUMED = _alloc("rest_consumed")
 _OFF_FOCUS_PRESENCE = _alloc(
     "presence", 6
 )  # Context-presence bits: Combat/reward/shop/event/rest/chest
@@ -127,17 +127,17 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
                 np_out[_OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
 
     if combat is not None:
-        for turns_left, damage in combat.bombs:
+        for turns_left, damage, _ in combat.bombs:
             np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
         due = np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE : _OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
         due[:] = np.minimum(due, _BOMB_DAMAGE_MAX) / _BOMB_DAMAGE_MAX
 
     if chest is not None:
-        np_out[_OFF_FOCUS_CHEST_KIND + int(chest.kind)] = 1.0
-        np_out[_OFF_FOCUS_CHEST_OPENED] = float(chest.opened)
+        np_out[_OFF_FOCUS_CHEST_KIND + int(chest.chest_kind)] = 1.0
+        np_out[_OFF_FOCUS_CHEST_OPENED] = float(chest.chest_opened)
 
     if rest_site is not None:
-        np_out[_OFF_FOCUS_REST_DONE] = float(rest_site.done)
+        np_out[_OFF_FOCUS_REST_CONSUMED] = float(rest_site.consumed)
 
     # Context-presence bits: the Focus OHE alone can't express overlays
     for idx_context, context in enumerate(

@@ -18,7 +18,11 @@ from slai import RelicName
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.tokens import get_burning_path
+from src.rl.tokens import get_character
+from src.rl.tokens import get_entities
 from src.rl.tokens import get_room_burning
+from src.rl.tokens import get_rooms
+from src.rl.tokens import get_y_x_current
 from src.rl.tokens import relic_held
 
 
@@ -86,12 +90,13 @@ def _potion_can_arrive(game_state: slai.GameState) -> bool:
         Whether a Potion can arrive.
     """
     reward = game_state.reward
-    if reward is not None and reward.potions:
+    if reward is not None and reward.id_potions:
         return True
     
     shop = game_state.shop
     if shop is not None and any(
-        cast(int, potion.price) <= game_state.character.gold for potion in shop.potions
+        cast(int, potion.price) <= get_character(game_state).gold
+        for potion in get_entities(game_state, shop.id_potions, slai.Potion)
     ):
         return True
     
@@ -129,7 +134,7 @@ def _potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> b
     if relic_held(game_state, RelicName.Sozu):
         return True
     
-    potions = game_state.potions
+    potions = get_entities(game_state, game_state.id_potions, slai.Potion)
     if any(
         potion.name == PotionName.EntropicBrew for potion in potions if potion.id != action.ids[0]
     ):
@@ -138,7 +143,11 @@ def _potion_discard_wasted(game_state: slai.GameState, action: slai.Action) -> b
     combat = game_state.combat
     if combat is not None and any(
         card.name == CardName.Alchemize
-        for card in (*combat.card_pile_hand, *combat.card_pile_draw, *combat.card_pile_discard)
+        for card in get_entities(
+            game_state,
+            (*combat.id_card_pile_hand, *combat.id_card_pile_draw, *combat.id_card_pile_discard),
+            slai.Card,
+        )
     ):
         return False
     
@@ -182,7 +191,9 @@ def curse_useful(game_state: slai.GameState) -> bool:
     bool
         Whether Blue Candle, Darkstone Periapt or Du-Vu Doll is held.
     """
-    return not _RELICS_CURSE_USEFUL.isdisjoint(relic.name for relic in game_state.relics)
+    return not _RELICS_CURSE_USEFUL.isdisjoint(
+        relic.name for relic in get_entities(game_state, game_state.id_relics, slai.Relic)
+    )
 
 
 def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
@@ -210,17 +221,19 @@ def event_option_wasted(game_state: slai.GameState, id_option: int) -> bool:
     event = cast(slai.Event, game_state.event)
 
     # The options are in catalog order, the order each case below lists them in
-    idx_option = next(
-        idx_option for idx_option, option in enumerate(event.options) if option.id == id_option
-    )
-    relic_names = {relic.name for relic in game_state.relics}
+    idx_option = event.id_event_options.index(id_option)
+    relic_names = {
+        relic.name for relic in get_entities(game_state, game_state.id_relics, slai.Relic)
+    }
 
     # Meat on the Bone gives lost HP a use
     hp_loss_useful = RelicName.MeatOnTheBone in relic_names
     match event.name:
         # Buy one, two or three Potions, or leave, for HP from A15 on
         case EventName.TheWomanInBlue if RelicName.Sozu in relic_names:
-            option_leave = event.options[3]
+            (option_leave,) = get_entities(
+                game_state, [event.id_event_options[3]], slai.EventOption
+            )
             leave_free = not any(
                 isinstance(effect, EffectHealthDelta) for effect in option_leave.effects
             )
@@ -309,10 +322,7 @@ def _misses_room_burning(game_state: slai.GameState, action: slai.Action) -> boo
         it.
     """
     id_room = action.ids[0]
-    rooms = game_state.map.rooms
-    room_selected = next(
-        room for row in rooms for room in row if room is not None and room.id == id_room
-    )
+    (room_selected,) = get_entities(game_state, [id_room], slai.Room)
     burning_path = get_burning_path(game_state)
     
     return (room_selected.y, room_selected.x) not in burning_path and any(
@@ -336,17 +346,17 @@ def _escapes_room_burning(game_state: slai.GameState, action: slai.Action) -> bo
         True for a Smoke Bomb in the burning Room.
     """
     id_potion = action.ids[0]
-    potion = next(potion for potion in game_state.potions if potion.id == id_potion)
+    (potion,) = get_entities(game_state, [id_potion], slai.Potion)
     if potion.name != PotionName.SmokeBomb:
         return False
 
-    map_ = game_state.map
-    room_burning = get_room_burning(map_.rooms)
+    room_burning = get_room_burning(get_rooms(game_state))
+    y_current, x_current = get_y_x_current(game_state.map)
     
     return (
         room_burning is not None
-        and map_.y_current == room_burning.y
-        and map_.x_current == room_burning.x
+        and y_current == room_burning.y
+        and x_current == room_burning.x
     )
 
 
@@ -363,11 +373,11 @@ def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> boo
     Returns
     -------
     bool
-        True for a RoomExit at a Chest or while `relic_linked` is set, and for taking the linked
+        True for a RoomExit at a Chest or while `id_relic_linked` is set, and for taking the linked
         Relic.
     """
     # Row 8 is always a Chest
-    y_current = game_state.map.y_current
+    y_current, _ = get_y_x_current(game_state.map)
     if y_current is None or y_current < 8:
         return False
 
@@ -377,10 +387,10 @@ def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> boo
         return game_state.chest is not None
 
     # Took the linked Relic instead of the key
-    relic_linked = reward.relic_linked
+    id_relic_linked = reward.id_relic_linked
     
-    return relic_linked is not None and (
-        action.action_type is ActionType.RoomExit or action.ids[0] == relic_linked.id
+    return id_relic_linked is not None and (
+        action.action_type is ActionType.RoomExit or action.ids[0] == id_relic_linked
     )
 
 
@@ -404,7 +414,7 @@ def _enters_secret_portal(game_state: slai.GameState, action: slai.Action) -> bo
         return False
 
     id_option = action.ids[0]
-    option = next(option for option in event.options if option.id == id_option)
+    (option,) = get_entities(game_state, [id_option], slai.EventOption)
 
     return any(isinstance(effect, EffectRoomEnter) for effect in option.effects)
 
@@ -444,7 +454,9 @@ def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
             | ActionType.RestToke
         ):
             # The Map's last row is always a Rest Site
-            return not game_state.key_ruby and game_state.map.y_current == MAP_HEIGHT - 1
+            y_current, _ = get_y_x_current(game_state.map)
+
+            return not game_state.key_ruby and y_current == MAP_HEIGHT - 1
         case ActionType.RoomExit | ActionType.RewardTakeRelic:
             return not game_state.key_sapphire and _leaves_key_sapphire(game_state, action)
         case ActionType.RoomSelect:

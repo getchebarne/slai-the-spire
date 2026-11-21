@@ -3,6 +3,7 @@ from slai import GameState
 
 from src.rl.constants import SHOP_PRICE_CAP
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.tokens import get_character
 
 
 _CHANNEL_LAYOUT_PRICE, _alloc = make_channel_allocator()
@@ -32,5 +33,5 @@ def encode_shop_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     if shop is None:
         return
     
-    encode_price_into(shop.purge_cost, game_state.character.gold, np_out)
+    encode_price_into(shop.purge_cost, get_character(game_state).gold, np_out)
     np_out[_OFF_SHOP_PURGED] = float(shop.purged)
