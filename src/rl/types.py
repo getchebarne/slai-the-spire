@@ -26,7 +26,7 @@ class EntityKind(IntEnum):
     ROOM = 6
 
 
-class TokenKind(IntEnum):
+class CollectionKind(IntEnum):
     CARD_MATCH_FLIPPED = 0
     CARD_MATCH_PAIRS = 1
     CARD_PILE_DECK = 2
@@ -62,7 +62,9 @@ class TokenKind(IntEnum):
 
 # An Entity behind a token
 type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
-type Token = tuple[TokenKind, Entity]
+
+# The collection kinds of the collections holding an Entity, in window order, then the Entity
+type Token = tuple[tuple[CollectionKind, ...], Entity]
 
 
 class EffectSource(IntEnum):
@@ -172,19 +174,20 @@ class EncodedFeatures[TStorage]:
 @final
 @dataclass
 class Tokens[TFeatures]:
-    """Every Entity token, each state's in window order, state after state.
+    """One token per Entity, each state's in window order, state after state.
 
-    `x_count` counts tokens per state. Every token has features, kinds and legal masks. Features
-    are EncodedFeatures before projection and Dense afterwards; projection and attention keep
-    the token order and state boundaries.
+    A token sits at its Entity's first collection in window order, and its collection kinds mark
+    every collection holding the Entity. `x_count` counts tokens per state. Every token has
+    features, kinds and legal masks. Features are EncodedFeatures before projection and Dense
+    afterwards; projection and attention keep the token order and state boundaries.
     """
 
     features: TFeatures
     x_count: torch.Tensor  # (B,) long, tokens per state
 
-    # Each token's `TokenKind` and `EntityKind`
-    x_token_kind: torch.Tensor   # (N_tok,) int16
-    x_entity_kind: torch.Tensor  # (N_tok,) int16
+    # Each token's `CollectionKind`s and `EntityKind`
+    x_collection_kind: torch.Tensor  # (N_tok, len(CollectionKind)) uint8, multi-hot
+    x_entity_kind: torch.Tensor      # (N_tok,) int16
 
     # Whether the token is selectable under the `ActionType`, deduped by Card identity
     x_legal_selection: torch.Tensor  # (N_tok, NUM_ACTION_TYPES) bool
@@ -197,12 +200,12 @@ class Tokens[TFeatures]:
 
 
 class StateCollection(IntEnum):
-    """Columns of States.x_total after its per-token-kind counts.
+    """Columns of States.x_total after its per-collection-kind counts.
 
     These identities name collections explicitly; record field order does not determine them.
     """
 
-    TOKENS = len(TokenKind)
+    TOKENS = len(CollectionKind)
     TOKEN_ENTRIES = TOKENS + 1
     EFFECTS = TOKENS + 2
     EFFECT_ENTRIES = TOKENS + 3
@@ -222,8 +225,8 @@ class States[TStorage]:
 
     `x_total` holds each state's derived totals on the data's device, and `x_total_cpu` holds
     the same totals on the CPU so output sizes need no device readback. CPU states use the same
-    tensor for both fields. Batch operations keep them together. TokenKind indexes the first
-    columns and StateCollection the rest.
+    tensor for both fields. Batch operations keep them together. CollectionKind indexes the first
+    columns, the tokens each collection holds, and StateCollection the rest.
     """
 
     tokens: Tokens[EncodedFeatures[TStorage]]
@@ -233,7 +236,7 @@ class States[TStorage]:
     x_context: torch.Tensor            # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
     x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
-    x_total: torch.Tensor              # (B, len(TokenKind) + len(StateCollection)) int32
+    x_total: torch.Tensor              # (B, len(CollectionKind) + len(StateCollection)) int32
     x_total_cpu: torch.Tensor          # Same totals on CPU; aliases x_total for CPU states
 
 
@@ -250,7 +253,7 @@ class CoreOutput:
     x_token_state: torch.Tensor        # (N,) long, each token's state
     x_global: torch.Tensor             # (B, dim_global)
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
-    x_total: torch.Tensor              # (B, len(TokenKind) + len(StateCollection)) int32
+    x_total: torch.Tensor              # (B, len(CollectionKind) + len(StateCollection)) int32
 
 
 @dataclass
@@ -258,10 +261,10 @@ class PolicyOutput:
     """One action per state, selected or recorded, with the policy statistics for its three levels.
 
     Each action row holds [action type, selection offset, target rank]. The selection offset
-    indexes that state's encoded tokens, across all token kinds; it stays valid when whole states
-    are reordered or joined into a new batch. The target is a Monster's rank. A selection or target
-    that did not apply holds -1. `actions.engine_action` resolves these coordinates to engine
-    Entity ids using the encoder's token ordering.
+    indexes that state's encoded tokens, one per Entity across all collection kinds; it stays valid
+    when whole states are reordered or joined into a new batch. The target is a Monster's rank.
+    A selection or target that did not apply holds -1. `actions.engine_action` resolves these
+    coordinates to engine Entity ids using the encoder's token ordering.
     """
 
     x_action: torch.Tensor      # (B, 3) long; action type, state-local selection offset, Monster rank

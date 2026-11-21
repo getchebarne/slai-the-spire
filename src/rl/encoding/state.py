@@ -13,12 +13,13 @@ from slai import EventOption
 from slai import GameState
 from slai import Modifier
 from slai import Monster
+from slai import PlaySource
 from slai import Potion
 from slai import Relic
 
+from src.rl.constants import COLLECTION_KINDS_OF_ENTITY_KIND
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
-from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
 from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
 from src.rl.encoding.card import encode_card_into
@@ -66,8 +67,10 @@ from src.rl.encoding.sparse import encode_sparse_rows_into
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
 from src.rl.encoding.sparse import set_last_rows
+from src.rl.tokens import get_character
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import iter_tokens
+from src.rl.types import CollectionKind
 from src.rl.types import EffectSource
 from src.rl.types import Entity
 from src.rl.types import ModifierOwner
@@ -77,7 +80,6 @@ from src.rl.types import Sparse
 from src.rl.types import StateCollection
 from src.rl.types import States
 from src.rl.types import Token
-from src.rl.types import TokenKind
 from src.rl.utils import action_masked
 
 
@@ -143,24 +145,17 @@ _FILL_PRIORITY_OF_EFFECT_SOURCE = {
     EffectSource.CARD_DRAW: 5,
 }
 
-# The token kinds whose Entity ids the masks look up; no action names the Character. The selected
-# pile and the play queue repeat the ids of Cards still in their piles
-_TOKEN_KINDS_ID_LOOKUP = frozenset(TokenKind) - {
-    TokenKind.CHARACTER,
-    TokenKind.CARD_PILE_SELECTED,
-    TokenKind.CARD_PLAY_QUEUE,
+# Each collection kind's Entity kind
+_ENTITY_KIND_OF_COLLECTION_KIND = {
+    collection_kind: entity_kind
+    for entity_kind, collection_kinds in COLLECTION_KINDS_OF_ENTITY_KIND.items()
+    for collection_kind in collection_kinds
 }
 
-# Each token kind's Entity kind
-_ENTITY_KIND_OF_TOKEN_KIND = {
-    token_kind: entity_kind
-    for entity_kind, token_kinds in TOKEN_KINDS_OF_ENTITY_KIND.items()
-    for token_kind in token_kinds
-}
-
-# The same, as the table the token writer indexes by token kind
-_NP_ENTITY_KIND_OF_TOKEN_KIND = np.array(
-    [_ENTITY_KIND_OF_TOKEN_KIND[token_kind] for token_kind in TokenKind], dtype=np.int16
+# The same, as the table the token writer indexes by collection kind
+_NP_ENTITY_KIND_OF_COLLECTION_KIND = np.array(
+    [_ENTITY_KIND_OF_COLLECTION_KIND[collection_kind] for collection_kind in CollectionKind],
+    dtype=np.int16,
 )
 
 # The records' token rows: each a Card's, Relic's or Potion's whole token
@@ -170,7 +165,9 @@ _ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_SPARSE_TOKEN)
 _ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
 
 # The kept records of the Cards, Relics and Potions, by their record keys
-_RECORD_OF_CARD: dict[tuple[int, int, int | None, int | None, int | None], _Record] = {}
+_RECORD_OF_CARD: dict[
+    tuple[int, int, int | None, int | None, int | None, PlaySource | None], _Record
+] = {}
 _RECORD_OF_RELIC: dict[tuple[int, bool, int | None], _Record] = {}
 _RECORD_OF_POTION: dict[tuple[int, bool, int | None], _Record] = {}
 
@@ -226,9 +223,9 @@ def encode_states_into(
     _drop_row_tables_when_full()
 
     # Tokens
-    batch_tokens, batch_row_of_entity_id = _encode_batch_tokens_into(
+    batch_tokens = _encode_batch_tokens_into(
         x_token_count=tokens.x_count,
-        x_token_kind=tokens.x_token_kind,
+        x_collection_kind=tokens.x_collection_kind,
         x_entity_kind=tokens.x_entity_kind,
         sparse_token=tokens.features.sparse,
         effects=tokens.features.effects,
@@ -242,7 +239,6 @@ def encode_states_into(
         batch_game_state,
         batch_legal_actions,
         batch_tokens,
-        batch_row_of_entity_id,
         tokens.x_legal_selection[:num_tokens].numpy(),
         tokens.x_legal_target[:num_tokens].numpy(),
         tokens.x_needs_target[:num_tokens].numpy(),
@@ -316,13 +312,16 @@ def _encode_totals_into(states_reserved: States[Reserved]) -> None:
     features = tokens.features
     np_total = states_reserved.x_total.numpy()
 
-    # Its tokens of each token kind
+    # Its tokens of each collection kind
     np_count_token = tokens.x_count.numpy()  # (B,)
     np_token_state = np.repeat(np.arange(len(np_count_token)), np_count_token)  # (N_tok,)
-    np_token_kind = tokens.x_token_kind[: len(np_token_state)].numpy()
-    np_total[:, : len(TokenKind)] = np.bincount(
-        np_token_state * len(TokenKind) + np_token_kind, minlength=len(np_total) * len(TokenKind)
-    ).reshape(-1, len(TokenKind))
+    np_membership_token, np_membership_collection_kind = (
+        tokens.x_collection_kind[: len(np_token_state)].numpy().nonzero()
+    )
+    np_total[:, : len(CollectionKind)] = np.bincount(
+        np_token_state[np_membership_token] * len(CollectionKind) + np_membership_collection_kind,
+        minlength=len(np_total) * len(CollectionKind),
+    ).reshape(-1, len(CollectionKind))
 
     # Its tokens, their feature entries, and the rows those tokens own
     np_total[:, StateCollection.TOKENS] = np_count_token
@@ -367,21 +366,22 @@ def _sum_counts(np_count_parent: np.ndarray, np_count_child: np.ndarray) -> np.n
 
 def _encode_batch_tokens_into(
     x_token_count: torch.Tensor,
-    x_token_kind: torch.Tensor,
+    x_collection_kind: torch.Tensor,
     x_entity_kind: torch.Tensor,
     sparse_token: Sparse[Reserved],
     effects: OwnedRows[Reserved],
     modifiers: OwnedRows[Reserved],
     batch_game_state: list[GameState],
-) -> tuple[list[list[Token]], list[dict[int, int]]]:
+) -> list[list[Token]]:
     """Write the tokens and their owned rows into the arrays handed in.
 
     Parameters
     ----------
     x_token_count : torch.Tensor
         (B,) long. Each state's number of tokens, written in place.
-    x_token_kind : torch.Tensor
-        (token capacity,) int16. Each token's kind, written in place.
+    x_collection_kind : torch.Tensor
+        (token capacity, len(CollectionKind)) uint8. Each token's collection kinds, 1 at each
+        collection holding its Entity, written in place.
     x_entity_kind : torch.Tensor
         (token capacity,) int16. Each token's Entity kind, written in place.
     sparse_token : Sparse[Reserved]
@@ -395,12 +395,10 @@ def _encode_batch_tokens_into(
 
     Returns
     -------
-    batch_tokens : list[list[Token]]
-        Each state's tokens, as (token kind, Entity) in window order.
-    batch_row_of_entity_id : list[dict[int, int]]
-        Each state's Entity ids mapped to their first state-local token row, for the masks.
+    list[list[Token]]
+        Each state's tokens, as (collection kinds, Entity) in window order, one per Entity.
     """
-    # Each state's tokens, as (token kind, Entity) in window order
+    # Each state's tokens, as (collection kinds, Entity) in window order
     batch_tokens = [list(iter_tokens(game_state)) for game_state in batch_game_state]
 
     # Number of tokens for each state in the batch
@@ -408,7 +406,7 @@ def _encode_batch_tokens_into(
 
     # Number of total tokens across all states
     num_tokens = int(np_count_token.sum())
-    if num_tokens > len(x_token_kind):
+    if num_tokens > len(x_collection_kind):
         raise IndexError("Token count exceeds the destination's capacity")
 
     # Each token's row in the token row table, and the dense rows of the tokens with no record
@@ -419,9 +417,6 @@ def _encode_batch_tokens_into(
     batch_token_effect_table_rows: list[Sequence[int]] = []
     batch_modifier_rows: list[_ModifierRow] = []
 
-    # Each state's Entity ids map to their first state-local token row for the masks
-    batch_row_of_entity_id: list[dict[int, int]] = []
-
     # Iterate over states
     for game_state, tokens, row_start in zip(
         batch_game_state, batch_tokens, np.cumsum(np_count_token) - np_count_token
@@ -431,7 +426,6 @@ def _encode_batch_tokens_into(
             token_rows_dense,
             token_effect_table_rows,
             modifier_rows,
-            row_of_entity_id,
         ) = _encode_tokens_into(game_state, tokens, row_start)
 
         # Accumulate the tokens' table rows and dense rows
@@ -442,17 +436,23 @@ def _encode_batch_tokens_into(
         batch_token_effect_table_rows += token_effect_table_rows
         batch_modifier_rows += modifier_rows
 
-        # Accumulate the Entity ids
-        batch_row_of_entity_id.append(row_of_entity_id)
-
-    # Each token's kind, through a bytearray: every TokenKind's value fits a byte
-    np_token_kind = x_token_kind[:num_tokens].numpy()
-    np_token_kind[:] = bytearray(
-        [token_kind for tokens in batch_tokens for token_kind, _ in tokens]
+    # Each token's collection kinds, 1 at each collection holding its Entity
+    np_collection_kind = x_collection_kind[:num_tokens].numpy()  # (N_tok, len(CollectionKind))
+    np_collection_kind.fill(0)
+    np.put(
+        np_collection_kind,
+        [
+            row * len(CollectionKind) + collection_kind
+            for row, (collection_kinds, _) in enumerate(chain.from_iterable(batch_tokens))
+            for collection_kind in collection_kinds
+        ],
+        1,
     )
 
-    # Each token's Entity kind, its token kind's
-    x_entity_kind[:num_tokens].numpy()[:] = _NP_ENTITY_KIND_OF_TOKEN_KIND[np_token_kind]
+    # Each token's Entity kind, its collection kinds'
+    x_entity_kind[:num_tokens].numpy()[:] = _NP_ENTITY_KIND_OF_COLLECTION_KIND[
+        np_collection_kind.argmax(1)
+    ]
 
     # Each token's count of Effect rows, and each of those rows' index in the Effect row table
     np_count_effect = np.array(
@@ -490,12 +490,12 @@ def _encode_batch_tokens_into(
     encode_sparse_rows_into(modifiers.sparse, np_modifier, ENCODING_DIM_SPARSE_MODIFIER)
     modifiers.x_count[:num_tokens].numpy()[:] = np_count_modifier
 
-    return batch_tokens, batch_row_of_entity_id
+    return batch_tokens
 
 
 def _encode_tokens_into(
     game_state: GameState, tokens: Sequence[Token], row_start: int
-) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[_ModifierRow], dict[int, int]]:
+) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[_ModifierRow]]:
     """Give each of a state's tokens its row and its Effect rows.
 
     A Card, Relic or Potion reads its record: one lookup for its row in the token row table and
@@ -504,14 +504,16 @@ def _encode_tokens_into(
 
     Each token goes at its Entity kind's columns and the shared block that ends the row, both
     written by its kind's encoder; an Event Option writes no shared column. A Room has no
-    columns: the model reads the Map network's output there.
+    columns: the model reads the Map network's output there. A token held by several
+    collections is written once, with the stasis slot and the play source when the stasis pile or
+    the play queue is one of them.
 
     Parameters
     ----------
     game_state : GameState
         The state to encode.
     tokens : Sequence[Token]
-        The state's tokens, as (token kind, Entity) in window order.
+        The state's tokens, as (collection kinds, Entity) in window order.
     row_start : int
         The state's first row in the batch.
 
@@ -527,30 +529,30 @@ def _encode_tokens_into(
     modifier_rows : list[_ModifierRow]
         The Modifier rows the tokens own, token after token, at most MAX_MODIFIERS: each its
         token's batch row, Modifier, and explicit owner kind.
-    row_of_entity_id : dict[int, int]
-        The first state-local row of each Entity id the masks look up: every token kind's but the
-        Character's, the selected pile's and the play queue's (`_TOKEN_KINDS_ID_LOOKUP`).
     """
+    character = get_character(game_state)
     monsters = get_monster_entities(game_state)
     damage = get_outgoing_damage(monsters) if game_state.combat is not None else None
     energy_current = (
         game_state.combat.energy.energy_current if game_state.combat is not None else 0
     )
-    draw_pile_size = len(game_state.combat.card_pile_draw) if game_state.combat is not None else 0
-    relic_linked = game_state.reward.relic_linked if game_state.reward is not None else None
-    gold = game_state.character.gold
+    draw_pile_size = (
+        len(game_state.combat.id_card_pile_draw) if game_state.combat is not None else 0
+    )
+    id_relic_linked = game_state.reward.id_relic_linked if game_state.reward is not None else None
+    gold = character.gold
     token_table_rows: list[int] = []
     token_rows_dense: list[np.ndarray] = []
     token_effect_table_rows: list[Sequence[int]] = []
     modifier_rows: list[_ModifierRow] = []
-    row_of_entity_id: dict[int, int] = {}
+
+    # Each queued Card's play source: its first CardPlay's
+    play_source_of_card_id: dict[int, PlaySource] = {}
+    for card_play in game_state.card_play_queue:
+        play_source_of_card_id.setdefault(card_play.id_card, card_play.play_source)
 
     # Iterate over tokens; `row_start` gives the offset this state's tokens start from
-    for row_local, (token_kind, entity) in enumerate(tokens):
-        # Its Entity's id, at the id's first state-local row
-        if token_kind in _TOKEN_KINDS_ID_LOOKUP:
-            row_of_entity_id.setdefault(entity.id, row_local)
-
+    for row_local, (collection_kinds, entity) in enumerate(tokens):
         record = None
         match entity:
             case Card():
@@ -561,13 +563,23 @@ def _encode_tokens_into(
 
                 # Its holder's slot, while it is in stasis
                 slot_holder = None
-                if token_kind is TokenKind.CARD_PILE_STASIS and game_state.combat is not None:
-                    slot_holder = monsters[game_state.combat.card_pile_stasis.index(entity)].slot
+                if (
+                    CollectionKind.CARD_PILE_STASIS in collection_kinds
+                    and game_state.combat is not None
+                ):
+                    slot_holder = game_state.combat.id_card_pile_stasis.index(entity.id)
 
-                record = _get_record_card(entity, energy_current, draw_below, gold, slot_holder)
+                # A queued Card plays from its first CardPlay's source
+                play_source = None
+                if CollectionKind.CARD_PLAY_QUEUE in collection_kinds:
+                    play_source = play_source_of_card_id[entity.id]
+
+                record = _get_record_card(
+                    entity, energy_current, draw_below, gold, slot_holder, play_source
+                )
 
             case Relic():
-                linked = relic_linked is not None and entity.id == relic_linked.id
+                linked = entity.id == id_relic_linked
                 record = _get_record_relic(entity, linked, gold)
 
             case Potion():
@@ -581,8 +593,8 @@ def _encode_tokens_into(
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_monster_into(
                     entity,
-                    game_state.character.health,
-                    game_state.character.block,
+                    character.health,
+                    character.block,
                     damage,
                     game_state.ascension,
                     np_row[COL_START_MONSTER:COL_START_CHARACTER],
@@ -689,12 +701,16 @@ def _encode_tokens_into(
         token_rows_dense,
         token_effect_table_rows,
         modifier_rows,
-        row_of_entity_id,
     )
 
 
 def _get_record_card(
-    card: Card, energy_current: int, draw_below: int | None, gold: int, slot_holder: int | None
+    card: Card,
+    energy_current: int,
+    draw_below: int | None,
+    gold: int,
+    slot_holder: int | None,
+    play_source: PlaySource | None,
 ) -> _Record:
     """Find a Card's record, making it the first time its key comes.
 
@@ -712,13 +728,17 @@ def _get_record_card(
         The Character's gold, which its price is read against.
     slot_holder : int | None
         The slot of the Monster holding it in stasis; None out of the stasis pile.
+    play_source : PlaySource | None
+        Its first CardPlay's source while it is queued; None out of the play queue.
 
     Returns
     -------
     _Record
         Its row in the token row table, then its Effect rows in the Effect row table.
     """
-    record_key_card = get_record_key_card(card, energy_current, draw_below, gold, slot_holder)
+    record_key_card = get_record_key_card(
+        card, energy_current, draw_below, gold, slot_holder, play_source
+    )
     record = _RECORD_OF_CARD.get(record_key_card)
     if record is not None:
         return record
@@ -730,6 +750,7 @@ def _get_record_card(
         draw_below,
         gold,
         slot_holder,
+        play_source,
         np_row[_COL_START_CARD:COL_START_RELIC],
         np_row[_COL_START_SHARED:],
     )

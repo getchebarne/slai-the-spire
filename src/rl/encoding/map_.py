@@ -10,7 +10,10 @@ from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.tokens import get_burning_path
+from src.rl.tokens import get_entities
 from src.rl.tokens import get_room_entities
+from src.rl.tokens import get_rooms
+from src.rl.tokens import get_y_x_current
 
 
 _IDX_OF_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
@@ -60,9 +63,11 @@ SLICE_MAP_ROOM_KIND = slice(_OFF_MAP_ROOM_KIND, _OFF_MAP_ROOM_KIND + _MAP_NUM_RO
 _CHANNEL_LAYOUT_MAP_META, _alloc = make_channel_allocator()
 _OFF_MAP_FLOOR_DEPTH = _alloc("floor_depth")  # y_current / MAP_HEIGHT
 _OFF_MAP_ON_MAP = _alloc("on_map")  # y_current is not None
-_OFF_MAP_BOSS = _alloc("boss", len(_IDX_OF_MONSTER_ENCOUNTER_BOSS))  # Act-boss identity OHE
-_OFF_MAP_BOSS_FIGHTS_AFTER = _alloc(
-    "boss_fights_after"
+_OFF_MAP_ENCOUNTER_BOSS = _alloc(
+    "encounter_boss", len(_IDX_OF_MONSTER_ENCOUNTER_BOSS)
+)  # Act-boss identity OHE
+_OFF_MAP_ENCOUNTER_POOL_BOSS_COUNT = _alloc(
+    "encounter_pool_boss_count"
 )  # Boss fights after the boss's: 1 at A20 in Act 3 until the second
 _OFF_MAP_CURRENT_ROOM_KIND = _alloc("current_room_kind", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_NEXT_ROOM_KINDS = _alloc(
@@ -80,7 +85,7 @@ _OFF_MAP_UNKNOWN_CHANCE_SHOP = _alloc("unknown_chance_shop")
 _OFF_MAP_UNKNOWN_CHANCE_TREASURE = _alloc("unknown_chance_treasure")
 _OFF_MAP_ROOM_KIND_RESOLVED = _alloc(
     "room_kind_resolved", _MAP_NUM_ROOM_KINDS
-)  # A "?" stays Unknown in `rooms`; no Shop right after a Shop
+)  # A "?" stays Unknown on its Room; no Shop right after a Shop
 _OFF_MAP_POOL_EVENTS = _alloc(
     "pool_events", len(_IDX_OF_EVENT_NAME)
 )  # Events a "?" can still become, each drawn once
@@ -93,7 +98,8 @@ _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
 _MAP_GRID_CACHE_MAX = 100_000
 
 
-def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.ndarray:
+def _get_static_grid(game_state: GameState) -> np.ndarray:
+    identity_hash = game_state.map.identity_hash
     np_grid = _MAP_GRID_CACHE.get(identity_hash)
     if np_grid is not None:
         return np_grid
@@ -102,6 +108,7 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
     np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.uint8)
 
     # Iterate over Rooms
+    rooms = get_rooms(game_state)
     for y, row in enumerate(rooms):
         for x, room in enumerate(row):
             if room is None:
@@ -132,9 +139,9 @@ def _get_static_grid(identity_hash: int, rooms: list[list[Room | None]]) -> np.n
 def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     """Write map position, boss, keys, room probabilities and event-pool features."""
     map_ = game_state.map
-    rooms = map_.rooms
-    y_current, x_current = map_.y_current, map_.x_current
-    boss, boss_fights_after = map_.boss, map_.boss_fights_after
+    y_current, x_current = get_y_x_current(map_)
+    encounter_boss = game_state.encounter_boss
+    encounter_pool_boss_count = game_state.encounter_pool_boss_count
     act = game_state.act
     # Floor depth + on-map sentinel
     if y_current is not None:
@@ -142,17 +149,20 @@ def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
         np_out[_OFF_MAP_ON_MAP] = 1.0
 
     # Act-boss identity OHE — fail loudly on a boss we haven't mapped (new act)
-    idx_boss = _IDX_OF_MONSTER_ENCOUNTER_BOSS.get(boss)
+    idx_boss = _IDX_OF_MONSTER_ENCOUNTER_BOSS.get(encounter_boss)
     if idx_boss is None:
-        raise ValueError(f"Unknown act boss {boss!r}; add it to _IDX_OF_MONSTER_ENCOUNTER_BOSS")
+        raise ValueError(
+            f"Unknown act boss {encounter_boss!r}; add it to _IDX_OF_MONSTER_ENCOUNTER_BOSS"
+        )
 
-    np_out[_OFF_MAP_BOSS + idx_boss] = 1.0
-    np_out[_OFF_MAP_BOSS_FIGHTS_AFTER] = boss_fights_after
+    np_out[_OFF_MAP_ENCOUNTER_BOSS + idx_boss] = 1.0
+    np_out[_OFF_MAP_ENCOUNTER_POOL_BOSS_COUNT] = encounter_pool_boss_count
 
     # Current `RoomKind` OHE
     if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
-        room = rooms[y_current][x_current]
-        if room is not None:
+        id_room = map_.id_rooms[y_current][x_current]
+        if id_room is not None:
+            (room,) = get_entities(game_state, [id_room], Room)
             np_out[_OFF_MAP_CURRENT_ROOM_KIND + _IDX_OF_ROOM_KIND[room.room_kind]] = 1.0
 
     # Next-row `RoomKind`s per column
@@ -191,8 +201,8 @@ def _encode_unknown_room_into(game_state: GameState, np_out: np.ndarray) -> None
 def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
     """Copy the cached static grid and stamp the position, burning path and selectable Rooms."""
     map_ = game_state.map
-    np_out[:] = _get_static_grid(map_.identity_hash, map_.rooms)
-    y_current, x_current = map_.y_current, map_.x_current
+    np_out[:] = _get_static_grid(game_state)
+    y_current, x_current = get_y_x_current(map_)
     if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
         np_out[y_current, x_current, OFF_MAP_POSITION] = 1
 

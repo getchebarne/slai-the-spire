@@ -5,6 +5,8 @@ from typing import cast
 import numpy as np
 import slai
 
+from src.rl.tokens import get_character
+
 
 _WEIGHT_HEALTH = 0.1000  # Φ scale, per HP
 _WEIGHT_WIN = 5.0  # Beating the Heart; a death pays −1
@@ -74,9 +76,10 @@ def shop_gold_spent(game_state: slai.GameState, action: slai.Action) -> int:
     if action.action_type == slai.ActionType.ShopPurge:
         return shop.purge_cost
     
-    shop_stock: list[slai.Card | slai.Relic | slai.Potion] = [*shop.cards, *shop.relics, *shop.potions]
+    # The Shop's Card, Relic or Potion
+    entity = cast(slai.Card | slai.Relic | slai.Potion, game_state.entities[action.ids[0]])
 
-    return cast(int, next(entity.price for entity in shop_stock if entity.id == action.ids[0]))
+    return cast(int, entity.price)
 
 
 def game_won(game_state: slai.GameState) -> bool:
@@ -98,7 +101,7 @@ def game_won(game_state: slai.GameState) -> bool:
     return (
         game_state.game_over
         and game_state.act == slai.GameEnv.ACT_FINAL
-        and game_state.character.health > 0
+        and get_character(game_state).health > 0
     )
 
 
@@ -135,15 +138,17 @@ def compute_reward(
     """
 
     won = game_won(game_state_next)
+    character = get_character(game_state)
+    character_next = get_character(game_state_next)
 
     # Any end but a win pays a death: a death, a cut at the step limit, a door-shut kill
     death = done and not won
-    health_next = 0 if death else game_state_next.character.health
+    health_next = 0 if death else character_next.health
 
     # Potential-based, γ^k·Φ(s') − Φ(s): the episode sum telescopes to its endpoints. γ must
     # be the trainer's discount. Φ stays on at a win on purpose: it prices the HP left
-    hp = discount * _potential(health_next, game_state_next.character.health_max) - _potential(
-        game_state.character.health, game_state.character.health_max
+    hp = discount * _potential(health_next, character_next.health_max) - _potential(
+        character.health, character.health_max
     )
 
     # A (1 − γ^k) time cost per step makes a death total ≈ −1 at any length. Only game_over or

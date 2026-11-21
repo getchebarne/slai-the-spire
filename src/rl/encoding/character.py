@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+from slai import Card
 from slai import CardCostKindMinusDiscardsThisTurn
 from slai import GameEnv
 from slai import GameState
@@ -17,6 +18,8 @@ from src.rl.encoding.scalars import get_piecewise_bucket
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.encoding.shared import encode_shared_health_block_into
+from src.rl.tokens import get_character
+from src.rl.tokens import get_entities
 
 
 # Widest catalog turn (damage x instances), Vulnerable-scaled; Strength ramps clamp
@@ -123,8 +126,8 @@ def encode_character_into(
     np_shared : np.ndarray
         (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
     """
-    character = game_state.character
-    deck = game_state.card_pile_deck
+    character = get_character(game_state)
+    deck = get_entities(game_state, game_state.id_card_pile_deck, Card)
     gold_bucket = get_piecewise_bucket(
         character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD
     )

@@ -11,6 +11,7 @@ from slai import Action
 from slai import ActionType
 from slai import EffectRelicGrantRandom
 from slai import EffectRelicLose
+from slai import EventOption
 from slai import GameEnv
 from slai import GameState
 from slai import RelicName
@@ -29,6 +30,8 @@ from src.rl.batches import to_device
 from src.rl.encoding import encode_states_into
 from src.rl.reward import RewardStream
 from src.rl.scripted import step_scripted
+from src.rl.tokens import get_entities
+from src.rl.tokens import relic_held
 from src.rl.types import Live
 from src.rl.types import Reserved
 from src.rl.types import States
@@ -542,7 +545,11 @@ def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
         env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
 
         # Neow's boss Relic swap: the option that loses a Relic and grants a random one
-        options = [] if game_state.event is None else game_state.event.options
+        options = (
+            []
+            if game_state.event is None
+            else get_entities(game_state, game_state.event.id_event_options, EventOption)
+        )
         option_swap = next(
             option
             for option in options
@@ -554,5 +561,5 @@ def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
         game_state, _, _ = step_scripted(
             env, Action(ActionType.EventOptionSelect, [option_swap.id])
         )
-        if any(relic.name == RelicName.PandorasBox for relic in game_state.relics):
+        if relic_held(game_state, RelicName.PandorasBox):
             return env, game_state

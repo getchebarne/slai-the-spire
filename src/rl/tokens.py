@@ -3,27 +3,29 @@
 import math
 import warnings
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Sequence
 from inspect import formatannotation
 from inspect import signature
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 from slai import Card
 from slai import Character
 from slai import Combat
 from slai import Event
-from slai import EventOption
 from slai import GameState
+from slai import LocationOverworld
+from slai import LocationStart
 from slai import Map
 from slai import Monster
-from slai import Potion
 from slai import Relic
 from slai import RelicName
 from slai import Reward
 from slai import Room
 from slai import Shop
 
+from src.rl.constants import COLLECTION_KINDS_IN_WINDOW_ORDER
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_CARD_REWARD_ROLL
@@ -50,24 +52,27 @@ from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_POTION_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
-from src.rl.constants import TOKEN_KINDS_IN_WINDOW_ORDER
+from src.rl.types import CollectionKind
 from src.rl.types import Entity
 from src.rl.types import Token
-from src.rl.types import TokenKind
 
 
 __all__ = [
     "iter_tokens",
+    "get_character",
+    "get_entities",
     "get_monster_entities",
     "relic_held",
+    "get_y_x_current",
+    "get_rooms",
     "get_room_entities",
     "get_room_burning",
     "get_burning_path",
 ]
 
 
-# The token kinds that have already warned about overflow
-_WARNED_OVERFLOW: set[TokenKind] = set()
+# The collection kinds that have already warned about overflow
+_WARNED_OVERFLOW: set[CollectionKind] = set()
 
 # The burning path by Map, current Room and Wing Boots charges left
 _BURNING_PATH_CACHE: dict[tuple[int | None, ...], frozenset[tuple[int, int]]] = {}
@@ -77,6 +82,9 @@ _BURNING_PATH_CACHE_MAX = 100_000
 def iter_tokens(game_state: GameState) -> Iterator[Token]:
     """Yield a state's tokens in the shared order used by encoding and action decoding.
 
+    One token per Entity id, at the id's first sighting in `COLLECTION_KINDS_IN_WINDOW_ORDER` and
+    then collection order. Only ids merge: a Combat's copy of a deck Card is an Entity of its own.
+
     Parameters
     ----------
     game_state : GameState
@@ -85,14 +93,25 @@ def iter_tokens(game_state: GameState) -> Iterator[Token]:
     Yields
     ------
     Token
-        Each token kind and Entity, in `TOKEN_KINDS_IN_WINDOW_ORDER` and then collection order.
+        Each Entity's collection kinds, those of the collections holding it in window order, and
+        the Entity, in the order of the Entities' first sightings.
     """
+    # Each Entity's token by its id, in the order of first sightings
+    token_of_entity_id: dict[int, Token] = {}
+    entities = game_state.entities
     context_of_reader = {reader: reader(game_state) for reader in _READERS}
-    for token_kind, reader, getter in _GETTERS_IN_WINDOW_ORDER:
+    for collection_kind, reader, getter in _GETTERS_IN_WINDOW_ORDER:
         context = context_of_reader[reader]
         if context is not None:
-            for entity in getter(context):
-                yield token_kind, entity
+            for entity_id in getter(context):
+                # The first sighting places the token; each collection adds its membership once
+                token = token_of_entity_id.get(entity_id)
+                if token is None:
+                    token_of_entity_id[entity_id] = ((collection_kind,), entities[entity_id])
+                elif collection_kind not in token[0]:
+                    token_of_entity_id[entity_id] = ((*token[0], collection_kind), token[1])
+
+    yield from token_of_entity_id.values()
 
 
 def get_monster_entities(game_state: GameState) -> list[Monster]:
@@ -109,37 +128,79 @@ def get_monster_entities(game_state: GameState) -> list[Monster]:
         The Combat's Monsters; empty outside Combat.
     """
     combat = _read_combat(game_state)
+    if combat is None:
+        return []
 
-    return _get_monsters(combat) if combat is not None else []
+    return get_entities(game_state, _get_monsters(combat), Monster)
 
 
-def _capped[TEntity: Entity](
-    token_kind: TokenKind, entities: list[TEntity], cap: int
-) -> list[TEntity]:
-    """Cut `entities` to `cap`, warning once per token kind when that drops any.
+def get_character(game_state: GameState) -> Character:
+    """Return the Character.
 
     Parameters
     ----------
-    token_kind : TokenKind
-        The Entities' token kind.
-    entities : list[TEntity]
-        The Entities to cut.
-    cap : int
-        The token kind's cap.
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    Character
+        The state's Character, from its Entities.
+    """
+    (character,) = get_entities(game_state, [game_state.id_character], Character)
+
+    return character
+
+
+def get_entities[TEntity: Entity](
+    game_state: GameState, ids: Iterable[int], entity_type: type[TEntity]
+) -> list[TEntity]:
+    """Return the Entities with ids `ids`, in their order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state whose Entities hold them.
+    ids : Iterable[int]
+        The Entities' ids, as a collection lists them.
+    entity_type : type[TEntity]
+        The Entity class the ids name, which types the result.
 
     Returns
     -------
     list[TEntity]
-        The first `cap` Entities.
+        One Entity per id.
     """
-    if len(entities) > cap and token_kind not in _WARNED_OVERFLOW:
-        _WARNED_OVERFLOW.add(token_kind)
+    entities = game_state.entities
+
+    return cast(list[TEntity], [entities[entity_id] for entity_id in ids])
+
+
+def _capped(collection_kind: CollectionKind, ids: list[int], cap: int) -> list[int]:
+    """Cut `ids` to `cap`, warning once per collection kind when that drops any.
+
+    Parameters
+    ----------
+    collection_kind : CollectionKind
+        The collection kind of the Entities the ids name.
+    ids : list[int]
+        The ids to cut.
+    cap : int
+        The collection kind's cap.
+
+    Returns
+    -------
+    list[int]
+        The first `cap` ids.
+    """
+    if len(ids) > cap and collection_kind not in _WARNED_OVERFLOW:
+        _WARNED_OVERFLOW.add(collection_kind)
         warnings.warn(
-            f"{token_kind.name} holds {len(entities)} Entities; the ones past its cap of {cap} "
+            f"{collection_kind.name} holds {len(ids)} Entities; the ones past its cap of {cap} "
             "are dropped"
         )
 
-    return entities[:cap]
+    return ids[:cap]
 
 
 def _read_combat(game_state: GameState) -> Combat | None:
@@ -158,153 +219,173 @@ def _read_shop(game_state: GameState) -> Shop | None:
     return game_state.shop
 
 
-# The token kinds of no context read the state itself
+# The collection kinds of no context read the state itself
 def _read_game_state(game_state: GameState) -> GameState:
     return game_state
 
 
-def _get_card_match_flipped(event: Event) -> list[Card]:
-    card = event.card_match_flipped
+def _get_card_match_flipped(event: Event) -> list[int]:
+    id_card = event.id_card_match_flipped
 
-    return [card] if card is not None else []
-
-
-def _get_card_match_pairs(event: Event) -> list[Card]:
-    return event.card_match_pairs[:MAX_SIZE_CARD_MATCH_PAIRS]
+    return [id_card] if id_card is not None else []
 
 
-def _get_card_pile_deck(game_state: GameState) -> list[Card]:
-    return _capped(TokenKind.CARD_PILE_DECK, game_state.card_pile_deck, MAX_SIZE_CARD_PILE_DECK)
+def _get_card_match_pairs(event: Event) -> list[int]:
+    return event.id_card_match_pairs[:MAX_SIZE_CARD_MATCH_PAIRS]
 
 
-def _get_card_pile_discard(combat: Combat) -> list[Card]:
+def _get_card_pile_deck(game_state: GameState) -> list[int]:
     return _capped(
-        TokenKind.CARD_PILE_DISCARD, combat.card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD
+        CollectionKind.CARD_PILE_DECK, game_state.id_card_pile_deck, MAX_SIZE_CARD_PILE_DECK
     )
 
 
-def _get_card_pile_discover(combat: Combat) -> list[Card]:
-    return combat.card_pile_discover[:MAX_SIZE_CARD_PILE_DISCOVER]
+def _get_card_pile_discard(combat: Combat) -> list[int]:
+    return _capped(
+        CollectionKind.CARD_PILE_DISCARD, combat.id_card_pile_discard, MAX_SIZE_CARD_PILE_DISCARD
+    )
 
 
-def _get_card_pile_draw(combat: Combat) -> list[Card]:
+def _get_card_pile_discover(combat: Combat) -> list[int]:
+    return combat.id_card_pile_discover[:MAX_SIZE_CARD_PILE_DISCOVER]
+
+
+# The state is the draw pile's context: its draw-depth order reads the Cards from its Entities
+def _get_card_pile_draw(game_state: GameState) -> list[int]:
+    combat = game_state.combat
+    if combat is None:
+        return []
+
     # Known Cards by depth, then the rest by id: the order hides what the player can't see
     cards_draw = sorted(
-        combat.card_pile_draw,
+        get_entities(game_state, combat.id_card_pile_draw, Card),
         key=lambda card: (card.draw_depth is None, card.draw_depth or 0, card.id),
     )
 
-    return _capped(TokenKind.CARD_PILE_DRAW, cards_draw, MAX_SIZE_CARD_PILE_DRAW)
-
-
-def _get_card_pile_event_roll(event: Event) -> list[Card]:
-    return event.card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
-
-
-def _get_card_pile_exhaust(combat: Combat) -> list[Card]:
     return _capped(
-        TokenKind.CARD_PILE_EXHAUST, combat.card_pile_exhaust, MAX_SIZE_CARD_PILE_EXHAUST
+        CollectionKind.CARD_PILE_DRAW, [card.id for card in cards_draw], MAX_SIZE_CARD_PILE_DRAW
     )
 
 
-def _get_card_pile_hand(combat: Combat) -> list[Card]:
-    return combat.card_pile_hand[:MAX_SIZE_CARD_PILE_HAND]
+def _get_card_pile_event_roll(event: Event) -> list[int]:
+    return event.id_card_pile_event_roll[:MAX_SIZE_CARD_PILE_EVENT_ROLL]
 
 
-def _get_card_pile_nightmare(combat: Combat) -> list[Card]:
+def _get_card_pile_exhaust(combat: Combat) -> list[int]:
     return _capped(
-        TokenKind.CARD_PILE_NIGHTMARE, combat.card_pile_nightmare, MAX_SIZE_CARD_PILE_NIGHTMARE
+        CollectionKind.CARD_PILE_EXHAUST, combat.id_card_pile_exhaust, MAX_SIZE_CARD_PILE_EXHAUST
     )
 
 
-def _get_card_pile_selected(game_state: GameState) -> list[Card]:
-    return game_state.card_pile_selected[:MAX_SIZE_CARD_PILE_SELECTED]
+def _get_card_pile_hand(combat: Combat) -> list[int]:
+    return combat.id_card_pile_hand[:MAX_SIZE_CARD_PILE_HAND]
 
 
-def _get_card_pile_stasis(combat: Combat) -> list[Card]:
-    # Index-aligned with the Monsters: a Monster holding no Card is None
-    cards = [card for card in combat.card_pile_stasis if card is not None]
-
-    return cards[:MAX_SIZE_CARD_PILE_STASIS]
-
-
-def _get_card_play_queue(combat: Combat) -> list[Card]:
-    return _capped(TokenKind.CARD_PLAY_QUEUE, combat.card_play_queue, MAX_SIZE_CARD_PLAY_QUEUE)
+def _get_card_pile_nightmare(combat: Combat) -> list[int]:
+    return _capped(
+        CollectionKind.CARD_PILE_NIGHTMARE,
+        [id_card for id_card, _ in combat.id_card_pile_nightmare],
+        MAX_SIZE_CARD_PILE_NIGHTMARE,
+    )
 
 
-def _get_card_reward_bundle(reward: Reward, idx_bundle: int, cap: int) -> list[Card]:
-    cards = reward.cards
-
-    return cards[idx_bundle][:cap] if idx_bundle < len(cards) else []
+def _get_card_pile_selected(game_state: GameState) -> list[int]:
+    return game_state.id_selected[:MAX_SIZE_CARD_PILE_SELECTED]
 
 
-def _get_card_reward_0(reward: Reward) -> list[Card]:
+def _get_card_pile_stasis(combat: Combat) -> list[int]:
+    # Slot-parallel to `id_monsters`: an empty slot or a Monster holding no Card is None
+    id_cards = [
+        id_card
+        for id_monster, id_card in zip(combat.id_monsters, combat.id_card_pile_stasis)
+        if id_monster is not None and id_card is not None
+    ]
+
+    return id_cards[:MAX_SIZE_CARD_PILE_STASIS]
+
+
+def _get_card_play_queue(game_state: GameState) -> list[int]:
+    return _capped(
+        CollectionKind.CARD_PLAY_QUEUE,
+        [card_play.id_card for card_play in game_state.card_play_queue],
+        MAX_SIZE_CARD_PLAY_QUEUE,
+    )
+
+
+def _get_card_reward_bundle(reward: Reward, idx_bundle: int, cap: int) -> list[int]:
+    id_cards = reward.id_cards
+
+    return id_cards[idx_bundle][:cap] if idx_bundle < len(id_cards) else []
+
+
+def _get_card_reward_0(reward: Reward) -> list[int]:
     # Bundle 0 must hold The Library's single wide roll
     return _get_card_reward_bundle(reward, 0, MAX_CARD_REWARD_ROLL)
 
 
-def _get_card_reward_1(reward: Reward) -> list[Card]:
+def _get_card_reward_1(reward: Reward) -> list[int]:
     return _get_card_reward_bundle(reward, 1, MAX_COMBAT_CARD_REWARD)
 
 
-def _get_card_reward_2(reward: Reward) -> list[Card]:
+def _get_card_reward_2(reward: Reward) -> list[int]:
     return _get_card_reward_bundle(reward, 2, MAX_COMBAT_CARD_REWARD)
 
 
-def _get_card_reward_3(reward: Reward) -> list[Card]:
+def _get_card_reward_3(reward: Reward) -> list[int]:
     return _get_card_reward_bundle(reward, 3, MAX_COMBAT_CARD_REWARD)
 
 
-def _get_card_reward_4(reward: Reward) -> list[Card]:
+def _get_card_reward_4(reward: Reward) -> list[int]:
     return _get_card_reward_bundle(reward, 4, MAX_COMBAT_CARD_REWARD)
 
 
-def _get_card_shop(shop: Shop) -> list[Card]:
-    return shop.cards[:MAX_SIZE_SHOP_CARDS]
+def _get_card_shop(shop: Shop) -> list[int]:
+    return shop.id_cards[:MAX_SIZE_SHOP_CARDS]
 
 
-def _get_character(game_state: GameState) -> list[Character]:
-    return [game_state.character]
+def _get_character(game_state: GameState) -> list[int]:
+    return [game_state.id_character]
 
 
-def _get_event_options(event: Event) -> list[EventOption]:
-    return event.options[:MAX_EVENT_OPTIONS]
+def _get_event_options(event: Event) -> list[int]:
+    return event.id_event_options[:MAX_EVENT_OPTIONS]
 
 
-def _get_monsters(combat: Combat) -> list[Monster]:
-    return combat.monsters
+def _get_monsters(combat: Combat) -> list[int]:
+    # The roster's slots hold None where empty
+    return [id_monster for id_monster in combat.id_monsters if id_monster is not None]
 
 
-def _get_potion_event_roll(event: Event) -> list[Potion]:
-    return event.potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
+def _get_potion_event_roll(event: Event) -> list[int]:
+    return event.id_potion_event_roll[:MAX_SIZE_POTION_EVENT_ROLL]
 
 
-def _get_potion_owned(game_state: GameState) -> list[Potion]:
-    return game_state.potions[:MAX_POTION_SLOTS]
+def _get_potion_owned(game_state: GameState) -> list[int]:
+    return game_state.id_potions[:MAX_POTION_SLOTS]
 
 
-def _get_potion_reward(reward: Reward) -> list[Potion]:
-    return reward.potions[:MAX_POTION_REWARDS]
+def _get_potion_reward(reward: Reward) -> list[int]:
+    return reward.id_potions[:MAX_POTION_REWARDS]
 
 
-def _get_potion_shop(shop: Shop) -> list[Potion]:
-    return shop.potions[:MAX_SHOP_POTIONS]
+def _get_potion_shop(shop: Shop) -> list[int]:
+    return shop.id_potions[:MAX_SHOP_POTIONS]
 
 
-def _get_relic_event_roll(event: Event) -> list[Relic]:
-    return event.relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
+def _get_relic_event_roll(event: Event) -> list[int]:
+    return event.id_relic_event_roll[:MAX_SIZE_RELIC_EVENT_ROLL]
 
 
-def _get_relic_owned(game_state: GameState) -> list[Relic]:
-    return _capped(TokenKind.RELIC_OWNED, game_state.relics, MAX_RELICS)
+def _get_relic_owned(game_state: GameState) -> list[int]:
+    return _capped(CollectionKind.RELIC_OWNED, game_state.id_relics, MAX_RELICS)
 
 
-def _get_relic_reward(reward: Reward) -> list[Relic]:
-    return reward.relics[:MAX_RELIC_REWARDS]
+def _get_relic_reward(reward: Reward) -> list[int]:
+    return reward.id_relics[:MAX_RELIC_REWARDS]
 
 
-def _get_relic_shop(shop: Shop) -> list[Relic]:
-    return shop.relics[:MAX_SHOP_RELICS]
+def _get_relic_shop(shop: Shop) -> list[int]:
+    return shop.id_relics[:MAX_SHOP_RELICS]
 
 
 def _get_wing_boots_charges(game_state: GameState) -> int:
@@ -323,7 +404,12 @@ def _get_wing_boots_charges(game_state: GameState) -> int:
         The Wing Boots Relic's counter; 0 without the Relic.
     """
     return next(
-        (relic.counter for relic in game_state.relics if relic.name == RelicName.WingBoots), 0
+        (
+            relic.counter
+            for relic in get_entities(game_state, game_state.id_relics, Relic)
+            if relic.name == RelicName.WingBoots
+        ),
+        0,
     )
 
 
@@ -342,18 +428,70 @@ def relic_held(game_state: GameState, relic_name: RelicName) -> bool:
     bool
         Whether it is held.
     """
-    return any(relic.name == relic_name for relic in game_state.relics)
+    return any(
+        relic.name == relic_name for relic in get_entities(game_state, game_state.id_relics, Relic)
+    )
+
+
+def get_y_x_current(map_: Map) -> tuple[int | None, int | None]:
+    """Return the current Room's row and column, from the Map's location.
+
+    Parameters
+    ----------
+    map_ : Map
+        The act's Map.
+
+    Returns
+    -------
+    y_current : int | None
+        The current row: None at the act's start, MAP_HEIGHT from the boss's Room on.
+    x_current : int | None
+        The current column: None at the act's start, 0 from the boss's Room on.
+    """
+    location = map_.location
+    if isinstance(location, LocationOverworld):
+        return location.y, location.x
+
+    if isinstance(location, LocationStart):
+        return None, None
+
+    # The boss's Room, its treasure and the victory sit past the last row
+    return MAP_HEIGHT, 0
+
+
+def get_rooms(game_state: GameState) -> list[list[Room | None]]:
+    """Return the Map's Rooms by row and column.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state whose Entities hold the Rooms.
+
+    Returns
+    -------
+    list[list[Room | None]]
+        Each cell's Room, None where the Map has none.
+    """
+    entities = game_state.entities
+
+    return cast(
+        list[list[Room | None]],
+        [
+            [None if id_room is None else entities[id_room] for id_room in row]
+            for row in game_state.map.id_rooms
+        ],
+    )
 
 
 def _next_row_candidate_cols(
-    rooms: list[list[Room | None]], y_current: int | None, x_current: int | None, winged: bool
+    game_state: GameState, y_current: int | None, x_current: int | None, winged: bool
 ) -> list[int]:
     """Return the columns of reachable Rooms in the next Map row.
 
     Parameters
     ----------
-    rooms : list[list[Room | None]]
-        The Map's rows and columns, with None for absent Rooms.
+    game_state : GameState
+        The state whose Map to read.
     y_current : int | None
         The current row, or None before entering the Map.
     x_current : int | None
@@ -366,20 +504,22 @@ def _next_row_candidate_cols(
     list[int]
         Reachable columns, empty beyond the last Map row.
     """
+    id_rooms = game_state.map.id_rooms
     y_next = 0 if y_current is None else y_current + 1
     if y_next >= MAP_HEIGHT:
         return []
 
     if y_current is None or x_current is None or winged:
-        return [x for x in range(MAP_WIDTH) if rooms[y_next][x] is not None]
+        return [x for x in range(MAP_WIDTH) if id_rooms[y_next][x] is not None]
 
     # Agent always stands on a real Room; cur is never None here, so fail loud if it is
-    room_curr = rooms[y_current][x_current]
-    if room_curr is None:
+    id_room_curr = id_rooms[y_current][x_current]
+    if id_room_curr is None:
         raise ValueError(f"Current room ({y_current}, {x_current}) is None")
 
+    (room_curr,) = get_entities(game_state, [id_room_curr], Room)
     for x_next in room_curr.edges:
-        if not (0 <= x_next < MAP_WIDTH and rooms[y_next][x_next] is not None):
+        if not (0 <= x_next < MAP_WIDTH and id_rooms[y_next][x_next] is not None):
             raise ValueError(f"Edge ({y_current}, {x_current})->({y_next}, {x_next}) has no room")
 
     return list(room_curr.edges)
@@ -400,82 +540,101 @@ def get_room_entities(game_state: GameState) -> list[Room]:
         or with charged Wing Boots, else the ones the current Room's edges lead to; empty when
         there is no next row.
     """
+    return get_entities(game_state, _get_id_rooms_next(game_state), Room)
+
+
+def _get_id_rooms_next(game_state: GameState) -> list[int]:
+    """Return the ids of the Rooms a RoomSelect can name, `get_room_entities`' in its order.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[int]
+        The next Map row's Room ids the Character can move to, in column order.
+    """
     map_ = game_state.map
-    rooms = map_.rooms
-    y_current = map_.y_current
+    y_current, x_current = get_y_x_current(map_)
     winged = _get_wing_boots_charges(game_state) > 0
-    cols = _next_row_candidate_cols(rooms, y_current, map_.x_current, winged)
+    cols = _next_row_candidate_cols(game_state, y_current, x_current, winged)
     if not cols:
         return []
 
     y_next = 0 if y_current is None else y_current + 1
 
-    return [room for x, room in enumerate(rooms[y_next]) if x in cols and room is not None]
+    return [
+        id_room
+        for x, id_room in enumerate(map_.id_rooms[y_next])
+        if x in cols and id_room is not None
+    ]
 
 
-# The reader of a token kind's context, then the token kind's getter
+# The reader of a collection kind's context, then the collection kind's getter of its Entities' ids
 type _GetterInContext = tuple[
     Callable[[GameState], Combat | Event | Reward | Shop | GameState | None],
-    Callable[[Any], Sequence[Entity]],
+    Callable[[Any], Sequence[int]],
 ]
 
-# The reader of each token kind's context, then the token kind's getter
-_GETTER_OF_TOKEN_KIND: dict[TokenKind, _GetterInContext] = {
-    TokenKind.CARD_MATCH_FLIPPED: (_read_event, _get_card_match_flipped),
-    TokenKind.CARD_MATCH_PAIRS: (_read_event, _get_card_match_pairs),
-    TokenKind.CARD_PILE_DECK: (_read_game_state, _get_card_pile_deck),
-    TokenKind.CARD_PILE_DISCARD: (_read_combat, _get_card_pile_discard),
-    TokenKind.CARD_PILE_DISCOVER: (_read_combat, _get_card_pile_discover),
-    TokenKind.CARD_PILE_DRAW: (_read_combat, _get_card_pile_draw),
-    TokenKind.CARD_PILE_EVENT_ROLL: (_read_event, _get_card_pile_event_roll),
-    TokenKind.CARD_PILE_EXHAUST: (_read_combat, _get_card_pile_exhaust),
-    TokenKind.CARD_PILE_HAND: (_read_combat, _get_card_pile_hand),
-    TokenKind.CARD_PILE_NIGHTMARE: (_read_combat, _get_card_pile_nightmare),
-    TokenKind.CARD_PILE_SELECTED: (_read_game_state, _get_card_pile_selected),
-    TokenKind.CARD_PILE_STASIS: (_read_combat, _get_card_pile_stasis),
-    TokenKind.CARD_PLAY_QUEUE: (_read_combat, _get_card_play_queue),
-    TokenKind.CARD_REWARD_0: (_read_reward, _get_card_reward_0),
-    TokenKind.CARD_REWARD_1: (_read_reward, _get_card_reward_1),
-    TokenKind.CARD_REWARD_2: (_read_reward, _get_card_reward_2),
-    TokenKind.CARD_REWARD_3: (_read_reward, _get_card_reward_3),
-    TokenKind.CARD_REWARD_4: (_read_reward, _get_card_reward_4),
-    TokenKind.CARD_SHOP: (_read_shop, _get_card_shop),
-    TokenKind.CHARACTER: (_read_game_state, _get_character),
-    TokenKind.EVENT_OPTIONS: (_read_event, _get_event_options),
-    TokenKind.MONSTERS: (_read_combat, _get_monsters),
-    TokenKind.POTION_EVENT_ROLL: (_read_event, _get_potion_event_roll),
-    TokenKind.POTION_OWNED: (_read_game_state, _get_potion_owned),
-    TokenKind.POTION_REWARD: (_read_reward, _get_potion_reward),
-    TokenKind.POTION_SHOP: (_read_shop, _get_potion_shop),
-    TokenKind.RELIC_EVENT_ROLL: (_read_event, _get_relic_event_roll),
-    TokenKind.RELIC_OWNED: (_read_game_state, _get_relic_owned),
-    TokenKind.RELIC_REWARD: (_read_reward, _get_relic_reward),
-    TokenKind.RELIC_SHOP: (_read_shop, _get_relic_shop),
-    TokenKind.ROOMS: (_read_game_state, get_room_entities),
+# The reader of each collection kind's context, then the collection kind's getter
+_GETTER_OF_COLLECTION_KIND: dict[CollectionKind, _GetterInContext] = {
+    CollectionKind.CARD_MATCH_FLIPPED: (_read_event, _get_card_match_flipped),
+    CollectionKind.CARD_MATCH_PAIRS: (_read_event, _get_card_match_pairs),
+    CollectionKind.CARD_PILE_DECK: (_read_game_state, _get_card_pile_deck),
+    CollectionKind.CARD_PILE_DISCARD: (_read_combat, _get_card_pile_discard),
+    CollectionKind.CARD_PILE_DISCOVER: (_read_combat, _get_card_pile_discover),
+    CollectionKind.CARD_PILE_DRAW: (_read_game_state, _get_card_pile_draw),
+    CollectionKind.CARD_PILE_EVENT_ROLL: (_read_event, _get_card_pile_event_roll),
+    CollectionKind.CARD_PILE_EXHAUST: (_read_combat, _get_card_pile_exhaust),
+    CollectionKind.CARD_PILE_HAND: (_read_combat, _get_card_pile_hand),
+    CollectionKind.CARD_PILE_NIGHTMARE: (_read_combat, _get_card_pile_nightmare),
+    CollectionKind.CARD_PILE_SELECTED: (_read_game_state, _get_card_pile_selected),
+    CollectionKind.CARD_PILE_STASIS: (_read_combat, _get_card_pile_stasis),
+    CollectionKind.CARD_PLAY_QUEUE: (_read_game_state, _get_card_play_queue),
+    CollectionKind.CARD_REWARD_0: (_read_reward, _get_card_reward_0),
+    CollectionKind.CARD_REWARD_1: (_read_reward, _get_card_reward_1),
+    CollectionKind.CARD_REWARD_2: (_read_reward, _get_card_reward_2),
+    CollectionKind.CARD_REWARD_3: (_read_reward, _get_card_reward_3),
+    CollectionKind.CARD_REWARD_4: (_read_reward, _get_card_reward_4),
+    CollectionKind.CARD_SHOP: (_read_shop, _get_card_shop),
+    CollectionKind.CHARACTER: (_read_game_state, _get_character),
+    CollectionKind.EVENT_OPTIONS: (_read_event, _get_event_options),
+    CollectionKind.MONSTERS: (_read_combat, _get_monsters),
+    CollectionKind.POTION_EVENT_ROLL: (_read_event, _get_potion_event_roll),
+    CollectionKind.POTION_OWNED: (_read_game_state, _get_potion_owned),
+    CollectionKind.POTION_REWARD: (_read_reward, _get_potion_reward),
+    CollectionKind.POTION_SHOP: (_read_shop, _get_potion_shop),
+    CollectionKind.RELIC_EVENT_ROLL: (_read_event, _get_relic_event_roll),
+    CollectionKind.RELIC_OWNED: (_read_game_state, _get_relic_owned),
+    CollectionKind.RELIC_REWARD: (_read_reward, _get_relic_reward),
+    CollectionKind.RELIC_SHOP: (_read_shop, _get_relic_shop),
+    CollectionKind.ROOMS: (_read_game_state, _get_id_rooms_next),
 }
 
 
 def _check_tables() -> None:
-    """Check that each token kind has its own getter, taking the context its reader returns."""
-    if set(_GETTER_OF_TOKEN_KIND) != set(TokenKind):
+    """Check that each collection kind has its own getter, taking its reader's context."""
+    if set(_GETTER_OF_COLLECTION_KIND) != set(CollectionKind):
         raise RuntimeError(
-            "A TokenKind has no entry in _GETTER_OF_TOKEN_KIND: "
-            f"{set(TokenKind) - set(_GETTER_OF_TOKEN_KIND)}"
+            "A CollectionKind has no entry in _GETTER_OF_COLLECTION_KIND: "
+            f"{set(CollectionKind) - set(_GETTER_OF_COLLECTION_KIND)}"
         )
 
-    token_kind_of_getter: dict[Callable[[Any], Sequence[Entity]], TokenKind] = {}
-    for token_kind, (reader, getter) in _GETTER_OF_TOKEN_KIND.items():
-        token_kind_first = token_kind_of_getter.setdefault(getter, token_kind)
-        if token_kind_first is not token_kind:
+    collection_kind_of_getter: dict[Callable[[Any], Sequence[int]], CollectionKind] = {}
+    for collection_kind, (reader, getter) in _GETTER_OF_COLLECTION_KIND.items():
+        collection_kind_first = collection_kind_of_getter.setdefault(getter, collection_kind)
+        if collection_kind_first is not collection_kind:
             raise RuntimeError(
-                f"`{getter.__name__}` serves two token kinds: {token_kind_first.name} and "
-                f"{token_kind.name}"
+                f"`{getter.__name__}` serves two collection kinds: {collection_kind_first.name} "
+                f"and {collection_kind.name}"
             )
 
         parameters = signature(getter).parameters
         if len(parameters) != 1:
             raise RuntimeError(
-                f"{token_kind.name}'s getter `{getter.__name__}` takes {len(parameters)} "
+                f"{collection_kind.name}'s getter `{getter.__name__}` takes {len(parameters)} "
                 "parameters, not its context alone"
             )
 
@@ -484,7 +643,7 @@ def _check_tables() -> None:
         (parameter,) = parameters.values()
         if parameter.annotation not in (type_returned, *get_args(type_returned)):
             raise RuntimeError(
-                f"{token_kind.name}'s getter takes {formatannotation(parameter.annotation)}, "
+                f"{collection_kind.name}'s getter takes {formatannotation(parameter.annotation)}, "
                 f"which `{reader.__name__}` does not return"
             )
 
@@ -492,11 +651,12 @@ def _check_tables() -> None:
 _check_tables()
 
 # Every reader a getter is paired with
-_READERS = frozenset(reader for reader, _ in _GETTER_OF_TOKEN_KIND.values())
+_READERS = frozenset(reader for reader, _ in _GETTER_OF_COLLECTION_KIND.values())
 
-# Each token kind in window order, with its context's reader and its getter
+# Each collection kind in window order, with its context's reader and its getter
 _GETTERS_IN_WINDOW_ORDER = tuple(
-    (token_kind, *_GETTER_OF_TOKEN_KIND[token_kind]) for token_kind in TOKEN_KINDS_IN_WINDOW_ORDER
+    (collection_kind, *_GETTER_OF_COLLECTION_KIND[collection_kind])
+    for collection_kind in COLLECTION_KINDS_IN_WINDOW_ORDER
 )
 
 
@@ -541,11 +701,12 @@ def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
         return frozenset()
 
     map_ = game_state.map
+    y_current, x_current = get_y_x_current(map_)
     wb_charges_left = _get_wing_boots_charges(game_state)
-    cache_key = (map_.identity_hash, map_.y_current, map_.x_current, wb_charges_left)
+    cache_key = (map_.identity_hash, y_current, x_current, wb_charges_left)
     burning_path = _BURNING_PATH_CACHE.get(cache_key)
     if burning_path is None:
-        burning_path = _get_burning_path_uncached(map_, wb_charges_left)
+        burning_path = _get_burning_path_uncached(game_state, wb_charges_left)
         if len(_BURNING_PATH_CACHE) >= _BURNING_PATH_CACHE_MAX:
             _BURNING_PATH_CACHE.clear()
 
@@ -554,13 +715,15 @@ def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
     return burning_path
 
 
-def _get_burning_path_uncached(map_: Map, wb_charges_left: int) -> frozenset[tuple[int, int]]:
-    """Compute `get_burning_path` on `map_` from its current Room.
+def _get_burning_path_uncached(
+    game_state: GameState, wb_charges_left: int
+) -> frozenset[tuple[int, int]]:
+    """Compute `get_burning_path` on the state's Map from its current Room.
 
     Parameters
     ----------
-    map_ : Map
-        The act's Map.
+    game_state : GameState
+        The state whose Map to read.
     wb_charges_left : int
         The Wing Boots charges left.
 
@@ -569,13 +732,13 @@ def _get_burning_path_uncached(map_: Map, wb_charges_left: int) -> frozenset[tup
     frozenset[tuple[int, int]]
         The Rooms' (y, x); empty when the Map has no burning Room or it is out of reach.
     """
-    rooms = map_.rooms
+    rooms = get_rooms(game_state)
     room_burning = get_room_burning(rooms)
     if room_burning is None:
         return frozenset()
 
     # Forward from the current Room, or from every first-row Room at the act's start
-    y_current, x_current = map_.y_current, map_.x_current
+    y_current, x_current = get_y_x_current(game_state.map)
     wb_charges_from = [[math.inf] * MAP_WIDTH for _ in rooms]
     if y_current is None or x_current is None:
         y_first = 0

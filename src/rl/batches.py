@@ -19,6 +19,7 @@ from src.rl.encoding import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.encoding import NUM_CHANNELS
+from src.rl.types import CollectionKind
 from src.rl.types import EncodedFeatures
 from src.rl.types import EntityKind
 from src.rl.types import Live
@@ -27,7 +28,6 @@ from src.rl.types import Reserved
 from src.rl.types import Sparse
 from src.rl.types import StateCollection
 from src.rl.types import States
-from src.rl.types import TokenKind
 from src.rl.types import Tokens
 
 
@@ -241,7 +241,9 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
             ),
         ),
         x_count=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
-        x_token_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
+        x_collection_kind=torch.zeros(
+            num_buffers, num_tokens, len(CollectionKind), dtype=torch.uint8
+        ),
         x_entity_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
         x_legal_selection=torch.zeros(
             num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
@@ -251,7 +253,7 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
     )
     effect_pending = _allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_SPARSE_EFFECT)
     x_total = torch.zeros(
-        num_buffers, buffer_size, len(TokenKind) + len(StateCollection), dtype=torch.int32
+        num_buffers, buffer_size, len(CollectionKind) + len(StateCollection), dtype=torch.int32
     )
 
     # Reserve memory for states
@@ -616,7 +618,7 @@ def _select_states[TStorage](
                 ),
             ),
             x_count=tokens.x_count[selector_states],
-            x_token_kind=tokens.x_token_kind[selector_tokens],
+            x_collection_kind=tokens.x_collection_kind[selector_tokens],
             x_entity_kind=tokens.x_entity_kind[selector_tokens],
             x_legal_selection=tokens.x_legal_selection[selector_tokens],
             x_legal_target=tokens.x_legal_target[selector_tokens],

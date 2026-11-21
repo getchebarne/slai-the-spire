@@ -5,8 +5,8 @@ Centralizes magic numbers and configuration values used across the RL codebase.
 
 import slai as _slai
 
+from src.rl.types import CollectionKind
 from src.rl.types import EntityKind
-from src.rl.types import TokenKind
 
 
 # The policy's action types are exactly the engine's
@@ -123,7 +123,7 @@ MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
 MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
 
 # Most Card bundles one Reward holds (Orrery stages 5); each bundle is its own
-# CARD_REWARD_<b> token kind, so a Reward token's token kind names its bundle
+# CARD_REWARD_<b> collection kind, so a Reward token's collection kind names its bundle
 MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
 
 # Size ceiling for the master deck, used to normalize deck-scale counts (deck
@@ -185,131 +185,136 @@ EVENT_STAGE_CAP = 10
 MIN_BATCH_DEDUP = 1024
 
 
-TOKEN_KINDS_CARD_REWARDS = (  # One token kind per Reward bundle, in bundle order
-    TokenKind.CARD_REWARD_0,
-    TokenKind.CARD_REWARD_1,
-    TokenKind.CARD_REWARD_2,
-    TokenKind.CARD_REWARD_3,
-    TokenKind.CARD_REWARD_4,
+COLLECTION_KINDS_CARD_REWARDS = (  # One collection kind per Reward bundle, in bundle order
+    CollectionKind.CARD_REWARD_0,
+    CollectionKind.CARD_REWARD_1,
+    CollectionKind.CARD_REWARD_2,
+    CollectionKind.CARD_REWARD_3,
+    CollectionKind.CARD_REWARD_4,
 )
 
-# The Card token kinds in window order: decision pools first, observational piles last
-TOKEN_KINDS_CARD = (
-    TokenKind.CARD_PILE_HAND,
-    TokenKind.CARD_PILE_DISCOVER,
-    TokenKind.CARD_PILE_SELECTED,
-    *TOKEN_KINDS_CARD_REWARDS,
-    TokenKind.CARD_SHOP,
-    TokenKind.CARD_PILE_EVENT_ROLL,
-    TokenKind.CARD_MATCH_FLIPPED,
-    TokenKind.CARD_MATCH_PAIRS,
-    TokenKind.CARD_PILE_STASIS,
-    TokenKind.CARD_PLAY_QUEUE,
-    TokenKind.CARD_PILE_NIGHTMARE,
-    TokenKind.CARD_PILE_DRAW,
-    TokenKind.CARD_PILE_DISCARD,
-    TokenKind.CARD_PILE_EXHAUST,
-    TokenKind.CARD_PILE_DECK,
+# The Card collection kinds in window order: decision pools first, observational piles last
+COLLECTION_KINDS_CARD = (
+    CollectionKind.CARD_PILE_HAND,
+    CollectionKind.CARD_PILE_DISCOVER,
+    CollectionKind.CARD_PILE_SELECTED,
+    *COLLECTION_KINDS_CARD_REWARDS,
+    CollectionKind.CARD_SHOP,
+    CollectionKind.CARD_PILE_EVENT_ROLL,
+    CollectionKind.CARD_MATCH_FLIPPED,
+    CollectionKind.CARD_MATCH_PAIRS,
+    CollectionKind.CARD_PILE_STASIS,
+    CollectionKind.CARD_PLAY_QUEUE,
+    CollectionKind.CARD_PILE_NIGHTMARE,
+    CollectionKind.CARD_PILE_DRAW,
+    CollectionKind.CARD_PILE_DISCARD,
+    CollectionKind.CARD_PILE_EXHAUST,
+    CollectionKind.CARD_PILE_DECK,
 )
 
-# The Relic token kinds in window order: decision pools first, the owned Relics last
-_TOKEN_KINDS_RELIC = (
-    TokenKind.RELIC_REWARD,
-    TokenKind.RELIC_SHOP,
-    TokenKind.RELIC_EVENT_ROLL,
-    TokenKind.RELIC_OWNED,
+# The Relic collection kinds in window order: decision pools first, the owned Relics last
+_COLLECTION_KINDS_RELIC = (
+    CollectionKind.RELIC_REWARD,
+    CollectionKind.RELIC_SHOP,
+    CollectionKind.RELIC_EVENT_ROLL,
+    CollectionKind.RELIC_OWNED,
 )
 
-# The Potion token kinds in window order; every source is engine-bounded
-_TOKEN_KINDS_POTION = (
-    TokenKind.POTION_OWNED,
-    TokenKind.POTION_REWARD,
-    TokenKind.POTION_SHOP,
-    TokenKind.POTION_EVENT_ROLL,
+# The Potion collection kinds in window order; every source is engine-bounded
+_COLLECTION_KINDS_POTION = (
+    CollectionKind.POTION_OWNED,
+    CollectionKind.POTION_REWARD,
+    CollectionKind.POTION_SHOP,
+    CollectionKind.POTION_EVENT_ROLL,
 )
 
-# The Entity kinds in window order, each its token kinds; the last four hold a single token kind
-TOKEN_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[TokenKind, ...]] = {
-    EntityKind.CARD: TOKEN_KINDS_CARD,
-    EntityKind.RELIC: _TOKEN_KINDS_RELIC,
-    EntityKind.POTION: _TOKEN_KINDS_POTION,
-    EntityKind.MONSTER: (TokenKind.MONSTERS,),
-    EntityKind.EVENT_OPTION: (TokenKind.EVENT_OPTIONS,),
-    EntityKind.CHARACTER: (TokenKind.CHARACTER,),
-    EntityKind.ROOM: (TokenKind.ROOMS,),
+# The Entity kinds in window order, each its collection kinds; the last four hold a single
+# collection kind
+COLLECTION_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[CollectionKind, ...]] = {
+    EntityKind.CARD: COLLECTION_KINDS_CARD,
+    EntityKind.RELIC: _COLLECTION_KINDS_RELIC,
+    EntityKind.POTION: _COLLECTION_KINDS_POTION,
+    EntityKind.MONSTER: (CollectionKind.MONSTERS,),
+    EntityKind.EVENT_OPTION: (CollectionKind.EVENT_OPTIONS,),
+    EntityKind.CHARACTER: (CollectionKind.CHARACTER,),
+    EntityKind.ROOM: (CollectionKind.ROOMS,),
 }
 
-# A state's tokens come in this order: the Entity kinds one after another, each its token kinds
-TOKEN_KINDS_IN_WINDOW_ORDER = tuple(
-    token_kind
-    for token_kinds_entity_kind in TOKEN_KINDS_OF_ENTITY_KIND.values()
-    for token_kind in token_kinds_entity_kind
+# A state's tokens come in this order: the Entity kinds one after another, each its
+# collection kinds
+COLLECTION_KINDS_IN_WINDOW_ORDER = tuple(
+    collection_kind
+    for collection_kinds_entity_kind in COLLECTION_KINDS_OF_ENTITY_KIND.values()
+    for collection_kind in collection_kinds_entity_kind
 )
 
-# Each token kind's token cap: the most tokens of that token kind a state holds
-MAX_TOKENS_OF_TOKEN_KIND: dict[TokenKind, int] = {
-    TokenKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
-    TokenKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
-    TokenKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
-    TokenKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
-    TokenKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
-    TokenKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
-    TokenKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
-    TokenKind.CARD_MATCH_FLIPPED: 1,
-    TokenKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
-    TokenKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
-    TokenKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
-    TokenKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
-    TokenKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
-    TokenKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
-    TokenKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
-    TokenKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
-    TokenKind.RELIC_REWARD: MAX_RELIC_REWARDS,
-    TokenKind.RELIC_SHOP: MAX_SHOP_RELICS,
-    TokenKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
-    TokenKind.RELIC_OWNED: MAX_RELICS,
-    TokenKind.POTION_OWNED: MAX_POTION_SLOTS,
-    TokenKind.POTION_REWARD: MAX_POTION_REWARDS,
-    TokenKind.POTION_SHOP: MAX_SHOP_POTIONS,
-    TokenKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
-    TokenKind.MONSTERS: MAX_MONSTERS,
-    TokenKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
-    TokenKind.CHARACTER: 1,
-    TokenKind.ROOMS: MAP_WIDTH,
+# Each collection kind's token cap: the most tokens of that collection kind a state holds
+MAX_TOKENS_OF_COLLECTION_KIND: dict[CollectionKind, int] = {
+    CollectionKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
+    CollectionKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
+    CollectionKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
+    CollectionKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
+    CollectionKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
+    CollectionKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
+    CollectionKind.CARD_MATCH_FLIPPED: 1,
+    CollectionKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
+    CollectionKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
+    CollectionKind.CARD_PLAY_QUEUE: MAX_SIZE_CARD_PLAY_QUEUE,
+    CollectionKind.CARD_PILE_NIGHTMARE: MAX_SIZE_CARD_PILE_NIGHTMARE,
+    CollectionKind.CARD_PILE_DRAW: MAX_SIZE_CARD_PILE_DRAW,
+    CollectionKind.CARD_PILE_DISCARD: MAX_SIZE_CARD_PILE_DISCARD,
+    CollectionKind.CARD_PILE_EXHAUST: MAX_SIZE_CARD_PILE_EXHAUST,
+    CollectionKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
+    CollectionKind.RELIC_REWARD: MAX_RELIC_REWARDS,
+    CollectionKind.RELIC_SHOP: MAX_SHOP_RELICS,
+    CollectionKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
+    CollectionKind.RELIC_OWNED: MAX_RELICS,
+    CollectionKind.POTION_OWNED: MAX_POTION_SLOTS,
+    CollectionKind.POTION_REWARD: MAX_POTION_REWARDS,
+    CollectionKind.POTION_SHOP: MAX_SHOP_POTIONS,
+    CollectionKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
+    CollectionKind.MONSTERS: MAX_MONSTERS,
+    CollectionKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
+    CollectionKind.CHARACTER: 1,
+    CollectionKind.ROOMS: MAP_WIDTH,
 }
 
 # The cap of the block every collection packs into: the sum of the collections' caps
-MAX_TOKENS = sum(MAX_TOKENS_OF_TOKEN_KIND.values())
+MAX_TOKENS = sum(MAX_TOKENS_OF_COLLECTION_KIND.values())
 
 
 def _check_tables() -> None:
     """Check that the tables that restate the engine or an enum still agree with it."""
-    if len(TOKEN_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
+    if len(COLLECTION_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
         raise RuntimeError(
             f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
-            "add CARD_REWARD_<b> token kinds"
+            "add CARD_REWARD_<b> collection kinds"
         )
-    if set(MAX_TOKENS_OF_TOKEN_KIND) != set(TokenKind):
+    if set(MAX_TOKENS_OF_COLLECTION_KIND) != set(CollectionKind):
         raise RuntimeError(
-            "A TokenKind has no entry in MAX_TOKENS_OF_TOKEN_KIND: "
-            f"{set(TokenKind) - set(MAX_TOKENS_OF_TOKEN_KIND)}"
+            "A CollectionKind has no entry in MAX_TOKENS_OF_COLLECTION_KIND: "
+            f"{set(CollectionKind) - set(MAX_TOKENS_OF_COLLECTION_KIND)}"
         )
-    if set(TOKEN_KINDS_OF_ENTITY_KIND) != set(EntityKind):
+    if set(COLLECTION_KINDS_OF_ENTITY_KIND) != set(EntityKind):
         raise RuntimeError(
-            "An EntityKind has no entry in TOKEN_KINDS_OF_ENTITY_KIND: "
-            f"{set(EntityKind) - set(TOKEN_KINDS_OF_ENTITY_KIND)}"
+            "An EntityKind has no entry in COLLECTION_KINDS_OF_ENTITY_KIND: "
+            f"{set(EntityKind) - set(COLLECTION_KINDS_OF_ENTITY_KIND)}"
         )
 
-    # Every token kind sits once in the window order, and TokenKind is valued 0..len-1
-    token_kinds = sorted(TOKEN_KINDS_IN_WINDOW_ORDER)
-    if token_kinds != list(TokenKind) or token_kinds != list(range(len(token_kinds))):
-        names = [token_kind.name for token_kind in TOKEN_KINDS_IN_WINDOW_ORDER]
+    # Every collection kind sits once in the window order, and CollectionKind is valued 0..len-1
+    collection_kinds = sorted(COLLECTION_KINDS_IN_WINDOW_ORDER)
+    if (
+        collection_kinds != list(CollectionKind)
+        or collection_kinds != list(range(len(collection_kinds)))
+    ):
+        names = [collection_kind.name for collection_kind in COLLECTION_KINDS_IN_WINDOW_ORDER]
         raise RuntimeError(
-            "Each TokenKind must sit once in TOKEN_KINDS_OF_ENTITY_KIND's tables, and TokenKind "
-            f"must be valued 0..len-1; the tables list {names}"
+            "Each CollectionKind must sit once in COLLECTION_KINDS_OF_ENTITY_KIND's tables, and "
+            f"CollectionKind must be valued 0..len-1; the tables list {names}"
         )
 
 

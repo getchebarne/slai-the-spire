@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.rl.batches import expand_ranges
+from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_owner_first_row
 from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
@@ -32,7 +33,6 @@ from src.rl.types import Live
 from src.rl.types import OwnedRows
 from src.rl.types import Sparse
 from src.rl.types import States
-from src.rl.types import TokenKind
 from src.rl.types import Tokens
 
 
@@ -182,8 +182,7 @@ class EntityProjector(nn.Module):
 
         # Rooms: the Room tokens' rows, in the order of their cell features
         num_rooms = x_room_hidden.shape[0]
-        x_room_row = torch.nonzero_static(tokens.x_token_kind == TokenKind.ROOMS, size=num_rooms)
-        x_room_row = x_room_row.squeeze(1)  # (N_rooms,)
+        x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, num_rooms)
 
         if batch_size < MIN_BATCH_DEDUP:
             x_hidden = self._embed_tokens(
@@ -210,7 +209,7 @@ class EntityProjector(nn.Module):
         return Tokens(
             features=Dense(x_value=x_hidden),
             x_count=tokens.x_count,
-            x_token_kind=tokens.x_token_kind,
+            x_collection_kind=tokens.x_collection_kind,
             x_entity_kind=tokens.x_entity_kind,
             x_legal_selection=tokens.x_legal_selection,
             x_legal_target=tokens.x_legal_target,
@@ -355,7 +354,7 @@ def _gather_tokens(
     """
     features = tokens.features
     effects, modifiers = features.effects, features.modifiers
-    x_is_room = tokens.x_token_kind[x_rep] == TokenKind.ROOMS  # (U,)
+    x_is_room = tokens.x_entity_kind[x_rep] == EntityKind.ROOM  # (U,)
 
     # Every size the gathers need, in one read
     (

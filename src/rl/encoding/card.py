@@ -160,6 +160,7 @@ def encode_card_into(
     draw_below: int | None,
     gold: int,
     slot_holder: int | None,
+    play_source: PlaySource | None,
     np_own: np.ndarray,
     np_shared: np.ndarray,
 ) -> None:
@@ -180,6 +181,8 @@ def encode_card_into(
         The Character's gold, which its price is read against.
     slot_holder : int | None
         The slot of the Monster holding it in stasis; None out of the stasis pile.
+    play_source : PlaySource | None
+        Its first CardPlay's source while it is queued; None out of the play queue.
     np_own : np.ndarray
         (ENCODING_DIM_CARD,) float32. The Card's own range of its token row, written in place.
     np_shared : np.ndarray
@@ -211,8 +214,8 @@ def encode_card_into(
     np_own[_OFF_CARD_BOTTLED] = float(card.bottled)
     np_own[_OFF_CARD_COST_OFFSET] = _cost_offset(card) / _COST_OFFSET_MAX
     np_own[_OFF_CARD_FREE_TO_PLAY_ONCE] = float(card.free_to_play_once)
-    if card.play_source is not None:
-        np_own[_OFF_CARD_PLAY_SOURCE + _IDX_OF_PLAY_SOURCE[card.play_source]] = 1.0
+    if play_source is not None:
+        np_own[_OFF_CARD_PLAY_SOURCE + _IDX_OF_PLAY_SOURCE[play_source]] = 1.0
     if card.draw_depth is not None:
         np_own[_OFF_CARD_DRAW_DEPTH + min(card.draw_depth, MAX_SIZE_CARD_PILE_DRAW - 1)] = 1.0
         np_own[_OFF_CARD_DRAW_DEPTH_SCALAR] = (
@@ -235,8 +238,13 @@ def encode_card_into(
 
 
 def get_record_key_card(
-    card: Card, energy_current: int, draw_below: int | None, gold: int, slot_holder: int | None
-) -> tuple[int, int, int | None, int | None, int | None]:
+    card: Card,
+    energy_current: int,
+    draw_below: int | None,
+    gold: int,
+    slot_holder: int | None,
+    play_source: PlaySource | None,
+) -> tuple[int, int, int | None, int | None, int | None, PlaySource | None]:
     """Make a Card's record key: its identity_hash and everything else its row reads.
 
     Parameters
@@ -251,12 +259,14 @@ def get_record_key_card(
         The Character's gold, which its price is read against.
     slot_holder : int | None
         The slot of the Monster holding it in stasis; None out of the stasis pile.
+    play_source : PlaySource | None
+        Its first CardPlay's source while it is queued; None out of the play queue.
 
     Returns
     -------
-    tuple[int, int, int | None, int | None, int | None]
-        Its identity_hash, the energy, the Cards below it, the gold when it has a price, and its
-        holder's slot while it is in stasis.
+    tuple[int, int, int | None, int | None, int | None, PlaySource | None]
+        Its identity_hash, the energy, the Cards below it, the gold when it has a price, its
+        holder's slot while it is in stasis, and its play source while it is queued.
     """
     return (
         card.identity_hash,
@@ -264,4 +274,5 @@ def get_record_key_card(
         draw_below,
         get_record_key_price(card.price, gold),
         slot_holder,
+        play_source,
     )
