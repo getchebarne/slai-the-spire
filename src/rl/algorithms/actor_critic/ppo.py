@@ -226,7 +226,7 @@ def _plan_dedup(rollout: Rollout) -> tuple[MapPlan, TokenPlan]:
     states = cat_states([rollout.states, rollout.states_final])
     maps = get_unique_maps(states)
 
-    return plan_maps(maps), plan_tokens(states, maps.x_room_key)
+    return plan_maps(maps), plan_tokens(states)
 
 
 def _evaluate_rollout(

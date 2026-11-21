@@ -15,7 +15,9 @@ from slai import Modifier
 from slai import Monster
 from slai import Potion
 from slai import Relic
+from slai import Room
 
+from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
 from src.rl.constants import TOKEN_KINDS_OF_ENTITY_KIND
@@ -230,6 +232,7 @@ def encode_states_into(
         x_token_count=tokens.x_count,
         x_token_kind=tokens.x_token_kind,
         x_entity_kind=tokens.x_entity_kind,
+        x_room_cell=states_reserved.x_room_cell,
         sparse_token=tokens.features.sparse,
         effects=tokens.features.effects,
         modifiers=tokens.features.modifiers,
@@ -369,6 +372,7 @@ def _encode_batch_tokens_into(
     x_token_count: torch.Tensor,
     x_token_kind: torch.Tensor,
     x_entity_kind: torch.Tensor,
+    x_room_cell: torch.Tensor,
     sparse_token: Sparse[Reserved],
     effects: OwnedRows[Reserved],
     modifiers: OwnedRows[Reserved],
@@ -384,6 +388,8 @@ def _encode_batch_tokens_into(
         (token capacity,) int16. Each token's kind, written in place.
     x_entity_kind : torch.Tensor
         (token capacity,) int16. Each token's Entity kind, written in place.
+    x_room_cell : torch.Tensor
+        (Room capacity,) long. Each Room token's flattened Map cell, written in token order.
     sparse_token : Sparse[Reserved]
         One row per token.
     effects : OwnedRows[Reserved]
@@ -414,6 +420,7 @@ def _encode_batch_tokens_into(
     # Each token's row in the token row table, and the dense rows of the tokens with no record
     batch_token_table_rows: list[int] = []
     batch_token_rows_dense: list[np.ndarray] = []
+    room_cells: list[int] = []
 
     # Initialize lists to store owned rows (Effects, Modifiers)
     batch_token_effect_table_rows: list[Sequence[int]] = []
@@ -432,7 +439,7 @@ def _encode_batch_tokens_into(
             token_effect_table_rows,
             modifier_rows,
             row_of_entity_id,
-        ) = _encode_tokens_into(game_state, tokens, row_start)
+        ) = _encode_tokens_into(game_state, tokens, row_start, room_cells)
 
         # Accumulate the tokens' table rows and dense rows
         batch_token_table_rows += token_table_rows
@@ -444,6 +451,8 @@ def _encode_batch_tokens_into(
 
         # Accumulate the Entity ids
         batch_row_of_entity_id.append(row_of_entity_id)
+
+    x_room_cell[: len(room_cells)].numpy()[:] = room_cells
 
     # Each token's kind, through a bytearray: every TokenKind's value fits a byte
     np_token_kind = x_token_kind[:num_tokens].numpy()
@@ -494,7 +503,7 @@ def _encode_batch_tokens_into(
 
 
 def _encode_tokens_into(
-    game_state: GameState, tokens: Sequence[Token], row_start: int
+    game_state: GameState, tokens: Sequence[Token], row_start: int, room_cells: list[int]
 ) -> tuple[list[int], list[np.ndarray], list[Sequence[int]], list[_ModifierRow], dict[int, int]]:
     """Give each of a state's tokens its row and its Effect rows.
 
@@ -514,6 +523,8 @@ def _encode_tokens_into(
         The state's tokens, as (token kind, Entity) in window order.
     row_start : int
         The state's first row in the batch.
+    room_cells : list[int]
+        Append each Room token's flattened cell to the batch's list.
 
     Returns
     -------
@@ -618,8 +629,8 @@ def _encode_tokens_into(
                         (row, modifier, ModifierOwner.CHARACTER) for modifier in entity.modifiers
                     ]
 
-            case _:
-                # A Room has no columns and owns no rows
+            case Room():
+                room_cells.append(entity.y * MAP_WIDTH + entity.x)
                 record = (TABLE_ROW_EMPTY, ())
 
         # A record gives the token's table row and Effect rows; with none it takes a dense row

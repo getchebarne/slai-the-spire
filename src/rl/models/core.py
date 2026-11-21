@@ -10,6 +10,7 @@ from src.rl.constants import MAX_TOKENS_OF_TOKEN_KIND
 from src.rl.constants import TOKEN_KINDS_CARD_REWARDS
 from src.rl.constants import TOKEN_KINDS_IN_WINDOW_ORDER
 from src.rl.encoding import ENCODING_DIM_CONTEXT
+from src.rl.encoding import NUM_FEATURE_CHANNELS
 from src.rl.models.entity_projector import EntityProjector
 from src.rl.models.entity_transformer import EntityTransformer
 from src.rl.models.map_encoder import MapGNN
@@ -52,7 +53,7 @@ class Core(nn.Module):
         super().__init__()
 
         # Entity projector
-        self._entity_projector = EntityProjector(dim_entity, dim_map)
+        self._entity_projector = EntityProjector(dim_entity, NUM_FEATURE_CHANNELS)
 
         # Entity transformer
         self._entity_transformer = EntityTransformer(
@@ -63,7 +64,7 @@ class Core(nn.Module):
         self._token_kind_emb = nn.Embedding(len(TokenKind), dim_entity)
 
         # Map GNN
-        self._map_gnn = MapGNN(gnn_num_layers, dim_map)
+        self._map_gnn = MapGNN(gnn_num_layers, dim_map, dim_entity)
 
         # Global context: global token + Character + Map readout + token-kind counts + raw flats
         dim_global_input = (
@@ -146,16 +147,21 @@ class Core(nn.Module):
         # Each token's state
         x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
 
-        # Map GNN: the Room tokens' cell features and the whole-graph readout
-        num_rooms = int(states.x_total_cpu[:, TokenKind.ROOMS].sum())
-        x_room_hidden, x_map_readout = self._map_gnn(
-            states.x_map_grid, num_rooms, map_cache, map_dedup
-        )
+        # Project the tokens and the pending halt
+        tokens_projected, x_effect_pending = self._entity_projector(states, token_dedup)
 
-        # Token embeddings grouped by state, and the embedded pending halt
-        tokens_projected, x_effect_pending = self._entity_projector(
-            states, x_room_hidden, token_dedup
+        # Project the local Room features, then gather the graph-refined selectable Rooms
+        x_room_hidden, x_map_readout = self._map_gnn(
+            states.x_map_grid,
+            states.x_room_cell,
+            states.x_total[:, TokenKind.ROOMS],
+            self._entity_projector.project_dense,
+            map_cache,
+            map_dedup,
         )
+        x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, states.x_room_cell.numel())
+        x_projected = tokens_projected.features.x_value
+        x_projected.index_copy_(0, x_room_row, x_room_hidden)
 
         # One transformer pass over every state
         tokens_refined, x_global_token = self._entity_transformer(
@@ -163,7 +169,7 @@ class Core(nn.Module):
                 tokens_projected,
                 features=Dense(
                     x_value=self._embed_identity(
-                        tokens_projected.features.x_value, tokens.x_token_kind.long()
+                        x_projected, tokens.x_token_kind.long()
                     )
                 ),
             ),

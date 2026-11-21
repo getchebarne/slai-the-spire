@@ -19,7 +19,7 @@ from src.rl.encoding import ENCODING_DIM_CONTEXT
 from src.rl.encoding import ENCODING_DIM_SPARSE_EFFECT
 from src.rl.encoding import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding import ENCODING_DIM_SPARSE_TOKEN
-from src.rl.encoding import NUM_CHANNELS
+from src.rl.encoding import NUM_FEATURE_CHANNELS
 from src.rl.types import EncodedFeatures
 from src.rl.types import EntityKind
 from src.rl.types import Live
@@ -50,6 +50,10 @@ __all__ = [
     "slice_states",
     "to_device",
 ]
+
+
+# Each of these total columns counts a collection of rows that must travel with its states.
+_ROW_COLLECTIONS = (TokenKind.ROOMS, *StateCollection)
 
 
 def iter_tensors(value: Any) -> Iterator[torch.Tensor]:
@@ -316,11 +320,13 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
     return States(
         tokens=tokens,
         effect_pending=effect_pending,
+        x_room_cell=torch.zeros(num_buffers, buffer_size * MAP_WIDTH, dtype=torch.long),
         x_context=torch.zeros(
             num_buffers, buffer_size, ENCODING_DIM_CONTEXT, dtype=torch.float32
         ),
         x_map_grid=torch.zeros(
-            num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            (num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_FEATURE_CHANNELS),
+            dtype=torch.uint8,
         ),
         x_legal_action_type=torch.zeros(
             num_buffers, buffer_size, NUM_ACTION_TYPES, dtype=torch.bool
@@ -570,7 +576,7 @@ def slice_states[TStorage](
     row_stop = x_total_cpu[:selector_states.stop].sum(0).tolist()
     selectors = {
         collection: slice(row_start[collection], row_stop[collection])
-        for collection in StateCollection
+        for collection in _ROW_COLLECTIONS
     }
 
     return _select_states(states, selector_states, selectors, x_total_cpu[selector_states])
@@ -622,7 +628,7 @@ def gather_states[TStorage](
             x_total[x_idx_state, collection],
             num_rows[collection],
         )
-        for collection in StateCollection
+        for collection in _ROW_COLLECTIONS
     }
 
     return _select_states(states, x_idx_state, selectors, x_total_cpu_selected)
@@ -631,7 +637,7 @@ def gather_states[TStorage](
 def _select_states[TStorage](
     states: States[TStorage],
     selector_states: slice | torch.Tensor,
-    selectors: Mapping[StateCollection, slice | torch.Tensor],
+    selectors: Mapping[StateCollection | TokenKind, slice | torch.Tensor],
     x_total_cpu_selected: torch.Tensor,
 ) -> States[Live]:
     """Apply prepared state and collection selectors to every field.
@@ -642,7 +648,7 @@ def _select_states[TStorage](
         The source states, live or one completed reserved buffer.
     selector_states : slice | torch.Tensor
         The selected states, as a slice or indexes on the source device.
-    selectors : Mapping[StateCollection, slice | torch.Tensor]
+    selectors : Mapping[StateCollection | TokenKind, slice | torch.Tensor]
         Each collection's rows, in the selected state order.
     x_total_cpu_selected : torch.Tensor
         The selected states' totals on the CPU.
@@ -683,6 +689,7 @@ def _select_states[TStorage](
         effect_pending=select_sparse(
             states.effect_pending, selector_states, selectors[StateCollection.PENDING_ENTRIES]
         ),
+        x_room_cell=states.x_room_cell[selectors[TokenKind.ROOMS]],
         x_context=states.x_context[selector_states],
         x_map_grid=states.x_map_grid[selector_states],
         x_legal_action_type=states.x_legal_action_type[selector_states],
