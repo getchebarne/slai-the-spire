@@ -679,12 +679,11 @@ def get_room_burning(rooms: list[list[Room | None]]) -> Room | None:
 def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
     """Return the Rooms that still lead to the burning Room within the Wing Boots charges left.
 
-    Only while the Emerald Key can be taken: with the final act on and the key not held, on the
-    Maps of Acts 1 to 3, which hold a burning Room. The key masks force the path in Act 3 alone. A
-    Room counts when the cheapest way to it from the current position plus the cheapest way from it
-    to the burning Room burn no more charges than are left. Each move onto a Room not in the
-    current Room's edges burns one; the act's first move is free. Cached by Map, current Room and
-    charges, all it depends on.
+    Only while the Emerald Key can be taken: with the key not held, on the Maps of Acts 1 to 3,
+    which hold a burning Room. The key masks force the path in Act 3 alone. A Room counts when the
+    cheapest way to it from the current position plus the cheapest way from it to the burning Room
+    burn no more charges than are left. Each move onto a Room not in the current Room's edges burns
+    one; the act's first move is free. Cached by Map, current Room and charges, all it depends on.
 
     Parameters
     ----------
@@ -697,7 +696,7 @@ def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
         The Rooms' (y, x), the current Room's included while it counts; empty when the key can't
         be taken or the burning Room is out of reach.
     """
-    if not game_state.final_act or game_state.key_emerald:
+    if game_state.key_emerald:
         return frozenset()
 
     map_ = game_state.map

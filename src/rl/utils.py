@@ -422,7 +422,7 @@ def _enters_secret_portal(game_state: slai.GameState, action: slai.Action) -> bo
 def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
     """Return whether `action` gives up a key.
 
-    Only Act 3 can lose a key, with the final act on.
+    Only Act 3 can lose a key.
 
     Parameters
     ----------
@@ -440,7 +440,6 @@ def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
     """
     if (
         game_state.act != GameEnv.ACT_FINAL - 1
-        or not game_state.final_act
         or (game_state.key_emerald and game_state.key_ruby and game_state.key_sapphire)
     ):
         return False
