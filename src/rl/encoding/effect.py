@@ -343,7 +343,7 @@ _CAP_COUNT = max(
     ),
     float(MAX_SIZE_CARD_PILE_HAND),
 )
-_CAP_DELTA = _cap(_field(slai.EffectEventAdvanceState, lambda effect: effect.delta))
+_CAP_DELTA = _cap(_field(slai.EffectEventAdvanceStage, lambda effect: effect.delta))
 _CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda effect: effect.factor))
 _CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda effect: effect.amount))
 _CAP_TURNS = float(slai.GameEnv.BOMB_FUSE_TURNS)
@@ -677,7 +677,7 @@ def _encode_escape_plan_check(np_out: np.ndarray, effect: slai.EffectEscapePlanC
     np_out[_OFF_BLOCK] += effect.block
 
 
-def _encode_event_advance_state(np_out: np.ndarray, effect: slai.EffectEventAdvanceState) -> None:
+def _encode_event_advance_stage(np_out: np.ndarray, effect: slai.EffectEventAdvanceStage) -> None:
     np_out[_OFF_DELTA] += effect.delta
 
 
@@ -870,7 +870,7 @@ _ENCODERS: dict[type, Callable[[np.ndarray, Any], None]] = {
     slai.EffectDamagePhysical: _encode_damage_physical,
     slai.EffectEnergyDelta: _encode_energy_delta,
     slai.EffectEscapePlanCheck: _encode_escape_plan_check,
-    slai.EffectEventAdvanceState: _encode_event_advance_state,
+    slai.EffectEventAdvanceStage: _encode_event_advance_stage,
     slai.EffectGamble: _encode_gamble,
     slai.EffectGlassKnifeDecay: _encode_glass_knife_decay,
     slai.EffectGoldDelta: _encode_gold_delta,

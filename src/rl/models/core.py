@@ -249,6 +249,8 @@ class Core(nn.Module):
                 x_collection_kind_other.flatten(), size=num_memberships_other
             )
             x_membership = x_membership.squeeze(1)  # (num_memberships_other,)
+
+            # Token and column of each collection membership bit
             x_membership_token = x_membership // num_collection_kinds
             x_membership_collection_kind = x_membership % num_collection_kinds
 

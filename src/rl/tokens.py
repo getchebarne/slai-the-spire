@@ -80,7 +80,7 @@ _BURNING_PATH_CACHE_MAX = 100_000
 
 
 def iter_tokens(game_state: GameState) -> Iterator[Token]:
-    """Yield a state's tokens in the shared order used by encoding and action decoding.
+    """Yield a state's tokens in the shared order used by encoding and Action decoding.
 
     One token per Entity id, at the id's first sighting in `COLLECTION_KINDS_IN_WINDOW_ORDER` and
     then collection order. Only ids merge: a Combat's copy of a deck Card is an Entity of its own.
@@ -96,18 +96,21 @@ def iter_tokens(game_state: GameState) -> Iterator[Token]:
         Each Entity's collection kinds, those of the collections holding it in window order, and
         the Entity, in the order of the Entities' first sightings.
     """
+    entities = game_state.entities
+    
     # Each Entity's token by its id, in the order of first sightings
     token_of_entity_id: dict[int, Token] = {}
-    entities = game_state.entities
     context_of_reader = {reader: reader(game_state) for reader in _READERS}
     for collection_kind, reader, getter in _GETTERS_IN_WINDOW_ORDER:
         context = context_of_reader[reader]
         if context is not None:
             for entity_id in getter(context):
-                # The first sighting places the token; each collection adds its membership once
+                # The first sighting places the token
                 token = token_of_entity_id.get(entity_id)
                 if token is None:
                     token_of_entity_id[entity_id] = ((collection_kind,), entities[entity_id])
+
+                # Append `CollectionKind` sighting
                 elif collection_kind not in token[0]:
                     token_of_entity_id[entity_id] = ((*token[0], collection_kind), token[1])
 
