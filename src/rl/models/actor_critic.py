@@ -124,7 +124,7 @@ class ActorCritic(nn.Module):
         generator : torch.Generator | None, default None
             The generator samples draw from, or None for the global one.
         map_cache : MapCache | None, default None
-            The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
+            The Map GNN's outputs to reuse and update within a rollout.
 
         Returns
         -------
@@ -185,7 +185,7 @@ class ActorCritic(nn.Module):
             (B, 3) long. Each state's recorded action: action type, selection offset within that
             state, Monster target rank; -1 where a selection or target didn't apply.
         map_dedup : MapDedup
-            The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+            The Maps the Map GNN runs, planned on the host for an update.
         token_dedup : TokenDedup | None
             The unique tokens the projector runs, planned on the host for an update, or None to
             run every token (see `EntityProjector.forward`).
@@ -243,7 +243,7 @@ class ActorCritic(nn.Module):
         states : States[Live]
             The game states.
         map_dedup : MapDedup
-            The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+            The Maps the Map GNN runs, planned on the host for an update.
         token_dedup : TokenDedup | None
             The unique tokens the projector runs, planned on the host for an update, or None to
             run every token (see `EntityProjector.forward`).

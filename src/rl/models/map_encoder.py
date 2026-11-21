@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -6,7 +6,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.rl.batches import dedup_rows
-from src.rl.batches import get_row_owner
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
@@ -16,12 +15,21 @@ from src.rl.encoding import OFF_MAP_POSITION
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.encoding import SLICE_MAP_ROOM_KIND
 from src.rl.maps import UniqueMaps
-from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import MapPlan
 
 
 _NUM_CELLS = MAP_HEIGHT * MAP_WIDTH
+
+
+@dataclass
+class RoomGraph:
+    """Forward Rooms in message-passing order, grouped by their number of children."""
+
+    x_node_cell: torch.Tensor                  # (N,) Each node's cell across the Maps.
+    x_children_by_count: tuple[torch.Tensor, ...]  # (Nk, k) for k = 3, 2, 1.
+    x_count: torch.Tensor                      # (U, 1) Forward Rooms in each Map.
+    x_feature_row: torch.Tensor | None         # (N,) Each node's row in the projection table.
 
 
 class MapGNN(nn.Module):
@@ -32,8 +40,8 @@ class MapGNN(nn.Module):
     every Room when there is no position bit (before the act's first Room, and in the boss and
     boss treasure Rooms).
 
-    Returns the selectable Rooms' cell features (N_rooms, dim_entity), in the Room tokens' order;
-    then the readout (B, dim_map): the mean over the forward Rooms, zero when there is none.
+    Takes the Entity Projector's embeddings and the graph of forward Rooms. Returns a grid of
+    contextual Room embeddings and the mean embedding of each Map's forward Rooms.
 
     Parameters
     ----------
@@ -77,198 +85,29 @@ class MapGNN(nn.Module):
         # The GNN's computation as a function; `compile_hot_paths` swaps in its compiled version
         self.message_passing = message_passing
 
-    def forward(
-        self,
-        x_grid: torch.Tensor,
-        x_room_cell: torch.Tensor,
-        x_count_room: torch.Tensor,
-        project_cells: Callable[[torch.Tensor], torch.Tensor],
-        map_cache: MapCache | None = None,
-        map_dedup: MapDedup | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the message passing over `x_grid`'s Maps.
+    def prepare_rooms(
+        self, x_cell: torch.Tensor, np_count_room_forward: np.ndarray | None
+    ) -> tuple[torch.Tensor, RoomGraph]:
+        """Return the local feature rows to project and the graph that uses them.
 
-        Parameters
-        ----------
-        x_grid : torch.Tensor
-            (B, H, W, C) uint8. Each state's Map.
-        x_room_cell : torch.Tensor
-            (N_rooms,) long. Each Room token's cell in its state's Map.
-        x_count_room : torch.Tensor
-            (B,) int32. Each state's number of Room tokens.
-        project_cells : Callable
-            The Entity projector for local Room features.
-        map_cache : MapCache | None, default None
-            The outputs of this rollout's last step, to reuse and update, or None to run them all.
-        map_dedup : MapDedup | None, default None
-            The Maps to run without a cache, planned on the host, or None to run every state's.
-
-        Returns
-        -------
-        x_room_hidden : torch.Tensor
-            (N_rooms, dim_entity). The selectable Rooms' cell features, state after state and each
-            state's in cell order: the Room tokens' order.
-        x_map_readout : torch.Tensor
-            (B, dim_map). Each state's readout.
-        """
-        batch_size = x_grid.shape[0]
-
-        x_cell_feature = x_grid.flatten(1, 2)  # (B, H * W, NUM_FEATURE_CHANNELS)
-        if map_cache is None:
-            x_hidden, x_state_map, x_readout = self._encode_maps(
-                x_cell_feature, project_cells, map_dedup
-            )
-        else:
-            x_hidden, x_readout = self._encode_maps_cached(x_cell_feature, project_cells, map_cache)
-            x_state_map = torch.arange(batch_size, device=x_grid.device)
-
-        x_room_state = get_row_owner(x_count_room, x_room_cell.numel())
-        x_room_hidden = self._out_proj(x_hidden[x_state_map[x_room_state], x_room_cell])
-        x_map_readout = x_readout[x_state_map]
-
-        return x_room_hidden, x_map_readout
-
-    def _encode_maps(
-        self,
-        x_cell: torch.Tensor,
-        project_cells: Callable[[torch.Tensor], torch.Tensor],
-        map_dedup: MapDedup | None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run the message passing over the Maps, each distinct one once when `map_dedup` says so.
-
-        Parameters
-        ----------
-        x_cell : torch.Tensor
-            (B, H * W, NUM_FEATURE_CHANNELS) uint8. Each state's Map, flattened to cells.
-        project_cells : Callable
-            The Entity projector for local Room features.
-        map_dedup : MapDedup | None
-            The Maps to run and their forward Rooms by child count, or None to run every state's.
-
-        Returns
-        -------
-        x_hidden : torch.Tensor
-            (U, H * W, dim_map). The cell features of each Map the GNN ran on: `map_dedup`'s
-            Maps, or every state's without it.
-        x_inv : torch.Tensor
-            (B,) long. Each state's Map, its index in `x_hidden`.
-        x_readout : torch.Tensor
-            (U, dim_map). The readout of each Map the GNN ran on.
-        """
-        batch_size = x_cell.shape[0]
-
-        np_count_room_forward: np.ndarray | None = None
-        if map_dedup is None:
-            x_rep = torch.arange(batch_size, device=x_cell.device)  # Every state's own Map
-            x_inv = x_rep
-        else:
-            # The game sits on one Room for many steps, so its grid repeats across a minibatch:
-            # run the GNN on unique grids once and gather back (exact)
-            x_rep, x_inv = map_dedup.x_rep, map_dedup.x_state_map
-            np_count_room_forward = map_dedup.np_count_room_forward
-
-        # Encode the unique Maps
-        x_hidden, x_readout = self._encode_rooms_forward(
-            x_cell[x_rep], project_cells, np_count_room_forward
-        )
-
-        return x_hidden, x_inv, x_readout
-
-    def _encode_maps_cached(
-        self,
-        x_cell: torch.Tensor,
-        project_cells: Callable[[torch.Tensor], torch.Tensor],
-        map_cache: MapCache,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Rerun the message passing on the games whose Map changed since the cache's last step.
-
-        Parameters
-        ----------
-        x_cell : torch.Tensor
-            (E, H * W, NUM_FEATURE_CHANNELS) uint8. Each game's Map, flattened to cells.
-        project_cells : Callable
-            The Entity projector for local Room features.
-        map_cache : MapCache
-            The outputs of this rollout's last step, updated in place.
-
-        Returns
-        -------
-        x_hidden : torch.Tensor
-            (E, H * W, dim_map). Each game's cell features.
-        x_readout : torch.Tensor
-            (E, dim_map). Each game's readout.
-        """
-        # A new cache holds empty Maps, whose features and readout the GNN leaves at zero
-        x_hidden, x_readout = map_cache.x_hidden, map_cache.x_readout
-        if map_cache.x_cell is None or x_hidden is None or x_readout is None:
-            map_cache.x_cell = torch.zeros_like(x_cell)
-            x_hidden, x_readout = self._encode_rooms_forward(map_cache.x_cell, project_cells)
-            map_cache.x_hidden, map_cache.x_readout = x_hidden, x_readout
-
-        x_changed = (x_cell != map_cache.x_cell).flatten(1).any(1)  # (E,)
-        x_idx_state = torch.nonzero(x_changed).squeeze(1)
-        x_hidden[x_idx_state], x_readout[x_idx_state] = self._encode_rooms_forward(
-            x_cell[x_idx_state], project_cells
-        )
-        map_cache.x_cell = x_cell
-
-        return x_hidden, x_readout
-
-    def _encode_rooms_forward(
-        self,
-        x_cell: torch.Tensor,
-        project_cells: Callable[[torch.Tensor], torch.Tensor],
-        np_count_room_forward: np.ndarray | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the message passing over the Maps' forward Rooms, and put them back on the grid.
-
-        A cell is a position along the U Maps' grids flattened together (U * H * W); an index is a
-        position in the list of the N forward Rooms, most children first: the order message
-        passing runs in.
-
-        Parameters
-        ----------
-        x_cell : torch.Tensor
-            (U, H * W, C) uint8. The Maps.
-        project_cells : Callable
-            The Entity projector for local Room features.
-        np_count_room_forward : np.ndarray | None, default None
-            (4,) int64. The Maps' forward Rooms with 0 to 3 children, as their `MapDedup` counted
-            them, or None to count them here.
-
-        Returns
-        -------
-        x_hidden : torch.Tensor
-            (U, H * W, dim_map). Each cell's features, zero off the forward Rooms.
-        x_readout : torch.Tensor
-            (U, dim_map). The readout: each Map's mean over its forward Rooms, zero when it has
-            none.
+        `x_cell` holds the selected Maps' grids, (U, H * W, C). When a Learner minibatch
+        supplies the four child-count totals, finding forward Rooms needs no GPU readback.
         """
         num_maps = x_cell.shape[0]
         num_cells = num_maps * _NUM_CELLS
-        dim_map = self._in_proj.out_features
         x_cell = x_cell.float()
-        x_is_room_forward = _is_room_forward(x_cell).flatten()       # (U * H * W,)
-        x_cell = x_cell.flatten(0, 1)                                # (U * H * W, C)
-        x_count_child = _count_children(x_cell)                      # (U * H * W,)
+        x_is_room_forward = _is_room_forward(x_cell)
+        x_count = x_is_room_forward.sum(1, keepdim=True)
+        x_is_room_forward = x_is_room_forward.flatten()
+        x_cell = x_cell.flatten(0, 1)
+        x_count_child = _count_children(x_cell)
 
-        # The forward Rooms with 0 to 3 children, in one host read
         if np_count_room_forward is None:
             np_count_room_forward = (
                 _count_rooms_forward(x_is_room_forward, x_count_child).cpu().numpy()
             )
         num_0, num_1, num_2, num_3 = np_count_room_forward.tolist()
         num_rooms_forward = num_0 + num_1 + num_2 + num_3
-
-        # No forward Room on any Map: every feature and readout is zero
-        if num_rooms_forward == 0:
-            dtype = self._in_proj.weight.dtype
-            x_hidden = torch.zeros(
-                num_maps, _NUM_CELLS, dim_map, dtype=dtype, device=x_cell.device
-            )
-            x_readout = torch.zeros(num_maps, dim_map, dtype=dtype, device=x_cell.device)
-
-            return x_hidden, x_readout
 
         # Each forward Room's cell, most children first
         x_room_forward_cell = torch.nonzero_static(
@@ -298,29 +137,50 @@ class MapGNN(nn.Module):
         x_3, x_2, x_1 = x_child.split([3 * num_3, 2 * num_2, num_1])
         x_children_by_count = (x_3.view(num_3, 3), x_2.view(num_2, 2), x_1.view(num_1, 1))
 
-        # First project the local Room features, then add information from the downstream Rooms
+        # On large graphs, identical local features share a row in the projection table.
+        x_features = x_room_forward
+        x_feature_row = None
         if num_rooms_forward > self._x_cell_features.shape[0]:
-            x_feature_id = (x_room_forward * self._x_feature_id).sum(1).long()
-            x_feature_hidden = self._in_proj(project_cells(self._x_cell_features))
-            x_local = x_feature_hidden.index_select(0, x_feature_id)
-        else:
-            x_local = self._in_proj(project_cells(x_room_forward))
-        x_hidden_room_forward = self.message_passing(self, x_local, x_children_by_count)
+            x_features = self._x_cell_features
+            x_feature_row = (x_room_forward * self._x_feature_id).sum(1).long()
 
-        # The forward Rooms' features on their cells, zero elsewhere
-        x_hidden = torch.zeros(
-            num_cells, dim_map, dtype=x_hidden_room_forward.dtype, device=x_cell.device
-        )  # (U * H * W, dim_map)
-        x_hidden[x_room_forward_cell] = x_hidden_room_forward
-        x_hidden = x_hidden.view(num_maps, _NUM_CELLS, dim_map)  # (U, H * W, dim_map)
-
-        # Map readout: masked mean over the forward Rooms
-        x_denom = (
-            x_is_room_forward.view(num_maps, _NUM_CELLS).sum(1, keepdim=True).clamp(min=1).float()
+        return x_features, RoomGraph(
+            x_node_cell=x_room_forward_cell,
+            x_children_by_count=x_children_by_count,
+            x_count=x_count,
+            x_feature_row=x_feature_row,
         )
-        x_readout = x_hidden.sum(1) / x_denom  # Already zero off x_is_room_forward
+
+    def forward(
+        self, x_projected: torch.Tensor, graph: RoomGraph
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pass messages between projected Rooms, then return the grid and mean for each Map."""
+        num_maps = graph.x_count.shape[0]
+        dim_map = self._in_proj.out_features
+        if graph.x_node_cell.numel() == 0:
+            weight = self._in_proj.weight
+            return (
+                weight.new_zeros((num_maps, _NUM_CELLS, dim_map)),
+                weight.new_zeros((num_maps, dim_map)),
+            )
+
+        x_local = self._in_proj(x_projected)
+        if graph.x_feature_row is not None:
+            x_local = x_local.index_select(0, graph.x_feature_row)
+        x_nodes = self.message_passing(self, x_local, graph.x_children_by_count)
+
+        x_hidden = x_nodes.new_zeros((num_maps * _NUM_CELLS, dim_map))
+        x_hidden[graph.x_node_cell] = x_nodes
+        x_hidden = x_hidden.view(num_maps, _NUM_CELLS, dim_map)
+        x_readout = x_hidden.sum(1) / graph.x_count.clamp(min=1).float()
 
         return x_hidden, x_readout
+
+    def select_rooms(
+        self, x_hidden: torch.Tensor, x_room_map: torch.Tensor, x_room_cell: torch.Tensor
+    ) -> torch.Tensor:
+        """Read the contextual embedding of each selectable Room at the transformer's width."""
+        return self._out_proj(x_hidden[x_room_map, x_room_cell])
 
 
 def message_passing(

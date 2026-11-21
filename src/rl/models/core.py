@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -126,9 +127,9 @@ class Core(nn.Module):
         states : States[Live]
             The game states.
         map_cache : MapCache | None, default None
-            The Map GNN's outputs to reuse and update within a rollout (see `MapGNN.forward`).
+            The Map GNN's outputs to reuse and update within a rollout.
         map_dedup : MapDedup | None, default None
-            The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+            The Maps the Map GNN runs, planned on the host for an update.
         token_dedup : TokenDedup | None, default None
             The unique tokens the projector runs, planned on the host for an update (see
             `EntityProjector.forward`).
@@ -150,16 +151,11 @@ class Core(nn.Module):
         # Project the tokens and the pending halt
         tokens_projected, x_effect_pending = self._entity_projector(states, token_dedup)
 
-        # Project the local Room features, then gather the graph-refined selectable Rooms
-        x_room_hidden, x_map_readout = self._map_gnn(
-            states.x_map_grid,
-            states.x_room_cell,
-            states.x_total[:, TokenKind.ROOMS],
-            self._entity_projector.project_dense,
-            map_cache,
-            map_dedup,
+        # Replace the selectable Room tokens with their contextual Map embeddings
+        x_room_hidden, x_map_readout = self._embed_maps(states, map_cache, map_dedup)
+        x_room_row = get_entity_kind_rows(
+            tokens.x_entity_kind, EntityKind.ROOM, states.x_room_cell.numel()
         )
-        x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, states.x_room_cell.numel())
         x_projected = tokens_projected.features.x_value
         x_projected.index_copy_(0, x_room_row, x_room_hidden)
 
@@ -203,6 +199,53 @@ class Core(nn.Module):
             x_legal_action_type=states.x_legal_action_type,
             x_total=states.x_total,
         )
+
+    def _embed_maps(
+        self, states: States[Live], map_cache: MapCache | None, map_dedup: MapDedup | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode the needed Maps and gather each state's Room tokens and Map readout."""
+        x_cell = states.x_map_grid.flatten(1, 2)
+        if map_cache is None and map_dedup is not None:
+            x_state_map = map_dedup.x_state_map
+            x_hidden, x_readout = self._encode_forward_rooms(
+                x_cell[map_dedup.x_rep], map_dedup.np_count_room_forward
+            )
+        else:
+            x_state_map = torch.arange(x_cell.shape[0], device=x_cell.device)
+            if map_cache is None:
+                x_hidden, x_readout = self._encode_forward_rooms(x_cell)
+            else:
+                x_hidden, x_readout = self._encode_cached_maps(x_cell, map_cache)
+
+        x_room_cell = states.x_room_cell
+        x_room_state = get_row_owner(states.x_total[:, TokenKind.ROOMS], x_room_cell.numel())
+        x_rooms = self._map_gnn.select_rooms(x_hidden, x_state_map[x_room_state], x_room_cell)
+        return x_rooms, x_readout[x_state_map]
+
+    def _encode_forward_rooms(
+        self, x_cell: torch.Tensor, np_count_room_forward: np.ndarray | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Project the forward Rooms' local features, then run the GNN on those embeddings."""
+        x_features, graph = self._map_gnn.prepare_rooms(x_cell, np_count_room_forward)
+        x_room_projected = self._entity_projector.project_dense(x_features)
+        return self._map_gnn(x_room_projected, graph)
+
+    def _encode_cached_maps(
+        self, x_cell: torch.Tensor, cache: MapCache
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Reuse the Actor's embeddings for every game whose Map stayed the same."""
+        x_hidden, x_readout = cache.x_hidden, cache.x_readout
+        if cache.x_cell is None or x_hidden is None or x_readout is None:
+            x_hidden, x_readout = self._encode_forward_rooms(x_cell)
+            cache.x_hidden, cache.x_readout = x_hidden, x_readout
+        else:
+            x_changed = torch.nonzero((x_cell != cache.x_cell).flatten(1).any(1)).flatten()
+            if x_changed.numel():
+                x_hidden[x_changed], x_readout[x_changed] = self._encode_forward_rooms(
+                    x_cell[x_changed]
+                )
+        cache.x_cell = x_cell
+        return x_hidden, x_readout
 
     def _embed_identity(
         self, x_projected: torch.Tensor, x_token_kind: torch.Tensor
