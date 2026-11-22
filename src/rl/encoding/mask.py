@@ -7,6 +7,7 @@ import slai
 from slai import Card
 
 from src.rl.constants import COLLECTION_KINDS_CARD
+from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.encoding.focus import derive_focus
 from src.rl.types import CollectionKind
 from src.rl.types import Token
@@ -40,17 +41,17 @@ def encode_batch_masks_into(
     batch_tokens : list[list[Token]]
         Each state's tokens, as (collection kinds, Entity) in window order, one per Entity.
     np_legal_selection : np.ndarray
-        (N, NUM_ACTION_TYPES) bool. The selectable tokens, deduped by Card identity among the
-        tokens held by the same collections, written in place.
+        (N,) int64. The selectable tokens, a bit per action type, deduped by Card identity among
+        the tokens held by the same collections, written in place.
     np_legal_target : np.ndarray
-        (N, NUM_ACTION_TYPES) bool. The legal Monster targets, written in place.
+        (N,) int64. The legal Monster targets, a bit per action type, written in place.
     np_needs_target : np.ndarray
         (N,) bool. The tokens whose selection requires a Monster target, written in place.
     np_legal_action_type : np.ndarray
         (B, NUM_ACTION_TYPES) bool. Each state's legal action types, written in place.
     """
-    np_legal_selection.fill(False)
-    np_legal_target.fill(False)
+    np_legal_selection.fill(0)
+    np_legal_target.fill(0)
     np_needs_target.fill(False)
     np_legal_action_type.fill(False)
 
@@ -82,7 +83,7 @@ def encode_batch_masks_into(
                     continue
 
                 # Entity is selectable for this `ActionType`
-                np_legal_selection[row_start + row_local, action_type] = True
+                np_legal_selection[row_start + row_local] |= 1 << action_type
 
                 # Add 
                 legal_collection_kinds.add((action_type, tokens[row_local][0]))
@@ -91,7 +92,7 @@ def encode_batch_masks_into(
                 if len(ids) == 2:
                     row_local_target = row_of_entity_id[ids[1]]
                     np_needs_target[row_start + row_local] = True
-                    np_legal_target[row_start + row_local_target, action_type] = True
+                    np_legal_target[row_start + row_local_target] |= 1 << action_type
 
             # Mark the `ActionType` as legal for this state
             np_legal_action_type[idx_state, action_type] = True
@@ -111,7 +112,7 @@ def encode_batch_masks_into(
             rows = [
                 row
                 for row, token in enumerate(tokens, row_start)
-                if token[0] == collection_kinds and np_legal_selection[row, action_type]
+                if token[0] == collection_kinds and (np_legal_selection[row] >> action_type) & 1
             ]
 
             # Draw order hidden: scan in an order keyed on the pile, so the kept copy is random
@@ -125,9 +126,21 @@ def encode_batch_masks_into(
                 identity = cast(Card, tokens[row - row_start][1]).identity_hash
                 if identity in seen_tokens:
                     # An identical Card is already selectable for this `ActionType`
-                    np_legal_selection[row, action_type] = False
+                    np_legal_selection[row] &= ~(1 << action_type)
                 else:
                     seen_tokens.add(identity)
 
         # Increment `row_start` w/ the number of tokens processed for this state
         row_start += len(tokens)
+
+
+def _check_action_types() -> None:
+    """Check that every action type has its bit in a legal mask's int64 field."""
+    if NUM_ACTION_TYPES > 63:
+        raise RuntimeError(
+            f"The engine has {NUM_ACTION_TYPES} action types: a legal mask holds a bit for each "
+            "in a signed int64, 63 at most"
+        )
+
+
+_check_action_types()

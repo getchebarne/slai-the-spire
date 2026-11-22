@@ -190,10 +190,10 @@ class Tokens[TFeatures]:
     x_entity_kind: torch.Tensor      # (N_tok,) int16
 
     # Whether the token is selectable under the `ActionType`, deduped by Card identity
-    x_legal_selection: torch.Tensor  # (N_tok, NUM_ACTION_TYPES) bool
+    x_legal_selection: torch.Tensor  # (N_tok,) long, a bit per `ActionType`
 
     # Whether the token is targetable by the `ActionType` (`CardPlay` / `PotionUse`)
-    x_legal_target: torch.Tensor  # (N_tok, NUM_ACTION_TYPES) bool
+    x_legal_target: torch.Tensor  # (N_tok,) long, a bit per `ActionType`
 
     # Whether the token needs an additional Monster target if selected (Cards / Potions)
     x_needs_target: torch.Tensor  # (N_tok,) bool
