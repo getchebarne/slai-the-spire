@@ -24,7 +24,7 @@ from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import SHOP_PRICE_CAP
 from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.encoding.shared import encode_shared_health_block_into
@@ -61,7 +61,7 @@ _THIS_TURN_PLAYS_LEFT_DIM = MAX_VELVET_CHOKER_PLAYS + 1
 
 
 _CHANNEL_LAYOUT_CHARACTER, _alloc = make_channel_allocator()
-_OFF_CHARACTER_GOLD = _alloc("gold", _GOLD_DIM)
+_OFF_CHARACTER_GOLD = _alloc("gold", _GOLD_DIM, 2)
 _OFF_CHARACTER_GOLD_SCALAR = _alloc("gold_scalar")
 _OFF_CHARACTER_HEALTH_FRACTION = _alloc("health_fraction")
 _OFF_CHARACTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
@@ -73,9 +73,9 @@ _OFF_CHARACTER_SHOP_PURGE_COST_RUN = _alloc("shop_purge_cost_run")
 _OFF_CHARACTER_POTION_SLOTS_LEFT = _alloc("potion_slots_left")
 # Combat only: 0 outside it
 _OFF_CHARACTER_INCOMING_DAMAGE = _alloc("incoming_damage")
-_OFF_CHARACTER_INCOMING_DAMAGE_OHE = _alloc("incoming_damage_ohe", _INCOMING_DIM)
+_OFF_CHARACTER_INCOMING_DAMAGE_OHE = _alloc("incoming_damage_ohe", _INCOMING_DIM, 2)
 _OFF_CHARACTER_INCOMING_HEALTH_LOST = _alloc("incoming_health_lost")
-_OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE = _alloc("incoming_health_lost_ohe", _INCOMING_DIM)
+_OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE = _alloc("incoming_health_lost_ohe", _INCOMING_DIM, 2)
 _OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc("incoming_is_lethal")
 _OFF_CHARACTER_INCOMING_HIDDEN = _alloc("incoming_hidden")
 _OFF_CHARACTER_THIS_TURN_DISCARDS = _alloc("this_turn_discards")
@@ -94,10 +94,10 @@ _OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED = _alloc("this_combat_thief_escaped")
 _OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED = _alloc("this_combat_monster_died")
 _OFF_CHARACTER_GOLD_STOLEN = _alloc("gold_stolen")
 
-ENCODING_DIM_CHARACTER = sum(w for _, w in _CHANNEL_LAYOUT_CHARACTER)
+ENCODING_DIM_CHARACTER = sum(w for _, w, _ in _CHANNEL_LAYOUT_CHARACTER)
 
-# Most nonzero columns a Character row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_CHARACTER = len(_CHANNEL_LAYOUT_CHARACTER)
+# Most nonzero columns a Character row holds: one per one-hot or scalar, two per two-hot
+ENCODING_DIM_SPARSE_CHARACTER = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_CHARACTER)
 
 
 def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | None:
@@ -147,10 +147,13 @@ def encode_character_into(
     """
     character = get_character(game_state)
     deck = get_entities(game_state, game_state.id_card_pile_deck, Card)
-    gold_bucket = get_piecewise_bucket(
-        character.gold, _GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD
+    encode_piecewise_into(
+        character.gold,
+        _GOLD_MIN,
+        _GOLD_MAX,
+        _GOLD_LINEAR_SQRT_THRESHOLD,
+        np_own[_OFF_CHARACTER_GOLD:][:_GOLD_DIM],
     )
-    np_own[_OFF_CHARACTER_GOLD + gold_bucket] = 1.0
 
     np_own[_OFF_CHARACTER_GOLD_SCALAR] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
     np_own[_OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
@@ -181,17 +184,23 @@ def encode_character_into(
             np_own[_OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
                 incoming.damage, _INCOMING_DAMAGE_MAX
             )
-            incoming_damage_bucket = get_piecewise_bucket(
-                incoming.damage, 0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD
+            encode_piecewise_into(
+                incoming.damage,
+                0,
+                _INCOMING_DAMAGE_MAX,
+                _INCOMING_LINEAR_SQRT_THRESHOLD,
+                np_own[_OFF_CHARACTER_INCOMING_DAMAGE_OHE:][:_INCOMING_DIM],
             )
-            np_own[_OFF_CHARACTER_INCOMING_DAMAGE_OHE + incoming_damage_bucket] = 1.0
             np_own[_OFF_CHARACTER_INCOMING_HEALTH_LOST] = get_sqrt_norm(
                 incoming.health_lost, _INCOMING_DAMAGE_MAX
             )
-            incoming_health_lost_bucket = get_piecewise_bucket(
-                incoming.health_lost, 0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD
+            encode_piecewise_into(
+                incoming.health_lost,
+                0,
+                _INCOMING_DAMAGE_MAX,
+                _INCOMING_LINEAR_SQRT_THRESHOLD,
+                np_own[_OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE:][:_INCOMING_DIM],
             )
-            np_own[_OFF_CHARACTER_INCOMING_HEALTH_LOST_OHE + incoming_health_lost_bucket] = 1.0
             np_own[_OFF_CHARACTER_INCOMING_IS_LETHAL] = float(incoming.is_lethal)
         np_own[_OFF_CHARACTER_THIS_TURN_DISCARDS] = (
             min(combat.this_turn_discards, _THIS_TURN_DISCARDS_MAX) / _THIS_TURN_DISCARDS_MAX

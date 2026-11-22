@@ -20,7 +20,7 @@ from src.rl.constants import MONSTER_MOVESET_MAX
 from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.incoming import get_poison_tick
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.encoding.shared import encode_shared_health_block_into
@@ -73,10 +73,10 @@ _MOVE_PREV_COUNT_DIM = get_piecewise_dim(0, MAX_MOVE_HISTORY, _LINEAR_SQRT_THRES
 
 _CHANNEL_LAYOUT_MONSTER, _alloc = make_channel_allocator()
 _OFF_MONSTER_NAME = _alloc("name", len(_IDX_OF_MONSTER_NAME))
-_OFF_MONSTER_INTENT_DAMAGE = _alloc("intent_damage", _DAMAGE_DIM)
+_OFF_MONSTER_INTENT_DAMAGE = _alloc("intent_damage", _DAMAGE_DIM, 2)
 _OFF_MONSTER_INTENT_DAMAGE_SCALAR = _alloc("intent_damage_scalar")
 _OFF_MONSTER_INTENT_INSTANCES = _alloc("intent_instances")
-_OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc("intent_damage_total", _DAMAGE_TOTAL_DIM)
+_OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc("intent_damage_total", _DAMAGE_TOTAL_DIM, 2)
 _OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR = _alloc("intent_damage_total_scalar")
 _OFF_MONSTER_INTENT_HAS_BLOCK = _alloc("intent_has_block")
 _OFF_MONSTER_INTENT_HAS_BUFF = _alloc("intent_has_buff")
@@ -86,7 +86,7 @@ _OFF_MONSTER_HIT_IS_LETHAL = _alloc("hit_is_lethal")
 _OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
 _OFF_MONSTER_HEALTH_FRACTION = _alloc("health_fraction")
 _OFF_MONSTER_POISON_TICKS_TO_KILL = _alloc("poison_ticks_to_kill", _POISON_TICKS_MAX)
-_OFF_MONSTER_HEALTH_TO_TRIGGER = _alloc("health_to_trigger", _HEALTH_TO_TRIGGER_DIM)
+_OFF_MONSTER_HEALTH_TO_TRIGGER = _alloc("health_to_trigger", _HEALTH_TO_TRIGGER_DIM, 2)
 _OFF_MONSTER_HEALTH_TO_TRIGGER_SCALAR = _alloc("health_to_trigger_scalar")
 _OFF_MONSTER_GOLD_STOLEN = _alloc("gold_stolen")
 _OFF_MONSTER_INTENT_KIND = _alloc("intent_kind", len(_IDX_OF_INTENT_KIND))
@@ -94,15 +94,15 @@ _OFF_MONSTER_INTENT_HIDDEN = _alloc("intent_hidden")
 _OFF_MONSTER_MOVE_CURRENT = _alloc("move_current", MONSTER_MOVESET_MAX)
 _OFF_MONSTER_MOVE_PREV_1 = _alloc("move_prev_1", MONSTER_MOVESET_MAX)
 _OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MONSTER_MOVESET_MAX)
-_OFF_MONSTER_MOVE_PREV_COUNT = _alloc("move_prev_count", _MOVE_PREV_COUNT_DIM)
+_OFF_MONSTER_MOVE_PREV_COUNT = _alloc("move_prev_count", _MOVE_PREV_COUNT_DIM, 2)
 _OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")
 _OFF_MONSTER_HALF_DEAD = _alloc("half_dead")
 _OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")
 
-ENCODING_DIM_MONSTER = sum(w for _, w in _CHANNEL_LAYOUT_MONSTER)
+ENCODING_DIM_MONSTER = sum(w for _, w, _ in _CHANNEL_LAYOUT_MONSTER)
 
-# Most nonzero columns a Monster row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_MONSTER = len(_CHANNEL_LAYOUT_MONSTER)
+# Most nonzero columns a Monster row holds: one per one-hot or scalar, two per two-hot
+ENCODING_DIM_SPARSE_MONSTER = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_MONSTER)
 
 
 def _poison_ticks_to_kill(
@@ -240,10 +240,13 @@ def encode_monster_into(
     # HP to its trigger
     health_to_trigger = _health_to_trigger(monster, stacks_of_modifier_kind)
     if health_to_trigger is not None:
-        health_to_trigger_bucket = get_piecewise_bucket(
-            health_to_trigger, 0, _HEALTH_MAX, _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD
+        encode_piecewise_into(
+            health_to_trigger,
+            0,
+            _HEALTH_MAX,
+            _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD,
+            np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER:][:_HEALTH_TO_TRIGGER_DIM],
         )
-        np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER + health_to_trigger_bucket] = 1.0
         np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER_SCALAR] = get_sqrt_norm(
             health_to_trigger, _HEALTH_MAX
         )
@@ -257,18 +260,26 @@ def encode_monster_into(
         np_own[_OFF_MONSTER_INTENT_HIDDEN] = 1.0
     else:
         damage = intent.damage or 0
-        damage_bucket = get_piecewise_bucket(damage, 0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
-        np_own[_OFF_MONSTER_INTENT_DAMAGE + damage_bucket] = 1.0
+        encode_piecewise_into(
+            damage,
+            0,
+            _DAMAGE_MAX,
+            _LINEAR_SQRT_THRESHOLD,
+            np_own[_OFF_MONSTER_INTENT_DAMAGE:][:_DAMAGE_DIM],
+        )
 
         total_damage = damage * (intent.instances or 1)
         np_own[_OFF_MONSTER_INTENT_DAMAGE_SCALAR] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
         np_own[_OFF_MONSTER_INTENT_INSTANCES] = (
             min(intent.instances or 0, _INSTANCES_MAX) / _INSTANCES_MAX
         )
-        total_damage_bucket = get_piecewise_bucket(
-            total_damage, 0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD
+        encode_piecewise_into(
+            total_damage,
+            0,
+            _DAMAGE_TOTAL_MAX,
+            _LINEAR_SQRT_THRESHOLD,
+            np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL:][:_DAMAGE_TOTAL_DIM],
         )
-        np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL + total_damage_bucket] = 1.0
         np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = (
             min(total_damage, _DAMAGE_TOTAL_MAX) / _DAMAGE_TOTAL_MAX
         )
@@ -299,10 +310,13 @@ def encode_monster_into(
         np_own[_OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
     if len(move_history) >= 2 + shift:
         np_own[_OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
-    move_prev_count_bucket = get_piecewise_bucket(
-        max(len(move_history) - shift, 0), 0, MAX_MOVE_HISTORY, _LINEAR_SQRT_THRESHOLD
+    encode_piecewise_into(
+        max(len(move_history) - shift, 0),
+        0,
+        MAX_MOVE_HISTORY,
+        _LINEAR_SQRT_THRESHOLD,
+        np_own[_OFF_MONSTER_MOVE_PREV_COUNT:][:_MOVE_PREV_COUNT_DIM],
     )
-    np_own[_OFF_MONSTER_MOVE_PREV_COUNT + move_prev_count_bucket] = 1.0
 
     # Health & Block
     encode_shared_health_block_into(monster.health, monster.block, np_shared)

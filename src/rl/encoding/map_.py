@@ -49,10 +49,10 @@ _OFF_MAP_NEXT_ROOM = _alloc("next_room")
 
 # The channels above are the Map network's cell features; the one below names the Room tokens'
 # cells
-NUM_FEATURE_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
+NUM_FEATURE_CHANNELS = sum(w for _, w, _ in _CHANNEL_LAYOUT_MAP_GRID)
 OFF_MAP_SELECTABLE = _alloc("selectable")
 
-NUM_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
+NUM_CHANNELS = sum(w for _, w, _ in _CHANNEL_LAYOUT_MAP_GRID)
 
 # GNN-facing view of the edge block (read by `map_encoder.py`)
 SLICE_MAP_EDGES = slice(_OFF_MAP_EDGES, _OFF_MAP_EDGES + len(EDGE_DELTAS))
@@ -81,7 +81,7 @@ _OFF_MAP_ROOM_KIND_RESOLVED = _alloc("room_kind_resolved", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_POOL_EVENTS = _alloc("pool_events", len(_IDX_OF_EVENT_NAME))
 _OFF_MAP_POOL_EVENT_SPECIAL = _alloc("pool_event_special", len(_IDX_OF_EVENT_NAME))
 
-ENCODING_DIM_MAP_META = sum(w for _, w in _CHANNEL_LAYOUT_MAP_META)
+ENCODING_DIM_MAP_META = sum(w for _, w, _ in _CHANNEL_LAYOUT_MAP_META)
 
 # Static Map-grid cache keyed by map.identity_hash: Room kinds + edges + burning are fixed per Map
 _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
