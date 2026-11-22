@@ -8,11 +8,11 @@ from slai import EventOption
 from slai import GameState
 from slai import MonsterEncounter
 
-from src.rl.constants import CHARACTER_HEALTH_CAP
 from src.rl.constants import EVENT_STAGE_CAP
+from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import MAX_EVENT_OPTIONS
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.scalars import get_sqrt_norm
+from src.rl.encoding.scalars import get_linear_norm
 from src.rl.utils import event_option_wasted
 
 
@@ -103,9 +103,7 @@ def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     np_out[_OFF_EVENT_STAGE] = min(event.stage, EVENT_STAGE_CAP) / EVENT_STAGE_CAP
 
     # On the Character row's max-health scale, so the two compare directly
-    np_out[_OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_sqrt_norm(
-        event.health_max_at_open, CHARACTER_HEALTH_CAP
-    )
+    np_out[_OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_linear_norm(event.health_max_at_open, HEALTH_SCALE)
 
     # Dead Adventurer only
     np_out[_OFF_EVENT_FOUND_GOLD] = float(event.found_gold)

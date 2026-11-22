@@ -3,6 +3,8 @@ from bisect import bisect_left
 
 import numpy as np
 
+from src.rl.constants import MAX_SCALED
+
 
 # Each piecewise code's knots, by its (val_min, val_max, threshold), made on its first use
 _KNOTS_OF_PIECEWISE: dict[tuple[int, int, int], list[int]] = {}
@@ -121,3 +123,21 @@ def get_sqrt_norm(value: float, cap: float) -> float:
     clamped = min(max(value, -cap), cap)
 
     return math.copysign(math.sqrt(abs(clamped)) / math.sqrt(cap), clamped)
+
+
+def get_linear_norm(value: float, scale: float) -> float:
+    """Normalize `value` linearly: `value` / `scale`, clipped to ±MAX_SCALED.
+
+    Parameters
+    ----------
+    value : float
+        The value to normalize.
+    scale : float
+        The value of one unit of the channel, such as HEALTH_SCALE or GOLD_SCALE.
+
+    Returns
+    -------
+    float
+        `value` / `scale`, clipped to [-MAX_SCALED, MAX_SCALED].
+    """
+    return min(max(value / scale, -MAX_SCALED), MAX_SCALED)
