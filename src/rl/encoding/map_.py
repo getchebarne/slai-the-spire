@@ -16,7 +16,9 @@ from src.rl.encoding.room import get_edge_channels
 from src.rl.tokens import get_entities
 from src.rl.tokens import get_room_entities
 from src.rl.tokens import get_rooms
+from src.rl.tokens import get_rooms_key
 from src.rl.tokens import get_y_x_current
+from src.rl.types import RoomsKey
 from src.rl.types import Token
 
 
@@ -75,6 +77,9 @@ ENCODING_DIM_MAP_META = sum(w for _, w in _CHANNEL_LAYOUT_MAP_META)
 _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
 _MAP_GRID_CACHE_MAX = 100_000
 
+# Map-grid cache keyed by `get_rooms_key`: a grid and its number of Room tokens
+_MAP_GRID_OF_ROOMS_KEY: dict[RoomsKey, tuple[np.ndarray, int]] = {}
+
 
 def _get_static_grid(game_state: GameState) -> np.ndarray:
     identity_hash = game_state.map.identity_hash
@@ -109,6 +114,51 @@ def _get_static_grid(game_state: GameState) -> np.ndarray:
     _MAP_GRID_CACHE[identity_hash] = np_grid
 
     return np_grid
+
+
+def _get_grid(game_state: GameState, tokens: Sequence[Token]) -> tuple[np.ndarray, int]:
+    """Find the Map grid of the states that share a Rooms key, making it the first time it comes.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    tokens : Sequence[Token]
+        The state's tokens, as (collection kinds, Entity) in window order.
+
+    Returns
+    -------
+    np_grid : np.ndarray
+        (MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) int16. Each cell's Room token, by its rank among the
+        state's Room tokens, and its edges; -1 and no edges where the cell holds none.
+    num_tokens_room : int
+        The state's number of Room tokens.
+    """
+    rooms_key = get_rooms_key(game_state)
+    grid = _MAP_GRID_OF_ROOMS_KEY.get(rooms_key)
+    if grid is not None:
+        return grid
+
+    # The Room tokens' cells, in the tokens' order
+    cells = [(entity.y, entity.x) for _, entity in tokens if isinstance(entity, Room)]
+    num_tokens_room = len(cells)
+    np_y, np_x = np.array(cells, dtype=np.intp).reshape(-1, 2).T
+
+    # No cell holds a token, then each Room token's cell takes its Room's edges and its rank
+    np_grid_static = _get_static_grid(game_state)
+    np_grid = np.zeros_like(np_grid_static)
+    np_grid[:, :, OFF_MAP_TOKEN] = -1
+    np_grid[np_y, np_x] = np_grid_static[np_y, np_x]
+    np_grid[np_y, np_x, OFF_MAP_TOKEN] = np.arange(num_tokens_room)
+
+    # Store in the cache. Guard the master copy against future writes
+    np_grid.flags.writeable = False
+    if len(_MAP_GRID_OF_ROOMS_KEY) >= _MAP_GRID_CACHE_MAX:
+        _MAP_GRID_OF_ROOMS_KEY.clear()
+
+    _MAP_GRID_OF_ROOMS_KEY[rooms_key] = (np_grid, num_tokens_room)
+
+    return np_grid, num_tokens_room
 
 
 def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
@@ -200,22 +250,9 @@ def encode_map_grid_into(
     np_out : np.ndarray
         (MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) int16. The state's Map grid, written in place.
     """
-    np_grid = _get_static_grid(game_state)
+    np_grid, num_tokens_room = _get_grid(game_state, tokens)
+    np_out[:] = np_grid
 
-    # Each Room token's offset among the state's tokens, and its cell
-    rows_local: list[int] = []
-    ys: list[int] = []
-    xs: list[int] = []
-    for row_local, (_, entity) in enumerate(tokens):
-        if isinstance(entity, Room):
-            rows_local.append(row_local)
-            ys.append(entity.y)
-            xs.append(entity.x)
-
-    # No cell holds a token, then each Room token's cell takes its offset and its Room's edges
-    np_y = np.array(ys, dtype=np.intp)
-    np_x = np.array(xs, dtype=np.intp)
-    np_out[:] = 0
-    np_out[:, :, OFF_MAP_TOKEN] = -1
-    np_out[np_y, np_x, SLICE_MAP_EDGES] = np_grid[np_y, np_x, SLICE_MAP_EDGES]
-    np_out[np_y, np_x, OFF_MAP_TOKEN] = rows_local
+    # The Room tokens are the state's last: their ranks turn into offsets among its tokens
+    np_token = np_out[:, :, OFF_MAP_TOKEN]
+    np_token[np_token >= 0] += len(tokens) - num_tokens_room

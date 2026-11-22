@@ -54,6 +54,7 @@ from src.rl.constants import MAX_SIZE_RELIC_EVENT_ROLL
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.types import CollectionKind
 from src.rl.types import Entity
+from src.rl.types import RoomsKey
 from src.rl.types import Token
 
 
@@ -67,6 +68,7 @@ __all__ = [
     "get_rooms",
     "get_room_entities",
     "next_row_candidate_cols",
+    "get_rooms_key",
     "get_room_burning",
     "get_burning_path",
 ]
@@ -603,6 +605,32 @@ def _get_rooms_not_selectable(game_state: GameState) -> list[int]:
         for id_room in row
         if id_room is not None and id_room not in ids_selectable
     ]
+
+
+def get_rooms_key(game_state: GameState) -> RoomsKey:
+    """Make a state's Rooms key: all that its Room tokens, their order and their rows depend on.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    RoomsKey
+        The Map's identity_hash, the current Room's row and column, the Wing Boots charges left,
+        and whether the Emerald Key can still be taken.
+    """
+    map_ = game_state.map
+    y_current, x_current = get_y_x_current(map_)
+
+    return (
+        map_.identity_hash,
+        y_current,
+        x_current,
+        _get_wing_boots_charges(game_state),
+        not game_state.key_emerald,
+    )
 
 
 # The reader of a collection kind's context, then the collection kind's getter of its Entities' ids

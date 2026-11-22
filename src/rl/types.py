@@ -74,6 +74,9 @@ type RecordKeyRelic = tuple[int, bool, bool, int | None]
 type RecordKeyPotion = tuple[int, bool, int | None]
 type RecordKeyRoom = tuple[int, tuple[int, ...], bool, bool, bool]
 
+# A state's Rooms key: all that its Room tokens depend on (`tokens.get_rooms_key`)
+type RoomsKey = tuple[int, int | None, int | None, int, bool]
+
 
 class EffectSource(IntEnum):
     """What applies the Effect, and for Relics on which trigger.

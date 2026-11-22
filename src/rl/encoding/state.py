@@ -74,6 +74,7 @@ from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
 from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_character
+from src.rl.tokens import get_rooms_key
 from src.rl.tokens import get_y_x_current
 from src.rl.tokens import iter_tokens
 from src.rl.tokens import next_row_candidate_cols
@@ -87,6 +88,7 @@ from src.rl.types import RecordKeyPotion
 from src.rl.types import RecordKeyRelic
 from src.rl.types import RecordKeyRoom
 from src.rl.types import Reserved
+from src.rl.types import RoomsKey
 from src.rl.types import Sparse
 from src.rl.types import StateCollection
 from src.rl.types import States
@@ -177,6 +179,9 @@ _RECORD_OF_RELIC: dict[RecordKeyRelic, _Record] = {}
 _RECORD_OF_POTION: dict[RecordKeyPotion, _Record] = {}
 _RECORD_OF_ROOM: dict[RecordKeyRoom, _Record] = {}
 
+# The ROOMS_NOT_SELECTABLE tokens' records by Rooms key, token after token
+_RECORDS_OF_ROOMS_KEY: dict[RoomsKey, tuple[_Record, ...]] = {}
+
 # Each Effect's row in _ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
 _EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
 
@@ -189,6 +194,7 @@ _TABLE_ROW_HOLDERS: tuple[dict, ...] = (
     _RECORD_OF_RELIC,
     _RECORD_OF_POTION,
     _RECORD_OF_ROOM,
+    _RECORDS_OF_ROOMS_KEY,
     _EFFECT_TABLE_ROW_OF_EFFECT,
     _MODIFIER_TABLE_ROW_OF_MODIFIER,
 )
@@ -484,7 +490,8 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
     A Card, Relic, Potion or Room keeps its record under its record key: one lookup finds its row
     and its Effect rows. A Monster's, an Event Option's and the Character's rows read the state
     around them, so their records are made on every write; those rows then stay in the token
-    row table, unread, until the row tables are dropped.
+    row table, unread, until the row tables are dropped. The ROOMS_NOT_SELECTABLE tokens, the
+    state's last, keep their records together under the state's Rooms key.
 
     Each token goes at its Entity kind's columns and the shared block that ends the row, both
     written by its kind's encoder; an Event Option and a Room write no shared column. A token
@@ -527,8 +534,11 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
     for card_play in game_state.card_play_queue:
         play_source_of_card_id.setdefault(card_play.id_card, card_play.play_source)
 
-    # Iterate over tokens
-    for collection_kinds, entity in tokens:
+    # The records of its ROOMS_NOT_SELECTABLE tokens, its last
+    records_rooms_not_selectable = _get_records_rooms_not_selectable(game_state, tokens)
+
+    # Iterate over the other tokens
+    for collection_kinds, entity in tokens[: len(tokens) - len(records_rooms_not_selectable)]:
         match entity:
             case Card():
                 # The Cards below it, when its draw depth shows
@@ -692,20 +702,11 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
             case Room():
                 on_burning_path = (entity.y, entity.x) in burning_path
                 is_next_room = (entity.y, entity.x) in cells_next_room
-                record_key_room = get_record_key_room(entity, on_burning_path, is_next_room)
-                record = _RECORD_OF_ROOM.get(record_key_room)
-                if record is None:
-                    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
-                    encode_room_into(
-                        entity,
-                        on_burning_path,
-                        is_next_room,
-                        np_row[COL_START_ROOM:_COL_START_SHARED],
-                    )
-                    record = (add_row(_ROW_TABLE_TOKEN, np_row), (), ())
-                    _RECORD_OF_ROOM[record_key_room] = record
+                record = _get_record_room(entity, on_burning_path, is_next_room)
 
         records.append(record)
+
+    records += records_rooms_not_selectable
 
     return records
 
@@ -731,6 +732,77 @@ def _get_cells_next_room(game_state: GameState) -> set[tuple[int, int]]:
         (y_next, x_next)
         for x_next in next_row_candidate_cols(game_state, y_current, x_current, winged=False)
     }
+
+
+def _get_record_room(room: Room, on_burning_path: bool, is_next_room: bool) -> _Record:
+    """Find a Room's record, making it the first time its key comes.
+
+    Its key is `get_record_key_room`'s and its row is the whole token `encode_room_into` writes.
+
+    Parameters
+    ----------
+    room : Room
+        The Room.
+    on_burning_path : bool
+        Whether it is on a path that still reaches the burning Room.
+    is_next_room : bool
+        Whether it is a next-row Room the position's edges reach, Wing Boots aside.
+
+    Returns
+    -------
+    _Record
+        Its row in the token row table; it owns no Effect row and no Modifier row.
+    """
+    record_key_room = get_record_key_room(room, on_burning_path, is_next_room)
+    record = _RECORD_OF_ROOM.get(record_key_room)
+    if record is not None:
+        return record
+
+    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
+    encode_room_into(room, on_burning_path, is_next_room, np_row[COL_START_ROOM:_COL_START_SHARED])
+    record = (add_row(_ROW_TABLE_TOKEN, np_row), (), ())
+    _RECORD_OF_ROOM[record_key_room] = record
+
+    return record
+
+
+def _get_records_rooms_not_selectable(
+    game_state: GameState, tokens: Sequence[Token]
+) -> tuple[_Record, ...]:
+    """Find the records of a state's ROOMS_NOT_SELECTABLE tokens, by its Rooms key.
+
+    The key (`get_rooms_key`) holds all they depend on. The first time it comes, each of them
+    finds its record as any Room does (`_get_record_room`).
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    tokens : Sequence[Token]
+        The state's tokens, as (collection kinds, Entity) in window order.
+
+    Returns
+    -------
+    tuple[_Record, ...]
+        Their records, token after token.
+    """
+    rooms_key = get_rooms_key(game_state)
+    records_rooms_not_selectable = _RECORDS_OF_ROOMS_KEY.get(rooms_key)
+    if records_rooms_not_selectable is not None:
+        return records_rooms_not_selectable
+
+    burning_path = get_burning_path(game_state)
+    cells_next_room = _get_cells_next_room(game_state)
+    records_rooms_not_selectable = tuple(
+        _get_record_room(
+            entity, (entity.y, entity.x) in burning_path, (entity.y, entity.x) in cells_next_room
+        )
+        for collection_kinds, entity in tokens
+        if CollectionKind.ROOMS_NOT_SELECTABLE in collection_kinds and isinstance(entity, Room)
+    )
+    _RECORDS_OF_ROOMS_KEY[rooms_key] = records_rooms_not_selectable
+
+    return records_rooms_not_selectable
 
 
 def _get_effect_table_rows(*effects_by_source: tuple[Sequence[Effect], EffectSource]) -> list[int]:

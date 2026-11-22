@@ -31,7 +31,7 @@ def encode_room_into(
     """Write a Room's token: its own columns.
 
     Every input besides the Room is in the Room's record key (`get_record_key_room`), so a new
-    input goes in the key too.
+    input goes in the key too, and all it depends on in the Rooms key (`tokens.get_rooms_key`).
 
     Parameters
     ----------
