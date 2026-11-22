@@ -78,7 +78,7 @@ _OFF_FOCUS_CHEST_OPENED = _alloc("chest_opened")
 _OFF_FOCUS_REST_CONSUMED = _alloc("rest_consumed")
 _OFF_FOCUS_PRESENCE = _alloc("presence", 6)
 
-ENCODING_DIM_FOCUS = sum(w for _, w in _CHANNEL_LAYOUT_FOCUS)
+ENCODING_DIM_FOCUS = sum(w for _, w, _ in _CHANNEL_LAYOUT_FOCUS)
 
 # Every pool the engine can halt over; the selection count normalizes against the
 # pool's size ceiling (Combat piles are bounded by the deck)

@@ -6,7 +6,7 @@ from slai import ModifierKind
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INVINCIBLE_STACKS_MAX
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.types import ModifierOwner
@@ -34,13 +34,13 @@ _OFF_MODIFIER_KIND = _alloc("kind", len(_IDX_OF_MODIFIER_KIND))
 _OFF_MODIFIER_BUFF = _alloc("buff")
 _OFF_MODIFIER_STACKS = _alloc("stacks")
 _OFF_MODIFIER_STACKS_NEGATIVE = _alloc("stacks_negative")
-_OFF_MODIFIER_STACKS_OHE = _alloc("stacks_ohe", _STACKS_BUCKET_DIM)
+_OFF_MODIFIER_STACKS_OHE = _alloc("stacks_ohe", _STACKS_BUCKET_DIM, 2)
 _OFF_MODIFIER_OWNER = _alloc("owner", len(ModifierOwner))
 
-ENCODING_DIM_MODIFIER = sum(w for _, w in _CHANNEL_LAYOUT_MODIFIER)
+ENCODING_DIM_MODIFIER = sum(w for _, w, _ in _CHANNEL_LAYOUT_MODIFIER)
 
-# Most nonzero columns a Modifier row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_MODIFIER = len(_CHANNEL_LAYOUT_MODIFIER)
+# Most nonzero columns a Modifier row holds: one per one-hot or scalar, two per two-hot
+ENCODING_DIM_SPARSE_MODIFIER = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_MODIFIER)
 
 
 def make_modifier_row(modifier: Modifier, modifier_owner: ModifierOwner) -> np.ndarray:
@@ -66,14 +66,17 @@ def make_modifier_row(modifier: Modifier, modifier_owner: ModifierOwner) -> np.n
     # Buff or debuff
     np_row[_OFF_MODIFIER_BUFF] = float(modifier.kind.is_buff)
 
-    # Stacks: signed float + sign bit + magnitude-only linear-sqrt buckets
+    # Stacks: signed float + sign bit + magnitude-only linear-sqrt two-hot
     stacks_max = _STACKS_MAX_OF_MODIFIER_KIND.get(modifier.kind, _STACKS_MAX)
     np_row[_OFF_MODIFIER_STACKS] = get_sqrt_norm(modifier.stacks, stacks_max)
     np_row[_OFF_MODIFIER_STACKS_NEGATIVE] = float(modifier.stacks < 0)
-    stacks_bucket = get_piecewise_bucket(
-        abs(modifier.stacks), 0, stacks_max, _LINEAR_SQRT_THRESHOLD
+    encode_piecewise_into(
+        abs(modifier.stacks),
+        0,
+        stacks_max,
+        _LINEAR_SQRT_THRESHOLD,
+        np_row[_OFF_MODIFIER_STACKS_OHE:][:_STACKS_BUCKET_DIM],
     )
-    np_row[_OFF_MODIFIER_STACKS_OHE + stacks_bucket] = 1.0
 
     # The combatant carrying this modifier
     np_row[_OFF_MODIFIER_OWNER + modifier_owner] = 1.0
