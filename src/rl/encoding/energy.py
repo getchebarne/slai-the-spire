@@ -35,7 +35,7 @@ _OFF_ENERGY_SCALAR = _alloc("energy_scalar")
 _OFF_ENERGY_MAX = _alloc("energy_max", _ENERGY_MAX_CAP - ENERGY_MAX_BASE + 1)
 _OFF_ENERGY_MAX_SCALAR = _alloc("energy_max_scalar")
 
-ENCODING_DIM_ENERGY = sum(w for _, w in _CHANNEL_LAYOUT_ENERGY)
+ENCODING_DIM_ENERGY = sum(w for _, w, _ in _CHANNEL_LAYOUT_ENERGY)
 
 
 def get_energy_max(game_state: GameState) -> int:

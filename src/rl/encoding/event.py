@@ -40,7 +40,7 @@ _OFF_EVENT_MONSTER_ENCOUNTER = _alloc("monster_encounter", len(_IDX_OF_MONSTER_E
 _OFF_EVENT_MATCH_ATTEMPTS = _alloc("match_attempts")
 _OFF_EVENT_CARD_MATCH_UNSEEN_COUNT = _alloc("card_match_unseen_count")
 
-ENCODING_DIM_EVENT_META = sum(w for _, w in _CHANNEL_LAYOUT_EVENT_META)
+ENCODING_DIM_EVENT_META = sum(w for _, w, _ in _CHANNEL_LAYOUT_EVENT_META)
 
 # Event kinds whose option list overflowed the cap (warn-once per kind)
 _WARNED_EVENT_TRUNCATED: set = set()
@@ -49,10 +49,10 @@ _WARNED_EVENT_TRUNCATED: set = set()
 _CHANNEL_LAYOUT_EVENT_OPTION, _alloc = make_channel_allocator()
 _OFF_EVENT_OPTION_AVAILABLE = _alloc("available")
 
-ENCODING_DIM_EVENT_OPTION = sum(w for _, w in _CHANNEL_LAYOUT_EVENT_OPTION)
+ENCODING_DIM_EVENT_OPTION = sum(w for _, w, _ in _CHANNEL_LAYOUT_EVENT_OPTION)
 
 # Most nonzero columns an Event option row holds
-ENCODING_DIM_SPARSE_EVENT_OPTION = len(_CHANNEL_LAYOUT_EVENT_OPTION)
+ENCODING_DIM_SPARSE_EVENT_OPTION = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_EVENT_OPTION)
 
 
 def encode_event_option_into(

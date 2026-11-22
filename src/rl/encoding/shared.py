@@ -28,9 +28,9 @@ _CHANNEL_LAYOUT_SHARED, _alloc = make_channel_allocator()
 OFF_SHARED_HEALTH_BLOCK = _alloc("health_block", ENCODING_DIM_HEALTH_BLOCK)
 OFF_SHARED_PRICE = _alloc("price", ENCODING_DIM_PRICE)
 OFF_SHARED_STASIS_SLOT = _alloc("stasis_slot", _ENCODING_DIM_STASIS_SLOT)
-OFF_SHARED_TAG = _alloc("tag", _ENCODING_DIM_TAG)
+OFF_SHARED_TAG = _alloc("tag", _ENCODING_DIM_TAG, ENCODING_DIM_SPARSE_TAG)
 
-ENCODING_DIM_SHARED = sum(w for _, w in _CHANNEL_LAYOUT_SHARED)
+ENCODING_DIM_SHARED = sum(w for _, w, _ in _CHANNEL_LAYOUT_SHARED)
 
 
 def encode_shared_health_block_into(health: int, block: int, np_shared: np.ndarray) -> None:

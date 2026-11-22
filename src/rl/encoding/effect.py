@@ -56,7 +56,7 @@ from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.scalars import get_piecewise_bucket
+from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.types import EffectSource
 
@@ -355,7 +355,7 @@ _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
 # Contiguous groups; every column carries a cap and a mode
 
 
-# Each magnitude's bucket block: exact up to here, one per floor(sqrt(value)) past it
+# Each magnitude's two-hot knots: every integer up to here, then each square past it
 _LINEAR_SQRT_THRESHOLD = 25
 
 
@@ -375,6 +375,12 @@ def _bucket_width(cap: float) -> int:
     return get_piecewise_dim(0, int(cap), _LINEAR_SQRT_THRESHOLD)
 
 
+# The multi-hot channels' widths: each can set every one of its columns
+_CANDIDATE_FILTER_DIM = len(_INDEX_CAND_FILTER)
+_RELIC_NAME_DIM = len(_VOCAB_RELIC) + 1
+_MONSTER_NAME_DIM = len(_VOCAB_MONSTER) + 1
+
+
 _CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
 
 
@@ -386,8 +392,8 @@ _OFF_TARGETED = _alloc("targeted")
 _OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
-_OFF_SELECT_COUNT_BUCKETS = _alloc("select_count_buckets", _bucket_width(_CAP_SELECT_COUNT))
-_OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
+_OFF_SELECT_COUNT_BUCKETS = _alloc("select_count_buckets", _bucket_width(_CAP_SELECT_COUNT), 2)
+_OFF_CANDIDATE_FILTER = _alloc("candidate_filter", _CANDIDATE_FILTER_DIM, _CANDIDATE_FILTER_DIM)
 _OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))
 
 # Categorical params, named for the engine type they one-hot
@@ -408,27 +414,27 @@ _OFF_ROUNDING = _alloc("rounding", len(_INDEX_ROUNDING))
 
 # Identity vocabularies, named for the engine name enum (index 0 = unseen)
 _OFF_CARD_NAME = _alloc("card_name", len(_VOCAB_CARD) + 1)
-_OFF_RELIC_NAME = _alloc("relic_name", len(_VOCAB_RELIC) + 1)
-_OFF_MONSTER_NAME = _alloc("monster_name", len(_VOCAB_MONSTER) + 1)
+_OFF_RELIC_NAME = _alloc("relic_name", _RELIC_NAME_DIM, _RELIC_NAME_DIM)
+_OFF_MONSTER_NAME = _alloc("monster_name", _MONSTER_NAME_DIM, _MONSTER_NAME_DIM)
 _OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
 
 # Magnitudes, one per physical unit
 _OFF_DAMAGE = _alloc("damage")
-_OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE))
+_OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE), 2)
 _OFF_INSTANCES = _alloc("instances")
 _OFF_BLOCK = _alloc("block")
-_OFF_BLOCK_BUCKETS = _alloc("block_buckets", _bucket_width(_CAP_BLOCK))
+_OFF_BLOCK_BUCKETS = _alloc("block_buckets", _bucket_width(_CAP_BLOCK), 2)
 _OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
-_OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
+_OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH), 2)
 _OFF_HEALTH_RELATIVE = _alloc("health_relative")
 _OFF_GOLD_ABSOLUTE = _alloc("gold_absolute")
-_OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD))
+_OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD), 2)
 _OFF_GOLD_RELATIVE = _alloc("gold_relative")
 _OFF_AMOUNT_IS_RANGE = _alloc("amount_is_range")
 _OFF_ENERGY = _alloc("energy")
 _OFF_STACKS = _alloc("stacks")
 _OFF_STACKS_NEGATIVE = _alloc("stacks_negative")
-_OFF_STACKS_BUCKETS = _alloc("stacks_buckets", _bucket_width(_CAP_STACKS))
+_OFF_STACKS_BUCKETS = _alloc("stacks_buckets", _bucket_width(_CAP_STACKS), 2)
 _OFF_COUNT = _alloc("count")
 _OFF_DELTA = _alloc("delta")
 _OFF_CHANCE = _alloc("chance")
@@ -466,20 +472,11 @@ _BUCKET_META: tuple[tuple[int, int, float], ...] = (
 )
 
 # Total
-ENCODING_DIM_EFFECT = sum(w for _, w in _CHANNEL_LAYOUT_EFFECT)
+ENCODING_DIM_EFFECT = sum(w for _, w, _ in _CHANNEL_LAYOUT_EFFECT)
 
-# The channels that set several of a row's columns
-_MULTI_HOT_CHANNELS = (
-    "candidate_filter",
-    "relic_name",
-    "monster_name",
-)
-
-# Most nonzero columns an Effect row holds: one per one-hot or scalar channel, and every column
-# of the multi-hot ones
-ENCODING_DIM_SPARSE_EFFECT = sum(
-    width if channel in _MULTI_HOT_CHANNELS else 1 for channel, width in _CHANNEL_LAYOUT_EFFECT
-)
+# Most nonzero columns an Effect row holds: one per one-hot or scalar channel, two per two-hot,
+# and every column of the multi-hot ones
+ENCODING_DIM_SPARSE_EFFECT = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_EFFECT)
 
 
 class _NormMode(StrEnum):
@@ -950,8 +947,13 @@ def _encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     for off_float, off_bucket, cap in _BUCKET_META:
         value = np_out[off_float]
         if value:
-            bucket = get_piecewise_bucket(int(abs(value)), 0, int(cap), _LINEAR_SQRT_THRESHOLD)
-            np_out[off_bucket + bucket] = 1.0
+            encode_piecewise_into(
+                abs(value),
+                0,
+                int(cap),
+                _LINEAR_SQRT_THRESHOLD,
+                np_out[off_bucket:][: _bucket_width(cap)],
+            )
 
     # Buckets are magnitude-only; keep negative stacks (Malaise) linearly separable
     np_out[_OFF_STACKS_NEGATIVE] = float(np_out[_OFF_STACKS] < 0)

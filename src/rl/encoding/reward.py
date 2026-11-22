@@ -8,7 +8,7 @@ _CHANNEL_LAYOUT_REWARD_META, _alloc = make_channel_allocator()
 _OFF_REWARD_RELICS_EXCLUSIVE = _alloc("relics_exclusive")
 _OFF_REWARD_CARDS_FORCED = _alloc("cards_forced")
 
-ENCODING_DIM_REWARD_META = sum(w for _, w in _CHANNEL_LAYOUT_REWARD_META)
+ENCODING_DIM_REWARD_META = sum(w for _, w, _ in _CHANNEL_LAYOUT_REWARD_META)
 
 
 def encode_reward_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
