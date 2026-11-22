@@ -64,22 +64,14 @@ _BOMB_DAMAGE_MAX = max(
 
 _CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
 _OFF_FOCUS_KIND = _alloc("kind", len(Focus))
-_OFF_FOCUS_PENDING_KIND = _alloc(
-    "pending_kind", len(_EFFECT_PENDING)
-)  # All-zero = no pending halt
+_OFF_FOCUS_PENDING_KIND = _alloc("pending_kind", len(_EFFECT_PENDING))
 _OFF_FOCUS_PENDING_COUNT = _alloc("pending_count")
-_OFF_FOCUS_PENDING_SKIPPABLE = _alloc(
-    "pending_skippable"
-)  # `InputUpTo` is exactly when `SelectionSkip` is legal
-_OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc(
-    "bomb_damage_due", _BOMB_TURNS
-)  # Per fuse turn left: the damage the bombs deal then
+_OFF_FOCUS_PENDING_SKIPPABLE = _alloc("pending_skippable")
+_OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc("bomb_damage_due", _BOMB_TURNS)
 _OFF_FOCUS_CHEST_KIND = _alloc("chest_kind", _NUM_CHEST_KINDS)
 _OFF_FOCUS_CHEST_OPENED = _alloc("chest_opened")
 _OFF_FOCUS_REST_CONSUMED = _alloc("rest_consumed")
-_OFF_FOCUS_PRESENCE = _alloc(
-    "presence", 6
-)  # Context-presence bits: Combat/reward/shop/event/rest/chest
+_OFF_FOCUS_PRESENCE = _alloc("presence", 6)
 
 ENCODING_DIM_FOCUS = sum(w for _, w in _CHANNEL_LAYOUT_FOCUS)
 

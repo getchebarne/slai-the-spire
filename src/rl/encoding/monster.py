@@ -59,9 +59,7 @@ _OFF_MONSTER_NAME = _alloc("name", len(_IDX_OF_MONSTER_NAME))
 _OFF_MONSTER_INTENT_DAMAGE = _alloc("intent_damage", _DAMAGE_DIM)
 _OFF_MONSTER_INTENT_DAMAGE_SCALAR = _alloc("intent_damage_scalar")
 _OFF_MONSTER_INTENT_INSTANCES = _alloc("intent_instances")
-_OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc(
-    "intent_damage_total", _DAMAGE_TOTAL_DIM
-)  # Damage x instances
+_OFF_MONSTER_INTENT_DAMAGE_TOTAL = _alloc("intent_damage_total", _DAMAGE_TOTAL_DIM)
 _OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR = _alloc("intent_damage_total_scalar")
 _OFF_MONSTER_INTENT_HAS_BLOCK = _alloc("intent_has_block")
 _OFF_MONSTER_INTENT_HAS_BUFF = _alloc("intent_has_buff")
@@ -70,26 +68,16 @@ _OFF_MONSTER_HIT_FULLY_BLOCKED = _alloc("hit_fully_blocked")
 _OFF_MONSTER_HIT_IS_LETHAL = _alloc("hit_is_lethal")
 _OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
 _OFF_MONSTER_HEALTH_FRACTION = _alloc("health_fraction")
-_OFF_MONSTER_POISON_IS_LETHAL = _alloc(
-    "poison_is_lethal"
-)  # Its next turn start's Poison tick kills it
+_OFF_MONSTER_POISON_IS_LETHAL = _alloc("poison_is_lethal")
 _OFF_MONSTER_GOLD_STOLEN = _alloc("gold_stolen")
 _OFF_MONSTER_INTENT_KIND = _alloc("intent_kind", len(_IDX_OF_INTENT_KIND))
-_OFF_MONSTER_INTENT_HIDDEN = _alloc(
-    "intent_hidden"
-)  # Runic Dome: every intent channel and hit flag reads 0
-_OFF_MONSTER_MOVE_CURRENT = _alloc(
-    "move_current", MONSTER_MOVESET_MAX
-)  # Index into the spawn-rolled moveset
-_OFF_MONSTER_MOVE_PREV_1 = _alloc(
-    "move_prev_1", MONSTER_MOVESET_MAX
-)  # One move back (move_history's last entry is the current move)
+_OFF_MONSTER_INTENT_HIDDEN = _alloc("intent_hidden")
+_OFF_MONSTER_MOVE_CURRENT = _alloc("move_current", MONSTER_MOVESET_MAX)
+_OFF_MONSTER_MOVE_PREV_1 = _alloc("move_prev_1", MONSTER_MOVESET_MAX)
 _OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MONSTER_MOVESET_MAX)
-_OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")  # A waiting replay aims at it
-_OFF_MONSTER_HALF_DEAD = _alloc(
-    "half_dead"
-)  # Health and block read 0, no Card can target it (Awakened One, Darkling)
-_OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")  # Its once-per-Combat move has executed
+_OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")
+_OFF_MONSTER_HALF_DEAD = _alloc("half_dead")
+_OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")
 
 ENCODING_DIM_MONSTER = sum(w for _, w in _CHANNEL_LAYOUT_MONSTER)
 

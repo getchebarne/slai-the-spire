@@ -57,50 +57,28 @@ _OFF_CHARACTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
 _OFF_CHARACTER_DECK_SIZE = _alloc("deck_size")
 _OFF_CHARACTER_DECK_UPGRADED_FRACTION = _alloc("deck_upgraded_fraction")
 _OFF_CHARACTER_REWARD_ROLL_OFFSET = _alloc("reward_roll_offset")
-_OFF_CHARACTER_POTION_DROP_CHANCE = _alloc(
-    "potion_drop_chance"
-)  # Combat Potion odds, ignoring White Beast Statue's 100%
-_OFF_CHARACTER_SHOP_PURGE_COST_RUN = _alloc(
-    "shop_purge_cost_run"
-)  # Card removal price before Relic discounts
+_OFF_CHARACTER_POTION_DROP_CHANCE = _alloc("potion_drop_chance")
+_OFF_CHARACTER_SHOP_PURGE_COST_RUN = _alloc("shop_purge_cost_run")
 # Combat only: 0 outside it
 _OFF_CHARACTER_INCOMING_DAMAGE = _alloc("incoming_damage")
 _OFF_CHARACTER_BLOCK_COVERS_INCOMING = _alloc("block_covers_incoming")
 _OFF_CHARACTER_INCOMING_IS_LETHAL = _alloc("incoming_is_lethal")
-_OFF_CHARACTER_INCOMING_HIDDEN = _alloc(
-    "incoming_hidden"
-)  # Runic Dome: the four incoming-damage channels read 0
+_OFF_CHARACTER_INCOMING_HIDDEN = _alloc("incoming_hidden")
 _OFF_CHARACTER_NET_UNBLOCKED_DAMAGE = _alloc("net_unblocked_damage")
 _OFF_CHARACTER_THIS_TURN_DISCARDS = _alloc("this_turn_discards")
-_OFF_CHARACTER_THIS_TURN_ATTACKS = _alloc("this_turn_attacks")  # Finisher hits once per Attack
-_OFF_CHARACTER_THIS_TURN_CARDS_PLAYED = _alloc(
-    "this_turn_cards_played"
-)  # Normality caps the turn at 3
-_OFF_CHARACTER_PANACHE_COUNTDOWN = _alloc("panache_countdown")  # Plays left until Panache's hit
-_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK = _alloc(
-    "orange_pellets_played_attack"
-)  # Kinds played this turn since Orange Pellets fired
+_OFF_CHARACTER_THIS_TURN_ATTACKS = _alloc("this_turn_attacks")
+_OFF_CHARACTER_THIS_TURN_CARDS_PLAYED = _alloc("this_turn_cards_played")
+_OFF_CHARACTER_PANACHE_COUNTDOWN = _alloc("panache_countdown")
+_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK = _alloc("orange_pellets_played_attack")
 _OFF_CHARACTER_ORANGE_PELLETS_PLAYED_SKILL = _alloc("orange_pellets_played_skill")
 _OFF_CHARACTER_ORANGE_PELLETS_PLAYED_POWER = _alloc("orange_pellets_played_power")
-_OFF_CHARACTER_TURN_END_STARTED = _alloc(
-    "turn_end_started"
-)  # From the turn end's first pass to the Character's next turn start
-_OFF_CHARACTER_TURN_END_PENDING = _alloc(
-    "turn_end_pending"
-)  # From Time Warp's 12th play until the turn end's first pass starts
-_OFF_CHARACTER_TURN_ENDED = _alloc(
-    "turn_ended"
-)  # From the first Monster turn start to the Character's next turn start
-_OFF_CHARACTER_BOSS_FIGHT = _alloc("boss_fight")  # A Boss-kind Monster was in the opening roster
-_OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED = _alloc(
-    "this_combat_thief_escaped"
-)  # A Smoke Bomb then still keeps the Reward
-_OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED = _alloc(
-    "this_combat_monster_died"
-)  # Escapes then no longer cost the gold and the Potion roll
-_OFF_CHARACTER_GOLD_STOLEN = _alloc(
-    "gold_stolen"
-)  # The killed thieves' gold, returned as its own Reward item
+_OFF_CHARACTER_TURN_END_STARTED = _alloc("turn_end_started")
+_OFF_CHARACTER_TURN_END_PENDING = _alloc("turn_end_pending")
+_OFF_CHARACTER_TURN_ENDED = _alloc("turn_ended")
+_OFF_CHARACTER_BOSS_FIGHT = _alloc("boss_fight")
+_OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED = _alloc("this_combat_thief_escaped")
+_OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED = _alloc("this_combat_monster_died")
+_OFF_CHARACTER_GOLD_STOLEN = _alloc("gold_stolen")
 
 ENCODING_DIM_CHARACTER = sum(w for _, w in _CHANNEL_LAYOUT_CHARACTER)
 

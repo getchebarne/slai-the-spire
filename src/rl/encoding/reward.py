@@ -5,10 +5,8 @@ from src.rl.encoding.layout import make_channel_allocator
 
 
 _CHANNEL_LAYOUT_REWARD_META, _alloc = make_channel_allocator()
-_OFF_REWARD_RELICS_EXCLUSIVE = _alloc(
-    "relics_exclusive"
-)  # Boss Rewards: take one Relic, lose the rest
-_OFF_REWARD_CARDS_FORCED = _alloc("cards_forced")  # The Library: one selection, no skip
+_OFF_REWARD_RELICS_EXCLUSIVE = _alloc("relics_exclusive")
+_OFF_REWARD_CARDS_FORCED = _alloc("cards_forced")
 
 ENCODING_DIM_REWARD_META = sum(w for _, w in _CHANNEL_LAYOUT_REWARD_META)
 

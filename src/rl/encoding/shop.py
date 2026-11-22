@@ -9,7 +9,7 @@ from src.rl.tokens import get_character
 _CHANNEL_LAYOUT_PRICE, _alloc = make_channel_allocator()
 _OFF_SHOP_PRICE = _alloc("price")
 _OFF_SHOP_AFFORDABLE = _alloc("affordable")
-_OFF_SHOP_GOLD_GAP = _alloc("gold_gap")  # `abs(gold - price)`
+_OFF_SHOP_GOLD_GAP = _alloc("gold_gap")
 
 ENCODING_DIM_PRICE = sum(w for _, w in _CHANNEL_LAYOUT_PRICE)
 

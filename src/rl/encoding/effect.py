@@ -382,7 +382,7 @@ _OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
 _OFF_CANDIDATE_FILTER = _alloc("candidate_filter", len(_INDEX_CAND_FILTER))
-_OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))  # Written by make_effect_row
+_OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))
 
 # Categorical params, named for the engine type they one-hot
 _OFF_MODIFIER_KIND = _alloc("modifier_kind", len(_INDEX_MODIFIER_KIND))
