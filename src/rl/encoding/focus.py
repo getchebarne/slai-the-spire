@@ -1,5 +1,4 @@
 from enum import IntEnum
-from typing import get_args
 
 import numpy as np
 from slai import CandidatePool
@@ -7,7 +6,6 @@ from slai import ChestKind
 from slai import EffectBombArm
 from slai import GameEnv
 from slai import GameState
-from slai import PendingEffect
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 
@@ -60,11 +58,6 @@ def derive_focus(game_state: GameState) -> Focus:
     return Focus.MAP
 
 
-# The engine's halting kinds, straight from the FFI's PendingEffect union, so a new halting
-# kind widens this tuple instead of raising the ValueError in _encode_focus_into
-_EFFECT_PENDING = get_args(PendingEffect)
-_IDX_OF_EFFECT_PENDING = {cls: idx_class for idx_class, cls in enumerate(_EFFECT_PENDING)}
-
 _NUM_CHEST_KINDS = len(ChestKind.members())
 
 
@@ -77,7 +70,6 @@ _BOMB_DAMAGE_MAX = max(
 
 _CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
 _OFF_FOCUS_KIND = _alloc("kind", len(Focus))
-_OFF_FOCUS_PENDING_KIND = _alloc("pending_kind", len(_EFFECT_PENDING))
 _OFF_FOCUS_PENDING_COUNT = _alloc("pending_count")
 _OFF_FOCUS_PENDING_SKIPPABLE = _alloc("pending_skippable")
 _OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc("bomb_damage_due", _BOMB_TURNS)
@@ -119,15 +111,10 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
     np_out[_OFF_FOCUS_KIND + derive_focus(game_state)] = 1.0
 
     # Pending input
-    if pending is not None:
-        idx_effect_pending = _IDX_OF_EFFECT_PENDING.get(type(pending))
-        if idx_effect_pending is None:
-            raise ValueError(f"Unsupported pending halt kind: {type(pending).__name__}")
-
-        np_out[_OFF_FOCUS_PENDING_KIND + idx_effect_pending] = 1.0
-
-        target = pending.target
-        selection_kind = target.selection_kind if target is not None else None
+    # None when nothing is pending or the pending Effect has no `target` field
+    target = getattr(pending, "target", None)
+    if target is not None:
+        selection_kind = target.selection_kind
         if isinstance(selection_kind, (SelectionKindInput, SelectionKindInputUpTo)):
             cap = _INPUT_POOL_CAP.get(target.candidate_pool)
             if cap is None:
