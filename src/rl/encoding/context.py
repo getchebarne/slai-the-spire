@@ -31,7 +31,15 @@ ENCODING_DIM_CONTEXT = _EVENT_META.stop
 
 
 def encode_context_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Write one state's dense features into its initially zeroed context row."""
+    """Write one state's dense features into its initially zeroed context row.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (ENCODING_DIM_CONTEXT,) float32. The state's context row, written in place.
+    """
     encode_energy_into(game_state, np_out[_ENERGY])
     encode_focus_into(game_state, np_out[_FOCUS])
     np_out[_ASCENSION][: game_state.ascension] = 1.0

@@ -9,10 +9,9 @@ from src.rl.tokens import get_entities
 
 
 _ENERGY_CURRENT_MIN = 0
-_ENERGY_CURRENT_MAX = 15  # Ice Cream accumulates energy across turns
+_ENERGY_CURRENT_MAX = 25  # Ice Cream accumulates energy across turns
 
-# The Relics that add 1 to max energy: the engine's process_effect_combat_start, which GameEnv
-# doesn't expose
+# The Relics that add 1 to max energy
 _RELIC_NAMES_ENERGY = frozenset(
     {
         RelicName.PhilosopherStone,
@@ -29,7 +28,6 @@ _RELIC_NAMES_ENERGY = frozenset(
 
 # Slaver's Collar adds 1 more, in elite and boss fights only
 _ENERGY_MAX_CAP = GameEnv.ENERGY_MAX_BASE + len(_RELIC_NAMES_ENERGY) + 1
-
 
 _CHANNEL_LAYOUT_ENERGY, _alloc = make_channel_allocator()
 _OFF_ENERGY = _alloc("energy", _ENERGY_CURRENT_MAX - _ENERGY_CURRENT_MIN + 1)
@@ -82,6 +80,7 @@ def encode_energy_into(game_state: GameState, np_out: np.ndarray) -> None:
     combat = game_state.combat
     if combat is None:
         return
+    
     energy = combat.energy
     energy_clamp = min(max(energy.energy_current, _ENERGY_CURRENT_MIN), _ENERGY_CURRENT_MAX)
     np_out[_OFF_ENERGY + energy_clamp - _ENERGY_CURRENT_MIN] = 1.0

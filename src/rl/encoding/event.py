@@ -78,7 +78,16 @@ def encode_event_option_into(
 
 
 def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Write event features, retaining the option-cap warning used by token encoding."""
+    """Write event features, retaining the option-cap warning used by token encoding.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (ENCODING_DIM_EVENT_META,) float32. The context row's Event range, written in place; it
+        stays 0 outside Events.
+    """
     event = game_state.event
     if event is None:
         return

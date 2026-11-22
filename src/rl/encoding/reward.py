@@ -12,7 +12,15 @@ ENCODING_DIM_REWARD_META = sum(w for _, w in _CHANNEL_LAYOUT_REWARD_META)
 
 
 def encode_reward_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Write reward flags, leaving states without a reward zero."""
+    """Write reward flags, leaving states without a reward zero.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (ENCODING_DIM_REWARD_META,) float32. The context row's Reward range, written in place.
+    """
     reward = game_state.reward
     if reward is None:
         return

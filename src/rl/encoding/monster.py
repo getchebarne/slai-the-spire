@@ -54,7 +54,7 @@ _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 _DAMAGE_TOTAL_DIM = get_piecewise_dim(0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
 
 # Its turn starts until Poison alone kills it: past this, the channel reads none
-_POISON_TICKS_MAX = 15
+_POISON_TICKS_MAX = 10
 
 # Champ's Anger and Time Eater's Haste come below half HP, once per Combat
 _MONSTER_NAMES_HALF_HEALTH_ULTIMATE = {MonsterName.Champ, MonsterName.TimeEater}
@@ -132,9 +132,9 @@ def _poison_ticks_to_kill(
     if monster.half_dead:
         return None
 
-    poison = stacks_of_modifier_kind.get(ModifierKind.Poison, 0)
-    regeneration = stacks_of_modifier_kind.get(ModifierKind.Regeneration, 0)
-    intangible = ModifierKind.Intangible in stacks_of_modifier_kind
+    stacks_poison = stacks_of_modifier_kind.get(ModifierKind.Poison, 0)
+    stacks_regen = stacks_of_modifier_kind.get(ModifierKind.Regeneration, 0)
+    is_intangible = ModifierKind.Intangible in stacks_of_modifier_kind
     can_roll_debuffs_clear = (
         monster.name in _MONSTER_NAMES_HALF_HEALTH_ULTIMATE and not monster.ultimate_used
     )
@@ -144,23 +144,27 @@ def _poison_ticks_to_kill(
         isinstance(effect, EffectDebuffsClear) for effect in monster.move_effects
     )
     health = monster.health
-    for ticks in range(1, min(poison, _POISON_TICKS_MAX) + 1):
+    for ticks in range(1, min(stacks_poison, _POISON_TICKS_MAX) + 1):
         health -= get_poison_tick(
-            poison - ticks + 1, intangible, stacks_of_modifier_kind, ascension
+            stacks_poison - ticks + 1, is_intangible, stacks_of_modifier_kind, ascension
         )
         if health <= 0:
             return ticks
+        
         if debuffs_clear_next or (
             ModifierKind.Splittable in stacks_of_modifier_kind
             and health <= monster.health_max // 2
         ):
             return None
 
-        # Below half, the roll behind its move is Anger or Haste; every Nemesis move regains
-        # Intangible unless it still holds it
+        # Below half, the roll behind its move is Anger or Haste
         debuffs_clear_next = can_roll_debuffs_clear and health < monster.health_max // 2
-        intangible = monster.name == MonsterName.Nemesis and not intangible
-        health = min(health + regeneration, monster.health_max)
+
+        # Nemesis regains Intangible unless it still holds it
+        is_intangible = monster.name == MonsterName.Nemesis and not is_intangible
+
+        # Regen health
+        health = min(health + stacks_regen, monster.health_max)
 
     return None
 
@@ -190,6 +194,7 @@ def _health_to_trigger(
     # Split at half or less, the once-per-Combat moves below half
     if ModifierKind.Splittable in stacks_of_modifier_kind:
         return max(monster.health - health_half, 0)
+    
     if monster.name in _MONSTER_NAMES_HALF_HEALTH_ULTIMATE and not monster.ultimate_used:
         return max(monster.health - health_half + 1, 0)
 
@@ -287,8 +292,7 @@ def encode_monster_into(
     if monster.move_current is not None:
         np_own[_OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
 
-    # Under Runic Dome the history holds only the executed moves: no current
-    # entry ends it, so the previous ones sit at [-1] and [-2]
+    # Under Runic Dome the history holds only the executed mov
     shift = 0 if intent is None else 1
     move_history = monster.move_history
     if len(move_history) >= 1 + shift:
@@ -307,8 +311,7 @@ def encode_monster_into(
     encode_shared_stasis_slot_into(monster.slot, np_shared)
 
 
-# Whole-moveset Effects per (ascension, MonsterName), collected once (one entry
-# per distinct move)
+# Whole-moveset Effects per (ascension, MonsterName), collected once
 _MOVESET_EFFECTS: dict[int, dict[MonsterName, tuple[Effect, ...]]] = {}
 
 
