@@ -28,29 +28,21 @@ class RankInfo:
 
 
 @dataclass
-class _Bucket:
-    """Trainable parameters whose gradients share one all-reduce, and the step's progress.
-
-    Its buffer holds its gradients, flattened, then one reached flag per parameter. It is
-    allocated with the bucket, and every step's all-reduce reuses it.
-    """
-
-    idx_params: list[int]             # Its parameters, by index in `model.parameters()`
-    x_grads: dict[int, torch.Tensor]  # (its parameter's shape) float. This step's gradients so far
-    work: dist.Work | None            # This step's all-reduce, once launched
-    x_flat: torch.Tensor              # (its numel + len(idx_params),) float. Gradients, then flags
-
-
-@dataclass
 class GradientBuckets:
     """The trainable parameters in buckets, one all-reduce each, and the step's progress.
 
     The buckets start in reverse parameter order. After the first step every rank regroups them
-    in the order in which rank 0 reached the parameters.
+    in the order in which rank 0 reached the parameters. A bucket's buffer is allocated with the
+    bucket, and every step's all-reduce reuses it. The `batch_*` fields hold one entry per
+    bucket, indexed by `idx_bucket` in launch order.
     """
 
-    buckets: list[_Bucket]               # In launch order
-    idx_bucket_of_param: dict[int, int]  # Each trainable parameter's bucket, by index in `buckets`
+    batch_idx_params: list[list[int]]                    # Its parameters, by index in `model.parameters()`
+    batch_work: list[dist.Work | None]                   # Its all-reduce this step; None unlaunched
+    batch_x_grad_of_param: list[dict[int, torch.Tensor]] # (its parameter's shape) float
+    batch_x_flat: list[torch.Tensor]                     # (its numel + its parameter count,) float
+
+    idx_bucket_of_param: dict[int, int]  # Each trainable parameter's bucket
     order_reached: list[int] | None      # The first step's order reached; None once regrouped
 
 
@@ -126,7 +118,14 @@ def hook_gradient_buckets(model: nn.Module) -> GradientBuckets:
     GradientBuckets
         The buckets, with no step started; empty without torchrun.
     """
-    gradient_buckets = GradientBuckets(buckets=[], idx_bucket_of_param={}, order_reached=[])
+    gradient_buckets = GradientBuckets(
+        batch_idx_params=[],
+        batch_work=[],
+        batch_x_grad_of_param=[],
+        batch_x_flat=[],
+        idx_bucket_of_param={},
+        order_reached=[],
+    )
     if not dist.is_initialized():
         return gradient_buckets
 
@@ -139,9 +138,7 @@ def hook_gradient_buckets(model: nn.Module) -> GradientBuckets:
     ]
 
     # Group grainable parameters into buckets
-    gradient_buckets.buckets, gradient_buckets.idx_bucket_of_param = _group_into_buckets(
-        idx_param_train, params
-    )
+    _group_into_buckets(gradient_buckets, idx_param_train, params)
 
     # Register a hook that fires after all of a parameter's gradients have been accumulated
     for idx_param in idx_param_train:
@@ -153,26 +150,22 @@ def hook_gradient_buckets(model: nn.Module) -> GradientBuckets:
 
 
 def _group_into_buckets(
-    idx_param_train: list[int], params: list[nn.Parameter]
-) -> tuple[list[_Bucket], dict[int, int]]:
+    gradient_buckets: GradientBuckets, idx_param_train: list[int], params: list[nn.Parameter]
+) -> None:
     """Split the parameter indices in `idx_param_train`, in that order, into buckets.
 
     Each bucket holds about `_BUCKET_BYTES` of gradients, and gets the buffer its all-reduces
-    reuse.
+    reuse. It works in place, setting the `batch_*` fields and `idx_bucket_of_param`, because
+    the hooks are bound to `gradient_buckets`.
 
     Parameters
     ----------
+    gradient_buckets : GradientBuckets
+        The buckets, their `batch_*` fields and `idx_bucket_of_param` replaced.
     idx_param_train : list[int]
         Indices into `params`, in the order the buckets take them.
     params : list[nn.Parameter]
         The model's parameters.
-
-    Returns
-    -------
-    buckets : list[_Bucket]
-        The buckets, in launch order.
-    idx_bucket_of_param : dict[int, int]
-        Each parameter's bucket, by index in `buckets`.
     """
     batch_idx_params: list[list[int]] = []
     num_bytes = 0
@@ -189,21 +182,23 @@ def _group_into_buckets(
         param = params[idx_param]
         num_bytes += param.numel() * param.element_size()
 
-    # Make each bucket, its buffer in its parameters' dtype and on their device
-    buckets = []
+    # Make each bucket's buffer, in its parameters' dtype and on their device
+    batch_x_flat = []
     for idx_params in batch_idx_params:
         param_first = params[idx_params[0]]
         num_elements = sum(params[idx_param].numel() for idx_param in idx_params) + len(idx_params)
         x_flat = torch.empty(num_elements, dtype=param_first.dtype, device=param_first.device)
-        buckets.append(_Bucket(idx_params=idx_params, x_grads={}, work=None, x_flat=x_flat))
+        batch_x_flat.append(x_flat)
 
-    idx_bucket_of_param = {
+    gradient_buckets.batch_idx_params = batch_idx_params
+    gradient_buckets.batch_x_grad_of_param = [{} for _ in batch_idx_params]
+    gradient_buckets.batch_work = [None for _ in batch_idx_params]
+    gradient_buckets.batch_x_flat = batch_x_flat
+    gradient_buckets.idx_bucket_of_param = {
         idx_param: idx_bucket
-        for idx_bucket, bucket in enumerate(buckets)
-        for idx_param in bucket.idx_params
+        for idx_bucket, idx_params in enumerate(batch_idx_params)
+        for idx_param in idx_params
     }
-
-    return buckets, idx_bucket_of_param
 
 
 def _mark_reached(
@@ -226,50 +221,59 @@ def _mark_reached(
     """
     # Store the parameter's gradient
     idx_bucket = gradient_buckets.idx_bucket_of_param[idx_param]
-    gradient_buckets.buckets[idx_bucket].x_grads[idx_param] = cast(torch.Tensor, x_param.grad)
+    x_grad_of_param = gradient_buckets.batch_x_grad_of_param[idx_bucket]
+    x_grad_of_param[idx_param] = cast(torch.Tensor, x_param.grad)
 
     if gradient_buckets.order_reached is not None:
         gradient_buckets.order_reached.append(idx_param)
 
-    for bucket in gradient_buckets.buckets:
-        if bucket.work is not None:
+    for idx_bucket_next, idx_params in enumerate(gradient_buckets.batch_idx_params):
+        if gradient_buckets.batch_work[idx_bucket_next] is not None:
             continue
 
         # Check if the bucket's parameter's gradients are ready
-        bucket_ready = len(bucket.x_grads) == len(bucket.idx_params)
+        x_grad_of_param = gradient_buckets.batch_x_grad_of_param[idx_bucket_next]
+        bucket_ready = len(x_grad_of_param) == len(idx_params)
         if not bucket_ready:
             return
 
         # If they are, collect them and launch the bucket
-        batch_x_grad = [bucket.x_grads[idx_param_bucket] for idx_param_bucket in bucket.idx_params]
-        _launch_bucket(bucket, batch_x_grad)
+        batch_x_grad = [x_grad_of_param[idx_param_bucket] for idx_param_bucket in idx_params]
+        _launch_bucket(gradient_buckets, idx_bucket_next, batch_x_grad)
 
 
-def _launch_bucket(bucket: _Bucket, batch_x_grad: list[torch.Tensor]) -> None:
+def _launch_bucket(
+    gradient_buckets: GradientBuckets, idx_bucket: int, batch_x_grad: list[torch.Tensor]
+) -> None:
     """Start summing a bucket's gradients and reached flags over the ranks, in its buffer.
 
     Parameters
     ----------
-    bucket : _Bucket
-        The bucket, its buffer overwritten and its all-reduce started.
+    gradient_buckets : GradientBuckets
+        The buckets: the bucket's buffer overwritten and its all-reduce started.
+    idx_bucket : int
+        The bucket's index, in launch order.
     batch_x_grad : list[torch.Tensor]
         (its parameter's shape) float. Each of the bucket's gradients, in bucket order: zeros for
         a parameter this rank didn't reach.
     """
     device = batch_x_grad[0].device
+    idx_params = gradient_buckets.batch_idx_params[idx_bucket]
+    x_grad_of_param = gradient_buckets.batch_x_grad_of_param[idx_bucket]
+    x_flat = gradient_buckets.batch_x_flat[idx_bucket]
 
     # Whether this rank reached each parameter, sent from pinned memory without blocking on CUDA
-    batch_reached = [float(idx_param in bucket.x_grads) for idx_param in bucket.idx_params]
+    batch_reached = [float(idx_param in x_grad_of_param) for idx_param in idx_params]
     x_reached = torch.tensor(batch_reached, pin_memory=device.type == "cuda").to(
         device, non_blocking=True
     )
 
-    # x_flat[:-len(x_reached)]: flattened gradients for each parameter
-    # x_flat[-len(x_reached):]: reached flag for each parameter
-    torch.cat([x_grad.flatten() for x_grad in batch_x_grad] + [x_reached], out=bucket.x_flat)
+    # x_flat[:-len(params)]: flattened gradients for each parameter
+    # x_flat[-len(params):]: reached flag for each parameter
+    torch.cat([x_grad.flatten() for x_grad in batch_x_grad] + [x_reached], out=x_flat)
 
     # All-reduce both gradients and reached flags (async) + append refs
-    bucket.work = dist.all_reduce(bucket.x_flat, async_op=True)
+    gradient_buckets.batch_work[idx_bucket] = dist.all_reduce(x_flat, async_op=True)
 
 
 def average_gradient_buckets(gradient_buckets: GradientBuckets, model: nn.Module) -> None:
@@ -295,34 +299,41 @@ def average_gradient_buckets(gradient_buckets: GradientBuckets, model: nn.Module
     params = list(model.parameters())
 
     # The buckets still waiting, with zeros for each parameter this rank didn't reach
-    for bucket in gradient_buckets.buckets:
-        if bucket.work is not None:
+    for idx_bucket, idx_params in enumerate(gradient_buckets.batch_idx_params):
+        if gradient_buckets.batch_work[idx_bucket] is not None:
             continue
 
+        x_grad_of_param = gradient_buckets.batch_x_grad_of_param[idx_bucket]
         batch_x_grad = [
-            bucket.x_grads[idx_param]
-            if idx_param in bucket.x_grads
+            x_grad_of_param[idx_param]
+            if idx_param in x_grad_of_param
             else torch.zeros_like(params[idx_param])
-            for idx_param in bucket.idx_params
+            for idx_param in idx_params
         ]
-        _launch_bucket(bucket, batch_x_grad)
-    for bucket in gradient_buckets.buckets:
-        cast(dist.Work, bucket.work).wait()
+        _launch_bucket(gradient_buckets, idx_bucket, batch_x_grad)
+
+    # Wait for reductions
+    for work in gradient_buckets.batch_work:
+        cast(dist.Work, work).wait()
 
     # The trainable parameters' indices, in bucket order
     idx_param_train = [
-        idx_param for bucket in gradient_buckets.buckets for idx_param in bucket.idx_params
+        idx_param for idx_params in gradient_buckets.batch_idx_params for idx_param in idx_params
     ]
 
     # A parameter this rank reached counts as reached on every rank: read the sums only for a miss
     idxs_unreached_any: set[int] = set()
     if not all(
-        len(bucket.x_grads) == len(bucket.idx_params) for bucket in gradient_buckets.buckets
+        len(gradient_buckets.batch_x_grad_of_param[idx_bucket]) == len(idx_params)
+        for idx_bucket, idx_params in enumerate(gradient_buckets.batch_idx_params)
     ):
         # One read of every bucket's flags: each .tolist() would make the CPU wait for the GPU
         batch_reached_any = torch.cat(
-            [bucket.x_flat[-len(bucket.idx_params) :] for bucket in gradient_buckets.buckets]
-        ).tolist()
+            [
+                gradient_buckets.batch_x_flat[idx_bucket][-len(idx_params) :]
+                for idx_bucket, idx_params in enumerate(gradient_buckets.batch_idx_params)
+            ]
+        ).tolist()  # (N_param,)
 
         # The flags follow the parameters' bucket order
         idxs_unreached_any = {
@@ -332,19 +343,19 @@ def average_gradient_buckets(gradient_buckets: GradientBuckets, model: nn.Module
         }
 
     # Each bucket's averaged gradients, None for a parameter no rank reached
-    for bucket in gradient_buckets.buckets:
-        x_averaged = bucket.x_flat[: -len(bucket.idx_params)] / dist.get_world_size()
+    for idx_bucket, idx_params in enumerate(gradient_buckets.batch_idx_params):
+        x_flat = gradient_buckets.batch_x_flat[idx_bucket]
+        x_averaged = x_flat[: -len(idx_params)] / dist.get_world_size()
         for idx_param, x_grad in zip(
-            bucket.idx_params,
-            x_averaged.split([params[idx_param].numel() for idx_param in bucket.idx_params]),
+            idx_params, x_averaged.split([params[idx_param].numel() for idx_param in idx_params])
         ):
             params[idx_param].grad = (
                 None if idx_param in idxs_unreached_any else x_grad.view_as(params[idx_param])
             )
 
         # Reset the bucket for the next step
-        bucket.x_grads.clear()
-        bucket.work = None
+        gradient_buckets.batch_x_grad_of_param[idx_bucket].clear()
+        gradient_buckets.batch_work[idx_bucket] = None
 
     # After the first step, every rank regroups its buckets in rank 0's order reached
     if gradient_buckets.order_reached is not None:
@@ -358,9 +369,7 @@ def average_gradient_buckets(gradient_buckets: GradientBuckets, model: nn.Module
             device=params[0].device,
         )
         dist.broadcast(x_idx_param, src=0)
-        gradient_buckets.buckets, gradient_buckets.idx_bucket_of_param = _group_into_buckets(
-            x_idx_param.tolist(), params
-        )
+        _group_into_buckets(gradient_buckets, x_idx_param.tolist(), params)
         gradient_buckets.order_reached = None
 
 
@@ -382,11 +391,15 @@ def mean_over_ranks(x_value: torch.Tensor) -> RankMean:
         The sum of every rank's `x_value` on its way to the host, and the number of ranks.
     """
     x_value_sum = x_value.detach().to(torch.float64)
+
     num_ranks = 1
     work = None
+    
+    # Start reducing
     if dist.is_initialized():
         work = dist.all_reduce(x_value_sum, async_op=True)
         num_ranks = dist.get_world_size()
+    
     if x_value_sum.device.type != "cuda":
         if work is not None:
             work.wait()
@@ -471,6 +484,7 @@ def broadcast_float(value: float, device: torch.device) -> float:
     """
     if not dist.is_initialized():
         return value
+    
     x_value = torch.tensor([value], dtype=torch.float64, device=device)
     dist.broadcast(x_value, src=0)
 
@@ -492,6 +506,7 @@ def gather_episode_results(episode_results: list[EpisodeResult]) -> list[Episode
     """
     if not dist.is_initialized():
         return episode_results
+    
     gathered: list[list[EpisodeResult]] = [[] for _ in range(dist.get_world_size())]
     dist.all_gather_object(gathered, episode_results)
 
