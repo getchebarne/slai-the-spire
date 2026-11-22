@@ -33,9 +33,7 @@ _CHANNEL_LAYOUT_EVENT_META, _alloc = make_channel_allocator()
 _OFF_EVENT_NAME = _alloc("name", len(_IDX_OF_EVENT_NAME))
 _OFF_EVENT_CONSUMED = _alloc("consumed")
 _OFF_EVENT_STAGE = _alloc("stage")
-_OFF_EVENT_HEALTH_MAX_AT_OPEN = _alloc(
-    "health_max_at_open"
-)  # What ReadAt.EventOpen fractions read
+_OFF_EVENT_HEALTH_MAX_AT_OPEN = _alloc("health_max_at_open")
 # Dead Adventurer only
 _OFF_EVENT_FOUND_GOLD = _alloc("found_gold")
 _OFF_EVENT_FOUND_NOTHING = _alloc("found_nothing")
@@ -52,7 +50,7 @@ _WARNED_EVENT_TRUNCATED: set = set()
 
 
 _CHANNEL_LAYOUT_EVENT_OPTION, _alloc = make_channel_allocator()
-_OFF_EVENT_OPTION_AVAILABLE = _alloc("available")  # The engine allows it and no mask blocks it
+_OFF_EVENT_OPTION_AVAILABLE = _alloc("available")
 
 ENCODING_DIM_EVENT_OPTION = sum(w for _, w in _CHANNEL_LAYOUT_EVENT_OPTION)
 

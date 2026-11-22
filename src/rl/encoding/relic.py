@@ -21,13 +21,9 @@ _OFF_RELIC_NAME = _alloc("name", len(_IDX_OF_RELIC_NAME))
 _OFF_RELIC_TIER = _alloc("tier", len(_IDX_OF_RELIC_TIER))
 _OFF_RELIC_USED_UP = _alloc("used_up")
 _OFF_RELIC_COUNTER = _alloc("counter")
-_OFF_RELIC_COUNTER_PROGRESS = _alloc(
-    "counter_progress"
-)  # Counter / counter_reset for firing counters, else 0
-_OFF_RELIC_COUNTER_REMAINING = _alloc(
-    "counter_remaining", _COUNTER_MAX
-)  # Triggers left until it fires, bucket 0 the next one
-_OFF_RELIC_LINKED = _alloc("linked")  # The Relic the Sapphire Key is linked to
+_OFF_RELIC_COUNTER_PROGRESS = _alloc("counter_progress")
+_OFF_RELIC_COUNTER_REMAINING = _alloc("counter_remaining", _COUNTER_MAX)
+_OFF_RELIC_LINKED = _alloc("linked")
 
 ENCODING_DIM_RELIC = sum(w for _, w in _CHANNEL_LAYOUT_RELIC)
 

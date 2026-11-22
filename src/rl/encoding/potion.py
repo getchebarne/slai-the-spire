@@ -19,10 +19,8 @@ _OFF_POTION_NAME = _alloc("name", len(_IDX_OF_POTION_NAME))
 _OFF_POTION_RARITY = _alloc("rarity", len(_IDX_OF_POTION_RARITY))
 _OFF_POTION_REQUIRES_TARGET = _alloc("requires_target")
 _OFF_POTION_COMBAT_ONLY = _alloc("combat_only")
-_OFF_POTION_DOUBLED = _alloc(
-    "doubled"
-)  # Sacred Bark: its Effect rows already carry the doubled amounts
-_OFF_POTION_USABLE = _alloc("usable")  # Drinkable now, and no mask blocks it
+_OFF_POTION_DOUBLED = _alloc("doubled")
+_OFF_POTION_USABLE = _alloc("usable")
 
 ENCODING_DIM_POTION = sum(w for _, w in _CHANNEL_LAYOUT_POTION)
 

@@ -63,7 +63,7 @@ _OFF_CARD_KIND = _alloc("kind", len(_IDX_OF_CARD_KIND))
 _OFF_CARD_COLOR = _alloc("color", len(_IDX_OF_CARD_COLOR))
 _OFF_CARD_RARITY = _alloc("rarity", len(_IDX_OF_CARD_RARITY))
 _OFF_CARD_COST_KIND = _alloc("cost_kind", len(_IDX_OF_CARD_COST_KIND))
-_OFF_CARD_COST_SCOPE = _alloc("cost_scope", len(_IDX_OF_COST_SCOPE))  # All-zero = no override
+_OFF_CARD_COST_SCOPE = _alloc("cost_scope", len(_IDX_OF_COST_SCOPE))
 _OFF_CARD_COST_VECTOR = _alloc("cost_vector", _COST_VECTOR_DIM)
 _OFF_CARD_COST_SCALAR = _alloc("cost_scalar")
 _OFF_CARD_UPGRADED = _alloc("upgraded")
@@ -73,25 +73,15 @@ _OFF_CARD_ETHEREAL = _alloc("ethereal")
 _OFF_CARD_RETAIN = _alloc("retain")
 _OFF_CARD_REQUIRES_TARGET = _alloc("requires_target")
 _OFF_CARD_PLAYABLE = _alloc("playable")
-_OFF_CARD_ENERGY_DELTA = _alloc("energy_delta")  # Signed: energy_current - cost
+_OFF_CARD_ENERGY_DELTA = _alloc("energy_delta")
 _OFF_CARD_COST_BASE = _alloc("cost_base")
 _OFF_CARD_BOTTLED = _alloc("bottled")
-_OFF_CARD_COST_OFFSET = _alloc("cost_offset")  # X-Cost offset
-_OFF_CARD_FREE_TO_PLAY_ONCE = _alloc(
-    "free_to_play_once"
-)  # Setup, Forethought: the 0 in `cost` lasts one play
-_OFF_CARD_PLAY_SOURCE = _alloc(
-    "play_source", len(_IDX_OF_PLAY_SOURCE)
-)  # All-zero = not in the play queue
-_OFF_CARD_DRAW_DEPTH = _alloc(
-    "draw_depth", MAX_SIZE_CARD_PILE_DRAW
-)  # The Cards above it in the draw pile. All-zero = not visible
-_OFF_CARD_DRAW_DEPTH_SCALAR = _alloc(
-    "draw_depth_scalar"
-)  # The same count over MAX_SIZE_CARD_PILE_DRAW, at most 1
-_OFF_CARD_DRAW_BELOW_SCALAR = _alloc(
-    "draw_below_scalar"
-)  # The Cards below it in the draw pile, likewise
+_OFF_CARD_COST_OFFSET = _alloc("cost_offset")
+_OFF_CARD_FREE_TO_PLAY_ONCE = _alloc("free_to_play_once")
+_OFF_CARD_PLAY_SOURCE = _alloc("play_source", len(_IDX_OF_PLAY_SOURCE))
+_OFF_CARD_DRAW_DEPTH = _alloc("draw_depth", MAX_SIZE_CARD_PILE_DRAW)
+_OFF_CARD_DRAW_DEPTH_SCALAR = _alloc("draw_depth_scalar")
+_OFF_CARD_DRAW_BELOW_SCALAR = _alloc("draw_below_scalar")
 
 ENCODING_DIM_CARD = sum(w for _, w in _CHANNEL_LAYOUT_CARD)
 

@@ -42,7 +42,7 @@ _OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_EDGES = _alloc("edges", len(EDGE_DELTAS))
 _OFF_MAP_BURNING = _alloc("burning")
 OFF_MAP_POSITION = _alloc("position")
-_OFF_MAP_BURNING_PATH = _alloc("burning_path")  # On a path that still reaches the burning Room
+_OFF_MAP_BURNING_PATH = _alloc("burning_path")
 
 # The channels above are the Map network's cell features; the one below names the Room tokens'
 # cells
@@ -61,34 +61,20 @@ SLICE_MAP_ROOM_KIND = slice(_OFF_MAP_ROOM_KIND, _OFF_MAP_ROOM_KIND + _MAP_NUM_RO
 
 
 _CHANNEL_LAYOUT_MAP_META, _alloc = make_channel_allocator()
-_OFF_MAP_FLOOR_DEPTH = _alloc("floor_depth")  # y_current / MAP_HEIGHT
-_OFF_MAP_ON_MAP = _alloc("on_map")  # y_current is not None
-_OFF_MAP_ENCOUNTER_BOSS = _alloc(
-    "encounter_boss", len(_IDX_OF_MONSTER_ENCOUNTER_BOSS)
-)  # Act-boss identity OHE
-_OFF_MAP_ENCOUNTER_POOL_BOSS_COUNT = _alloc(
-    "encounter_pool_boss_count"
-)  # Boss fights after the boss's: 1 at A20 in Act 3 until the second
+_OFF_MAP_FLOOR_DEPTH = _alloc("floor_depth")
+_OFF_MAP_ON_MAP = _alloc("on_map")
+_OFF_MAP_ENCOUNTER_BOSS = _alloc("encounter_boss", len(_IDX_OF_MONSTER_ENCOUNTER_BOSS))
+_OFF_MAP_ENCOUNTER_POOL_BOSS_COUNT = _alloc("encounter_pool_boss_count")
 _OFF_MAP_CURRENT_ROOM_KIND = _alloc("current_room_kind", _MAP_NUM_ROOM_KINDS)
-_OFF_MAP_NEXT_ROOM_KINDS = _alloc(
-    "next_room_kinds", MAP_WIDTH * _MAP_NUM_ROOM_KINDS
-)  # RoomKind OHE per next-row column
-_OFF_MAP_ACT = _alloc(
-    "act", GameEnv.ACT_FINAL
-)  # Each act is a fresh 15-row Map; depth alone is ambiguous
-_OFF_MAP_KEYS = _alloc("keys", 3)  # The keys held: Emerald, Ruby, Sapphire
+_OFF_MAP_NEXT_ROOM_KINDS = _alloc("next_room_kinds", MAP_WIDTH * _MAP_NUM_ROOM_KINDS)
+_OFF_MAP_ACT = _alloc("act", GameEnv.ACT_FINAL)
+_OFF_MAP_KEYS = _alloc("keys", 3)
 # "?" Rooms
-_OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc(
-    "unknown_chance_monster"
-)  # The Event chance is what the three odds leave
+_OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc("unknown_chance_monster")
 _OFF_MAP_UNKNOWN_CHANCE_SHOP = _alloc("unknown_chance_shop")
 _OFF_MAP_UNKNOWN_CHANCE_TREASURE = _alloc("unknown_chance_treasure")
-_OFF_MAP_ROOM_KIND_RESOLVED = _alloc(
-    "room_kind_resolved", _MAP_NUM_ROOM_KINDS
-)  # A "?" stays Unknown on its Room; no Shop right after a Shop
-_OFF_MAP_POOL_EVENTS = _alloc(
-    "pool_events", len(_IDX_OF_EVENT_NAME)
-)  # Events a "?" can still become, each drawn once
+_OFF_MAP_ROOM_KIND_RESOLVED = _alloc("room_kind_resolved", _MAP_NUM_ROOM_KINDS)
+_OFF_MAP_POOL_EVENTS = _alloc("pool_events", len(_IDX_OF_EVENT_NAME))
 _OFF_MAP_POOL_EVENT_SPECIAL = _alloc("pool_event_special", len(_IDX_OF_EVENT_NAME))
 
 ENCODING_DIM_MAP_META = sum(w for _, w in _CHANNEL_LAYOUT_MAP_META)
