@@ -1,8 +1,9 @@
 import numpy as np
 from slai import GameState
 
-from src.rl.constants import SHOP_PRICE_CAP
+from src.rl.constants import GOLD_SCALE
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.scalars import get_linear_norm
 from src.rl.tokens import get_character
 
 
@@ -34,9 +35,9 @@ def encode_price_into(price: int, gold: int, np_out: np.ndarray) -> None:
         (ENCODING_DIM_PRICE,) float32. The price's range, a token's shared block or the Shop's
         context range, written in place.
     """
-    np_out[_OFF_SHOP_PRICE] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+    np_out[_OFF_SHOP_PRICE] = get_linear_norm(price, GOLD_SCALE)
     np_out[_OFF_SHOP_AFFORDABLE] = float(gold >= price)
-    np_out[_OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+    np_out[_OFF_SHOP_GOLD_GAP] = get_linear_norm(abs(gold - price), GOLD_SCALE)
 
 
 def encode_shop_meta_into(game_state: GameState, np_out: np.ndarray) -> None:

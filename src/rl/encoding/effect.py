@@ -53,6 +53,9 @@ from slai import get_potion_templates
 from slai import get_relic_templates
 
 from src.rl.constants import ASCENSION_LEVEL
+from src.rl.constants import GOLD_SCALE
+from src.rl.constants import HEALTH_SCALE
+from src.rl.constants import MAX_SCALED
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.layout import make_channel_allocator
@@ -482,17 +485,18 @@ ENCODING_DIM_SPARSE_EFFECT = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_
 class _NormMode(StrEnum):
     SQRT = auto()
     LINEAR = auto()
+    SCALE = auto()  # Divided by its scale, then clipped to ±MAX_SCALED
 
 
-# (offset, cap, mode) for every non-unit channel
+# (offset, cap or SCALE's scale, mode) for every non-unit channel
 _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (_OFF_SELECT_COUNT, _CAP_SELECT_COUNT, _NormMode.LINEAR),
     (_OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
-    (_OFF_DAMAGE, _CAP_DAMAGE, _NormMode.SQRT),
+    (_OFF_DAMAGE, HEALTH_SCALE, _NormMode.SCALE),
     (_OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
-    (_OFF_BLOCK, _CAP_BLOCK, _NormMode.SQRT),
-    (_OFF_HEALTH_ABSOLUTE, _CAP_HEALTH, _NormMode.SQRT),
-    (_OFF_GOLD_ABSOLUTE, _CAP_GOLD, _NormMode.SQRT),
+    (_OFF_BLOCK, HEALTH_SCALE, _NormMode.SCALE),
+    (_OFF_HEALTH_ABSOLUTE, HEALTH_SCALE, _NormMode.SCALE),
+    (_OFF_GOLD_ABSOLUTE, GOLD_SCALE, _NormMode.SCALE),
     (_OFF_ENERGY, _CAP_ENERGY, _NormMode.LINEAR),
     (_OFF_STACKS, _CAP_STACKS, _NormMode.SQRT),
     (_OFF_COUNT, _CAP_COUNT, _NormMode.LINEAR),
@@ -505,15 +509,18 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
 
 _NP_SCALED_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
 _NP_CAP = np.ones(ENCODING_DIM_EFFECT, dtype=np.float32)
+_NP_DIVISOR = np.ones(ENCODING_DIM_EFFECT, dtype=np.float32)
 _NP_SQRT_MASK = np.zeros(ENCODING_DIM_EFFECT, dtype=bool)
 for _off, _cap_value, _mode in _NORM_META:
     _NP_SCALED_MASK[_off] = True
-    _NP_CAP[_off] = _cap_value
+    _NP_CAP[_off] = _cap_value * MAX_SCALED if _mode == _NormMode.SCALE else _cap_value
+    _NP_DIVISOR[_off] = _cap_value
     _NP_SQRT_MASK[_off] = _mode == _NormMode.SQRT
 
 # Only the _NORM_META channels need scaling at all
 _NP_IDX_SCALED = np.nonzero(_NP_SCALED_MASK)[0]
 _NP_SCALED_CAP = _NP_CAP[_NP_IDX_SCALED]
+_NP_SCALED_DIVISOR = _NP_DIVISOR[_NP_IDX_SCALED]
 _NP_SCALED_SQRT = _NP_SQRT_MASK[_NP_IDX_SCALED]
 _NP_SCALED_LINEAR = ~_NP_SCALED_SQRT
 
@@ -985,7 +992,8 @@ def make_effect_row(effect: Effect, effect_source: EffectSource) -> np.ndarray:
 def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
     """Scale the `_NORM_META` channels in place.
 
-    Each is clipped to ±its cap, then divided by the cap or sqrt-compressed.
+    Each is clipped to ±its cap, then divided by the cap or sqrt-compressed; a SCALE channel is
+    divided by its scale, clipped to ±MAX_SCALED.
 
     Fancy indexing copies, so the transform runs on the gathered channels and the final
     assignment scatters them back.
@@ -997,7 +1005,7 @@ def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
     """
     np_effect_gather = np_effect_row[_NP_IDX_SCALED]
     np.clip(np_effect_gather, -_NP_SCALED_CAP, _NP_SCALED_CAP, out=np_effect_gather)
-    np_effect_gather[_NP_SCALED_LINEAR] /= _NP_SCALED_CAP[_NP_SCALED_LINEAR]
+    np_effect_gather[_NP_SCALED_LINEAR] /= _NP_SCALED_DIVISOR[_NP_SCALED_LINEAR]
     np_value_sqrt = np_effect_gather[_NP_SCALED_SQRT]
     np_effect_gather[_NP_SCALED_SQRT] = np.sign(np_value_sqrt) * np.sqrt(
         np.abs(np_value_sqrt) / _NP_SCALED_CAP[_NP_SCALED_SQRT]

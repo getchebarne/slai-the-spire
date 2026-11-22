@@ -7,15 +7,16 @@ from slai import MAX_SIZE_CARD_PILE_HAND
 from slai import MAX_SIZE_RELIC_EVENT_ROLL
 from slai import CandidatePool
 from slai import ChestKind
-from slai import EffectBombArm
 from slai import GameState
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 
+from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
 from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.scalars import get_linear_norm
 
 
 class Focus(IntEnum):
@@ -62,11 +63,6 @@ _NUM_CHEST_KINDS = len(ChestKind.members())
 
 
 _BOMB_TURNS = BOMB_FUSE_TURNS  # The Bomb's fuse length
-
-# The catalog's biggest bomb; bombs due on the same turn add up and clamp to it
-_BOMB_DAMAGE_MAX = max(
-    effect.damage for effect in catalog_effects() if isinstance(effect, EffectBombArm)
-)
 
 _CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
 _OFF_FOCUS_KIND = _alloc("kind", len(Focus))
@@ -130,7 +126,7 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
         for turns_left, damage, _ in combat.bombs:
             np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
         due = np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE : _OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
-        due[:] = np.minimum(due, _BOMB_DAMAGE_MAX) / _BOMB_DAMAGE_MAX
+        due[:] = [get_linear_norm(damage_due, HEALTH_SCALE) for damage_due in due]
 
     if chest is not None:
         np_out[_OFF_FOCUS_CHEST_KIND + int(chest.chest_kind)] = 1.0
