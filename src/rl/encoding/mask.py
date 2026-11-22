@@ -4,6 +4,7 @@ from typing import cast
 
 import numpy as np
 import slai
+import torch
 from slai import Card
 
 from src.rl.constants import COLLECTION_KINDS_CARD
@@ -132,6 +133,25 @@ def encode_batch_masks_into(
 
         # Increment `row_start` w/ the number of tokens processed for this state
         row_start += len(tokens)
+
+
+def unpack_legal_bits(x_legal: torch.Tensor) -> torch.Tensor:
+    """Unpack legal masks into one bit per action type.
+
+    Parameters
+    ----------
+    x_legal : torch.Tensor
+        (N,) int64. Each token's legal mask as `encode_batch_masks_into` writes it: bit t set
+        where action type t is legal.
+
+    Returns
+    -------
+    torch.Tensor
+        (N, NUM_ACTION_TYPES) bool. Each token's bit of each action type.
+    """
+    x_idx_action_type = torch.arange(NUM_ACTION_TYPES, device=x_legal.device)
+
+    return ((x_legal.unsqueeze(1) >> x_idx_action_type) & 1).bool()
 
 
 def _check_action_types() -> None:

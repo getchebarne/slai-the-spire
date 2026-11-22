@@ -463,7 +463,7 @@ def _update_minibatch(
     x_loss_value = 0.5 * F.mse_loss(x_value, x_return, reduction="none").sum(-1).mean()
     x_loss_entropy = -torch.mean(policy_output.x_entropy.sum(dim=-1))
 
-    # KL-Uniform barrier, summed per head like the entropy term; each head's KL falls
+    # KL-Uniform barrier, summed per level like the entropy term; each level's KL falls
     x_loss_kl_uniform = torch.mean(policy_output.x_kl_uniform.sum(dim=-1))
     x_loss = (
         x_loss_policy
@@ -559,9 +559,9 @@ def _minibatch_metrics(
     x_loss_kl_uniform : torch.Tensor
         (). The uniform-KL loss.
     x_entropy : torch.Tensor
-        (batch_size, 3). The entropy of each of the minibatch's states at each level.
+        (batch_size, 2). The entropy of each of the minibatch's states at each level.
     x_kl_uniform : torch.Tensor
-        (batch_size, 3). Each state's KL-Uniform at each level.
+        (batch_size, 2). Each state's KL-Uniform at each level.
     x_ratio : torch.Tensor
         (batch_size,). Each recorded action's probability ratio, the current weights' over
         π_prox's.
@@ -588,12 +588,10 @@ def _minibatch_metrics(
         # Entropy
         MetricKey.ENTROPY_L1: x_entropy_mean[0],
         MetricKey.ENTROPY_L2: x_entropy_mean[1],
-        MetricKey.ENTROPY_L3: x_entropy_mean[2],
 
         # KL-Uniform
         MetricKey.KL_UNIFORM_L1: x_kl_uniform_mean[0],
         MetricKey.KL_UNIFORM_L2: x_kl_uniform_mean[1],
-        MetricKey.KL_UNIFORM_L3: x_kl_uniform_mean[2],
 
         # Other
         MetricKey.UPDATE_CLIP_FRACTION: ((x_ratio - 1).abs() > clip_eps).float().mean(),
