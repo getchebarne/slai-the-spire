@@ -10,6 +10,7 @@ from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_tag_into
 from src.rl.encoding.shared import get_record_key_price
 from src.rl.tokens import get_character
+from src.rl.types import RecordKeyRelic
 from src.rl.types import Tag
 
 
@@ -154,9 +155,7 @@ def is_relic_armed(relic: Relic, game_state: GameState) -> bool:
     return _COUNTER_ARMED_OF_RELIC_NAME.get(relic.name) == relic.counter
 
 
-def get_record_key_relic(
-    relic: Relic, linked: bool, armed: bool, gold: int
-) -> tuple[int, bool, bool, int | None]:
+def get_record_key_relic(relic: Relic, linked: bool, armed: bool, gold: int) -> RecordKeyRelic:
     """Make a Relic's record key: its identity_hash and everything else its row reads.
 
     Parameters
@@ -172,7 +171,7 @@ def get_record_key_relic(
 
     Returns
     -------
-    tuple[int, bool, bool, int | None]
+    RecordKeyRelic
         Its identity_hash, whether the Sapphire Key is linked to it, whether it is armed, and the
         gold when it has a price.
     """

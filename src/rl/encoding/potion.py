@@ -7,6 +7,7 @@ from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_tag_into
 from src.rl.encoding.shared import get_record_key_price
+from src.rl.types import RecordKeyPotion
 from src.rl.types import Tag
 
 
@@ -72,7 +73,7 @@ def encode_potion_into(
     encode_shared_tag_into(_TAGS_OF_POTION_NAME.get(potion.name, ()), np_shared)
 
 
-def get_record_key_potion(potion: Potion, usable: bool, gold: int) -> tuple[int, bool, int | None]:
+def get_record_key_potion(potion: Potion, usable: bool, gold: int) -> RecordKeyPotion:
     """Make a Potion's record key: its identity_hash and everything else its row reads.
 
     Parameters
@@ -86,7 +87,7 @@ def get_record_key_potion(potion: Potion, usable: bool, gold: int) -> tuple[int,
 
     Returns
     -------
-    tuple[int, bool, int | None]
+    RecordKeyPotion
         Its identity_hash, whether the policy can drink it, and the gold when it has a price.
     """
     return (potion.identity_hash, usable, get_record_key_price(potion.price, gold))

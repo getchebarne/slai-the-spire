@@ -20,6 +20,7 @@ from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
 from src.rl.encoding.shared import encode_shared_tag_into
 from src.rl.encoding.shared import get_record_key_price
+from src.rl.types import RecordKeyCard
 from src.rl.types import Tag
 
 
@@ -234,7 +235,7 @@ def get_record_key_card(
     gold: int,
     slot_holder: int | None,
     play_source: PlaySource | None,
-) -> tuple[int, int, int | None, int | None, int | None, PlaySource | None]:
+) -> RecordKeyCard:
     """Make a Card's record key: its identity_hash and everything else its row reads.
 
     Parameters
@@ -254,7 +255,7 @@ def get_record_key_card(
 
     Returns
     -------
-    tuple[int, int, int | None, int | None, int | None, PlaySource | None]
+    RecordKeyCard
         Its identity_hash, the energy, the Cards below it, the gold when it has a price, its
         holder's slot while it is in stasis, and its play source while it is queued.
     """

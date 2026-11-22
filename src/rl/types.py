@@ -9,6 +9,7 @@ from slai import Card
 from slai import Character
 from slai import EventOption
 from slai import Monster
+from slai import PlaySource
 from slai import Potion
 from slai import Relic
 from slai import Room
@@ -65,6 +66,11 @@ type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
 
 # The collection kinds of the collections holding an Entity, in window order, then the Entity
 type Token = tuple[tuple[CollectionKind, ...], Entity]
+
+# The record key of a Card, of a Relic and of a Potion: everything its token's row reads
+type RecordKeyCard = tuple[int, int, int | None, int | None, int | None, PlaySource | None]
+type RecordKeyRelic = tuple[int, bool, bool, int | None]
+type RecordKeyPotion = tuple[int, bool, int | None]
 
 
 class EffectSource(IntEnum):
