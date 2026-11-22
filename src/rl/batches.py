@@ -245,10 +245,8 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
             num_buffers, num_tokens, len(CollectionKind), dtype=torch.uint8
         ),
         x_entity_kind=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
-        x_legal_selection=torch.zeros(
-            num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool
-        ),
-        x_legal_target=torch.zeros(num_buffers, num_tokens, NUM_ACTION_TYPES, dtype=torch.bool),
+        x_legal_selection=torch.zeros(num_buffers, num_tokens, dtype=torch.long),
+        x_legal_target=torch.zeros(num_buffers, num_tokens, dtype=torch.long),
         x_needs_target=torch.zeros(num_buffers, num_tokens, dtype=torch.bool),
     )
     effect_pending = _allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_SPARSE_EFFECT)

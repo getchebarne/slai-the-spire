@@ -220,10 +220,11 @@ class HeadSelection(nn.Module):
         """
         tokens_refined = core_output.tokens
         x_token_state = core_output.x_token_state
-        x_token_row = torch.arange(x_token_state.shape[0], device=x_token_state.device)  # (N,)
 
         # Wether each token is selectable under its state selected `ActionType`
-        x_token_selectable = tokens_refined.x_legal_selection[x_token_row, x_action_type[x_token_state]] # (N,)
+        x_token_selectable = (
+            (tokens_refined.x_legal_selection >> x_action_type[x_token_state]) & 1
+        ).bool()  # (N,)
 
         # An `ActionType` that selects no token sets its state's Character as legal to avoid NaNs
         x_is_character = tokens_refined.x_entity_kind == EntityKind.CHARACTER  # (N,)
@@ -321,7 +322,9 @@ class HeadTarget(nn.Module):
 
         # For actions that take one (CardPlay / PotionUse) and tokens that need one only
         x_has_target = self._x_has_target[x_action_type] & tokens.x_needs_target[x_selection_row] # (B,)
-        x_target_legal = tokens.x_legal_target[x_monster_row, x_action_type[x_monster_state]] # (M,)
+        x_target_legal = (
+            (tokens.x_legal_target[x_monster_row] >> x_action_type[x_monster_state]) & 1
+        ).bool()  # (M,)
         x_mask_l3 = torch.cat([x_has_target[x_monster_state] & x_target_legal, ~x_has_target]) # (M + B,)
 
         # A cat, not F.pad: compiled, F.pad's backward fails on an empty Monster block
