@@ -111,8 +111,7 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
     np_out[_OFF_FOCUS_KIND + derive_focus(game_state)] = 1.0
 
     # Pending input
-    # None when nothing is pending or the pending Effect has no `target` field
-    target = getattr(pending, "target", None)
+    target = pending.target if pending is not None else None
     if target is not None:
         selection_kind = target.selection_kind
         if isinstance(selection_kind, (SelectionKindInput, SelectionKindInputUpTo)):
@@ -152,8 +151,7 @@ def _check_tables() -> None:
     """Check the selection-count caps cover exactly the pools the catalog's halts select from."""
     halting: set[CandidatePool] = set()
     for effect in catalog_effects():
-        # Rows the engine never targets carry no `target` field at all
-        target = getattr(effect, "target", None)
+        target = effect.target
         if target is None:
             continue
         if isinstance(target.selection_kind, (SelectionKindInput, SelectionKindInputUpTo)):

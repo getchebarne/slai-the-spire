@@ -930,8 +930,7 @@ def _encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     # Effect's kind
     np_out[_OFF_EFFECT_KIND + _INDEX_EFFECT[type(effect)]] = 1.0
 
-    # Rows the engine never targets carry no `target` field at all
-    target = getattr(effect, "target", None)
+    target = effect.target
     if target is not None:
         np_out[_OFF_TARGETED] = 1.0
         np_out[_OFF_CANDIDATE_POOL + _INDEX_CAND_POOL[target.candidate_pool]] = 1.0
