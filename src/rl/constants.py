@@ -13,15 +13,11 @@ from src.rl.types import EntityKind
 ACTION_TYPES = _slai.ActionType.members()
 NUM_ACTION_TYPES = len(ACTION_TYPES)
 
-# The top Ascension, which GameEnv doesn't expose; it sizes the ascension thermometer
-# (a checkpoint shape) and every catalog fold
+# The top Ascension, which GameEnv doesn't expose TODO expose
 ASCENSION_LEVEL = 20
 
 # Start runs with Neow's blessing (choice states + bonuses)
 NEOW = True
-
-# Actor encoding limits. Monster and Character share ENTITY caps: health_block.py
-# writes the health/block columns both share.
 
 # Every Monster template across every ascension, for the catalog folds below
 _MONSTER_TEMPLATES = [
@@ -31,12 +27,10 @@ _MONSTER_TEMPLATES = [
 ]
 _MONSTER_MOVES = [move for template in _MONSTER_TEMPLATES for move in template.moves]
 
-# Character max-health normalization clamp (health grows via Events/relics with no
-# engine ceiling); also the scale Hexaghost's Divider is bridged from
+# Character max-health normalization clamp
 CHARACTER_HEALTH_CAP = 200
 
-# The catalog's widest single block source (the Spire Shield's A18 block); Character
-# block accumulation clamps to the same scale
+# The catalog's widest single block source (the Spire Shield's A18 block)
 BLOCK_MAX_ENTITY = max(
     value
     for template in _MONSTER_TEMPLATES
@@ -51,20 +45,17 @@ BLOCK_MAX_ENTITY = max(
     )
 )
 
-# The catalog's widest Monster HP roll (the Transient's 999); the
-# Character rides the same buckets far below
+# The catalog's widest Monster HP roll (the Transient's 999)
 HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
 
-# Widest raw intent hit; Vulnerable scaling is the encoder caps' job. Hexaghost's Divider
-# template holds a placeholder 0 (it rolls at selection): bridged from CHARACTER_HEALTH_CAP
+# Widest raw intent hit; Vulnerable scaling is the encoder caps' job
 _DIVIDER_HIT_MAX = CHARACTER_HEALTH_CAP // _slai.GameEnv.HEXAGHOST_DIVIDER_DIVISOR + 1
 INTENT_DAMAGE_HIT_MAX = max(
     max(move.damage for move in _MONSTER_MOVES if move.damage is not None),
     _DIVIDER_HIT_MAX,
 )
 
-# Book of Stabbing's Multi-Stab template holds a placeholder 0 hits (the count grows with each
-# use), so it is bridged at the engine's former 20-hit ceiling
+# Book of Stabbing's Multi-Stab template holds a placeholder 0 hits (the count grows w/ each use)
 MULTI_STAB_INSTANCES_MAX = 20
 _MULTI_STAB_HIT_MAX = max(
     move.damage for move in _MONSTER_MOVES if move.name == "Multi-Stab" and move.damage is not None
@@ -97,8 +88,7 @@ _GOLD_STEAL_MAX = max(
 # Thievery accumulation: Mug, Mug, Lunge — every attack before the Escape turn steals
 GOLD_STOLEN_MAX = 3 * _GOLD_STEAL_MAX
 
-# Invincible caps the HP lost per turn at its stacks (the Corrupt Heart's spawn Modifier), which
-# refill ahead of their holder's Poison tick
+# Invincible caps the HP lost per turn at its stacks
 INVINCIBLE_STACKS_OF_ASCENSION = {
     ascension: max(
         spawn.stacks_max
@@ -122,20 +112,16 @@ MAX_SIZE_CARD_MATCH_PAIRS = _slai.GameEnv.MATCH_AND_KEEP_ATTEMPTS  # One pair pe
 MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
 MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
 
-# Most Card bundles one Reward holds (Orrery stages 5); each bundle is its own
-# CARD_REWARD_<b> collection kind, so a Reward token's collection kind names its bundle
+# Most Card bundles one Reward holds (Orrery stages 5)
 MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
 
-# Size ceiling for the master deck, used to normalize deck-scale counts (deck
-# size, halt selections over the deck and the Combat piles it feeds)
+# Size ceiling for the master deck
 MAX_SIZE_CARD_PILE_DECK = 80
 
-# Relics offered per Reward: boss Rewards roll mutually
-# exclusive Relics (taking one discards the others).
+# Relics offered per Reward: boss Rewards roll mutually exclusive Relics
 MAX_RELIC_REWARDS = _slai.GameEnv.NUM_BOSS_RELIC_REWARDS
 
-# Cauldron stages NUM_CAULDRON_POTIONS Potions as one Reward batch; Combat
-# Rewards offer at most 1.
+# Cauldron stages NUM_CAULDRON_POTIONS Potions as one Reward batch
 MAX_POTION_REWARDS = _slai.GameEnv.NUM_CAULDRON_POTIONS
 
 # Engine slot counts + provisional headroom
@@ -146,13 +132,11 @@ MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
 MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.NUM_DISCOVER_ROLLS + 2
 
-# Per-state caps on the Effect and Modifier rows, per state rather than per Entity since
-# Entities are ragged (a Monster brings its whole moveset); they size the workers' shared step
+# Per-state caps on the Effect and Modifier rows, per state rather than per Entity
 MAX_EFFECTS = 224
 MAX_MODIFIERS = 64
 
-# Caps for the piles the engine doesn't bound: each encoder slices its pile to the cap. Draw
-# and discard hold a full deck; stasis is slot-parallel to the Monsters, so its cap is exact
+# Caps for the piles the engine doesn't bound
 MAX_SIZE_CARD_PILE_DRAW = MAX_SIZE_CARD_PILE_DECK
 MAX_SIZE_CARD_PILE_DISCARD = MAX_SIZE_CARD_PILE_DECK
 MAX_SIZE_CARD_PILE_EXHAUST = 45
@@ -167,10 +151,9 @@ MAX_SIZE_CARD_PLAY_QUEUE = MAX_SIZE_CARD_PILE_HAND
 MAX_SIZE_CARD_PILE_NIGHTMARE = MAX_SIZE_CARD_PILE_HAND
 
 # Owned Relics: no duplicates, so the true ceiling is the catalog; sized with headroom
-MAX_RELICS = 35
+MAX_RELICS = 50
 
-# Reward bundle widths: bundle 0 must hold The Library's single wide roll, the
-# rest hold Combat rolls
+# Reward bundle widths: bundle 0 must hold The Library's single wide roll
 MAX_CARD_REWARD_ROLL = _slai.GameEnv.MAX_CARD_REWARD_ROLL
 MAX_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 
@@ -183,7 +166,6 @@ EVENT_STAGE_CAP = 10
 
 # Batches repeat Maps and tokens from here up: above an Actor step's batch, below any minibatch
 MIN_BATCH_DEDUP = 1024
-
 
 COLLECTION_KINDS_CARD_REWARDS = (  # One collection kind per Reward bundle, in bundle order
     CollectionKind.CARD_REWARD_0,
@@ -240,8 +222,7 @@ COLLECTION_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[CollectionKind, ...]] = 
     EntityKind.ROOM: (CollectionKind.ROOMS,),
 }
 
-# A state's tokens come in this order: the Entity kinds one after another, each its
-# collection kinds
+# A state's tokens come in this order: Entity kinds one after another, each its collection kinds
 COLLECTION_KINDS_IN_WINDOW_ORDER = tuple(
     collection_kind
     for collection_kinds_entity_kind in COLLECTION_KINDS_OF_ENTITY_KIND.values()

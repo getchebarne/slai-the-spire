@@ -131,15 +131,18 @@ def is_relic_armed(relic: Relic, game_state: GameState) -> bool:
         True when the Relic's condition holds; False for a Relic without one.
     """
     match relic.name:
-        case RelicName.MeatOnTheBone:  # Ending a Combat at half HP or less heals 12
+        case RelicName.MeatOnTheBone:
             character = get_character(game_state)
 
             return character.health * 2 <= character.health_max
-        case RelicName.Orichalcum:  # Ending the turn with no block gains 6
+        
+        case RelicName.Orichalcum:
             return get_character(game_state).block == 0
+        
         case RelicName.Pocketwatch:
             return relic.counter <= _POCKETWATCH_PLAYS_ARMED
-        case RelicName.StoneCalendar:  # This turn's end deals 52 to every Monster
+        
+        case RelicName.StoneCalendar:
             combat = game_state.combat
 
             return (
