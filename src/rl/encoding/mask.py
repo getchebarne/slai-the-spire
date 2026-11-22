@@ -29,8 +29,9 @@ def encode_batch_masks_into(
 ) -> None:
     """Reset and write the masks into the supplied token and state rows.
 
-    A legal action names its Entity's one token, found by the Entity's id. An Entity with no
-    token, past its collection's cap, is unselectable.
+    A legal action names its Entity's one token, found by the Entity's id, the ROOMS_NOT_SELECTABLE
+    tokens aside: no action names them. An Entity with no token, past its collection's cap, is
+    unselectable.
 
     Parameters
     ----------
@@ -59,8 +60,12 @@ def encode_batch_masks_into(
     for idx_state, game_state in enumerate(batch_game_state):
         tokens = batch_tokens[idx_state]
 
-        # Each Entity id's state-local row: its one token's
-        row_of_entity_id = {entity.id: row_local for row_local, (_, entity) in enumerate(tokens)}
+        # Each Entity id's state-local row: its one token's, the ROOMS_NOT_SELECTABLE tokens aside
+        row_of_entity_id = {
+            entity.id: row_local
+            for row_local, (collection_kinds, entity) in enumerate(tokens)
+            if CollectionKind.ROOMS_NOT_SELECTABLE not in collection_kinds
+        }
 
         # The (`ActionType`, `CollectionKind`s) pairs whose legal ids set a bit, for the dedup
         legal_collection_kinds: set[tuple[int, tuple[CollectionKind, ...]]] = set()

@@ -320,7 +320,7 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
             num_buffers, buffer_size, ENCODING_DIM_CONTEXT, dtype=torch.float32
         ),
         x_map_grid=torch.zeros(
-            num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS, dtype=torch.int16
         ),
         x_legal_action_type=torch.zeros(
             num_buffers, buffer_size, NUM_ACTION_TYPES, dtype=torch.bool

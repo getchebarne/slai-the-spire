@@ -210,8 +210,13 @@ _COLLECTION_KINDS_POTION = (
     CollectionKind.POTION_EVENT_ROLL,
 )
 
-# The Entity kinds in window order, each its collection kinds; the last four hold a single
-# collection kind
+# The Room collection kinds in window order: the selectable Rooms, then the other forward Rooms
+_COLLECTION_KINDS_ROOM = (
+    CollectionKind.ROOMS,
+    CollectionKind.ROOMS_NOT_SELECTABLE,
+)
+
+# The Entity kinds in window order, each its collection kinds; three hold a single collection kind
 COLLECTION_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[CollectionKind, ...]] = {
     EntityKind.CARD: COLLECTION_KINDS_CARD,
     EntityKind.RELIC: _COLLECTION_KINDS_RELIC,
@@ -219,7 +224,7 @@ COLLECTION_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[CollectionKind, ...]] = 
     EntityKind.MONSTER: (CollectionKind.MONSTERS,),
     EntityKind.EVENT_OPTION: (CollectionKind.EVENT_OPTIONS,),
     EntityKind.CHARACTER: (CollectionKind.CHARACTER,),
-    EntityKind.ROOM: (CollectionKind.ROOMS,),
+    EntityKind.ROOM: _COLLECTION_KINDS_ROOM,
 }
 
 # A state's tokens come in this order: Entity kinds one after another, each its collection kinds
@@ -262,6 +267,7 @@ MAX_TOKENS_OF_COLLECTION_KIND: dict[CollectionKind, int] = {
     CollectionKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
     CollectionKind.CHARACTER: 1,
     CollectionKind.ROOMS: MAP_WIDTH,
+    CollectionKind.ROOMS_NOT_SELECTABLE: MAP_HEIGHT * MAP_WIDTH,
 }
 
 # The cap of the block every collection packs into: the sum of the collections' caps
@@ -296,6 +302,13 @@ def _check_tables() -> None:
         raise RuntimeError(
             "Each CollectionKind must sit once in COLLECTION_KINDS_OF_ENTITY_KIND's tables, and "
             f"CollectionKind must be valued 0..len-1; the tables list {names}"
+        )
+
+    # The transformer's tokens are each state's first, so the selection offsets index both
+    if COLLECTION_KINDS_IN_WINDOW_ORDER[-1] is not CollectionKind.ROOMS_NOT_SELECTABLE:
+        raise RuntimeError(
+            "ROOMS_NOT_SELECTABLE must come last in the window order: the transformer's tokens "
+            "are each state's first tokens"
         )
 
 

@@ -14,9 +14,9 @@ from src.rl.algorithms.actor_critic.metrics import MetricKey
 from src.rl.batches import cat_states
 from src.rl.batches import gather_states
 from src.rl.batches import slice_states
-from src.rl.maps import get_unique_maps
 from src.rl.models import ActorCritic
 from src.rl.models.entity_projector import dedup_tokens
+from src.rl.models.entity_projector import hash_tokens
 from src.rl.models.entity_projector import plan_tokens
 from src.rl.models.map_encoder import dedup_maps
 from src.rl.models.map_encoder import plan_maps
@@ -227,11 +227,11 @@ def adapt_lr(lr: float, approx_kl: float, target_kl: float) -> float:
 
 
 def _plan_dedup(rollout: Rollout) -> tuple[MapPlan, TokenPlan]:
-    """Build both host plans from the same Map identities over all the rollout's states."""
+    """Build both host plans from the same token hashes over all the rollout's states."""
     states = cat_states([rollout.states, rollout.states_final])
-    maps = get_unique_maps(states)
+    x_hash_token = hash_tokens(states.tokens)
 
-    return plan_maps(maps), plan_tokens(states, maps.x_room_key)
+    return plan_maps(states, x_hash_token), plan_tokens(states, x_hash_token)
 
 
 def _evaluate_rollout(

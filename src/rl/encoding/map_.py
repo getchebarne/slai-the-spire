@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import numpy as np
 from slai import EventName
 from slai import GameEnv
@@ -9,12 +11,13 @@ from slai import RoomKind
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.tokens import get_burning_path
+from src.rl.encoding.room import EDGE_DELTAS
+from src.rl.encoding.room import get_edge_channels
 from src.rl.tokens import get_entities
 from src.rl.tokens import get_room_entities
 from src.rl.tokens import get_rooms
 from src.rl.tokens import get_y_x_current
-from src.rl.tokens import next_row_candidate_cols
+from src.rl.types import Token
 
 
 _IDX_OF_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
@@ -33,30 +36,16 @@ _IDX_OF_MONSTER_ENCOUNTER_BOSS = {
 _MAP_NUM_ROOM_KINDS = len(_IDX_OF_ROOM_KIND)
 _IDX_OF_EVENT_NAME = {event_name: int(event_name) for event_name in EventName.members()}
 
-# Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
-EDGE_DELTAS = (-1, 0, 1)
 
-
-# Every channel of a cell must be 0 or 1 so Map dedup can pack each feature into one bit
+# A cell's Room token, by its offset among its state's tokens (-1 = none), then the Room's edges
 _CHANNEL_LAYOUT_MAP_GRID, _alloc = make_channel_allocator()
-_OFF_MAP_ROOM_KIND = _alloc("room_kind", _MAP_NUM_ROOM_KINDS)
+OFF_MAP_TOKEN = _alloc("token")
 _OFF_MAP_EDGES = _alloc("edges", len(EDGE_DELTAS))
-_OFF_MAP_BURNING = _alloc("burning")
-OFF_MAP_POSITION = _alloc("position")
-_OFF_MAP_BURNING_PATH = _alloc("burning_path")
-_OFF_MAP_NEXT_ROOM = _alloc("next_room")
-
-# The channels above are the Map network's cell features; the one below names the Room tokens'
-# cells
-NUM_FEATURE_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
-OFF_MAP_SELECTABLE = _alloc("selectable")
 
 NUM_CHANNELS = sum(w for _, w in _CHANNEL_LAYOUT_MAP_GRID)
 
 # GNN-facing view of the edge block (read by `map_encoder.py`)
 SLICE_MAP_EDGES = slice(_OFF_MAP_EDGES, _OFF_MAP_EDGES + len(EDGE_DELTAS))
-
-SLICE_MAP_ROOM_KIND = slice(_OFF_MAP_ROOM_KIND, _OFF_MAP_ROOM_KIND + _MAP_NUM_ROOM_KINDS)
 
 
 # Flat Map-global meta — position-anchored facts the pooled GNN readout can't carry
@@ -82,7 +71,7 @@ _OFF_MAP_POOL_EVENT_SPECIAL = _alloc("pool_event_special", len(_IDX_OF_EVENT_NAM
 
 ENCODING_DIM_MAP_META = sum(w for _, w in _CHANNEL_LAYOUT_MAP_META)
 
-# Static Map-grid cache keyed by map.identity_hash: Room kinds + edges + burning are fixed per Map
+# Static Map-grid cache keyed by map.identity_hash: the Rooms' edges are fixed per Map
 _MAP_GRID_CACHE: dict[int, np.ndarray] = {}
 _MAP_GRID_CACHE_MAX = 100_000
 
@@ -93,8 +82,9 @@ def _get_static_grid(game_state: GameState) -> np.ndarray:
     if np_grid is not None:
         return np_grid
 
-    # Initialize empty grid
-    np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.uint8)
+    # Initialize empty grid: no cell holds a token
+    np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.int16)
+    np_grid[:, :, OFF_MAP_TOKEN] = -1
 
     # Iterate over Rooms
     rooms = get_rooms(game_state)
@@ -103,17 +93,13 @@ def _get_static_grid(game_state: GameState) -> np.ndarray:
             if room is None:
                 continue
 
-            np_grid[y, x, _OFF_MAP_ROOM_KIND + _IDX_OF_ROOM_KIND[room.room_kind]] = 1
             for x_next in room.edges:
                 delta = x_next - x  # -1, 0, or 1
                 if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
                     if y + 1 >= MAP_HEIGHT or rooms[y + 1][x_next] is None:
                         raise ValueError(f"Edge ({y}, {x})->({y + 1}, {x_next}) has no room")
 
-                    np_grid[y, x, _OFF_MAP_EDGES + EDGE_DELTAS.index(delta)] = 1
-
-            if room.burning:
-                np_grid[y, x, _OFF_MAP_BURNING] = 1
+            np_grid[y, x, SLICE_MAP_EDGES] = get_edge_channels(room)
 
     # Store in the cache. Guard the master copy against future writes
     np_grid.flags.writeable = False
@@ -198,31 +184,38 @@ def _encode_unknown_room_into(game_state: GameState, np_out: np.ndarray) -> None
         np_out[_OFF_MAP_POOL_EVENT_SPECIAL + _IDX_OF_EVENT_NAME[event_name]] = 1.0
 
 
-def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Copy the cached static grid; stamp the position, burning path, next and selectable Rooms.
+def encode_map_grid_into(
+    game_state: GameState, tokens: Sequence[Token], np_out: np.ndarray
+) -> None:
+    """Write each Room token's offset among its state's tokens, and its edges, at its cell.
+
+    A cell with no Room token holds -1 and no edges.
 
     Parameters
     ----------
     game_state : GameState
         The state to encode.
+    tokens : Sequence[Token]
+        The state's tokens, as (collection kinds, Entity) in window order.
     np_out : np.ndarray
-        (MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8. The state's Map grid, overwritten.
+        (MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) int16. The state's Map grid, written in place.
     """
-    map_ = game_state.map
-    np_out[:] = _get_static_grid(game_state)
-    y_current, x_current = get_y_x_current(map_)
-    if y_current is not None and x_current is not None and y_current < MAP_HEIGHT:
-        np_out[y_current, x_current, OFF_MAP_POSITION] = 1
+    np_grid = _get_static_grid(game_state)
 
-    # The Rooms that still reach the burning Room while the Emerald Key is missing
-    for y, x in get_burning_path(game_state):
-        np_out[y, x, _OFF_MAP_BURNING_PATH] = 1
+    # Each Room token's offset among the state's tokens, and its cell
+    rows_local: list[int] = []
+    ys: list[int] = []
+    xs: list[int] = []
+    for row_local, (_, entity) in enumerate(tokens):
+        if isinstance(entity, Room):
+            rows_local.append(row_local)
+            ys.append(entity.y)
+            xs.append(entity.x)
 
-    # The next-row Rooms the position's edges reach, Wing Boots aside
-    y_next = 0 if y_current is None else y_current + 1
-    for x_next in next_row_candidate_cols(game_state, y_current, x_current, winged=False):
-        np_out[y_next, x_next, _OFF_MAP_NEXT_ROOM] = 1
-
-    # The Room tokens' cells, in the tokens' order: cell order
-    for room in get_room_entities(game_state):
-        np_out[room.y, room.x, OFF_MAP_SELECTABLE] = 1
+    # No cell holds a token, then each Room token's cell takes its offset and its Room's edges
+    np_y = np.array(ys, dtype=np.intp)
+    np_x = np.array(xs, dtype=np.intp)
+    np_out[:] = 0
+    np_out[:, :, OFF_MAP_TOKEN] = -1
+    np_out[np_y, np_x, SLICE_MAP_EDGES] = np_grid[np_y, np_x, SLICE_MAP_EDGES]
+    np_out[np_y, np_x, OFF_MAP_TOKEN] = rows_local

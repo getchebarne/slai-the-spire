@@ -59,6 +59,7 @@ class CollectionKind(IntEnum):
     RELIC_REWARD = 28
     RELIC_SHOP = 29
     ROOMS = 30
+    ROOMS_NOT_SELECTABLE = 31
 
 
 # An Entity behind a token
@@ -67,10 +68,11 @@ type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
 # The collection kinds of the collections holding an Entity, in window order, then the Entity
 type Token = tuple[tuple[CollectionKind, ...], Entity]
 
-# The record key of a Card, of a Relic and of a Potion: everything its token's row reads
+# The record key of a Card, of a Relic, of a Potion and of a Room: everything its token's row reads
 type RecordKeyCard = tuple[int, int, int | None, int | None, int | None, PlaySource | None]
 type RecordKeyRelic = tuple[int, bool, bool, int | None]
 type RecordKeyPotion = tuple[int, bool, int | None]
+type RecordKeyRoom = tuple[int, tuple[int, ...], bool, bool, bool]
 
 
 class EffectSource(IntEnum):
@@ -225,9 +227,11 @@ class States[TStorage]:
     """Encoded game states, with explicit collections of tokens, owned rows and sparse entries.
 
     Tokens belong to states; Effects and Modifiers belong to tokens. The pending Effect has one
-    sparse feature row per state, empty where no halt is pending. TStorage propagates Live or
-    Reserved to these collections. `read_states` turns reserved capacity into populated views;
-    rewriting that capacity invalidates its earlier views. The worker protocol owns access.
+    sparse feature row per state, empty where no halt is pending. The Map grid names each cell's
+    Room token by its offset among its state's tokens, which stays valid when whole states are
+    reordered or joined. TStorage propagates Live or Reserved to these collections. `read_states`
+    turns reserved capacity into populated views; rewriting that capacity invalidates its earlier
+    views. The worker protocol owns access.
 
     `x_total` holds each state's derived totals on the data's device, and `x_total_cpu` holds
     the same totals on the CPU so output sizes need no device readback. CPU states use the same
@@ -240,7 +244,7 @@ class States[TStorage]:
 
     # One row per state
     x_context: torch.Tensor            # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
-    x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
+    x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) int16
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     x_total: torch.Tensor              # (B, len(CollectionKind) + len(StateCollection)) int32
     x_total_cpu: torch.Tensor          # Same totals on CPU; aliases x_total for CPU states
@@ -250,9 +254,10 @@ class States[TStorage]:
 class CoreOutput:
     """The game states after the core: what the heads read.
 
-    Dense token features preserve the input tokens' order, kinds and legal masks. The core also
-    carries each token's state, derived once from the counts. Global vectors, legal action types
-    and totals each have one row per state.
+    The tokens are the transformer's: each state's input tokens but its ROOMS_NOT_SELECTABLE ones,
+    in the input's order, with their dense features, counts, kinds and legal masks. The core also
+    carries each of those tokens' state, derived once from the counts. Global vectors, legal
+    action types and totals each have one row per state; the totals are the input states'.
     """
 
     tokens: Tokens[Dense]
@@ -284,15 +289,13 @@ class PolicyOutput:
 class MapCache:
     """The Map GNN's outputs for every game of a rollout, whose weights don't change.
 
-    The GNN reruns only the games whose Map changed since `x_cell`, and writes their rows in
-    place; the others keep theirs. Empty until the rollout's first step. The cache keeps the
-    caller's grid without copying it, so a caller must hand a new buffer each step (the Actor's
-    snapshots do).
+    The GNN reruns only the games whose Map changed since `x_hash_map`, up to a hash collision,
+    and writes their rows in place; the others keep theirs. Empty until the rollout's first step.
     """
 
-    x_cell: torch.Tensor | None = None     # (E, H * W, NUM_FEATURE_CHANNELS) uint8
-    x_hidden: torch.Tensor | None = None   # (E, H * W, dim_map)
-    x_readout: torch.Tensor | None = None  # (E, dim_map)
+    x_hash_map: torch.Tensor | None = None  # (E,) long
+    x_hidden: torch.Tensor | None = None    # (E, H * W, dim_map)
+    x_readout: torch.Tensor | None = None   # (E, dim_map)
 
 
 @final
@@ -301,7 +304,7 @@ class MapPlan:
     """An update's unique Maps, found once over the states of its rollout and read to the host.
 
     Its states are the rollout's B states, then its E final states; its U Maps are the distinct
-    ones among them, in the order `torch.unique` sorts their packed grids.
+    ones among them, up to a hash collision, in the order `torch.unique` sorts their hashes.
     """
 
     np_state_map: np.ndarray           # (B + E,) int64: each state's Map, by its index among the U
@@ -326,12 +329,12 @@ class TokenPlan:
     Its N tokens belong to the rollout's B states followed by its E final states, state after
     state. Its U distinct tokens follow the order in which `torch.unique` sorts their hashes.
     For each unique token, `_gather_tokens` needs its counts of entries, Effects, Effect entries,
-    Modifiers and Modifier entries, followed by 1 for a Room token and 0 otherwise.
+    Modifiers and Modifier entries.
     """
 
     np_state_first_token: np.ndarray  # (B + E + 1,) int64: each state's first token, then N
     np_token_unique: np.ndarray       # (N,) int64: each token's unique token, by index among the U
-    np_size: np.ndarray               # (U, 6) int64: each unique token's sizes
+    np_size: np.ndarray               # (U, 5) int64: each unique token's sizes
 
 
 @final
@@ -341,7 +344,7 @@ class TokenDedup:
 
     x_rep: torch.Tensor           # (U,) long, on the device: each unique token's first token
     x_token_unique: torch.Tensor  # (N,) long, on the device: each token's unique token, by index
-    np_size: np.ndarray           # (6,) int64: their sizes, summed
+    np_size: np.ndarray           # (5,) int64: their sizes, summed
 
 
 @dataclass

@@ -16,6 +16,7 @@ from slai import Monster
 from slai import PlaySource
 from slai import Potion
 from slai import Relic
+from slai import Room
 
 from src.rl.constants import COLLECTION_KINDS_OF_ENTITY_KIND
 from src.rl.constants import MAX_EFFECTS
@@ -53,6 +54,10 @@ from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
 from src.rl.encoding.relic import encode_relic_into
 from src.rl.encoding.relic import get_record_key_relic
 from src.rl.encoding.relic import is_relic_armed
+from src.rl.encoding.room import ENCODING_DIM_ROOM
+from src.rl.encoding.room import ENCODING_DIM_SPARSE_ROOM
+from src.rl.encoding.room import encode_room_into
+from src.rl.encoding.room import get_record_key_room
 from src.rl.encoding.shared import ENCODING_DIM_SHARED
 from src.rl.encoding.shared import ENCODING_DIM_SPARSE_STASIS_SLOT
 from src.rl.encoding.shared import ENCODING_DIM_SPARSE_TAG
@@ -67,8 +72,11 @@ from src.rl.encoding.sparse import add_row
 from src.rl.encoding.sparse import drop_rows
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
+from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_character
+from src.rl.tokens import get_y_x_current
 from src.rl.tokens import iter_tokens
+from src.rl.tokens import next_row_candidate_cols
 from src.rl.types import CollectionKind
 from src.rl.types import EffectSource
 from src.rl.types import EntityKind
@@ -77,6 +85,7 @@ from src.rl.types import OwnedRows
 from src.rl.types import RecordKeyCard
 from src.rl.types import RecordKeyPotion
 from src.rl.types import RecordKeyRelic
+from src.rl.types import RecordKeyRoom
 from src.rl.types import Reserved
 from src.rl.types import Sparse
 from src.rl.types import StateCollection
@@ -89,16 +98,17 @@ from src.rl.utils import action_masked
 type _Record = tuple[int, Sequence[int], Sequence[int]]
 
 
-# Each Entity kind's first token column; Rooms have no columns
+# Each Entity kind's first token column
 _COL_START_CARD = 0
 COL_START_RELIC = _COL_START_CARD + ENCODING_DIM_CARD
 COL_START_POTION = COL_START_RELIC + ENCODING_DIM_RELIC
 COL_START_MONSTER = COL_START_POTION + ENCODING_DIM_POTION
 COL_START_CHARACTER = COL_START_MONSTER + ENCODING_DIM_MONSTER
 COL_START_EVENT_OPTION = COL_START_CHARACTER + ENCODING_DIM_CHARACTER
+COL_START_ROOM = COL_START_EVENT_OPTION + ENCODING_DIM_EVENT_OPTION
 
 # The ranges shared across tokens of different Entity kinds
-_COL_START_SHARED = COL_START_EVENT_OPTION + ENCODING_DIM_EVENT_OPTION
+_COL_START_SHARED = COL_START_ROOM + ENCODING_DIM_ROOM
 COL_START_HEALTH_BLOCK = _COL_START_SHARED + OFF_SHARED_HEALTH_BLOCK
 COL_START_PRICE = _COL_START_SHARED + OFF_SHARED_PRICE
 COL_START_STASIS_SLOT = _COL_START_SHARED + OFF_SHARED_STASIS_SLOT
@@ -122,6 +132,7 @@ ENCODING_DIM_SPARSE_TOKEN = max(
     + ENCODING_DIM_SPARSE_STASIS_SLOT,
     ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
     ENCODING_DIM_SPARSE_EVENT_OPTION,
+    ENCODING_DIM_SPARSE_ROOM,
 )
 
 # The owned row kinds that have already warned about overflow — truncation is never silent
@@ -160,10 +171,11 @@ _ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
 # The Modifier rows, each with its owner's one-hot
 _ROW_TABLE_MODIFIER = make_row_table(ENCODING_DIM_SPARSE_MODIFIER)
 
-# The kept records of the Cards, Relics and Potions, by their record keys
+# The kept records of the Cards, Relics, Potions and Rooms, by their record keys
 _RECORD_OF_CARD: dict[RecordKeyCard, _Record] = {}
 _RECORD_OF_RELIC: dict[RecordKeyRelic, _Record] = {}
 _RECORD_OF_POTION: dict[RecordKeyPotion, _Record] = {}
+_RECORD_OF_ROOM: dict[RecordKeyRoom, _Record] = {}
 
 # Each Effect's row in _ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
 _EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
@@ -176,6 +188,7 @@ _TABLE_ROW_HOLDERS: tuple[dict, ...] = (
     _RECORD_OF_CARD,
     _RECORD_OF_RELIC,
     _RECORD_OF_POTION,
+    _RECORD_OF_ROOM,
     _EFFECT_TABLE_ROW_OF_EFFECT,
     _MODIFIER_TABLE_ROW_OF_MODIFIER,
 )
@@ -245,9 +258,11 @@ def encode_states_into(
     np_map_grid = states_reserved.x_map_grid.numpy()
     np_context.fill(0)
     np_map_grid.fill(0)
-    for game_state, np_context_row, np_grid in zip(batch_game_state, np_context, np_map_grid):
+    for game_state, tokens_state, np_context_row, np_grid in zip(
+        batch_game_state, batch_tokens, np_context, np_map_grid
+    ):
         encode_context_into(game_state, np_context_row)
-        encode_map_grid_into(game_state, np_grid)
+        encode_map_grid_into(game_state, tokens_state, np_grid)
 
     _encode_batch_effect_pending_into(states_reserved.effect_pending, batch_game_state)
 
@@ -466,16 +481,15 @@ def _encode_batch_tokens_into(
 def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[_Record]:
     """Give each of a state's tokens its record: its row and the rows it owns, in the row tables.
 
-    A Card, Relic or Potion keeps its record under its record key: one lookup finds its row and
-    its Effect rows. A Monster's, an Event Option's and the Character's rows read the state
+    A Card, Relic, Potion or Room keeps its record under its record key: one lookup finds its row
+    and its Effect rows. A Monster's, an Event Option's and the Character's rows read the state
     around them, so their records are made on every write; those rows then stay in the token
     row table, unread, until the row tables are dropped.
 
     Each token goes at its Entity kind's columns and the shared block that ends the row, both
-    written by its kind's encoder; an Event Option writes no shared column. A Room has no
-    columns: the model reads the Map network's output there. A token held by several
-    collections is written once, with the stasis slot and the play source when the stasis pile or
-    the play queue is one of them.
+    written by its kind's encoder; an Event Option and a Room write no shared column. A token
+    held by several collections is written once, with the stasis slot and the play source when
+    the stasis pile or the play queue is one of them.
 
     Parameters
     ----------
@@ -504,6 +518,8 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
     )
     id_relic_linked = game_state.reward.id_relic_linked if game_state.reward is not None else None
     gold = character.gold
+    burning_path = get_burning_path(game_state)
+    cells_next_room = _get_cells_next_room(game_state)
     records: list[_Record] = []
 
     # Each queued Card's play source: its first CardPlay's
@@ -645,7 +661,7 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
             case EventOption():
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_event_option_into(
-                    game_state, entity, np_row[COL_START_EVENT_OPTION:_COL_START_SHARED]
+                    game_state, entity, np_row[COL_START_EVENT_OPTION:COL_START_ROOM]
                 )
 
                 # Everything it does lives in its Effect rows
@@ -673,13 +689,48 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
 
                 record = (add_row(_ROW_TABLE_TOKEN, np_row), (), modifier_table_rows)
 
-            case _:
-                # A Room has no columns and owns no rows
-                record = (TABLE_ROW_EMPTY, (), ())
+            case Room():
+                on_burning_path = (entity.y, entity.x) in burning_path
+                is_next_room = (entity.y, entity.x) in cells_next_room
+                record_key_room = get_record_key_room(entity, on_burning_path, is_next_room)
+                record = _RECORD_OF_ROOM.get(record_key_room)
+                if record is None:
+                    np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
+                    encode_room_into(
+                        entity,
+                        on_burning_path,
+                        is_next_room,
+                        np_row[COL_START_ROOM:_COL_START_SHARED],
+                    )
+                    record = (add_row(_ROW_TABLE_TOKEN, np_row), (), ())
+                    _RECORD_OF_ROOM[record_key_room] = record
 
         records.append(record)
 
     return records
+
+
+def _get_cells_next_room(game_state: GameState) -> set[tuple[int, int]]:
+    """Find the next-row Rooms the position's edges reach, Wing Boots aside.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    set[tuple[int, int]]
+        Their cells, as (row, column): every first-row Room before the act's first Room, and none
+        past the Map's last row.
+    """
+    y_current, x_current = get_y_x_current(game_state.map)
+    y_next = 0 if y_current is None else y_current + 1
+
+    return {
+        (y_next, x_next)
+        for x_next in next_row_candidate_cols(game_state, y_current, x_current, winged=False)
+    }
 
 
 def _get_effect_table_rows(*effects_by_source: tuple[Sequence[Effect], EffectSource]) -> list[int]:

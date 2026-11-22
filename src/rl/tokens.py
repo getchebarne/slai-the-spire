@@ -530,7 +530,7 @@ def next_row_candidate_cols(
 
 
 def get_room_entities(game_state: GameState) -> list[Room]:
-    """Return the Rooms a RoomSelect can name, in column order: the Room tokens' rank order.
+    """Return the Rooms a RoomSelect can name, in column order: the ROOMS tokens' rank order.
 
     Parameters
     ----------
@@ -576,6 +576,35 @@ def _get_id_rooms_next(game_state: GameState) -> list[int]:
     ]
 
 
+def _get_rooms_not_selectable(game_state: GameState) -> list[int]:
+    """Return the ids of the forward Rooms no RoomSelect can name, in cell order.
+
+    The forward Rooms are the Rooms on the rows past the current Room's: every Room before the
+    act's first Room, and none in the boss and boss treasure Rooms, which sit past the Map's rows.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[int]
+        The forward Rooms' ids but `_get_id_rooms_next`'s, row after row and column after column.
+    """
+    map_ = game_state.map
+    y_current, _ = get_y_x_current(map_)
+    y_next = 0 if y_current is None else y_current + 1
+    ids_selectable = set(_get_id_rooms_next(game_state))
+
+    return [
+        id_room
+        for row in map_.id_rooms[y_next:]
+        for id_room in row
+        if id_room is not None and id_room not in ids_selectable
+    ]
+
+
 # The reader of a collection kind's context, then the collection kind's getter of its Entities' ids
 type _GetterInContext = tuple[
     Callable[[GameState], Combat | Event | Reward | Shop | GameState | None],
@@ -615,6 +644,7 @@ _GETTER_OF_COLLECTION_KIND: dict[CollectionKind, _GetterInContext] = {
     CollectionKind.RELIC_REWARD: (_read_reward, _get_relic_reward),
     CollectionKind.RELIC_SHOP: (_read_shop, _get_relic_shop),
     CollectionKind.ROOMS: (_read_game_state, _get_id_rooms_next),
+    CollectionKind.ROOMS_NOT_SELECTABLE: (_read_game_state, _get_rooms_not_selectable),
 }
 
 

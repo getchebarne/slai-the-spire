@@ -7,15 +7,12 @@ exposes the layout names the models and `batches.py` read.
 from src.rl.encoding.context import ENCODING_DIM_CONTEXT
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.encoding.map_ import EDGE_DELTAS
 from src.rl.encoding.map_ import NUM_CHANNELS
-from src.rl.encoding.map_ import NUM_FEATURE_CHANNELS
-from src.rl.encoding.map_ import OFF_MAP_POSITION
-from src.rl.encoding.map_ import OFF_MAP_SELECTABLE
+from src.rl.encoding.map_ import OFF_MAP_TOKEN
 from src.rl.encoding.map_ import SLICE_MAP_EDGES
-from src.rl.encoding.map_ import SLICE_MAP_ROOM_KIND
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.encoding.room import EDGE_DELTAS
 from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_EVENT_OPTION
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
@@ -23,6 +20,7 @@ from src.rl.encoding.state import COL_START_MONSTER
 from src.rl.encoding.state import COL_START_POTION
 from src.rl.encoding.state import COL_START_PRICE
 from src.rl.encoding.state import COL_START_RELIC
+from src.rl.encoding.state import COL_START_ROOM
 from src.rl.encoding.state import COL_START_STASIS_SLOT
 from src.rl.encoding.state import COL_START_TAG
 from src.rl.encoding.state import ENCODING_DIM_SPARSE_TOKEN
@@ -39,6 +37,7 @@ __all__ = [
     "COL_START_POTION",
     "COL_START_PRICE",
     "COL_START_RELIC",
+    "COL_START_ROOM",
     "COL_START_STASIS_SLOT",
     "COL_START_TAG",
     "EDGE_DELTAS",
@@ -50,9 +49,6 @@ __all__ = [
     "ENCODING_DIM_SPARSE_TOKEN",
     "ENCODING_DIM_TOKEN",
     "NUM_CHANNELS",
-    "NUM_FEATURE_CHANNELS",
-    "OFF_MAP_POSITION",
-    "OFF_MAP_SELECTABLE",
+    "OFF_MAP_TOKEN",
     "SLICE_MAP_EDGES",
-    "SLICE_MAP_ROOM_KIND",
 ]

@@ -1,9 +1,9 @@
-from dataclasses import replace
-
 import torch
 import torch.nn as nn
 
+from src.rl.batches import expand_ranges
 from src.rl.batches import get_entity_kind_rows
+from src.rl.batches import get_owner_first_row
 from src.rl.batches import get_row_owner
 from src.rl.constants import COLLECTION_KINDS_CARD_REWARDS
 from src.rl.constants import COLLECTION_KINDS_IN_WINDOW_ORDER
@@ -23,14 +23,14 @@ from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import States
 from src.rl.types import TokenDedup
+from src.rl.types import Tokens
 
 
-# Count features: one per collection kind except the Character singleton (a constant 1.0), each
-# normalized by its collection kind's cap (a count never exceeds it), in window order
+# The count features' collection kinds, in window order: all but CHARACTER and ROOMS_NOT_SELECTABLE
 _COUNT_COLLECTION_KINDS = tuple(
     collection_kind
     for collection_kind in COLLECTION_KINDS_IN_WINDOW_ORDER
-    if collection_kind is not CollectionKind.CHARACTER
+    if collection_kind not in (CollectionKind.CHARACTER, CollectionKind.ROOMS_NOT_SELECTABLE)
 )
 
 
@@ -52,7 +52,7 @@ class Core(nn.Module):
         super().__init__()
 
         # Entity projector
-        self._entity_projector = EntityProjector(dim_entity, dim_map)
+        self._entity_projector = EntityProjector(dim_entity)
 
         # Entity transformer
         self._entity_transformer = EntityTransformer(
@@ -63,7 +63,7 @@ class Core(nn.Module):
         self._collection_kind_emb = nn.Embedding(len(CollectionKind), dim_entity)
 
         # Map GNN
-        self._map_gnn = MapGNN(gnn_num_layers, dim_map)
+        self._map_gnn = MapGNN(gnn_num_layers, dim_map, dim_entity)
 
         # Global context: global token + Character + Map readout + collection-kind counts
         # + raw flats
@@ -145,49 +145,70 @@ class Core(nn.Module):
         Returns
         -------
         CoreOutput
-            The refined tokens grouped by state with their legal masks, and each state's global
-            vector, legal action types and counts.
+            The transformer's tokens, refined and grouped by state with their legal masks, and
+            each state's global vector, legal action types and counts.
         """
 
         tokens = states.tokens
         num_tokens = tokens.x_collection_kind.shape[0]
         batch_size = tokens.x_count.shape[0]
 
-        # Each token's state
-        x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
-
-        # Map GNN: the Room tokens' cell features and the whole-graph readout
-        num_rooms = int(states.x_total_cpu[:, CollectionKind.ROOMS].sum())
-        x_room_hidden, x_map_readout = self._map_gnn(
-            states.x_map_grid, num_rooms, map_cache, map_dedup
-        )
-
         # Token embeddings grouped by state, and the embedded pending halt
-        tokens_projected, x_effect_pending = self._entity_projector(
-            states, x_room_hidden, token_dedup
+        tokens_projected, x_effect_pending = self._entity_projector(states, token_dedup)
+
+        # Map GNN: the selectable Rooms' rows and the whole-graph readout
+        x_room_hidden, x_map_readout = self._map_gnn(
+            states, tokens_projected, map_cache, map_dedup
         )
 
-        # The tokens' memberships, their collection kinds, counted on the host
-        num_memberships = int(states.x_total_cpu[:, : len(CollectionKind)].sum())
+        # The transformer's tokens: each state's tokens but its last, the ROOMS_NOT_SELECTABLE ones
+        num_tokens_rooms_not_selectable = int(
+            states.x_total_cpu[:, CollectionKind.ROOMS_NOT_SELECTABLE].sum()
+        )
+        num_tokens_transformer = num_tokens - num_tokens_rooms_not_selectable
+        x_count_transformer = (
+            tokens.x_count - states.x_total[:, CollectionKind.ROOMS_NOT_SELECTABLE]
+        )  # (B,)
+        x_transformer_row = expand_ranges(
+            get_owner_first_row(tokens.x_count), x_count_transformer, num_tokens_transformer
+        )  # (N,)
+        x_collection_kind = tokens.x_collection_kind[x_transformer_row]
+        x_entity_kind = tokens.x_entity_kind[x_transformer_row]
+
+        # Each of those tokens' state
+        x_token_state = get_row_owner(x_count_transformer, num_tokens_transformer)  # (N,)
+
+        # Their rows: the projected ones, the selectable Rooms' as the Map GNN made them
+        x_row = tokens_projected.features.x_value.index_select(0, x_transformer_row)  # (N, D)
+        num_rooms = x_room_hidden.shape[0]
+        x_room_row = get_entity_kind_rows(x_entity_kind, EntityKind.ROOM, num_rooms)  # (N_rooms,)
+        x_row[x_room_row] = x_room_hidden
+
+        # Those tokens' memberships, their collection kinds, counted on the host
+        num_memberships = (
+            int(states.x_total_cpu[:, : len(CollectionKind)].sum())
+            - num_tokens_rooms_not_selectable
+        )
 
         # One transformer pass over every state
         tokens_refined, x_global_token = self._entity_transformer(
-            replace(
-                tokens_projected,
+            Tokens(
                 features=Dense(
-                    x_value=self._embed_identity(
-                        tokens_projected.features.x_value,
-                        tokens.x_collection_kind,
-                        num_memberships,
-                    )
+                    x_value=self._embed_identity(x_row, x_collection_kind, num_memberships)
                 ),
+                x_count=x_count_transformer,
+                x_collection_kind=x_collection_kind,
+                x_entity_kind=x_entity_kind,
+                x_legal_selection=tokens.x_legal_selection[x_transformer_row],
+                x_legal_target=tokens.x_legal_target[x_transformer_row],
+                x_needs_target=tokens.x_needs_target[x_transformer_row],
             ),
             x_token_state,
         )
 
         # Each state's global vector
         x_character_row = get_entity_kind_rows(
-            tokens.x_entity_kind, EntityKind.CHARACTER, batch_size
+            x_entity_kind, EntityKind.CHARACTER, batch_size
         )  # (B,)
         x_global = self._global_projection(
             torch.cat(
@@ -204,7 +225,7 @@ class Core(nn.Module):
             )
         )
 
-        # The input tokens' Entity kinds and legal masks stay with the refined tokens
+        # The transformer's tokens' Entity kinds and legal masks stay with the refined tokens
         return CoreOutput(
             tokens=tokens_refined,
             x_token_state=x_token_state,
@@ -224,7 +245,8 @@ class Core(nn.Module):
         Parameters
         ----------
         x_projected : torch.Tensor
-            (N, dim_entity). The projector's token embeddings.
+            (N, dim_entity). The transformer's tokens' rows: the projected ones, the selectable
+            Rooms' as the Map GNN made them.
         x_collection_kind : torch.Tensor
             (N, len(CollectionKind)) uint8. Each token's collection kinds, 1 at each collection
             holding it.
@@ -292,7 +314,7 @@ class Core(nn.Module):
         -------
         torch.Tensor
             (B, len(_COUNT_COLLECTION_KINDS)) float32. Each state's normalized counts, one per
-            collection kind except the Character.
+            collection kind except the Character and the ROOMS_NOT_SELECTABLE kind.
         """
         x_count = x_total[:, self._x_count_collection_kind].float()
 
