@@ -28,7 +28,16 @@ def encode_price_into(price: int, gold: int, np_out: np.ndarray) -> None:
 
 
 def encode_shop_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Write the purge service's price features and whether it was used."""
+    """Write the purge service's price features and whether it was used.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (ENCODING_DIM_SHOP_META,) float32. The context row's Shop range, written in place; it
+        stays 0 outside Shops.
+    """
     shop = game_state.shop
     if shop is None:
         return

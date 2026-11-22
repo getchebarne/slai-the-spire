@@ -126,7 +126,15 @@ def _get_static_grid(game_state: GameState) -> np.ndarray:
 
 
 def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Write map position, boss, keys, room probabilities and event-pool features."""
+    """Write map position, boss, keys, room probabilities and event-pool features.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (ENCODING_DIM_MAP_META,) float32. The context row's Map range, written in place.
+    """
     map_ = game_state.map
     y_current, x_current = get_y_x_current(map_)
     encounter_boss = game_state.encounter_boss
@@ -191,7 +199,15 @@ def _encode_unknown_room_into(game_state: GameState, np_out: np.ndarray) -> None
 
 
 def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:
-    """Copy the cached static grid; stamp the position, burning path, next and selectable Rooms."""
+    """Copy the cached static grid; stamp the position, burning path, next and selectable Rooms.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8. The state's Map grid, overwritten.
+    """
     map_ = game_state.map
     np_out[:] = _get_static_grid(game_state)
     y_current, x_current = get_y_x_current(map_)
