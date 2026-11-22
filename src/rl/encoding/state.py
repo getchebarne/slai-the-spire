@@ -38,6 +38,7 @@ from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.incoming import project_incoming
 from src.rl.encoding.map_ import encode_map_grid_into
 from src.rl.encoding.mask import encode_batch_masks_into
+from src.rl.encoding.mask import unpack_legal_bits
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.modifier import make_modifier_row
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
@@ -343,6 +344,12 @@ def _encode_totals_into(states_reserved: States[Reserved]) -> None:
         np_count_modifier, features.modifiers.sparse.x_count.numpy()
     )
     np_total[:, StateCollection.PENDING_ENTRIES] = states_reserved.effect_pending.x_count.numpy()
+
+    # Its legal selections: the set bits of its tokens' deduped selection masks
+    x_selection_bit = unpack_legal_bits(tokens.x_legal_selection[: len(np_token_state)])
+    np_total[:, StateCollection.SELECTIONS] = _sum_counts(
+        np_count_token, x_selection_bit.sum(1).numpy()
+    )
 
 
 def _sum_counts(np_count_parent: np.ndarray, np_count_child: np.ndarray) -> np.ndarray:

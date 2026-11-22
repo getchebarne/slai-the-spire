@@ -14,6 +14,7 @@ from src.rl.encoding.map_ import OFF_MAP_POSITION
 from src.rl.encoding.map_ import OFF_MAP_SELECTABLE
 from src.rl.encoding.map_ import SLICE_MAP_EDGES
 from src.rl.encoding.map_ import SLICE_MAP_ROOM_KIND
+from src.rl.encoding.mask import unpack_legal_bits
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.state import COL_START_CHARACTER
@@ -32,6 +33,7 @@ from src.rl.encoding.state import encode_states_into
 
 __all__ = [
     "encode_states_into",
+    "unpack_legal_bits",
     "COL_START_CHARACTER",
     "COL_START_EVENT_OPTION",
     "COL_START_HEALTH_BLOCK",

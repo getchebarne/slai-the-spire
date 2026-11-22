@@ -2,10 +2,14 @@ import math
 
 import torch
 import torch.nn as nn
+from slai import ACTION_SPEC_REGISTRY
 
 from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_owner_first_row
 from src.rl.batches import get_row_owner
+from src.rl.constants import ACTION_TYPES
+from src.rl.constants import NUM_ACTION_TYPES
+from src.rl.encoding import unpack_legal_bits
 from src.rl.models.core import Core
 from src.rl.models.heads import HeadActionType
 from src.rl.models.heads import HeadTarget
@@ -21,6 +25,7 @@ from src.rl.types import Live
 from src.rl.types import MapCache
 from src.rl.types import MapDedup
 from src.rl.types import PolicyOutput
+from src.rl.types import StateCollection
 from src.rl.types import States
 
 
@@ -31,9 +36,11 @@ _KL_UNIFORM_LOG_P_FLOOR = math.log(1e-4)
 class ActorCritic(nn.Module):
     """The policy and the value function over a batch of game states.
 
-    The policy has three levels: an action type, the token it selects and its Monster target. The
-    levels run in order, each given the selections before it, and each has a head that returns
-    its logits.
+    The policy has two levels: L1, the joint level, an action type with the token it selects, and
+    L2, the target level, its Monster target. L1 is one categorical over each state's legal
+    selections, (token, action type) pairs, and its legal action types that select nothing: a
+    selection's logit is its action type's plus its token's, an action type that selects nothing
+    scores its own. L2 runs after it, given its selections. Each head returns its logits.
 
     Each entry point runs the core once, then the heads its caller needs:
     - `action_select`: the Actor's step and the eval's. Selects each state's action, without
@@ -41,6 +48,8 @@ class ActorCritic(nn.Module):
     - `action_evaluate`: the Learner's update. Scores recorded actions and computes the values.
     - `get_values`: the Learner's bootstrap. Computes the values alone.
     """
+
+    _x_action_type_no_selection: torch.Tensor
 
     def __init__(
         self,
@@ -69,16 +78,29 @@ class ActorCritic(nn.Module):
             dim_map=dim_map,
         )
 
-        # Policy heads, one per level
+        # Policy heads
         self._head_action_type = HeadActionType(dim_global, dim_ff_primary)
         self._head_selection = HeadSelection(dim_global, dim_op, dim_key)
         self._head_target = HeadTarget(dim_global, dim_entity, dim_key)
 
-        # One key net for every token, shared by the L2 and L3 pointer selections
+        # One key net for every token, shared by the L1 and L2 pointer selections
         self._pointer_keys = PointerKeys(dim_entity, dim_key)
 
         # Value head
         self._head_value = HeadValue(dim_global, dim_ff_value, len(RewardStream))
+
+        # Buffer of the `ActionType`s that select nothing, each a joint row of every state
+        self.register_buffer(
+            "_x_action_type_no_selection",
+            torch.tensor(
+                [
+                    idx_action_type
+                    for idx_action_type, action_type in enumerate(ACTION_TYPES)
+                    if ACTION_SPEC_REGISTRY[action_type].arity == (0, 0)
+                ]
+            ),
+            persistent=False,
+        )
 
         # The selections' statistics function, which compile_hot_paths swaps for its compiled self
         self._evaluate_selections = _evaluate_selections
@@ -112,7 +134,8 @@ class ActorCritic(nn.Module):
     ) -> PolicyOutput:
         """Select each state's action.
 
-        Each level selects from its head's logits.
+        L1 selects one of its joint rows, which gives the action type and the selection; L2 then
+        selects from its head's logits.
 
         Parameters
         ----------
@@ -134,17 +157,26 @@ class ActorCritic(nn.Module):
         core_output = self.core(states, map_cache=map_cache)
         tokens_refined = core_output.tokens
         batch_size = tokens_refined.x_count.shape[0]
-
-        # Select the `ActionType` for every row — one masked categorical
-        x_logit_action_type = self._head_action_type(core_output)
-        x_action_type = _select_idx(x_logit_action_type, greedy, generator)
-
-        # Compute the `Action`'s selections from the chosen `ActionType`
         x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
-        x_logit_selection = self._head_selection(core_output, x_token_key, x_action_type)
-        x_selection_row = _select_row(
-            x_logit_selection, core_output.x_token_state, batch_size, greedy, generator
+
+        # The joint rows and their logits, the legal selections counted on the host
+        num_selections = int(states.x_total_cpu[:, StateCollection.SELECTIONS].sum())
+        _, x_joint_token_row, x_joint_action_type, x_joint_state = _get_joint_rows(
+            core_output, self._x_action_type_no_selection, num_selections
         )
+        x_logit_joint = self._score_joint_rows(
+            core_output,
+            x_token_key,
+            x_joint_token_row,
+            x_joint_action_type,
+            x_joint_state,
+            num_selections,
+        )
+
+        # Select each state's joint row: its `ActionType` and selected token, its Character if none
+        x_joint_row = _select_row(x_logit_joint, x_joint_state, batch_size, greedy, generator)
+        x_action_type = x_joint_action_type[x_joint_row]
+        x_selection_row = x_joint_token_row[x_joint_row]
 
         # Each target row's state, the Monsters counted on the host
         num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
@@ -156,9 +188,10 @@ class ActorCritic(nn.Module):
 
         return self._evaluate_selections(
             core_output,
-            x_logit_action_type,
+            x_logit_joint,
+            x_joint_state,
+            x_joint_row,
             x_action_type,
-            x_logit_selection,
             x_selection_row,
             x_logit_target,
             x_target_state,
@@ -173,7 +206,8 @@ class ActorCritic(nn.Module):
     ) -> tuple[PolicyOutput, torch.Tensor]:
         """Score the recorded actions and compute the values.
 
-        Each level's head scores its choices given the recorded selections before it.
+        L1 scores its joint rows, each recorded action and its selection one of them; L2's head
+        scores its choices given those selections.
 
         Parameters
         ----------
@@ -199,6 +233,12 @@ class ActorCritic(nn.Module):
         # Pointer keys
         x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
 
+        # The joint rows, the legal selections counted on the host
+        num_selections = int(states.x_total_cpu[:, StateCollection.SELECTIONS].sum())
+        x_selection_flat, x_joint_token_row, x_joint_action_type, x_joint_state = _get_joint_rows(
+            core_output, self._x_action_type_no_selection, num_selections
+        )
+
         # Each target row's state, the Monsters counted on the host
         num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
@@ -206,20 +246,34 @@ class ActorCritic(nn.Module):
         # The recorded selections, each as a row of its level's logits
         x_action_type, x_selection_off, x_target = x_recorded_action.unbind(-1)
         x_selection_row = _row_of_selection_off(core_output, x_selection_off)
+        x_joint_row = _row_of_joint(
+            x_selection_flat,
+            self._x_action_type_no_selection,
+            x_action_type,
+            x_selection_off,
+            x_selection_row,
+        )
         x_target_row = _row_of_target(core_output, num_monsters, x_target)
 
         # Each level's logits, given the recorded selections before it
-        x_logit_action_type = self._head_action_type(core_output)
-        x_logit_selection = self._head_selection(core_output, x_token_key, x_action_type)
+        x_logit_joint = self._score_joint_rows(
+            core_output,
+            x_token_key,
+            x_joint_token_row,
+            x_joint_action_type,
+            x_joint_state,
+            num_selections,
+        )
         x_logit_target = self._head_target(
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
         )
 
         policy_output = self._evaluate_selections(
             core_output,
-            x_logit_action_type,
+            x_logit_joint,
+            x_joint_state,
+            x_joint_row,
             x_action_type,
-            x_logit_selection,
             x_selection_row,
             x_logit_target,
             x_target_state,
@@ -244,6 +298,60 @@ class ActorCritic(nn.Module):
             (B, len(RewardStream)). The values.
         """
         return self._head_value(self.core(states, map_dedup=map_dedup).x_global)
+
+    def _score_joint_rows(
+        self,
+        core_output: CoreOutput,
+        x_token_key: torch.Tensor,
+        x_joint_token_row: torch.Tensor,
+        x_joint_action_type: torch.Tensor,
+        x_joint_state: torch.Tensor,
+        num_selections: int,
+    ) -> torch.Tensor:
+        """Score the joint rows.
+
+        A selection scores its `ActionType`'s logit plus its token's, from the selection head; an
+        `ActionType` that selects nothing scores its own.
+
+        Parameters
+        ----------
+        core_output : CoreOutput
+            The core's output.
+        x_token_key : torch.Tensor
+            (N, dim_key). Each token's key, from PointerKeys.
+        x_joint_token_row : torch.Tensor
+            (P + B * K,) long. Each joint row's selected token, its state's Character where none.
+        x_joint_action_type : torch.Tensor
+            (P + B * K,) long. Each joint row's action type.
+        x_joint_state : torch.Tensor
+            (P + B * K,) long. Each joint row's state.
+        num_selections : int
+            The batch's number of legal selections, P, which are the first joint rows, as the host
+            knows it.
+
+        Returns
+        -------
+        torch.Tensor
+            (P + B * K,). Each joint row's logit, -inf where its `ActionType` is illegal.
+        """
+        x_logit_action_type = self._head_action_type(core_output)  # (B, NUM_ACTION_TYPES)
+        x_logit_joint = x_logit_action_type[x_joint_state, x_joint_action_type]  # (P + B * K,)
+
+        # No legal selection: the compiled selection head is not handed zero rows
+        if num_selections == 0:
+            return x_logit_joint
+
+        x_logit_selection = self._head_selection(
+            core_output,
+            x_token_key,
+            x_joint_state[:num_selections],
+            x_joint_token_row[:num_selections],
+            x_joint_action_type[:num_selections],
+        )  # (P,)
+
+        return torch.cat(
+            [x_logit_joint[:num_selections] + x_logit_selection, x_logit_joint[num_selections:]]
+        )
 
 
 def compile_hot_paths(model: ActorCritic) -> None:
@@ -276,6 +384,64 @@ def compile_hot_paths(model: ActorCritic) -> None:
     model._evaluate_selections = torch.compile(_evaluate_selections, dynamic=True)
 
 
+def _get_joint_rows(
+    core_output: CoreOutput, x_action_type_no_selection: torch.Tensor, num_selections: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Find each joint row's selected token, action type and state.
+
+    The joint rows are the legal selections, in flat (token, action type) order, then each state's
+    K action types that select nothing, state after state, with its Character as their selection.
+
+    Parameters
+    ----------
+    core_output : CoreOutput
+        The core's output.
+    x_action_type_no_selection : torch.Tensor
+        (K,) long. The action types that select nothing, ascending.
+    num_selections : int
+        The batch's number of legal selections, P, as the host knows it: no size is read back from
+        the device.
+
+    Returns
+    -------
+    x_selection_flat : torch.Tensor
+        (P,) long. Each legal selection's flat index among the selection masks' bits, token row *
+        NUM_ACTION_TYPES + action type, ascending.
+    x_joint_token_row : torch.Tensor
+        (P + B * K,) long. Each joint row's selected token, its state's Character where none.
+    x_joint_action_type : torch.Tensor
+        (P + B * K,) long. Each joint row's action type.
+    x_joint_state : torch.Tensor
+        (P + B * K,) long. Each joint row's state.
+    """
+    tokens = core_output.tokens
+    batch_size = tokens.x_count.shape[0]
+    num_action_types_no_selection = x_action_type_no_selection.shape[0]
+
+    # Each token's selection bit of each action type, then the set ones as flat indexes: (P,)
+    x_selection_bit = unpack_legal_bits(tokens.x_legal_selection)
+    x_selection_flat = torch.nonzero_static(
+        x_selection_bit.flatten(), size=num_selections
+    ).squeeze(1)
+
+    # Each state's Character, the selection of its action types that select nothing
+    x_character_row = get_entity_kind_rows(
+        tokens.x_entity_kind, EntityKind.CHARACTER, batch_size
+    )  # (B,)
+    x_joint_token_row = torch.cat(
+        [
+            x_selection_flat // NUM_ACTION_TYPES,
+            x_character_row.repeat_interleave(num_action_types_no_selection),
+        ]
+    )
+    x_joint_action_type = torch.cat(
+        [x_selection_flat % NUM_ACTION_TYPES, x_action_type_no_selection.repeat(batch_size)]
+    )
+    x_joint_state = core_output.x_token_state[x_joint_token_row]
+
+    return x_selection_flat, x_joint_token_row, x_joint_action_type, x_joint_state
+
+
 def _get_target_state(core_output: CoreOutput, num_monsters: int) -> torch.Tensor:
     """Find each target row's state.
 
@@ -299,6 +465,56 @@ def _get_target_state(core_output: CoreOutput, num_monsters: int) -> torch.Tenso
     x_idx_state = torch.arange(batch_size, device=x_monster_state.device)
 
     return torch.cat([x_monster_state, x_idx_state])
+
+
+def _row_of_joint(
+    x_selection_flat: torch.Tensor,
+    x_action_type_no_selection: torch.Tensor,
+    x_action_type: torch.Tensor,
+    x_selection_off: torch.Tensor,
+    x_selection_row: torch.Tensor,
+) -> torch.Tensor:
+    """Find each state's action type `x_action_type` and its selection among the joint rows.
+
+    Parameters
+    ----------
+    x_selection_flat : torch.Tensor
+        (P,) long. Each legal selection's flat index among the selection masks' bits, ascending:
+        the first P joint rows.
+    x_action_type_no_selection : torch.Tensor
+        (K,) long. The action types that select nothing, ascending: each state's K joint rows
+        after the selections.
+    x_action_type : torch.Tensor
+        (B,) long. Each state's action type.
+    x_selection_off : torch.Tensor
+        (B,) long. Each state's selection offset in its state, -1 where none.
+    x_selection_row : torch.Tensor
+        (B,) long. Each state's selected token's row among the batch's tokens.
+
+    Returns
+    -------
+    torch.Tensor
+        (B,) long. Each state's joint row: its selection's, or its action type's among its
+        state's rows after the selections where the offset is -1.
+    """
+    num_selections = x_selection_flat.shape[0]
+    num_action_types_no_selection = x_action_type_no_selection.shape[0]
+    x_idx_state = torch.arange(x_action_type.shape[0], device=x_action_type.device)
+
+    # A selection's row is its flat index's rank among the selections, which ascend
+    x_joint_row_selection = torch.searchsorted(
+        x_selection_flat, x_selection_row * NUM_ACTION_TYPES + x_action_type
+    )
+
+    # An action type that selects nothing: its state's rows after the selections, then its rank;
+    # `searchsorted` warns on a strided column, as a recorded one is
+    x_joint_row_no_selection = (
+        num_selections
+        + x_idx_state * num_action_types_no_selection
+        + torch.searchsorted(x_action_type_no_selection, x_action_type.contiguous())
+    )
+
+    return torch.where(x_selection_off >= 0, x_joint_row_selection, x_joint_row_no_selection)
 
 
 def _row_of_selection_off(core_output: CoreOutput, x_selection_off: torch.Tensor) -> torch.Tensor:
@@ -357,36 +573,6 @@ def _row_of_target(
     return torch.where(x_target >= 0, x_state_first_monster + x_target, num_monsters + x_idx_state)
 
 
-def _select_idx(
-    x_logit: torch.Tensor, greedy: bool, generator: torch.Generator | None
-) -> torch.Tensor:
-    """Select each state's index among its logits.
-
-    Parameters
-    ----------
-    x_logit : torch.Tensor
-        (B, C). A head's logits, C per state, -inf where illegal.
-    greedy : bool
-        Whether to select each state's highest logit rather than sample.
-    generator : torch.Generator | None
-        The generator samples draw from, or None for the global one.
-
-    Returns
-    -------
-    torch.Tensor
-        (B,) long. Each state's selected index.
-    """
-    if greedy:
-        # Highest logit
-        return torch.argmax(x_logit, dim=-1)
-
-    # No argument checks: each one reads the logits back, making the CPU wait for the GPU
-    dist = torch.distributions.Categorical(logits=x_logit, validate_args=False)
-
-    # Sample from distribution
-    return torch.multinomial(dist.probs, 1, True, generator=generator).squeeze(-1)
-
-
 def _select_row(
     x_logit: torch.Tensor,
     x_row_state: torch.Tensor,
@@ -394,7 +580,7 @@ def _select_row(
     greedy: bool,
     generator: torch.Generator | None,
 ) -> torch.Tensor:
-    """Select each state's row among its rows of logits, as `_select_idx` does among indexes.
+    """Select each state's row among its rows of logits.
 
     Samples are Gumbel-max: one draw per row from `generator`, or the global one when it is None,
     then each state's argmax.
@@ -430,9 +616,10 @@ def _select_row(
 
 def _evaluate_selections(
     core_output: CoreOutput,
-    x_logit_action_type: torch.Tensor,
+    x_logit_joint: torch.Tensor,
+    x_joint_state: torch.Tensor,
+    x_joint_row: torch.Tensor,
     x_action_type: torch.Tensor,
-    x_logit_selection: torch.Tensor,
     x_selection_row: torch.Tensor,
     x_logit_target: torch.Tensor,
     x_target_state: torch.Tensor,
@@ -444,22 +631,24 @@ def _evaluate_selections(
     ----------
     core_output : CoreOutput
         The core's output.
-    x_logit_action_type : torch.Tensor
-        (B, NUM_ACTION_TYPES). The L1 logits.
+    x_logit_joint : torch.Tensor
+        (P + B * K,). The L1 logits, one per joint row.
+    x_joint_state : torch.Tensor
+        (P + B * K,) long. Each joint row's state.
+    x_joint_row : torch.Tensor
+        (B,) long. Each state's selected joint row: the L1 selection.
     x_action_type : torch.Tensor
-        (B,) long. Each state's action type, the L1 selection.
-    x_logit_selection : torch.Tensor
-        (N,). The L2 logits, one per token.
+        (B,) long. Each state's action type, its joint row's.
     x_selection_row : torch.Tensor
         (B,) long. Each state's selected token's row among the tokens, its Character's where
-        none: the L2 selection.
+        none: its joint row's.
     x_logit_target : torch.Tensor
-        (M + B,). The L3 logits, one per target row.
+        (M + B,). The L2 logits, one per target row.
     x_target_state : torch.Tensor
         (M + B,) long. Each target row's state.
     x_target_row : torch.Tensor
         (B,) long. Each state's selected row among the target rows, its "no target" row where
-        none: the L3 selection.
+        none: the L2 selection.
 
     Returns
     -------
@@ -473,13 +662,10 @@ def _evaluate_selections(
     num_monsters = x_target_state.shape[0] - batch_size
 
     # Each level's log-prob, entropy and KL-Uniform
-    x_log_prob_l1, x_entropy_l1, x_kl_uniform_l1 = _evaluate_idx(
-        x_logit_action_type, x_action_type
+    x_log_prob_l1, x_entropy_l1, x_kl_uniform_l1 = _evaluate_row(
+        x_logit_joint, x_joint_state, batch_size, x_joint_row
     )
     x_log_prob_l2, x_entropy_l2, x_kl_uniform_l2 = _evaluate_row(
-        x_logit_selection, core_output.x_token_state, batch_size, x_selection_row
-    )
-    x_log_prob_l3, x_entropy_l3, x_kl_uniform_l3 = _evaluate_row(
         x_logit_target, x_target_state, batch_size, x_target_row
     )
 
@@ -489,64 +675,28 @@ def _evaluate_selections(
         core_output.x_total[:, CollectionKind.MONSTERS]
     )
 
-    # Stack per-level columns: contiguous, faster than strided writes to a preallocated buffer
+    # Stack the columns: contiguous, faster than strided writes to a preallocated buffer
     x_action = torch.stack([x_action_type, x_selection_off, x_target_off], dim=1)
-    x_log_prob = torch.stack([x_log_prob_l1, x_log_prob_l2, x_log_prob_l3], dim=1)
-    x_entropy = torch.stack([x_entropy_l1, x_entropy_l2, x_entropy_l3], dim=1)
-    x_kl_uniform = torch.stack([x_kl_uniform_l1, x_kl_uniform_l2, x_kl_uniform_l3], dim=1)
+    x_log_prob = torch.stack([x_log_prob_l1, x_log_prob_l2], dim=1)
+    x_entropy = torch.stack([x_entropy_l1, x_entropy_l2], dim=1)
+    x_kl_uniform = torch.stack([x_kl_uniform_l1, x_kl_uniform_l2], dim=1)
 
-    # Whether each level applies: its selection is no placeholder, the Character or "no target"
+    # Whether each coordinate and level applies: its selection is no placeholder, the Character
+    # or "no target"
     x_has_selection = tokens_refined.x_entity_kind[x_selection_row] != EntityKind.CHARACTER
     x_has_target = x_target_row < num_monsters
-    x_level_applies = torch.stack(
+    x_level_applies = torch.stack([torch.ones_like(x_has_target), x_has_target], dim=1)  # (B, 2)
+    x_coordinate_applies = torch.stack(
         [torch.ones_like(x_has_selection), x_has_selection, x_has_target], dim=1
     )  # (B, 3)
 
-    # A level a row doesn't reach: no selection (-1) and zero terms, whatever its placeholder drew
+    # A coordinate or level a row doesn't reach: no selection (-1) and zero terms, whatever its
+    # placeholder drew
     return PolicyOutput(
-        x_action=torch.where(x_level_applies, x_action, -1),
+        x_action=torch.where(x_coordinate_applies, x_action, -1),
         x_log_prob=torch.where(x_level_applies, x_log_prob, 0.0),
         x_entropy=torch.where(x_level_applies, x_entropy, 0.0),
         x_kl_uniform=torch.where(x_level_applies, x_kl_uniform, 0.0),
-    )
-
-
-def _evaluate_idx(
-    x_logit: torch.Tensor, x_idx_choice: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute each state's selected index's log-prob, with its entropy and KL-Uniform.
-
-    Parameters
-    ----------
-    x_logit : torch.Tensor
-        (B, C). A head's logits, C per state, -inf where illegal.
-    x_idx_choice : torch.Tensor
-        (B,) long. Each state's selected index.
-
-    Returns
-    -------
-    x_log_prob : torch.Tensor
-        (B,). The selected index's log-prob.
-    x_entropy : torch.Tensor
-        (B,). The entropy.
-    x_kl_uniform : torch.Tensor
-        (B,). KL-Uniform over the legal set.
-    """
-    x_legal = x_logit != float("-inf")
-
-    # No argument checks: each one reads the logits back, making the CPU wait for the GPU
-    dist = torch.distributions.Categorical(logits=x_logit, validate_args=False)
-
-    # KL-Uniform over the legal set; the anti-collapse barrier
-    x_num_legal = x_legal.sum(-1).float()
-    x_logp = dist.logits.clamp(min=_KL_UNIFORM_LOG_P_FLOOR)
-    x_kl_uniform = -x_logp.masked_fill(~x_legal, 0.0).sum(-1) / x_num_legal - x_num_legal.log()
-
-    # The entropy over its maximum, log(legal count); min=2: a lone legal choice gives 0, not 0/0
-    return (
-        dist.log_prob(x_idx_choice),
-        dist.entropy() / x_num_legal.clamp(min=2).log(),
-        x_kl_uniform,
     )
 
 
@@ -555,7 +705,7 @@ def _evaluate_row(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute each state's selected row's log-prob, with its entropy and KL-Uniform.
 
-    The same statistics as `_evaluate_idx`, over rows of logits grouped by state.
+    The same statistics, over rows of logits grouped by state.
 
     Parameters
     ----------
@@ -589,13 +739,13 @@ def _evaluate_row(
     x_log_prob_legal = x_log_prob.masked_fill(~x_legal, 0.0)
     x_entropy = -1 * _sum_by_state(x_log_prob_legal.exp() * x_log_prob_legal, x_row_state, batch_size)
 
-    # KL-Uniform over the legal set, −log p clamped at the floor, as in `_evaluate_idx`
+    # KL-Uniform over the legal set, −log p clamped at the floor; the anti-collapse barrier
     x_num_legal = _sum_by_state(x_legal.to(x_logit.dtype), x_row_state, batch_size)
     x_log_prob_floor = x_log_prob.clamp(min=_KL_UNIFORM_LOG_P_FLOOR).masked_fill(~x_legal, 0.0)
     x_log_prob_sum = _sum_by_state(x_log_prob_floor, x_row_state, batch_size)
     x_kl_uniform = -1 * x_log_prob_sum / x_num_legal - x_num_legal.log()
 
-    # The entropy over its maximum, log(legal count), as in `_evaluate_idx`
+    # The entropy over its maximum, log(legal count); min=2: a lone legal choice gives 0, not 0/0
     return x_log_prob[x_row], x_entropy / x_num_legal.clamp(min=2).log(), x_kl_uniform
 
 

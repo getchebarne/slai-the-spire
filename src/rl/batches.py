@@ -48,6 +48,17 @@ __all__ = [
     "to_device",
 ]
 
+# The collections with stored rows: every StateCollection but SELECTIONS, a total only
+_STATE_COLLECTIONS_STORED = (
+    StateCollection.TOKENS,
+    StateCollection.TOKEN_ENTRIES,
+    StateCollection.EFFECTS,
+    StateCollection.EFFECT_ENTRIES,
+    StateCollection.MODIFIERS,
+    StateCollection.MODIFIER_ENTRIES,
+    StateCollection.PENDING_ENTRIES,
+)
+
 
 def iter_tensors(value: Any) -> Iterator[torch.Tensor]:
     """Walk the tensor leaves of the data records in declaration order.
@@ -512,7 +523,7 @@ def slice_states[TStorage](
     row_stop = x_total_cpu[:selector_states.stop].sum(0).tolist()
     selectors = {
         collection: slice(row_start[collection], row_stop[collection])
-        for collection in StateCollection
+        for collection in _STATE_COLLECTIONS_STORED
     }
 
     return _select_states(states, selector_states, selectors, x_total_cpu[selector_states])
@@ -564,7 +575,7 @@ def gather_states[TStorage](
             x_total[x_idx_state, collection],
             num_rows[collection],
         )
-        for collection in StateCollection
+        for collection in _STATE_COLLECTIONS_STORED
     }
 
     return _select_states(states, x_idx_state, selectors, x_total_cpu_selected)
@@ -671,3 +682,15 @@ def expand_ranges(
 
     # Add each output row's position to its shift to get its source row
     return x_shift + torch.arange(num_rows, device=x_start.device)
+
+
+def _check_tables() -> None:
+    """Check that the stored collections are every StateCollection but SELECTIONS, each once."""
+    if sorted((*_STATE_COLLECTIONS_STORED, StateCollection.SELECTIONS)) != sorted(StateCollection):
+        raise RuntimeError(
+            "Each StateCollection but SELECTIONS must be in _STATE_COLLECTIONS_STORED once: "
+            f"the table holds {[collection.name for collection in _STATE_COLLECTIONS_STORED]}"
+        )
+
+
+_check_tables()

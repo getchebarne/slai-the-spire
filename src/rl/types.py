@@ -209,6 +209,8 @@ class StateCollection(IntEnum):
     """Columns of States.x_total after its per-collection-kind counts.
 
     These identities name collections explicitly; record field order does not determine them.
+    SELECTIONS counts the legal (token, `ActionType`) selections, the set bits of the tokens'
+    `x_legal_selection`: a total only, with no rows stored for it.
     """
 
     TOKENS = len(CollectionKind)
@@ -218,6 +220,7 @@ class StateCollection(IntEnum):
     MODIFIERS = TOKENS + 4
     MODIFIER_ENTRIES = TOKENS + 5
     PENDING_ENTRIES = TOKENS + 6
+    SELECTIONS = TOKENS + 7
 
 
 @dataclass
@@ -264,19 +267,20 @@ class CoreOutput:
 
 @dataclass
 class PolicyOutput:
-    """One action per state, selected or recorded, with the policy statistics for its three levels.
+    """One action per state, selected or recorded, with the policy statistics for its two levels.
 
     Each action row holds [action type, selection offset, target rank]. The selection offset
     indexes that state's encoded tokens, one per Entity across all collection kinds; it stays valid
     when whole states are reordered or joined into a new batch. The target is a Monster's rank.
     A selection or target that did not apply holds -1. `actions.engine_action` resolves these
-    coordinates to engine Entity ids using the encoder's token ordering.
+    coordinates to engine Entity ids using the encoder's token ordering. The statistics have a
+    column per level: L1, the action type with its selection, then L2, the target.
     """
 
     x_action: torch.Tensor      # (B, 3) long; action type, state-local selection offset, Monster rank
-    x_log_prob: torch.Tensor    # (B, 3) float, 0 where N/A
-    x_entropy: torch.Tensor     # (B, 3) float, 0 where N/A
-    x_kl_uniform: torch.Tensor  # (B, 3) float, KL-Uniform over legal actions, 0 where N/A
+    x_log_prob: torch.Tensor    # (B, 2) float, 0 where N/A
+    x_entropy: torch.Tensor     # (B, 2) float, 0 where N/A
+    x_kl_uniform: torch.Tensor  # (B, 2) float, KL-Uniform over legal actions, 0 where N/A
 
 
 @final
