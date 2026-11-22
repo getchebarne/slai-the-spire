@@ -46,6 +46,17 @@ ENCODING_DIM_SPARSE_MODIFIER = len(_CHANNEL_LAYOUT_MODIFIER)
 def encode_modifier_row_into(
     modifier: Modifier, modifier_owner: ModifierOwner, np_out: np.ndarray
 ) -> None:
+    """Write a Modifier row: its kind, whether it is a buff, its stacks and its owner.
+
+    Parameters
+    ----------
+    modifier : Modifier
+        The Modifier.
+    modifier_owner : ModifierOwner
+        The kind of combatant carrying it.
+    np_out : np.ndarray
+        (ENCODING_DIM_MODIFIER,) float32. The Modifier's row, written in place.
+    """
     # Modifier kind
     np_out[_OFF_MODIFIER_KIND + _IDX_OF_MODIFIER_KIND[modifier.kind]] = 1.0
 

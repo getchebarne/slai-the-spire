@@ -33,6 +33,18 @@ ENCODING_DIM_SPARSE_HEALTH_BLOCK = len(_CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 
 def encode_health_block_into(health: int, block: int, np_out: np.ndarray) -> None:
+    """Write a combatant's health, block and their sum, each bucketed and as a scalar.
+
+    Parameters
+    ----------
+    health : int
+        The combatant's health.
+    block : int
+        The combatant's block.
+    np_out : np.ndarray
+        (ENCODING_DIM_HEALTH_BLOCK,) float32. The shared block's health/block range, written in
+        place.
+    """
     total = health + block
 
     health_bucket = get_piecewise_bucket(
