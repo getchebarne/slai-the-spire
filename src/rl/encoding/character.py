@@ -17,14 +17,14 @@ from slai import GameState
 from slai import RelicName
 from slai import get_card_templates
 
-from src.rl.constants import CHARACTER_HEALTH_CAP
-from src.rl.constants import GOLD_STOLEN_MAX
+from src.rl.constants import GOLD_SCALE
+from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.constants import SHOP_PRICE_CAP
 from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import encode_piecewise_into
+from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.encoding.shared import encode_shared_health_block_into
@@ -37,7 +37,6 @@ from src.rl.tokens import relic_held
 _INCOMING_DAMAGE_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)
 _INCOMING_LINEAR_SQRT_THRESHOLD = 25
 _INCOMING_DIM = get_piecewise_dim(0, _INCOMING_DAMAGE_MAX, _INCOMING_LINEAR_SQRT_THRESHOLD)
-_HEALTH_MAX_CAP = CHARACTER_HEALTH_CAP
 _GOLD_MIN = 0
 _GOLD_MAX = 999
 _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
@@ -155,10 +154,10 @@ def encode_character_into(
         np_own[_OFF_CHARACTER_GOLD:][:_GOLD_DIM],
     )
 
-    np_own[_OFF_CHARACTER_GOLD_SCALAR] = min(character.gold, _GOLD_MAX) / _GOLD_MAX
+    np_own[_OFF_CHARACTER_GOLD_SCALAR] = get_linear_norm(character.gold, GOLD_SCALE)
     np_own[_OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
-    np_own[_OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(
-        character.health_max, _HEALTH_MAX_CAP
+    np_own[_OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_linear_norm(
+        character.health_max, HEALTH_SCALE
     )
     np_own[_OFF_CHARACTER_DECK_SIZE] = get_sqrt_norm(len(deck), MAX_SIZE_CARD_PILE_DECK)
     np_own[_OFF_CHARACTER_DECK_UPGRADED_FRACTION] = sum(card.upgraded for card in deck) / max(
@@ -170,8 +169,8 @@ def encode_character_into(
     np_own[_OFF_CHARACTER_POTION_DROP_CHANCE] = (
         min(max(POTION_DROP_CHANCE_BASE + game_state.potion_drop_mod, 0), 100) / 100
     )
-    np_own[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = (
-        min(game_state.shop_purge_cost_run, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
+    np_own[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = get_linear_norm(
+        game_state.shop_purge_cost_run, GOLD_SCALE
     )
     np_own[_OFF_CHARACTER_POTION_SLOTS_LEFT] = (
         game_state.potion_slots_max - len(game_state.id_potions)
@@ -181,9 +180,7 @@ def encode_character_into(
         if incoming is None:
             np_own[_OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
         else:
-            np_own[_OFF_CHARACTER_INCOMING_DAMAGE] = get_sqrt_norm(
-                incoming.damage, _INCOMING_DAMAGE_MAX
-            )
+            np_own[_OFF_CHARACTER_INCOMING_DAMAGE] = get_linear_norm(incoming.damage, HEALTH_SCALE)
             encode_piecewise_into(
                 incoming.damage,
                 0,
@@ -191,8 +188,8 @@ def encode_character_into(
                 _INCOMING_LINEAR_SQRT_THRESHOLD,
                 np_own[_OFF_CHARACTER_INCOMING_DAMAGE_OHE:][:_INCOMING_DIM],
             )
-            np_own[_OFF_CHARACTER_INCOMING_HEALTH_LOST] = get_sqrt_norm(
-                incoming.health_lost, _INCOMING_DAMAGE_MAX
+            np_own[_OFF_CHARACTER_INCOMING_HEALTH_LOST] = get_linear_norm(
+                incoming.health_lost, HEALTH_SCALE
             )
             encode_piecewise_into(
                 incoming.health_lost,
@@ -230,7 +227,7 @@ def encode_character_into(
         np_own[_OFF_CHARACTER_BOSS_FIGHT] = float(combat.boss_fight)
         np_own[_OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED] = float(combat.this_combat_thief_escaped)
         np_own[_OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED] = float(combat.this_combat_monster_died)
-        np_own[_OFF_CHARACTER_GOLD_STOLEN] = get_sqrt_norm(combat.gold_stolen, GOLD_STOLEN_MAX)
+        np_own[_OFF_CHARACTER_GOLD_STOLEN] = get_linear_norm(combat.gold_stolen, GOLD_SCALE)
 
     # Health & Block
     encode_shared_health_block_into(character.health, character.block, np_shared)

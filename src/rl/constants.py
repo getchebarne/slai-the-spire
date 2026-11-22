@@ -26,8 +26,8 @@ _MONSTER_TEMPLATES = [
 ]
 _MONSTER_MOVES = [move for template in _MONSTER_TEMPLATES for move in template.moves]
 
-# Character max-health normalization clamp
-CHARACTER_HEALTH_CAP = 200
+# The Character's max-health ceiling, which bounds Hexaghost's Divider
+_CHARACTER_HEALTH_CAP = 200
 
 # The catalog's widest single block source (the Spire Shield's A18 block)
 BLOCK_MAX_ENTITY = max(
@@ -48,7 +48,7 @@ BLOCK_MAX_ENTITY = max(
 HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
 
 # Widest raw intent hit; Vulnerable scaling is the encoder caps' job
-_DIVIDER_HIT_MAX = CHARACTER_HEALTH_CAP // _slai.HEXAGHOST_DIVIDER_DIVISOR + 1
+_DIVIDER_HIT_MAX = _CHARACTER_HEALTH_CAP // _slai.HEXAGHOST_DIVIDER_DIVISOR + 1
 INTENT_DAMAGE_HIT_MAX = max(
     max(move.damage for move in _MONSTER_MOVES if move.damage is not None),
     _DIVIDER_HIT_MAX,
@@ -75,17 +75,6 @@ INTENT_INSTANCES_MAX = max(
 
 # Widest moveset in the catalog: the move-index OHE width
 MONSTER_MOVESET_MAX = max(len(template.moves) for template in _MONSTER_TEMPLATES)
-
-# Thievery steals its stacks per landed attack (Looter/Mugger spawn Modifier)
-_GOLD_STEAL_MAX = max(
-    spawn.stacks_max
-    for template in _MONSTER_TEMPLATES
-    for spawn in template.modifier_spawns
-    if spawn.kind is _slai.ModifierKind.Thievery
-)
-
-# Thievery accumulation: Mug, Mug, Lunge — every attack before the Escape turn steals
-GOLD_STOLEN_MAX = 3 * _GOLD_STEAL_MAX
 
 # Invincible caps the HP lost per turn at its stacks
 INVINCIBLE_STACKS_OF_ASCENSION = {
@@ -138,11 +127,12 @@ MAX_SIZE_CARD_PILE_NIGHTMARE = _slai.MAX_SIZE_CARD_PILE_HAND
 # Owned Relics: no duplicates, so the true ceiling is the catalog; sized with headroom
 MAX_RELICS = 50
 
-# Normalization caps for scalar features; SHOP_PRICE_CAP is the exact pre-discount
-# ceiling from the engine's pricing (discounts only lower prices)
-SHOP_PRICE_CAP = max(
-    _slai.MAX_SHOP_PRICE_CARD, _slai.MAX_SHOP_PRICE_RELIC, _slai.MAX_SHOP_PRICE_POTION
-)
+# HP and gold per unit of their scaled channels, and the clip of every scaled channel
+HEALTH_SCALE = 100
+GOLD_SCALE = 100
+MAX_SCALED = 5.0
+
+# Normalization caps for scalar features
 EVENT_STAGE_CAP = 10
 
 # Batches repeat Maps and tokens from here up: above an Actor step's batch, below any minibatch

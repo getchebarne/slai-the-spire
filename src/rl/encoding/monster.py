@@ -11,8 +11,9 @@ from slai import Monster
 from slai import MonsterName
 from slai import get_monster_templates
 
-from src.rl.constants import GOLD_STOLEN_MAX
+from src.rl.constants import GOLD_SCALE
 from src.rl.constants import HEALTH_MAX_ENTITY
+from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import INTENT_DAMAGE_HIT_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import INTENT_INSTANCES_MAX
@@ -21,8 +22,8 @@ from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.incoming import get_poison_tick
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import encode_piecewise_into
+from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.scalars import get_piecewise_dim
-from src.rl.encoding.scalars import get_sqrt_norm
 from src.rl.encoding.shared import encode_shared_health_block_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
 
@@ -43,7 +44,7 @@ _INTENT_DEBUFF_KINDS = {
     IntentKind.BlockDebuff,
 }
 
-# Normalization caps, catalog-anchored
+# Caps, catalog-anchored: the two-hots' maxima and the instances' scale
 _DAMAGE_MAX = math.ceil(INTENT_DAMAGE_HIT_MAX * FACTOR_VULN)  # Widest hit, Vulnerable-scaled
 _DAMAGE_TOTAL_MAX = math.ceil(INTENT_DAMAGE_TOTAL_MAX * FACTOR_VULN)  # Widest turn, likewise
 _INSTANCES_MAX = INTENT_INSTANCES_MAX
@@ -225,7 +226,7 @@ def encode_monster_into(
         (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
     """
     np_own[_OFF_MONSTER_NAME + _IDX_OF_MONSTER_NAME[monster.name]] = 1.0
-    np_own[_OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_sqrt_norm(monster.health_max, _HEALTH_MAX)
+    np_own[_OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_linear_norm(monster.health_max, HEALTH_SCALE)
     np_own[_OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
     np_own[_OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
     np_own[_OFF_MONSTER_HALF_DEAD] = float(monster.half_dead)
@@ -247,12 +248,12 @@ def encode_monster_into(
             _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD,
             np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER:][:_HEALTH_TO_TRIGGER_DIM],
         )
-        np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER_SCALAR] = get_sqrt_norm(
-            health_to_trigger, _HEALTH_MAX
+        np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER_SCALAR] = get_linear_norm(
+            health_to_trigger, HEALTH_SCALE
         )
 
     # Stolen gold
-    np_own[_OFF_MONSTER_GOLD_STOLEN] = get_sqrt_norm(monster.gold_stolen, GOLD_STOLEN_MAX)
+    np_own[_OFF_MONSTER_GOLD_STOLEN] = get_linear_norm(monster.gold_stolen, GOLD_SCALE)
 
     # Intent
     intent = monster.intent
@@ -269,7 +270,7 @@ def encode_monster_into(
         )
 
         total_damage = damage * (intent.instances or 1)
-        np_own[_OFF_MONSTER_INTENT_DAMAGE_SCALAR] = min(damage, _DAMAGE_MAX) / _DAMAGE_MAX
+        np_own[_OFF_MONSTER_INTENT_DAMAGE_SCALAR] = get_linear_norm(damage, HEALTH_SCALE)
         np_own[_OFF_MONSTER_INTENT_INSTANCES] = (
             min(intent.instances or 0, _INSTANCES_MAX) / _INSTANCES_MAX
         )
@@ -280,8 +281,8 @@ def encode_monster_into(
             _LINEAR_SQRT_THRESHOLD,
             np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL:][:_DAMAGE_TOTAL_DIM],
         )
-        np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = (
-            min(total_damage, _DAMAGE_TOTAL_MAX) / _DAMAGE_TOTAL_MAX
+        np_own[_OFF_MONSTER_INTENT_DAMAGE_TOTAL_SCALAR] = get_linear_norm(
+            total_damage, HEALTH_SCALE
         )
         np_own[_OFF_MONSTER_INTENT_HAS_BLOCK] = float(intent.kind in _INTENT_BLOCK_KINDS)
         np_own[_OFF_MONSTER_INTENT_HAS_BUFF] = float(intent.kind in _INTENT_BUFF_KINDS)
