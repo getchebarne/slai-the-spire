@@ -74,6 +74,9 @@ from src.rl.types import EffectSource
 from src.rl.types import EntityKind
 from src.rl.types import ModifierOwner
 from src.rl.types import OwnedRows
+from src.rl.types import RecordKeyCard
+from src.rl.types import RecordKeyPotion
+from src.rl.types import RecordKeyRelic
 from src.rl.types import Reserved
 from src.rl.types import Sparse
 from src.rl.types import StateCollection
@@ -158,11 +161,9 @@ _ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
 _ROW_TABLE_MODIFIER = make_row_table(ENCODING_DIM_SPARSE_MODIFIER)
 
 # The kept records of the Cards, Relics and Potions, by their record keys
-_RECORD_OF_CARD: dict[
-    tuple[int, int, int | None, int | None, int | None, PlaySource | None], _Record
-] = {}
-_RECORD_OF_RELIC: dict[tuple[int, bool, bool, int | None], _Record] = {}
-_RECORD_OF_POTION: dict[tuple[int, bool, int | None], _Record] = {}
+_RECORD_OF_CARD: dict[RecordKeyCard, _Record] = {}
+_RECORD_OF_RELIC: dict[RecordKeyRelic, _Record] = {}
+_RECORD_OF_POTION: dict[RecordKeyPotion, _Record] = {}
 
 # Each Effect's row in _ROW_TABLE_EFFECT, under each source: an Effect hashes by field value
 _EFFECT_TABLE_ROW_OF_EFFECT: dict[tuple[Effect, EffectSource], int] = {}
