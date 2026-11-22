@@ -31,6 +31,19 @@ class Focus(IntEnum):
 
 
 def derive_focus(game_state: GameState) -> Focus:
+    """Return the context the state's decision belongs to.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    Focus
+        The first open context in priority order (Reward, Combat, Shop, Chest, Rest Site, Event),
+        else MAP.
+    """
     if game_state.reward is not None:
         return Focus.REWARD
     if game_state.combat is not None:
@@ -89,6 +102,15 @@ _INPUT_POOL_CAP = {
 
 
 def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
+    """Write the Focus, the pending selection, Bombs, the Chest and Rest Site, and open contexts.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to encode.
+    np_out : np.ndarray
+        (ENCODING_DIM_FOCUS,) float32. The context row's Focus range, written in place.
+    """
     combat = game_state.combat
     chest = game_state.chest
     rest_site = game_state.rest_site

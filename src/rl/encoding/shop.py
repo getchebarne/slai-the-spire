@@ -22,6 +22,18 @@ ENCODING_DIM_SHOP_META = ENCODING_DIM_PRICE + 1
 
 
 def encode_price_into(price: int, gold: int, np_out: np.ndarray) -> None:
+    """Write a price: its scaled amount, whether the gold covers it, and the gap between them.
+
+    Parameters
+    ----------
+    price : int
+        The price.
+    gold : int
+        The Character's gold.
+    np_out : np.ndarray
+        (ENCODING_DIM_PRICE,) float32. The price's range, a token's shared block or the Shop's
+        context range, written in place.
+    """
     np_out[_OFF_SHOP_PRICE] = min(price, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
     np_out[_OFF_SHOP_AFFORDABLE] = float(gold >= price)
     np_out[_OFF_SHOP_GOLD_GAP] = min(abs(gold - price), SHOP_PRICE_CAP) / SHOP_PRICE_CAP
