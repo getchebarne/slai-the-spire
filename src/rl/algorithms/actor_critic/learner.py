@@ -137,7 +137,7 @@ def train(
         # Rank 0 alone logs, checkpoints and evaluates: greedy fixed-seed games in a side process
         if rank_info.rank == 0:
             writer = stack.enter_context(SummaryWriter(experiment_dir(exp_name)))
-            evaluator = start_eval(model_config, gamma)
+            evaluator = start_eval(model_config, gamma, rank_info.device)
             stack.callback(stop_evaluator, evaluator)
 
         # The Actor process plays one update behind; the Learner's own RNG keeps runs reproducible
@@ -199,7 +199,7 @@ def train(
 
             # Rank 0: log a finished eval battery and step the curriculum on its win rate
             if evaluator is not None and writer is not None:
-                _finish_eval(evaluator, writer, run_state, curriculum)
+                _finish_eval(evaluator, writer, run_state, curriculum, rank_info.device)
 
             # Broadcast rank 0's curriculum position to the rest of the GPUs
             run_state.ascension_current = distributed.broadcast_float(
@@ -298,6 +298,7 @@ def _finish_eval(
     writer: SummaryWriter,
     run_state: RunState,
     curriculum: AscensionCurriculum,
+    device: torch.device,
 ) -> None:
     """Log an eval battery, if one has finished, and step the curriculum on its win rate.
 
@@ -311,14 +312,15 @@ def _finish_eval(
         The run's progress, its curriculum position and streak stepped in place.
     curriculum : AscensionCurriculum
         The curriculum's settings.
+    device : torch.device
+        The device the eval process plays on.
     """
     # A finished eval battery, polled without blocking, logs at its own iteration
     battery = poll_eval(evaluator)
     if battery is None:
         return
 
-    iteration_eval, ascension_current_eval, episode_results_eval = battery
-    metrics_eval = log_eval(writer, iteration_eval, ascension_current_eval, episode_results_eval)
+    metrics_eval = log_eval(writer, battery, device)
     step_curriculum(
-        run_state, metrics_eval[MetricKey.WIN_RATE], ascension_current_eval, curriculum
+        run_state, metrics_eval[MetricKey.WIN_RATE], battery.ascension_current, curriculum
     )
