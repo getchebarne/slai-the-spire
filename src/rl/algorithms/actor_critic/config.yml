@@ -56,5 +56,5 @@ model:
 optimizer:
   name: Adam
   kwargs:
-    lr: 7.5e-5 # The starting lr: with a `target_kl`, `adapt_lr` moves it within [1e-5, 1e-2]
+    lr: 7.5e-5 # The starting lr: with a `target_kl`, `adapt_lr` moves it within [1e-5, 1e-3]
     fused: true # One kernel per optimizer step
