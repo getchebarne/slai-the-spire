@@ -24,10 +24,6 @@ _IDX_OF_MONSTER_ENCOUNTER = {
     MonsterEncounter.LagavulinEvent: 2,
 }
 
-# Match and Keep! deals six Card names twice, face down: the engine's
-# src/events/match_and_keep.rs, which GameEnv doesn't expose
-_MATCH_AND_KEEP_BOARD_SIZE = 12
-
 
 _CHANNEL_LAYOUT_EVENT_META, _alloc = make_channel_allocator()
 _OFF_EVENT_NAME = _alloc("name", len(_IDX_OF_EVENT_NAME))
@@ -127,5 +123,5 @@ def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     # Match and Keep! only
     np_out[_OFF_EVENT_MATCH_ATTEMPTS] = event.match_attempts / GameEnv.MATCH_AND_KEEP_ATTEMPTS
     np_out[_OFF_EVENT_CARD_MATCH_UNSEEN_COUNT] = (
-        event.card_match_unseen_count / _MATCH_AND_KEEP_BOARD_SIZE
+        event.card_match_unseen_count / GameEnv.NUM_MATCH_AND_KEEP_CARDS
     )

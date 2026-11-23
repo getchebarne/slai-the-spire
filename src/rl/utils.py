@@ -378,7 +378,7 @@ def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> boo
     """
     # Row 8 is always a Chest
     y_current, _ = get_y_x_current(game_state.map)
-    if y_current is None or y_current < 8:
+    if y_current is None or y_current < GameEnv.MAP_ROW_TREASURE:
         return False
 
     # An opened Chest closes for its Reward

@@ -14,6 +14,7 @@ from slai import CardName
 from slai import CardPile
 from slai import EffectCardDiscoverSelect
 from slai import EffectHealthDelta
+from slai import GameEnv
 from slai import GameState
 from slai import Intent
 from slai import ModifierKind
@@ -30,16 +31,9 @@ from src.rl.tokens import get_entities
 from src.rl.tokens import get_monster_entities
 
 
-# The engine's hardcoded amounts, which GameEnv doesn't expose TODO: expose
-_ORICHALCUM_BLOCK = 6
-_BURN_DAMAGE = 2
-_BURN_DAMAGE_UPGRADED = 4
-_DECAY_DAMAGE = 2
-_EXPLOSIVE_DAMAGE = 30
-
 # A Monster hit leaving this much past block lands 1 under Torii
-_TORII_MIN = 2
-_TORII_MAX = 5
+_MIN_TORII_DAMAGE = GameEnv.MIN_TORII_DAMAGE
+_MAX_TORII_DAMAGE = GameEnv.MAX_TORII_DAMAGE
 
 
 @dataclass
@@ -146,7 +140,11 @@ def _deal_damage(walk: _Walk, amount: int, is_from_monster: bool) -> None:
     walk.block_char = max(walk.block_char - amount, 0)
 
     # Apply Torii reduction
-    if is_from_monster and walk.has_torii and _TORII_MIN <= damage_over_block <= _TORII_MAX:
+    if (
+        is_from_monster
+        and walk.has_torii
+        and _MIN_TORII_DAMAGE <= damage_over_block <= _MAX_TORII_DAMAGE
+    ):
         damage_over_block = 1
 
     # Accumulate lost health if any
@@ -271,7 +269,7 @@ def _walk_monster_move(
 
     # Explosive's last stack blows up behind the move, with no source, and takes the Monster along
     if stacks_of_modifier_kind_monster.get(ModifierKind.Explosive, 0) == 1:
-        _deal_damage(walk, _EXPLOSIVE_DAMAGE, is_from_monster=False)
+        _deal_damage(walk, GameEnv.EXPLOSIVE_DAMAGE, is_from_monster=False)
 
         return 0
 
@@ -352,16 +350,16 @@ def project_incoming(game_state: GameState) -> Incoming | None:
     ):
         # The first pass: Orichalcum, Plated Armor, the Cards that play themselves out of hand
         if walk.block_char == 0 and RelicName.Orichalcum in relic_names:
-            walk.block_char = _ORICHALCUM_BLOCK
+            walk.block_char = GameEnv.ORICHALCUM_BLOCK
         walk.block_char += stacks_of_modifier_kind_char.get(ModifierKind.PlatedArmor, 0)
         hand = get_entities(game_state, combat.id_card_pile_hand, Card)
         for card in hand:
             match card.name:
                 case CardName.Burn:
-                    damage = _BURN_DAMAGE_UPGRADED if card.upgraded else _BURN_DAMAGE
+                    damage = GameEnv.BURN_DAMAGE_UPGRADED if card.upgraded else GameEnv.BURN_DAMAGE
                     _deal_damage(walk, damage, is_from_monster=False)
                 case CardName.Decay:
-                    _deal_damage(walk, _DECAY_DAMAGE, is_from_monster=False)
+                    _deal_damage(walk, GameEnv.DECAY_DAMAGE, is_from_monster=False)
                 case CardName.Regret:
                     walk.damage += 1 if walk.is_intangible_char else len(hand)
                     _lose_health(walk, len(hand))

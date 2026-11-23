@@ -49,10 +49,6 @@ _THIS_TURN_DISCARDS_MAX = max(
     if isinstance(card_template.cost_kind, CardCostKindMinusDiscardsThisTurn)
 )
 
-# Panache hits on every 5th play of a turn: the engine's PANACHE_PLAYS
-# (src/consts.rs), which GameEnv doesn't expose
-_PANACHE_PLAYS = 5
-
 _THIS_TURN_PLAYS_LEFT_DIM = GameEnv.MAX_VELVET_CHOKER_PLAYS + 1
 
 
@@ -204,7 +200,7 @@ def encode_character_into(
         this_turn_plays_left = _get_this_turn_plays_left(game_state, combat)
         if this_turn_plays_left is not None:
             np_own[_OFF_CHARACTER_THIS_TURN_PLAYS_LEFT + this_turn_plays_left] = 1.0
-        np_own[_OFF_CHARACTER_PANACHE_COUNTDOWN] = combat.panache_countdown / _PANACHE_PLAYS
+        np_own[_OFF_CHARACTER_PANACHE_COUNTDOWN] = combat.panache_countdown / GameEnv.PANACHE_PLAYS
         np_own[_OFF_CHARACTER_ORANGE_PELLETS_PLAYED_ATTACK] = float(
             combat.orange_pellets_played_attack
         )

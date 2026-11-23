@@ -13,8 +13,7 @@ from src.rl.types import EntityKind
 ACTION_TYPES = _slai.ActionType.members()
 NUM_ACTION_TYPES = len(ACTION_TYPES)
 
-# The top Ascension, which GameEnv doesn't expose TODO expose
-ASCENSION_LEVEL = 20
+ASCENSION_LEVEL = _slai.GameEnv.MAX_ASCENSION
 
 # Start runs with Neow's blessing (choice states + bonuses)
 NEOW = True
