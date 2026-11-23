@@ -24,7 +24,7 @@ ppo:
   clip_eps: 0.20
   coef_value: 0.500
   coef_entropy: 0.010
-  coef_kl_uniform: 0.020
+  coef_kl_uniform: 0.002
   is_clip: 2.0
   max_grad_norm: 0.500
   target_kl: 0.03
