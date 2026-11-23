@@ -58,7 +58,6 @@ _TAGS_OF_RELIC_NAME: dict[RelicName, tuple[Tag, ...]] = {
     RelicName.Nunchaku: (Tag.NINJA,),
     RelicName.OrnamentalFan: (Tag.NINJA,),
     RelicName.PenNib: (Tag.NINJA,),
-    RelicName.RunicPyramid: (Tag.SETUP,),
     RelicName.Shuriken: (Tag.NINJA,),
     RelicName.SneckoSkull: (Tag.POISON,),
     RelicName.TheSpecimen: (Tag.POISON,),

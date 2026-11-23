@@ -115,7 +115,6 @@ class Tag(IntEnum):
     POISON = 0
     DISCARD = 1
     NINJA = 2
-    SETUP = 3  # Meant for planned combo plays
 
 
 # Collection storage forms, used only in type annotations
