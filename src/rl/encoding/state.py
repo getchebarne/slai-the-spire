@@ -24,6 +24,7 @@ from src.rl.encoding.card import ENCODING_DIM_CARD
 from src.rl.encoding.card import ENCODING_DIM_CARD_SPARSE
 from src.rl.encoding.card import encode_card_into
 from src.rl.encoding.card import get_record_key_card
+from src.rl.encoding.card import project_outgoing
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER_SPARSE
 from src.rl.encoding.character import encode_character_into
@@ -69,6 +70,7 @@ from src.rl.encoding.sparse import drop_rows
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
 from src.rl.tokens import get_character
+from src.rl.tokens import get_entities
 from src.rl.tokens import iter_tokens
 from src.rl.types import CollectionKind
 from src.rl.types import EffectSource
@@ -499,6 +501,7 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
     """
     character = get_character(game_state)
     incoming = project_incoming(game_state)
+    outgoing_of_card = project_outgoing(game_state)
 
     # What the Card rows weigh their cost against: outside Combat, a turn's energy
     energy = (
@@ -540,8 +543,11 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
                 if CollectionKind.CARD_PLAY_QUEUE in collection_kinds:
                     play_source = play_source_of_card_id[entity.id]
 
+                # What playing it would take off each slot's Monster, while it is in the hand
+                outgoing = outgoing_of_card.get(entity.id)
+
                 record_key_card = get_record_key_card(
-                    entity, energy, draw_below, gold, slot_holder, play_source
+                    entity, energy, draw_below, gold, slot_holder, play_source, outgoing
                 )
                 record = _RECORD_OF_CARD.get(record_key_card)
                 if record is None:
@@ -553,6 +559,7 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
                         gold,
                         slot_holder,
                         play_source,
+                        outgoing,
                         np_row[_COL_START_CARD:COL_START_RELIC],
                         np_row[_COL_START_SHARED:],
                     )
@@ -622,10 +629,18 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
                     _RECORD_OF_POTION[record_key_potion] = record
 
             case Monster():
+                # What each playable hand Card that hits it would take off it
+                outgoing_monster: list[tuple[int, bool]] = []
+                for card in get_entities(game_state, outgoing_of_card, Card):
+                    outgoing_slot = outgoing_of_card[card.id][entity.slot]
+                    if card.playable and outgoing_slot is not None:
+                        outgoing_monster.append(outgoing_slot)
+
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_monster_into(
                     entity,
                     incoming,
+                    outgoing_monster,
                     game_state.ascension,
                     np_row[COL_START_MONSTER:COL_START_CHARACTER],
                     np_row[_COL_START_SHARED:],

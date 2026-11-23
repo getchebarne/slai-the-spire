@@ -24,6 +24,7 @@ from slai import EffectCardDiscoverSelect
 from slai import EffectHealthDelta
 from slai import GameState
 from slai import Intent
+from slai import Modifier
 from slai import ModifierKind
 from slai import Monster
 from slai import MonsterName
@@ -67,6 +68,22 @@ class Incoming:
     health_at_monsters: int  # The HP left when the Monsters' moves start, the revives' included
     damage_of_monster: dict[int, int]
     health_lost_of_monster: dict[int, int]
+
+
+def get_stacks_of_modifier_kind(modifiers: list[Modifier]) -> dict[ModifierKind, int]:
+    """Return each kind's stacks among a combatant's Modifiers.
+
+    Parameters
+    ----------
+    modifiers : list[Modifier]
+        The Character's or a Monster's Modifiers.
+
+    Returns
+    -------
+    dict[ModifierKind, int]
+        The stacks of each kind it holds.
+    """
+    return {modifier.kind: modifier.stacks for modifier in modifiers}
 
 
 def get_poison_tick(
@@ -327,9 +344,7 @@ def project_incoming(game_state: GameState) -> Incoming | None:
         return None
 
     character = get_character(game_state)
-    stacks_of_modifier_kind_char = {
-        modifier.kind: modifier.stacks for modifier in character.modifiers
-    }
+    stacks_of_modifier_kind_char = get_stacks_of_modifier_kind(character.modifiers)
     relic_names = {relic.name for relic in get_entities(game_state, game_state.id_relics, Relic)}
 
     # Initialize walk
@@ -378,8 +393,7 @@ def project_incoming(game_state: GameState) -> Incoming | None:
     # The Monsters' turn: every tick, then the moves in slot order
     health_at_monsters = walk.health_char + sum(walk.revives_char)
     stacks_of_monster = {
-        monster.id: {modifier.kind: modifier.stacks for modifier in monster.modifiers}
-        for monster in monsters
+        monster.id: get_stacks_of_modifier_kind(monster.modifiers) for monster in monsters
     }
     health_of_monster = {}
     for monster in monsters:
