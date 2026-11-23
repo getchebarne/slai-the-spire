@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 import numpy as np
+from slai import ACT_FINAL
 from slai import Action
 from slai import GameEnv
 from slai import GameState
@@ -184,7 +185,7 @@ def _tally_step(
         # The Heart's Room: the reach; the damage, 0 elsewhere, averages to reach x conversion
         y_current, _ = get_y_x_current(game_state_next.map)
         episode_result.heart_reached = (
-            game_state_next.act == GameEnv.ACT_FINAL
+            game_state_next.act == ACT_FINAL
             and y_current == MAP_HEIGHT
         )
         episode_result.heart_damage = _heart_damage(game_state_next) if episode_result.heart_reached else 0.0

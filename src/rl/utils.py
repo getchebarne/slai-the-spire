@@ -7,12 +7,12 @@ import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
 import yaml
+from slai import ACT_FINAL
 from slai import ActionType
 from slai import CardName
 from slai import EffectHealthDelta
 from slai import EffectRoomEnter
 from slai import EventName
-from slai import GameEnv
 from slai import PotionName
 from slai import RelicName
 
@@ -439,7 +439,7 @@ def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
         that loses the burning Room (Emerald Key), and entering the Secret Portal (any key).
     """
     if (
-        game_state.act != GameEnv.ACT_FINAL - 1
+        game_state.act != ACT_FINAL - 1
         or (game_state.key_emerald and game_state.key_ruby and game_state.key_sapphire)
     ):
         return False

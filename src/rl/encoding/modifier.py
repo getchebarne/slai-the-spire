@@ -1,5 +1,5 @@
 import numpy as np
-from slai import GameEnv
+from slai import TIME_WARP_PLAYS
 from slai import Modifier
 from slai import ModifierKind
 
@@ -21,7 +21,7 @@ _STACKS_MAX = 99
 _STACKS_MAX_OF_MODIFIER_KIND = {
     ModifierKind.Poison: HEALTH_MAX_ENTITY,
     ModifierKind.Invincible: INVINCIBLE_STACKS_MAX,  # The HP left to lose before its next turn
-    ModifierKind.TimeWarp: GameEnv.TIME_WARP_PLAYS - 1,  # The next Card played ends the turn
+    ModifierKind.TimeWarp: TIME_WARP_PLAYS - 1,  # The next Card played ends the turn
 }
 _LINEAR_SQRT_THRESHOLD = 25
 _STACKS_BUCKET_DIM = get_piecewise_dim(

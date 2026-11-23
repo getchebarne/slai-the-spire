@@ -1,9 +1,9 @@
 import warnings
 
 import numpy as np
+from slai import MATCH_AND_KEEP_ATTEMPTS
 from slai import EventName
 from slai import EventOption
-from slai import GameEnv
 from slai import GameState
 from slai import MonsterEncounter
 
@@ -125,7 +125,7 @@ def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
         np_out[_OFF_EVENT_MONSTER_ENCOUNTER + idx_adventurer_elite] = 1.0
 
     # Match and Keep! only
-    np_out[_OFF_EVENT_MATCH_ATTEMPTS] = event.match_attempts / GameEnv.MATCH_AND_KEEP_ATTEMPTS
+    np_out[_OFF_EVENT_MATCH_ATTEMPTS] = event.match_attempts / MATCH_AND_KEEP_ATTEMPTS
     np_out[_OFF_EVENT_CARD_MATCH_UNSEEN_COUNT] = (
         event.card_match_unseen_count / _MATCH_AND_KEEP_BOARD_SIZE
     )

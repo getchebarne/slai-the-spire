@@ -347,7 +347,7 @@ _CAP_COUNT = max(
 _CAP_DELTA = _cap(_field(slai.EffectEventAdvanceStage, lambda effect: effect.delta))
 _CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda effect: effect.factor))
 _CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda effect: effect.amount))
-_CAP_TURNS = float(slai.GameEnv.BOMB_FUSE_TURNS)
+_CAP_TURNS = float(slai.BOMB_FUSE_TURNS)
 _CAP_SELECT_COUNT = float(MAX_SIZE_CARD_PILE_DECK)
 _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
 

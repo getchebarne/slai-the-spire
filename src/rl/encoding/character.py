@@ -1,11 +1,15 @@
 import math
 
 import numpy as np
+from slai import CARD_REWARD_ROLL_OFFSET_BASE
+from slai import MAX_NORMALITY_PLAYS
+from slai import MAX_VELVET_CHOKER_PLAYS
+from slai import MIN_CARD_REWARD_ROLL_OFFSET
+from slai import POTION_DROP_CHANCE_BASE
 from slai import Card
 from slai import CardCostKindMinusDiscardsThisTurn
 from slai import CardName
 from slai import Combat
-from slai import GameEnv
 from slai import GameState
 from slai import RelicName
 from slai import get_card_templates
@@ -39,8 +43,8 @@ _GOLD_LINEAR_SQRT_THRESHOLD = _GOLD_MIN  # Pure sqrt
 _GOLD_DIM = get_piecewise_dim(_GOLD_MIN, _GOLD_MAX, _GOLD_LINEAR_SQRT_THRESHOLD)
 
 # Card-reward pity: starts at the base, falls by one per Common down to the min, resets on a Rare
-_REWARD_ROLL_OFFSET_MIN = GameEnv.MIN_CARD_REWARD_ROLL_OFFSET
-_REWARD_ROLL_OFFSET_BASE = GameEnv.CARD_REWARD_ROLL_OFFSET_BASE
+_REWARD_ROLL_OFFSET_MIN = MIN_CARD_REWARD_ROLL_OFFSET
+_REWARD_ROLL_OFFSET_BASE = CARD_REWARD_ROLL_OFFSET_BASE
 
 # This turn's discards only cut Eviscerate's cost and unlock Sneaky Strike's refund
 _THIS_TURN_DISCARDS_MAX = max(
@@ -53,7 +57,7 @@ _THIS_TURN_DISCARDS_MAX = max(
 # (src/consts.rs), which GameEnv doesn't expose
 _PANACHE_PLAYS = 5
 
-_THIS_TURN_PLAYS_LEFT_DIM = GameEnv.MAX_VELVET_CHOKER_PLAYS + 1
+_THIS_TURN_PLAYS_LEFT_DIM = MAX_VELVET_CHOKER_PLAYS + 1
 
 
 # Health / Block is not here: it is the combatants' health/block columns (health_block.py)
@@ -117,9 +121,9 @@ def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | No
     """
     hand = get_entities(game_state, combat.id_card_pile_hand, Card)
     if any(card.name == CardName.Normality for card in hand):
-        plays_max = GameEnv.MAX_NORMALITY_PLAYS
+        plays_max = MAX_NORMALITY_PLAYS
     elif relic_held(game_state, RelicName.VelvetChoker):
-        plays_max = GameEnv.MAX_VELVET_CHOKER_PLAYS
+        plays_max = MAX_VELVET_CHOKER_PLAYS
     else:
         return None
 
@@ -164,7 +168,7 @@ def encode_character_into(
         character.reward_roll_offset - _REWARD_ROLL_OFFSET_MIN
     ) / (_REWARD_ROLL_OFFSET_BASE - _REWARD_ROLL_OFFSET_MIN)
     np_own[_OFF_CHARACTER_POTION_DROP_CHANCE] = (
-        min(max(GameEnv.POTION_DROP_CHANCE_BASE + game_state.potion_drop_mod, 0), 100) / 100
+        min(max(POTION_DROP_CHANCE_BASE + game_state.potion_drop_mod, 0), 100) / 100
     )
     np_own[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = (
         min(game_state.shop_purge_cost_run, SHOP_PRICE_CAP) / SHOP_PRICE_CAP
