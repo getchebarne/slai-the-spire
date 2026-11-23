@@ -100,20 +100,7 @@ INVINCIBLE_STACKS_OF_ASCENSION = {
 }
 INVINCIBLE_STACKS_MAX = max(INVINCIBLE_STACKS_OF_ASCENSION.values())
 
-FACTOR_VULN = _slai.FACTOR_VULN
-
-
-MAP_HEIGHT = _slai.MAP_HEIGHT
-MAP_WIDTH = _slai.MAP_WIDTH
-MAX_SIZE_CARD_PILE_EVENT_ROLL = _slai.MAX_SIZE_CARD_PILE_EVENT_ROLL
-MAX_SIZE_POTION_EVENT_ROLL = _slai.MAX_SIZE_POTION_EVENT_ROLL
-MAX_SIZE_RELIC_EVENT_ROLL = _slai.MAX_SIZE_RELIC_EVENT_ROLL
 MAX_SIZE_CARD_MATCH_PAIRS = _slai.MATCH_AND_KEEP_ATTEMPTS  # One pair per attempt at most
-MAX_MONSTERS = _slai.MAX_MONSTERS
-MAX_SIZE_CARD_PILE_HAND = _slai.MAX_SIZE_CARD_PILE_HAND
-
-# Most Card bundles one Reward holds (Orrery stages 5)
-MAX_REWARD_CARD_BUNDLES = _slai.MAX_REWARD_CARD_BUNDLES
 
 # Size ceiling for the master deck
 MAX_SIZE_CARD_PILE_DECK = 80
@@ -125,7 +112,6 @@ MAX_RELIC_REWARDS = _slai.NUM_BOSS_RELIC_REWARDS
 MAX_POTION_REWARDS = _slai.NUM_CAULDRON_POTIONS
 
 # Engine slot counts + provisional headroom
-MAX_POTION_SLOTS = _slai.MAX_POTION_SLOTS  # Belt capacity; the FFI list is dense
 MAX_SIZE_SHOP_CARDS = _slai.SHOP_SLOTS_CARD_TOTAL + 1
 MAX_SHOP_RELICS = _slai.SHOP_SLOTS_RELIC + 1
 MAX_SHOP_POTIONS = _slai.SHOP_SLOTS_POTION + 1
@@ -140,22 +126,18 @@ MAX_MODIFIERS = 64
 MAX_SIZE_CARD_PILE_DRAW = MAX_SIZE_CARD_PILE_DECK
 MAX_SIZE_CARD_PILE_DISCARD = MAX_SIZE_CARD_PILE_DECK
 MAX_SIZE_CARD_PILE_EXHAUST = 45
-MAX_SIZE_CARD_PILE_STASIS = MAX_MONSTERS
+MAX_SIZE_CARD_PILE_STASIS = _slai.MAX_MONSTERS
 
 # Staged selections of an open multi-selection halt: at most a hand's worth
-MAX_SIZE_CARD_PILE_SELECTED = MAX_SIZE_CARD_PILE_HAND
+MAX_SIZE_CARD_PILE_SELECTED = _slai.MAX_SIZE_CARD_PILE_HAND
 
 # Queued plays (replays, top-of-draw plays, end-of-turn self-plays) and the
 # nightmare pile: at most a hand's worth; past it they warn and drop
-MAX_SIZE_CARD_PLAY_QUEUE = MAX_SIZE_CARD_PILE_HAND
-MAX_SIZE_CARD_PILE_NIGHTMARE = MAX_SIZE_CARD_PILE_HAND
+MAX_SIZE_CARD_PLAY_QUEUE = _slai.MAX_SIZE_CARD_PILE_HAND
+MAX_SIZE_CARD_PILE_NIGHTMARE = _slai.MAX_SIZE_CARD_PILE_HAND
 
 # Owned Relics: no duplicates, so the true ceiling is the catalog; sized with headroom
 MAX_RELICS = 50
-
-# Reward bundle widths: bundle 0 must hold The Library's single wide roll
-MAX_CARD_REWARD_ROLL = _slai.MAX_CARD_REWARD_ROLL
-MAX_COMBAT_CARD_REWARD = _slai.MAX_COMBAT_CARD_REWARD
 
 # Normalization caps for scalar features; SHOP_PRICE_CAP is the exact pre-discount
 # ceiling from the engine's pricing (discounts only lower prices)
@@ -231,16 +213,16 @@ COLLECTION_KINDS_IN_WINDOW_ORDER = tuple(
 
 # Each collection kind's token cap: the most tokens of that collection kind a state holds
 MAX_TOKENS_OF_COLLECTION_KIND: dict[CollectionKind, int] = {
-    CollectionKind.CARD_PILE_HAND: MAX_SIZE_CARD_PILE_HAND,
+    CollectionKind.CARD_PILE_HAND: _slai.MAX_SIZE_CARD_PILE_HAND,
     CollectionKind.CARD_PILE_DISCOVER: MAX_SIZE_CARD_PILE_DISCOVER,
     CollectionKind.CARD_PILE_SELECTED: MAX_SIZE_CARD_PILE_SELECTED,
-    CollectionKind.CARD_REWARD_0: MAX_CARD_REWARD_ROLL,
-    CollectionKind.CARD_REWARD_1: MAX_COMBAT_CARD_REWARD,
-    CollectionKind.CARD_REWARD_2: MAX_COMBAT_CARD_REWARD,
-    CollectionKind.CARD_REWARD_3: MAX_COMBAT_CARD_REWARD,
-    CollectionKind.CARD_REWARD_4: MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_0: _slai.MAX_CARD_REWARD_ROLL,
+    CollectionKind.CARD_REWARD_1: _slai.MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_2: _slai.MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_3: _slai.MAX_COMBAT_CARD_REWARD,
+    CollectionKind.CARD_REWARD_4: _slai.MAX_COMBAT_CARD_REWARD,
     CollectionKind.CARD_SHOP: MAX_SIZE_SHOP_CARDS,
-    CollectionKind.CARD_PILE_EVENT_ROLL: MAX_SIZE_CARD_PILE_EVENT_ROLL,
+    CollectionKind.CARD_PILE_EVENT_ROLL: _slai.MAX_SIZE_CARD_PILE_EVENT_ROLL,
     CollectionKind.CARD_MATCH_FLIPPED: 1,
     CollectionKind.CARD_MATCH_PAIRS: MAX_SIZE_CARD_MATCH_PAIRS,
     CollectionKind.CARD_PILE_STASIS: MAX_SIZE_CARD_PILE_STASIS,
@@ -252,16 +234,16 @@ MAX_TOKENS_OF_COLLECTION_KIND: dict[CollectionKind, int] = {
     CollectionKind.CARD_PILE_DECK: MAX_SIZE_CARD_PILE_DECK,
     CollectionKind.RELIC_REWARD: MAX_RELIC_REWARDS,
     CollectionKind.RELIC_SHOP: MAX_SHOP_RELICS,
-    CollectionKind.RELIC_EVENT_ROLL: MAX_SIZE_RELIC_EVENT_ROLL,
+    CollectionKind.RELIC_EVENT_ROLL: _slai.MAX_SIZE_RELIC_EVENT_ROLL,
     CollectionKind.RELIC_OWNED: MAX_RELICS,
-    CollectionKind.POTION_OWNED: MAX_POTION_SLOTS,
+    CollectionKind.POTION_OWNED: _slai.MAX_POTION_SLOTS,
     CollectionKind.POTION_REWARD: MAX_POTION_REWARDS,
     CollectionKind.POTION_SHOP: MAX_SHOP_POTIONS,
-    CollectionKind.POTION_EVENT_ROLL: MAX_SIZE_POTION_EVENT_ROLL,
-    CollectionKind.MONSTERS: MAX_MONSTERS,
+    CollectionKind.POTION_EVENT_ROLL: _slai.MAX_SIZE_POTION_EVENT_ROLL,
+    CollectionKind.MONSTERS: _slai.MAX_MONSTERS,
     CollectionKind.EVENT_OPTIONS: MAX_EVENT_OPTIONS,
     CollectionKind.CHARACTER: 1,
-    CollectionKind.ROOMS: MAP_WIDTH,
+    CollectionKind.ROOMS: _slai.MAP_WIDTH,
 }
 
 # The cap of the block every collection packs into: the sum of the collections' caps
@@ -270,9 +252,9 @@ MAX_TOKENS = sum(MAX_TOKENS_OF_COLLECTION_KIND.values())
 
 def _check_tables() -> None:
     """Check that the tables that restate the engine or an enum still agree with it."""
-    if len(COLLECTION_KINDS_CARD_REWARDS) != MAX_REWARD_CARD_BUNDLES:
+    if len(COLLECTION_KINDS_CARD_REWARDS) != _slai.MAX_REWARD_CARD_BUNDLES:
         raise RuntimeError(
-            f"The engine stages up to {MAX_REWARD_CARD_BUNDLES} reward bundles: "
+            f"The engine stages up to {_slai.MAX_REWARD_CARD_BUNDLES} reward bundles: "
             "add CARD_REWARD_<b> collection kinds"
         )
     if set(MAX_TOKENS_OF_COLLECTION_KIND) != set(CollectionKind):

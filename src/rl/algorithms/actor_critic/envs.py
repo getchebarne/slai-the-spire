@@ -2,11 +2,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from slai import ACT_FINAL
+from slai import MAP_HEIGHT
 from slai import Action
 from slai import GameEnv
 from slai import GameState
 
-from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import NEOW
 from src.rl.reward import RewardStream
 from src.rl.reward import compute_reward
