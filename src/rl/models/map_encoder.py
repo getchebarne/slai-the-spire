@@ -4,10 +4,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from slai import MAP_HEIGHT
+from slai import MAP_WIDTH
 
 from src.rl.batches import get_unique_rep_row
-from src.rl.constants import MAP_HEIGHT
-from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
 from src.rl.encoding import EDGE_DELTAS
 from src.rl.encoding import NUM_CHANNELS

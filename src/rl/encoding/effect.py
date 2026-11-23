@@ -25,6 +25,7 @@ from typing import Any, Protocol, SupportsInt, get_args
 
 import numpy as np
 import slai
+from slai import MAX_SIZE_CARD_PILE_HAND
 from slai import Amount
 from slai import AmountAbsolute
 from slai import AmountRange
@@ -53,7 +54,6 @@ from slai import get_relic_templates
 
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.constants import MAX_SIZE_CARD_PILE_HAND
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_piecewise_bucket

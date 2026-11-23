@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+from slai import FACTOR_VULN
 from slai import MAX_MOVE_HISTORY
 from slai import Effect
 from slai import EffectDebuffsClear
@@ -10,7 +11,6 @@ from slai import Monster
 from slai import MonsterName
 from slai import get_monster_templates
 
-from src.rl.constants import FACTOR_VULN
 from src.rl.constants import GOLD_STOLEN_MAX
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INTENT_DAMAGE_HIT_MAX

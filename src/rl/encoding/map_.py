@@ -1,5 +1,7 @@
 import numpy as np
 from slai import ACT_FINAL
+from slai import MAP_HEIGHT
+from slai import MAP_WIDTH
 from slai import NUM_ENCOUNTERS_EASY_ACT1
 from slai import EventName
 from slai import GameState
@@ -7,8 +9,6 @@ from slai import MonsterEncounter
 from slai import Room
 from slai import RoomKind
 
-from src.rl.constants import MAP_HEIGHT
-from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_entities
