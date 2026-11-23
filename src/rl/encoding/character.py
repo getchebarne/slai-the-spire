@@ -2,7 +2,9 @@ import math
 
 import numpy as np
 from slai import CARD_REWARD_ROLL_OFFSET_BASE
+from slai import FACTOR_VULN
 from slai import MAX_NORMALITY_PLAYS
+from slai import MAX_POTION_SLOTS
 from slai import MAX_VELVET_CHOKER_PLAYS
 from slai import MIN_CARD_REWARD_ROLL_OFFSET
 from slai import POTION_DROP_CHANCE_BASE
@@ -15,10 +17,8 @@ from slai import RelicName
 from slai import get_card_templates
 
 from src.rl.constants import CHARACTER_HEALTH_CAP
-from src.rl.constants import FACTOR_VULN
 from src.rl.constants import GOLD_STOLEN_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
-from src.rl.constants import MAX_POTION_SLOTS
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import SHOP_PRICE_CAP
 from src.rl.encoding.incoming import Incoming

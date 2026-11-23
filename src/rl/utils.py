@@ -8,6 +8,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import yaml
 from slai import ACT_FINAL
+from slai import MAP_HEIGHT
 from slai import ActionType
 from slai import CardName
 from slai import EffectHealthDelta
@@ -16,7 +17,6 @@ from slai import EventName
 from slai import PotionName
 from slai import RelicName
 
-from src.rl.constants import MAP_HEIGHT
 from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_character
 from src.rl.tokens import get_entities

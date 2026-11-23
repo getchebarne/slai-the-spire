@@ -5,8 +5,8 @@ slot, Tags): its layout, the single writer of each range, and a price's part of 
 from collections.abc import Iterable
 
 import numpy as np
+from slai import MAX_MONSTERS
 
-from src.rl.constants import MAX_MONSTERS
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.layout import make_channel_allocator

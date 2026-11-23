@@ -7,9 +7,9 @@ from dataclasses import fields, replace
 from typing import Any, cast
 
 import torch
+from slai import MAP_HEIGHT
+from slai import MAP_WIDTH
 
-from src.rl.constants import MAP_HEIGHT
-from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
 from src.rl.constants import MAX_TOKENS
