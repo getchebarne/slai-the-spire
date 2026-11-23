@@ -8,6 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.rl.algorithms.actor_critic.actor import Delivery
 from src.rl.algorithms.actor_critic.envs import EpisodeResult
+from src.rl.algorithms.actor_critic.evals import EvalBatteryResults
 from src.rl.reward import RewardStream
 from src.rl.types import RunState
 
@@ -44,6 +45,7 @@ class MetricKey(StrEnum):
     LOSS_POLICY = "loss/policy"
     LOSS_VALUE = "loss/value"
     MEMORY_ACTOR_GB = "memory/actor_gb"
+    MEMORY_EVAL_GB = "memory/eval_gb"
     MEMORY_LEARNER_GB = "memory/learner_gb"
     OFFPOLICY_IS_WEIGHT_MEAN = "offpolicy/is_weight_mean"
     OFFPOLICY_IS_WEIGHT_TRUNCATED = "offpolicy/is_weight_truncated"
@@ -129,24 +131,17 @@ def log_iteration(
     _print_iteration(iteration, run_state.total_steps, metrics, len(episode_results))
 
 
-def log_eval(
-    writer: SummaryWriter,
-    iteration_eval: int,
-    ascension_current_eval: float,
-    episode_results_eval: list[EpisodeResult],
-) -> dict[str, float]:
-    """Write a finished eval battery's behavioral metrics under eval/ and print its line.
+def log_eval(writer: SummaryWriter, battery: EvalBatteryResults, device: torch.device) -> dict[str, float]:
+    """Write a finished eval battery's metrics and memory peak under eval/ and print its line.
 
     Parameters
     ----------
     writer : SummaryWriter
         Rank 0's writer.
-    iteration_eval : int
-        The iteration whose weights the battery played.
-    ascension_current_eval : float
-        The curriculum position it played at.
-    episode_results_eval : list[EpisodeResult]
-        The battery's finished episodes.
+    battery : EvalBatteryResults
+        The finished battery, logged at the iteration whose weights it played.
+    device : torch.device
+        The eval process's device.
 
     Returns
     -------
@@ -154,9 +149,22 @@ def log_eval(
         The battery's behavioral metrics, keyed by `MetricKey`.
     """
     metrics_eval = _log_behavior(
-        writer, iteration_eval, _MetricPrefix.EVAL, episode_results_eval, ascension_current_eval
+        writer,
+        battery.iteration,
+        _MetricPrefix.EVAL,
+        battery.episode_results,
+        battery.ascension_current,
     )
-    _print_eval(iteration_eval, ascension_current_eval, metrics_eval)
+
+    # The eval process's peak GPU memory
+    if device.type == "cuda":
+        _write_metrics(
+            writer,
+            battery.iteration,
+            _MetricPrefix.EVAL,
+            {MetricKey.MEMORY_EVAL_GB: battery.bytes_reserved_peak / 2**30},
+        )
+    _print_eval(battery.iteration, battery.ascension_current, metrics_eval)
 
     return metrics_eval
 
