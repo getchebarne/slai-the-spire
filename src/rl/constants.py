@@ -157,11 +157,9 @@ MAX_RELICS = 50
 MAX_CARD_REWARD_ROLL = _slai.GameEnv.MAX_CARD_REWARD_ROLL
 MAX_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
 
-# Normalization caps for scalar features; SHOP_PRICE_CAP is the exact pre-discount
-# ceiling from the engine's pricing (discounts only lower prices)
-SHOP_PRICE_CAP = max(
-    _slai.MAX_SHOP_PRICE_CARD, _slai.MAX_SHOP_PRICE_RELIC, _slai.MAX_SHOP_PRICE_POTION
-)
+# Normalization caps for scalar features; SHOP_PRICE_CAP is the exact pre-discount ceiling of the
+# engine's pricing: a Rare Relic at the top of its roll, after the A16 markup
+SHOP_PRICE_CAP = 345
 EVENT_STAGE_CAP = 10
 
 # Batches repeat Maps and tokens from here up: above an Actor step's batch, below any minibatch
