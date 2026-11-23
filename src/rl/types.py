@@ -67,8 +67,13 @@ type Entity = Card | Relic | Potion | Monster | EventOption | Character | Room
 # The collection kinds of the collections holding an Entity, in window order, then the Entity
 type Token = tuple[tuple[CollectionKind, ...], Entity]
 
+# A hand Card's (HP lost, lethal) against each Monster slot, None where it shows that slot no hit
+type Outgoing = tuple[tuple[int, bool] | None, ...]
+
 # The record key of a Card, of a Relic and of a Potion: everything its token's row reads
-type RecordKeyCard = tuple[int, int, int | None, int | None, int | None, PlaySource | None]
+type RecordKeyCard = tuple[
+    int, int, int | None, int | None, int | None, PlaySource | None, Outgoing | None
+]
 type RecordKeyRelic = tuple[int, bool, bool, int | None]
 type RecordKeyPotion = tuple[int, bool, int | None]
 

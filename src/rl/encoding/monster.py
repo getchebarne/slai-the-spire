@@ -21,6 +21,7 @@ from src.rl.constants import SCALE_GOLD
 from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.incoming import get_poison_tick
+from src.rl.encoding.incoming import get_stacks_of_modifier_kind
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_linear_norm
@@ -161,6 +162,8 @@ _OFF_MONSTER_MOVE_PREV_COUNT = _alloc("move_prev_count", _MOVE_PREV_COUNT_DIM, 2
 _OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")
 _OFF_MONSTER_HALF_DEAD = _alloc("half_dead")
 _OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")
+_OFF_MONSTER_OUTGOING_HEALTH_LOST_MAX = _alloc("outgoing_health_lost_max")
+_OFF_MONSTER_OUTGOING_IS_LETHAL = _alloc("outgoing_is_lethal")
 
 ENCODING_DIM_MONSTER = sum(w for _, w, _ in _CHANNEL_LAYOUT_MONSTER)
 
@@ -235,6 +238,7 @@ def _poison_ticks_to_kill(
 def encode_monster_into(
     monster: Monster,
     incoming: Incoming | None,
+    outgoing_monster: list[tuple[int, bool]],
     ascension: int,
     np_own: np.ndarray,
     np_shared: np.ndarray,
@@ -247,6 +251,9 @@ def encode_monster_into(
         The Monster.
     incoming : Incoming | None
         What ending the turn now would cost (incoming.py); None when Runic Dome hides the intents.
+    outgoing_monster : list[tuple[int, bool]]
+        What each playable hand Card that hits it would take off it (card.py's
+        `project_outgoing`): (HP lost, lethal).
     ascension : int
         The game's ascension, which sets Invincible's cap on the health a Poison tick takes.
     np_own : np.ndarray
@@ -270,7 +277,7 @@ def encode_monster_into(
     np_own[_OFF_MONSTER_ULTIMATE_USED] = float(monster.ultimate_used)
 
     # Poison's horizon
-    stacks_of_modifier_kind = {modifier.kind: modifier.stacks for modifier in monster.modifiers}
+    stacks_of_modifier_kind = get_stacks_of_modifier_kind(monster.modifiers)
     poison_ticks = _poison_ticks_to_kill(monster, stacks_of_modifier_kind, ascension)
     if poison_ticks is not None:
         np_own[_OFF_MONSTER_POISON_TICKS_TO_KILL + poison_ticks - 1] = 1.0
@@ -342,6 +349,15 @@ def encode_monster_into(
 
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
         np_own[_OFF_MONSTER_INTENT_KIND + _IDX_OF_INTENT_KIND[intent.kind]] = 1.0
+
+    # The most HP one playable hand Card would take off it, and whether one would kill it
+    if outgoing_monster:
+        np_own[_OFF_MONSTER_OUTGOING_HEALTH_LOST_MAX] = get_linear_norm(
+            max(health_lost_card for health_lost_card, _ in outgoing_monster), SCALE_HEALTH
+        )
+        np_own[_OFF_MONSTER_OUTGOING_IS_LETHAL] = float(
+            any(is_lethal_card for _, is_lethal_card in outgoing_monster)
+        )
 
     # Move identity: the current move + the two before it
     if monster.move_current is not None:

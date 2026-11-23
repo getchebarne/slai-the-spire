@@ -2,6 +2,8 @@ from typing import get_args
 
 import numpy as np
 from slai import MAX_ENERGY_MAX
+from slai import MAX_MONSTERS
+from slai import NUM_CHEMICAL_X_REPEATS
 from slai import Card
 from slai import CardColor
 from slai import CardCostKind
@@ -10,15 +12,31 @@ from slai import CardKind
 from slai import CardName
 from slai import CardRarity
 from slai import CostScope
+from slai import EffectDamageFinisher
+from slai import EffectDamageFlechettes
+from slai import EffectDamageMindBlast
+from slai import EffectDamagePhysical
+from slai import EffectHeelHookProc
+from slai import EffectSkewerProc
+from slai import GameState
+from slai import ModifierKind
 from slai import PlaySource
+from slai import RelicName
 from slai import get_card_templates
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
+from src.rl.constants import SCALE_HEALTH
+from src.rl.encoding.incoming import get_stacks_of_modifier_kind
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
 from src.rl.encoding.shared import encode_shared_tag_into
 from src.rl.encoding.shared import get_record_key_price
+from src.rl.tokens import get_entities
+from src.rl.tokens import get_monster_entities
+from src.rl.tokens import relic_held
+from src.rl.types import Outgoing
 from src.rl.types import RecordKeyCard
 from src.rl.types import Tag
 
@@ -77,6 +95,9 @@ _OFF_CARD_PLAY_SOURCE = _alloc("play_source", len(_IDX_OF_PLAY_SOURCE))
 _OFF_CARD_DRAW_DEPTH = _alloc("draw_depth", MAX_SIZE_CARD_PILE_DRAW)
 _OFF_CARD_DRAW_DEPTH_SCALAR = _alloc("draw_depth_scalar")
 _OFF_CARD_DRAW_BELOW_SCALAR = _alloc("draw_below_scalar")
+# Hand only: what playing it would take off each slot's Monster
+_OFF_CARD_OUTGOING_HEALTH_LOST = _alloc("outgoing_health_lost", MAX_MONSTERS, MAX_MONSTERS)
+_OFF_CARD_OUTGOING_IS_LETHAL = _alloc("outgoing_is_lethal", MAX_MONSTERS, MAX_MONSTERS)
 
 ENCODING_DIM_CARD = sum(w for _, w, _ in _CHANNEL_LAYOUT_CARD)
 
@@ -136,6 +157,7 @@ def encode_card_into(
     gold: int,
     slot_holder: int | None,
     play_source: PlaySource | None,
+    outgoing: Outgoing | None,
     np_own: np.ndarray,
     np_shared: np.ndarray,
 ) -> None:
@@ -158,6 +180,9 @@ def encode_card_into(
         The slot of the Monster holding it in stasis; None out of the stasis pile.
     play_source : PlaySource | None
         Its first CardPlay's source while it is queued; None out of the play queue.
+    outgoing : Outgoing | None
+        What playing it would take off each slot's Monster (`project_outgoing`); None out of the
+        hand.
     np_own : np.ndarray
         (ENCODING_DIM_CARD,) float32. The Card's own range of its token row, written in place.
     np_shared : np.ndarray
@@ -200,6 +225,14 @@ def encode_card_into(
         np_own[_OFF_CARD_DRAW_BELOW_SCALAR] = (
             min(draw_below, MAX_SIZE_CARD_PILE_DRAW) / MAX_SIZE_CARD_PILE_DRAW
         )
+    if outgoing is not None:
+        for slot, outgoing_slot in enumerate(outgoing):
+            if outgoing_slot is not None:
+                health_lost, is_lethal = outgoing_slot
+                np_own[_OFF_CARD_OUTGOING_HEALTH_LOST + slot] = get_linear_norm(
+                    health_lost, SCALE_HEALTH
+                )
+                np_own[_OFF_CARD_OUTGOING_IS_LETHAL + slot] = float(is_lethal)
 
     # Shop price
     encode_shared_price_into(card.price, gold, np_shared)
@@ -219,6 +252,7 @@ def get_record_key_card(
     gold: int,
     slot_holder: int | None,
     play_source: PlaySource | None,
+    outgoing: Outgoing | None,
 ) -> RecordKeyCard:
     """Make a Card's record key: its identity_hash and everything else its row reads.
 
@@ -236,12 +270,16 @@ def get_record_key_card(
         The slot of the Monster holding it in stasis; None out of the stasis pile.
     play_source : PlaySource | None
         Its first CardPlay's source while it is queued; None out of the play queue.
+    outgoing : Outgoing | None
+        What playing it would take off each slot's Monster (`project_outgoing`); None out of the
+        hand.
 
     Returns
     -------
     RecordKeyCard
         Its identity_hash, the energy, the Cards below it, the gold when it has a price, its
-        holder's slot while it is in stasis, and its play source while it is queued.
+        holder's slot while it is in stasis, its play source while it is queued, and what playing
+        it would take off each slot's Monster while it is in the hand.
     """
     return (
         card.identity_hash,
@@ -250,4 +288,88 @@ def get_record_key_card(
         get_record_key_price(card.price, gold),
         slot_holder,
         play_source,
+        outgoing,
     )
+
+
+def project_outgoing(game_state: GameState) -> dict[int, Outgoing]:
+    """Return what playing each hand Card now would take off each slot's Monster.
+
+    Each hit is the damage the game shows with the Card hovered over that Monster
+    (`Combat.damage_card_pile_hand`). The hits are one play's own, Bane's poisoned hit counted
+    only when that Monster already holds Poison. Block takes the first hits, and Invincible caps
+    the HP lost at what it has left this turn. An area attack's values hold for every slot at
+    once, a targeted Card's for aiming it at each slot.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    dict[int, Outgoing]
+        Each hand Card's (HP lost, lethal) against each slot, by the Card's id; None at the slots
+        where the engine shows it no hit. Empty outside Combat.
+    """
+    combat = game_state.combat
+    if combat is None:
+        return {}
+
+    hand = get_entities(game_state, combat.id_card_pile_hand, Card)
+    monsters = get_monster_entities(game_state)
+    stacks_of_monster = {
+        monster.id: get_stacks_of_modifier_kind(monster.modifiers) for monster in monsters
+    }
+
+    # What Finisher, Flechettes and an X-cost Card count, as they stand before the play
+    this_turn_attacks = combat.this_turn_attacks
+    num_skills_in_hand = sum(card.kind == CardKind.Skill for card in hand)
+    energy = combat.energy.energy_current
+    has_chemical_x = relic_held(game_state, RelicName.ChemicalX)
+
+    outgoing_of_card: dict[int, Outgoing] = {}
+    for card, damage_card in zip(hand, combat.damage_card_pile_hand):
+        # Every Monster takes the first hits, only a poisoned one Bane's second
+        hits = hits_poisoned = 0
+        for effect in card.effects_play:
+            match effect:
+                case EffectDamagePhysical(if_poisoned=True):
+                    hits_poisoned += effect.instances
+                case EffectDamagePhysical():
+                    hits += effect.instances
+                case EffectDamageFinisher():
+                    hits += this_turn_attacks
+                case EffectDamageFlechettes():
+                    hits += num_skills_in_hand
+                case EffectHeelHookProc() | EffectSkewerProc() | EffectDamageMindBlast():
+                    hits += 1
+
+        # An X-cost Card plays its Effects X times
+        num_repeats = 1
+        if isinstance(card.cost_kind, CardCostKindXCost):
+            num_repeats = max(energy + card.cost_kind.offset, 0)
+            if has_chemical_x:
+                num_repeats += NUM_CHEMICAL_X_REPEATS
+
+        outgoing: list[tuple[int, bool] | None] = [None] * MAX_MONSTERS
+        for monster in monsters:
+            damage = damage_card[monster.slot]
+            if damage is None:
+                continue
+
+            stacks_of_modifier_kind_monster = stacks_of_monster[monster.id]
+            hits_monster = hits
+            if ModifierKind.Poison in stacks_of_modifier_kind_monster:
+                hits_monster += hits_poisoned
+            health_lost_monster = max(hits_monster * num_repeats * damage - monster.block, 0)
+
+            # Invincible: the HP it has left to lose this turn
+            if ModifierKind.Invincible in stacks_of_modifier_kind_monster:
+                health_lost_monster = min(
+                    health_lost_monster, stacks_of_modifier_kind_monster[ModifierKind.Invincible]
+                )
+            outgoing[monster.slot] = (health_lost_monster, health_lost_monster >= monster.health)
+        outgoing_of_card[card.id] = tuple(outgoing)
+
+    return outgoing_of_card
