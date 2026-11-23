@@ -444,6 +444,29 @@ def read_rank_mean(rank_mean: RankMean) -> float:
     return rank_mean.x_value_sum_cpu.item() / rank_mean.num_ranks
 
 
+def mean_over_ranks_on_device(x_value: torch.Tensor) -> torch.Tensor:
+    """Average a tensor over the ranks, on its device: nothing is read back to the host.
+
+    Parameters
+    ----------
+    x_value : torch.Tensor
+        (...). This rank's tensor, on its device, where the all-reduce runs.
+
+    Returns
+    -------
+    torch.Tensor
+        (...). The mean of every rank's `x_value`, the same on every rank; `x_value` itself
+        without torchrun.
+    """
+    if not dist.is_initialized():
+        return x_value
+
+    x_value_sum = x_value.detach().clone()
+    dist.all_reduce(x_value_sum)
+
+    return x_value_sum / dist.get_world_size()
+
+
 def any_rank(flag: bool, device: torch.device) -> bool:
     """Check whether `flag` is set on at least one rank.
 
