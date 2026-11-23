@@ -1,9 +1,9 @@
 import math
 
 import numpy as np
+from slai import MAX_MOVE_HISTORY
 from slai import Effect
 from slai import EffectDebuffsClear
-from slai import GameEnv
 from slai import IntentKind
 from slai import ModifierKind
 from slai import Monster
@@ -65,7 +65,7 @@ _HEALTH_TO_TRIGGER_DIM = get_piecewise_dim(
     0, _HEALTH_MAX, _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD
 )
 
-_MOVE_PREV_COUNT_DIM = get_piecewise_dim(0, GameEnv.MAX_MOVE_HISTORY, _LINEAR_SQRT_THRESHOLD)
+_MOVE_PREV_COUNT_DIM = get_piecewise_dim(0, MAX_MOVE_HISTORY, _LINEAR_SQRT_THRESHOLD)
 
 
 # Health/block is not here: it is the combatants' health/block columns (health_block.py)
@@ -300,7 +300,7 @@ def encode_monster_into(
     if len(move_history) >= 2 + shift:
         np_own[_OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
     move_prev_count_bucket = get_piecewise_bucket(
-        max(len(move_history) - shift, 0), 0, GameEnv.MAX_MOVE_HISTORY, _LINEAR_SQRT_THRESHOLD
+        max(len(move_history) - shift, 0), 0, MAX_MOVE_HISTORY, _LINEAR_SQRT_THRESHOLD
     )
     np_own[_OFF_MONSTER_MOVE_PREV_COUNT + move_prev_count_bucket] = 1.0
 

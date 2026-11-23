@@ -49,7 +49,7 @@ BLOCK_MAX_ENTITY = max(
 HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
 
 # Widest raw intent hit; Vulnerable scaling is the encoder caps' job
-_DIVIDER_HIT_MAX = CHARACTER_HEALTH_CAP // _slai.GameEnv.HEXAGHOST_DIVIDER_DIVISOR + 1
+_DIVIDER_HIT_MAX = CHARACTER_HEALTH_CAP // _slai.HEXAGHOST_DIVIDER_DIVISOR + 1
 INTENT_DAMAGE_HIT_MAX = max(
     max(move.damage for move in _MONSTER_MOVES if move.damage is not None),
     _DIVIDER_HIT_MAX,
@@ -66,7 +66,7 @@ INTENT_DAMAGE_TOTAL_MAX = max(
         for move in _MONSTER_MOVES
         if move.damage is not None and move.instances is not None
     ),
-    _DIVIDER_HIT_MAX * _slai.GameEnv.HEXAGHOST_DIVIDER_HITS,
+    _DIVIDER_HIT_MAX * _slai.HEXAGHOST_DIVIDER_HITS,
     _MULTI_STAB_HIT_MAX * MULTI_STAB_INSTANCES_MAX,
 )
 INTENT_INSTANCES_MAX = max(
@@ -100,37 +100,37 @@ INVINCIBLE_STACKS_OF_ASCENSION = {
 }
 INVINCIBLE_STACKS_MAX = max(INVINCIBLE_STACKS_OF_ASCENSION.values())
 
-FACTOR_VULN = _slai.GameEnv.FACTOR_VULN
+FACTOR_VULN = _slai.FACTOR_VULN
 
 
-MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
-MAP_WIDTH = _slai.GameEnv.MAP_WIDTH
-MAX_SIZE_CARD_PILE_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_CARD_PILE_EVENT_ROLL
-MAX_SIZE_POTION_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_POTION_EVENT_ROLL
-MAX_SIZE_RELIC_EVENT_ROLL = _slai.GameEnv.MAX_SIZE_RELIC_EVENT_ROLL
-MAX_SIZE_CARD_MATCH_PAIRS = _slai.GameEnv.MATCH_AND_KEEP_ATTEMPTS  # One pair per attempt at most
-MAX_MONSTERS = _slai.GameEnv.MAX_MONSTERS
-MAX_SIZE_CARD_PILE_HAND = _slai.GameEnv.MAX_SIZE_CARD_PILE_HAND
+MAP_HEIGHT = _slai.MAP_HEIGHT
+MAP_WIDTH = _slai.MAP_WIDTH
+MAX_SIZE_CARD_PILE_EVENT_ROLL = _slai.MAX_SIZE_CARD_PILE_EVENT_ROLL
+MAX_SIZE_POTION_EVENT_ROLL = _slai.MAX_SIZE_POTION_EVENT_ROLL
+MAX_SIZE_RELIC_EVENT_ROLL = _slai.MAX_SIZE_RELIC_EVENT_ROLL
+MAX_SIZE_CARD_MATCH_PAIRS = _slai.MATCH_AND_KEEP_ATTEMPTS  # One pair per attempt at most
+MAX_MONSTERS = _slai.MAX_MONSTERS
+MAX_SIZE_CARD_PILE_HAND = _slai.MAX_SIZE_CARD_PILE_HAND
 
 # Most Card bundles one Reward holds (Orrery stages 5)
-MAX_REWARD_CARD_BUNDLES = _slai.GameEnv.MAX_REWARD_CARD_BUNDLES
+MAX_REWARD_CARD_BUNDLES = _slai.MAX_REWARD_CARD_BUNDLES
 
 # Size ceiling for the master deck
 MAX_SIZE_CARD_PILE_DECK = 80
 
 # Relics offered per Reward: boss Rewards roll mutually exclusive Relics
-MAX_RELIC_REWARDS = _slai.GameEnv.NUM_BOSS_RELIC_REWARDS
+MAX_RELIC_REWARDS = _slai.NUM_BOSS_RELIC_REWARDS
 
 # Cauldron stages NUM_CAULDRON_POTIONS Potions as one Reward batch
-MAX_POTION_REWARDS = _slai.GameEnv.NUM_CAULDRON_POTIONS
+MAX_POTION_REWARDS = _slai.NUM_CAULDRON_POTIONS
 
 # Engine slot counts + provisional headroom
-MAX_POTION_SLOTS = _slai.GameEnv.MAX_POTION_SLOTS  # Belt capacity; the FFI list is dense
-MAX_SIZE_SHOP_CARDS = _slai.GameEnv.SHOP_SLOTS_CARD_TOTAL + 1
-MAX_SHOP_RELICS = _slai.GameEnv.SHOP_SLOTS_RELIC + 1
-MAX_SHOP_POTIONS = _slai.GameEnv.SHOP_SLOTS_POTION + 1
+MAX_POTION_SLOTS = _slai.MAX_POTION_SLOTS  # Belt capacity; the FFI list is dense
+MAX_SIZE_SHOP_CARDS = _slai.SHOP_SLOTS_CARD_TOTAL + 1
+MAX_SHOP_RELICS = _slai.SHOP_SLOTS_RELIC + 1
+MAX_SHOP_POTIONS = _slai.SHOP_SLOTS_POTION + 1
 MAX_EVENT_OPTIONS = 12
-MAX_SIZE_CARD_PILE_DISCOVER = _slai.GameEnv.NUM_DISCOVER_ROLLS + 2
+MAX_SIZE_CARD_PILE_DISCOVER = _slai.NUM_DISCOVER_ROLLS + 2
 
 # Per-state caps on the Effect and Modifier rows, per state rather than per Entity
 MAX_EFFECTS = 224
@@ -154,8 +154,8 @@ MAX_SIZE_CARD_PILE_NIGHTMARE = MAX_SIZE_CARD_PILE_HAND
 MAX_RELICS = 50
 
 # Reward bundle widths: bundle 0 must hold The Library's single wide roll
-MAX_CARD_REWARD_ROLL = _slai.GameEnv.MAX_CARD_REWARD_ROLL
-MAX_COMBAT_CARD_REWARD = _slai.GameEnv.MAX_COMBAT_CARD_REWARD
+MAX_CARD_REWARD_ROLL = _slai.MAX_CARD_REWARD_ROLL
+MAX_COMBAT_CARD_REWARD = _slai.MAX_COMBAT_CARD_REWARD
 
 # Normalization caps for scalar features; SHOP_PRICE_CAP is the exact pre-discount
 # ceiling from the engine's pricing (discounts only lower prices)

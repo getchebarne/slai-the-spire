@@ -1,6 +1,7 @@
 import numpy as np
+from slai import ACT_FINAL
+from slai import NUM_ENCOUNTERS_EASY_ACT1
 from slai import EventName
-from slai import GameEnv
 from slai import GameState
 from slai import MonsterEncounter
 from slai import Room
@@ -69,7 +70,7 @@ _OFF_MAP_ENCOUNTER_BOSS = _alloc("encounter_boss", len(_IDX_OF_MONSTER_ENCOUNTER
 _OFF_MAP_ENCOUNTER_POOL_BOSS_COUNT = _alloc("encounter_pool_boss_count")
 _OFF_MAP_CURRENT_ROOM_KIND = _alloc("current_room_kind", _MAP_NUM_ROOM_KINDS)
 _OFF_MAP_NEXT_ROOM_KINDS = _alloc("next_room_kinds", MAP_WIDTH * _MAP_NUM_ROOM_KINDS)
-_OFF_MAP_ACT = _alloc("act", GameEnv.ACT_FINAL)
+_OFF_MAP_ACT = _alloc("act", ACT_FINAL)
 _OFF_MAP_KEYS = _alloc("keys", 3)
 _OFF_MAP_ENCOUNTERS_EASY_LEFT = _alloc("encounters_easy_left")
 # "?" Rooms
@@ -171,7 +172,7 @@ def encode_map_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     np_out[_OFF_MAP_ACT + (act - 1)] = 1.0
     _encode_keys_into(game_state, np_out)
     np_out[_OFF_MAP_ENCOUNTERS_EASY_LEFT] = (
-        game_state.encounters_easy_left / GameEnv.NUM_ENCOUNTERS_EASY_ACT1
+        game_state.encounters_easy_left / NUM_ENCOUNTERS_EASY_ACT1
     )
     _encode_unknown_room_into(game_state, np_out)
 

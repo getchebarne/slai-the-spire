@@ -1,10 +1,10 @@
 from enum import IntEnum
 
 import numpy as np
+from slai import BOMB_FUSE_TURNS
 from slai import CandidatePool
 from slai import ChestKind
 from slai import EffectBombArm
-from slai import GameEnv
 from slai import GameState
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
@@ -61,7 +61,7 @@ def derive_focus(game_state: GameState) -> Focus:
 _NUM_CHEST_KINDS = len(ChestKind.members())
 
 
-_BOMB_TURNS = GameEnv.BOMB_FUSE_TURNS  # The Bomb's fuse length
+_BOMB_TURNS = BOMB_FUSE_TURNS  # The Bomb's fuse length
 
 # The catalog's biggest bomb; bombs due on the same turn add up and clamp to it
 _BOMB_DAMAGE_MAX = max(

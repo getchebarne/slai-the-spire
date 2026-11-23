@@ -100,7 +100,7 @@ def game_won(game_state: slai.GameState) -> bool:
     """
     return (
         game_state.game_over
-        and game_state.act == slai.GameEnv.ACT_FINAL
+        and game_state.act == slai.ACT_FINAL
         and get_character(game_state).health > 0
     )
 
@@ -161,7 +161,7 @@ def compute_reward(
         outcome -= 1.0
 
     # The door pays on the step that passes from Act 3 into Act 4
-    if game_state.act < slai.GameEnv.ACT_FINAL and game_state_next.act == slai.GameEnv.ACT_FINAL:
+    if game_state.act < slai.ACT_FINAL and game_state_next.act == slai.ACT_FINAL:
         outcome += _WEIGHT_DOOR
 
     # Event form: a potential form's per-step rent would make dying early pay
