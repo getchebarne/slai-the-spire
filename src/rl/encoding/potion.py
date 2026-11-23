@@ -31,9 +31,7 @@ ENCODING_DIM_SPARSE_POTION = len(_CHANNEL_LAYOUT_POTION)
 # Each tagged Potion's Tags, by name: Sacred Bark's variant keeps them
 _TAGS_OF_POTION_NAME: dict[PotionName, tuple[Tag, ...]] = {
     PotionName.Cunning: (Tag.NINJA,),
-    PotionName.Duplication: (Tag.SETUP,),
     PotionName.GamblersBrew: (Tag.DISCARD,),
-    PotionName.LiquidMemories: (Tag.SETUP,),
     PotionName.Poison: (Tag.POISON,),
 }
 
