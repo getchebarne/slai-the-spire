@@ -12,7 +12,9 @@ from slai import MAP_HEIGHT
 from slai import MAP_ROW_TREASURE
 from slai import ActionType
 from slai import CardName
+from slai import ChestKind
 from slai import EffectHealthDelta
+from slai import EffectRelicGrantPool
 from slai import EffectRoomEnter
 from slai import EventName
 from slai import PotionName
@@ -420,10 +422,63 @@ def _enters_secret_portal(game_state: slai.GameState, action: slai.Action) -> bo
     return any(isinstance(effect, EffectRoomEnter) for effect in option.effects)
 
 
+def _lets_nloth_take_key_sapphire(game_state: slai.GameState, action: slai.Action) -> bool:
+    """Return whether `action` lets N'loth's Hungry Face empty Act 3's row-8 Chest.
+
+    The face's one charge empties the next non-boss Chest, Sapphire Key included, and each act's
+    row 8 is a Chest. The Face Trader, which can grant the face, is drawable in Acts 1 and 2.
+
+    Parameters
+    ----------
+    game_state : slai.GameState
+        The state `action` is legal in.
+    action : slai.Action
+        One legal action.
+
+    Returns
+    -------
+    bool
+        True for an Event option that can grant the face past Act 2's row 8, and for leaving a
+        non-boss Chest unopened while the face's charge is unspent.
+    """
+    match action.action_type:
+        case ActionType.EventOptionSelect:
+            # Until Act 2's row 8, a row-8 Chest spends the charge before Act 3's
+            y_current, _ = get_y_x_current(game_state.map)
+            if (
+                game_state.act != ACT_FINAL - 2
+                or y_current is None
+                or y_current <= MAP_ROW_TREASURE
+                or relic_held(game_state, RelicName.NlothsHungryFace)
+            ):
+                return False
+
+            id_option = action.ids[0]
+            (option,) = get_entities(game_state, [id_option], slai.EventOption)
+
+            return any(
+                isinstance(effect, EffectRelicGrantPool)
+                and RelicName.NlothsHungryFace in effect.pool
+                for effect in option.effects
+            )
+        case ActionType.RoomExit:
+            chest = game_state.chest
+            if chest is None or chest.chest_kind == ChestKind.Boss or chest.chest_opened:
+                return False
+
+            relics = get_entities(game_state, game_state.id_relics, slai.Relic)
+
+            return any(
+                relic.name == RelicName.NlothsHungryFace and relic.counter > 0 for relic in relics
+            )
+        case _:
+            return False
+
+
 def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
     """Return whether `action` gives up a key.
 
-    Only Act 3 can lose a key.
+    Act 3 can lose any key; Acts 1 and 2 only the Sapphire Key, to N'loth's Hungry Face.
 
     Parameters
     ----------
@@ -437,8 +492,12 @@ def _forfeits_key(game_state: slai.GameState, action: slai.Action) -> bool:
     bool
         True with a key missing in Act 3, for a rest option other than Recall at the last Rest Site
         (Ruby Key), a move that gives up the Sapphire Key from row 8 on, a Room or a Smoke Bomb
-        that loses the burning Room (Emerald Key), and entering the Secret Portal (any key).
+        that loses the burning Room (Emerald Key), and entering the Secret Portal (any key); with
+        the Sapphire Key missing in any act, for an action that lets N'loth's Hungry Face take it.
     """
+    if not game_state.key_sapphire and _lets_nloth_take_key_sapphire(game_state, action):
+        return True
+
     if (
         game_state.act != ACT_FINAL - 1
         or (game_state.key_emerald and game_state.key_ruby and game_state.key_sapphire)
