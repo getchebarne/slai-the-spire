@@ -131,9 +131,8 @@ def start_workers(
     # Boolean flag to signal shutdown
     x_stop = torch.tensor(False).share_memory_()
 
+    # Create workers' contaienr and write the curriculum's current ascension level
     workers = Workers(step_buffers, [], ctx.Queue(), x_stop)
-
-    # Write the curriculum's current ascension level
     write_ascensions(workers, ascension_current)
 
     try:
