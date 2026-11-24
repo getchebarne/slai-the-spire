@@ -26,7 +26,9 @@ from slai import get_card_templates
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
 from src.rl.constants import SCALE_HEALTH
-from src.rl.encoding.incoming import get_stacks_of_modifier_kind
+from src.rl.encoding.damage import deal_damage
+from src.rl.encoding.damage import get_stacks_of_modifier_kind
+from src.rl.encoding.damage import make_combatant
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.shared import encode_shared_price_into
@@ -36,6 +38,7 @@ from src.rl.encoding.shared import get_record_key_price
 from src.rl.tokens import get_entities
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import relic_held
+from src.rl.types import EntityKind
 from src.rl.types import Outgoing
 from src.rl.types import RecordKeyCard
 from src.rl.types import Tag
@@ -297,9 +300,10 @@ def project_outgoing(game_state: GameState) -> dict[int, Outgoing]:
 
     Each hit is the damage the game shows with the Card hovered over that Monster
     (`Combat.damage_card_pile_hand`). The hits are one play's own, Bane's poisoned hit counted
-    only when that Monster already holds Poison. Block takes the first hits, and Invincible caps
-    the HP lost at what it has left this turn. An area attack's values hold for every slot at
-    once, a targeted Card's for aiming it at each slot.
+    only when that Monster already holds Poison. Block takes the first hits, The Boot lifts a
+    small remainder past it, and Invincible caps the HP lost at what it has left this turn. An
+    area attack's values hold for every slot at once, a targeted Card's for aiming it at each
+    slot.
 
     Parameters
     ----------
@@ -321,6 +325,7 @@ def project_outgoing(game_state: GameState) -> dict[int, Outgoing]:
     stacks_of_monster = {
         monster.id: get_stacks_of_modifier_kind(monster.modifiers) for monster in monsters
     }
+    has_boot = relic_held(game_state, RelicName.Boot)
 
     # What Finisher, Flechettes and an X-cost Card count, as they stand before the play
     this_turn_attacks = combat.this_turn_attacks
@@ -362,14 +367,18 @@ def project_outgoing(game_state: GameState) -> dict[int, Outgoing]:
             hits_monster = hits
             if ModifierKind.Poison in stacks_of_modifier_kind_monster:
                 hits_monster += hits_poisoned
-            health_lost_monster = max(hits_monster * num_repeats * damage - monster.block, 0)
 
-            # Invincible: the HP it has left to lose this turn
-            if ModifierKind.Invincible in stacks_of_modifier_kind_monster:
-                health_lost_monster = min(
-                    health_lost_monster, stacks_of_modifier_kind_monster[ModifierKind.Invincible]
-                )
-            outgoing[monster.slot] = (health_lost_monster, health_lost_monster >= monster.health)
+            # The hits land one by one on a copy of its block and HP
+            combatant_monster = make_combatant(
+                EntityKind.MONSTER,
+                monster.health,
+                monster.block,
+                stacks_of_modifier_kind_monster,
+                has_boot=has_boot,
+            )
+            for _ in range(hits_monster * num_repeats):
+                deal_damage(combatant_monster, damage, EntityKind.CARD)
+            outgoing[monster.slot] = (combatant_monster.health_lost, combatant_monster.is_lethal)
         outgoing_of_card[card.id] = tuple(outgoing)
 
     return outgoing_of_card

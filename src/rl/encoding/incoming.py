@@ -12,10 +12,7 @@ from slai import BURN_DAMAGE
 from slai import BURN_DAMAGE_UPGRADED
 from slai import DECAY_DAMAGE
 from slai import EXPLOSIVE_DAMAGE
-from slai import MAX_TORII_DAMAGE
-from slai import MIN_TORII_DAMAGE
 from slai import ORICHALCUM_BLOCK
-from slai import TORII_DAMAGE_LANDED
 from slai import AmountRelative
 from slai import Card
 from slai import CardName
@@ -24,7 +21,6 @@ from slai import EffectCardDiscoverSelect
 from slai import EffectHealthDelta
 from slai import GameState
 from slai import Intent
-from slai import Modifier
 from slai import ModifierKind
 from slai import Monster
 from slai import MonsterName
@@ -33,26 +29,16 @@ from slai import PotionName
 from slai import Relic
 from slai import RelicName
 
-from src.rl.constants import INVINCIBLE_STACKS_OF_ASCENSION
+from src.rl.encoding.damage import Combatant
+from src.rl.encoding.damage import deal_damage
+from src.rl.encoding.damage import get_poison_tick
+from src.rl.encoding.damage import get_stacks_of_modifier_kind
+from src.rl.encoding.damage import lose_health
+from src.rl.encoding.damage import make_combatant
 from src.rl.tokens import get_character
 from src.rl.tokens import get_entities
 from src.rl.tokens import get_monster_entities
-
-
-@dataclass
-class _Walk:
-    """The Character's side of the walk, moved along by each hit."""
-
-    health_char: int
-    block_char: int
-    buffer_instances_char: int  # HP-loss instances Buffer still absorbs
-    is_intangible_char: bool
-    has_torii: bool
-    has_tungsten_rod: bool
-    revives_char: list[int]  # The HP each revive left restores, the next one first
-    damage: int = 0          # Dealt so far: what landed on block and HP
-    health_lost: int = 0
-    is_lethal: bool = False
+from src.rl.types import EntityKind
 
 
 @dataclass
@@ -70,111 +56,10 @@ class Incoming:
     health_lost_of_monster: dict[int, int]
 
 
-def get_stacks_of_modifier_kind(modifiers: list[Modifier]) -> dict[ModifierKind, int]:
-    """Return each kind's stacks among a combatant's Modifiers.
-
-    Parameters
-    ----------
-    modifiers : list[Modifier]
-        The Character's or a Monster's Modifiers.
-
-    Returns
-    -------
-    dict[ModifierKind, int]
-        The stacks of each kind it holds.
-    """
-    return {modifier.kind: modifier.stacks for modifier in modifiers}
-
-
-def get_poison_tick(
-    poison_monster: int,
-    is_intangible_monster: bool,
-    stacks_of_modifier_kind_monster: dict[ModifierKind, int],
-    ascension: int,
-) -> int:
-    """Return the HP a tick of `poison_monster` takes from a Monster holding those Modifiers.
-
-    Parameters
-    ----------
-    poison_monster : int
-        The Poison stacks.
-    is_intangible_monster : bool
-        Whether Intangible covers the tick.
-    stacks_of_modifier_kind_monster : dict[ModifierKind, int]
-        The Monster's Modifiers: each kind's stacks.
-    ascension : int
-        The run's Ascension, which sets Invincible's cap.
-
-    Returns
-    -------
-    int
-        The HP the tick takes.
-    """
-    if is_intangible_monster:
-        return min(poison_monster, 1)
-
-    # Invincible's cap refills ahead of its holder's tick
-    if ModifierKind.Invincible in stacks_of_modifier_kind_monster:
-        return min(poison_monster, INVINCIBLE_STACKS_OF_ASCENSION[ascension])
-
-    return poison_monster
-
-
-def _lose_health(walk: _Walk, amount: int) -> None:
-    # Intangible clamps the instance
-    if walk.is_intangible_char:
-        amount = min(amount, 1)
-
-    # Buffer absorbs it whole
-    if walk.buffer_instances_char > 0:
-        walk.buffer_instances_char -= 1
-
-        return
-
-    # Tungsten Rod takes 1 off
-    if walk.has_tungsten_rod:
-        amount -= 1
-
-    # Accumulate lost health
-    walk.health_char -= amount
-    walk.health_lost += amount
-
-    # Lethal check
-    if walk.health_char <= 0:
-        if walk.revives_char:
-            walk.health_char = walk.revives_char.pop(0)
-        else:
-            walk.is_lethal = True
-
-
-def _deal_damage(walk: _Walk, amount: int, is_from_monster: bool) -> None:
-    if walk.is_intangible_char:
-        amount = min(amount, 1)
-
-    # Accumulate damage taken
-    walk.damage += amount
-
-    # Calculate damage over block, set new current block
-    damage_over_block = max(amount - walk.block_char, 0)
-    walk.block_char = max(walk.block_char - amount, 0)
-
-    # Apply Torii reduction
-    if (
-        is_from_monster
-        and walk.has_torii
-        and MIN_TORII_DAMAGE <= damage_over_block <= MAX_TORII_DAMAGE
-    ):
-        damage_over_block = TORII_DAMAGE_LANDED
-
-    # Accumulate lost health if any
-    if damage_over_block > 0:
-        _lose_health(walk, damage_over_block)
-
-
 def _resolve_deaths(
     monsters: list[Monster],
     stacks_of_monster: dict[int, dict[ModifierKind, int]],
-    health_of_monster: dict[int, int],
+    combatant_of_monster: dict[int, Combatant],
     id_monsters_exploded: set[int],
 ) -> None:
     """Resolve what the Monsters' deaths set off, ahead of the next move.
@@ -185,9 +70,9 @@ def _resolve_deaths(
         The Monsters.
     stacks_of_monster : dict[int, dict[ModifierKind, int]]
         Each Monster's Modifiers, by id: each kind's stacks.
-    health_of_monster : dict[int, int]
-        Each Monster's health by id, with the block Barricade keeps; 0 or less for one that won't
-        move. Moved along in place.
+    combatant_of_monster : dict[int, Combatant]
+        Each Monster's side of the walk by id; 0 HP or less for one that won't move. Moved along
+        in place.
     id_monsters_exploded : set[int]
         The ids whose Corpse Explosion went off. Moved along in place.
     """
@@ -197,14 +82,17 @@ def _resolve_deaths(
             corpse_explosion = stacks_of_monster[monster.id].get(ModifierKind.CorpseExplosion, 0)
             if (
                 corpse_explosion > 0
-                and health_of_monster[monster.id] <= 0
+                and combatant_of_monster[monster.id].health <= 0
                 and not monster.half_dead
                 and monster.id not in id_monsters_exploded
             ):
                 id_monsters_exploded.add(monster.id)
                 for other in monsters:
-                    if other.id != monster.id:
-                        health_of_monster[other.id] -= monster.health_max * corpse_explosion
+                    combatant_other = combatant_of_monster[other.id]
+
+                    # Corpses and half-dead Monsters, at 0 HP or less, absorb nothing
+                    if combatant_other.health > 0:
+                        deal_damage(combatant_other, monster.health_max * corpse_explosion, None)
 
     # The Awakened One's final death sends its Cultists running
     for monster in monsters:
@@ -212,62 +100,61 @@ def _resolve_deaths(
             monster.name == MonsterName.AwakenedOne
             and not monster.half_dead
             and ModifierKind.Unawakened not in stacks_of_monster[monster.id]
-            and health_of_monster[monster.id] <= 0
+            and combatant_of_monster[monster.id].health <= 0
         ):
             for other in monsters:
                 if other.name == MonsterName.Cultist:
-                    health_of_monster[other.id] = 0
+                    combatant_of_monster[other.id].health = 0
 
     # A leader's death takes its Minions along, or sends them running
-    monsters_dead = [monster for monster in monsters if health_of_monster[monster.id] <= 0]
-    monsters_alive = [monster for monster in monsters if health_of_monster[monster.id] > 0]
+    monsters_dead = [
+        monster for monster in monsters if combatant_of_monster[monster.id].health <= 0
+    ]
+    monsters_alive = [
+        monster for monster in monsters if combatant_of_monster[monster.id].health > 0
+    ]
     if any(
         ModifierKind.Minion not in stacks_of_monster[monster.id] for monster in monsters_dead
     ) and all(ModifierKind.Minion in stacks_of_monster[monster.id] for monster in monsters_alive):
         for monster in monsters_alive:
-            health_of_monster[monster.id] = 0
+            combatant_of_monster[monster.id].health = 0
 
 
 def _walk_monster_move(
-    walk: _Walk,
+    combatant_char: Combatant,
     monster: Monster,
     stacks_of_modifier_kind_monster: dict[ModifierKind, int],
-    health_monster: int,
+    combatant_monster: Combatant,
     thorns_char: int,
-) -> int:
+) -> None:
     """Walk the Monster's move.
 
     Parameters
     ----------
-    walk : _Walk
-        The walk, moved along in place.
+    combatant_char : Combatant
+        The Character's side of the walk, moved along in place.
     monster : Monster
         The Monster, with its intent visible.
     stacks_of_modifier_kind_monster : dict[ModifierKind, int]
         The Monster's Modifiers: each kind's stacks.
-    health_monster : int
-        Its health at its move, with the block Barricade keeps.
+    combatant_monster : Combatant
+        Its side of the walk at its move, moved along in place; 0 HP or less once it's dead.
     thorns_char : int
         The Character's Thorns stacks.
-
-    Returns
-    -------
-    int
-        Its health after the move, likewise; 0 or less for one that's dead.
     """
     # A dead Monster skips its move, and a half-dead one hits nothing
-    if monster.half_dead or health_monster <= 0:
-        return health_monster
+    if monster.half_dead or combatant_monster.health <= 0:
+        return
 
     # HP lost ahead of the move that crosses Split or Mode Shift replaces the move
-    health_lost_monster = monster.health - health_monster
+    health_lost_monster = combatant_monster.health_lost
     is_splittable_monster = ModifierKind.Splittable in stacks_of_modifier_kind_monster
     mode_shift_monster = stacks_of_modifier_kind_monster.get(ModifierKind.ModeShift, 0)
     if health_lost_monster > 0 and (
-        (is_splittable_monster and health_monster <= monster.health_max // 2)
+        (is_splittable_monster and combatant_monster.health <= monster.health_max // 2)
         or 0 < mode_shift_monster <= health_lost_monster
     ):
-        return health_monster
+        return
 
     # Shifting: HP lost comes off its Strength until its turn end
     intent = cast(Intent, monster.intent)
@@ -276,23 +163,17 @@ def _walk_monster_move(
         hit = max(hit - health_lost_monster, 0)
 
     # Thorns can kill it mid-move, which cancels its remaining hits
-    if ModifierKind.Intangible in stacks_of_modifier_kind_monster:
-        thorns_char = min(thorns_char, 1)
-
     for _ in range(intent.instances or 0):
-        if health_monster <= 0:
+        if combatant_monster.health <= 0:
             break
 
-        _deal_damage(walk, hit, is_from_monster=True)
-        health_monster -= thorns_char
+        deal_damage(combatant_char, hit, EntityKind.MONSTER)
+        deal_damage(combatant_monster, thorns_char, None)
 
     # Explosive's last stack blows up behind the move, with no source, and takes the Monster along
     if stacks_of_modifier_kind_monster.get(ModifierKind.Explosive, 0) == 1:
-        _deal_damage(walk, EXPLOSIVE_DAMAGE, is_from_monster=False)
-
-        return 0
-
-    return health_monster
+        deal_damage(combatant_char, EXPLOSIVE_DAMAGE, None)
+        combatant_monster.health = 0
 
 
 def _get_revives(game_state: GameState) -> list[int]:
@@ -348,14 +229,14 @@ def project_incoming(game_state: GameState) -> Incoming | None:
     relic_names = {relic.name for relic in get_entities(game_state, game_state.id_relics, Relic)}
 
     # Initialize walk
-    walk = _Walk(
-        health_char=character.health,
-        block_char=character.block,
-        buffer_instances_char=stacks_of_modifier_kind_char.get(ModifierKind.Buffer, 0),
-        is_intangible_char=ModifierKind.Intangible in stacks_of_modifier_kind_char,
+    combatant_char = make_combatant(
+        EntityKind.CHARACTER,
+        character.health,
+        character.block,
+        stacks_of_modifier_kind_char,
         has_torii=RelicName.Torii in relic_names,
         has_tungsten_rod=RelicName.TungstenRod in relic_names,
-        revives_char=[] if RelicName.MarkOfTheBloom in relic_names else _get_revives(game_state),
+        revives=[] if RelicName.MarkOfTheBloom in relic_names else _get_revives(game_state),
     )
 
     # A selection inside the turn end comes after its first pass and the heal, but for Nilry's
@@ -366,74 +247,81 @@ def project_incoming(game_state: GameState) -> Incoming | None:
         and effect_pending.card_pile == CardPile.Draw
     ):
         # The first pass: Orichalcum, Plated Armor, the Cards that play themselves out of hand
-        if walk.block_char == 0 and RelicName.Orichalcum in relic_names:
-            walk.block_char = ORICHALCUM_BLOCK
-        walk.block_char += stacks_of_modifier_kind_char.get(ModifierKind.PlatedArmor, 0)
+        if combatant_char.block == 0 and RelicName.Orichalcum in relic_names:
+            combatant_char.block = ORICHALCUM_BLOCK
+        combatant_char.block += stacks_of_modifier_kind_char.get(ModifierKind.PlatedArmor, 0)
         hand = get_entities(game_state, combat.id_card_pile_hand, Card)
         for card in hand:
             match card.name:
                 case CardName.Burn:
                     damage = BURN_DAMAGE_UPGRADED if card.upgraded else BURN_DAMAGE
-                    _deal_damage(walk, damage, is_from_monster=False)
+                    deal_damage(combatant_char, damage, None)
                 case CardName.Decay:
-                    _deal_damage(walk, DECAY_DAMAGE, is_from_monster=False)
+                    deal_damage(combatant_char, DECAY_DAMAGE, None)
                 case CardName.Regret:
-                    walk.damage += 1 if walk.is_intangible_char else len(hand)
-                    _lose_health(walk, len(hand))
+                    combatant_char.damage += lose_health(combatant_char, len(hand), None)
 
         # The landing: Regeneration heals ahead of its other hooks
         if RelicName.MarkOfTheBloom not in relic_names:
             regeneration_char = stacks_of_modifier_kind_char.get(ModifierKind.Regeneration, 0)
-            walk.health_char = min(walk.health_char + regeneration_char, character.health_max)
+            combatant_char.health = min(
+                combatant_char.health + regeneration_char, character.health_max
+            )
 
     # Constricted's hit has no source
     constricted_char = stacks_of_modifier_kind_char.get(ModifierKind.Constricted, 0)
-    _deal_damage(walk, constricted_char, is_from_monster=False)
+    deal_damage(combatant_char, constricted_char, None)
 
     # The Monsters' turn: every tick, then the moves in slot order
-    health_at_monsters = walk.health_char + sum(walk.revives_char)
+    health_at_monsters = combatant_char.health + sum(combatant_char.revives)
     stacks_of_monster = {
         monster.id: get_stacks_of_modifier_kind(monster.modifiers) for monster in monsters
     }
-    health_of_monster = {}
+    combatant_of_monster = {}
     for monster in monsters:
         stacks_of_modifier_kind_monster = stacks_of_monster[monster.id]
-        health_monster = monster.health - get_poison_tick(
-            stacks_of_modifier_kind_monster.get(ModifierKind.Poison, 0),
-            ModifierKind.Intangible in stacks_of_modifier_kind_monster,
-            stacks_of_modifier_kind_monster,
-            game_state.ascension,
-        )
 
         # Block expires at its turn start unless Barricade keeps it, and no tick touches it
-        if health_monster > 0 and ModifierKind.Barricade in stacks_of_modifier_kind_monster:
-            health_monster += monster.block
-        health_of_monster[monster.id] = health_monster
+        is_barricade_monster = ModifierKind.Barricade in stacks_of_modifier_kind_monster
+        combatant_monster = make_combatant(
+            EntityKind.MONSTER,
+            monster.health,
+            monster.block if is_barricade_monster else 0,
+            stacks_of_modifier_kind_monster,
+        )
+        get_poison_tick(
+            combatant_monster,
+            stacks_of_modifier_kind_monster.get(ModifierKind.Poison, 0),
+            game_state.ascension,
+        )
+        combatant_of_monster[monster.id] = combatant_monster
     id_monsters_exploded: set[int] = set()
-    _resolve_deaths(monsters, stacks_of_monster, health_of_monster, id_monsters_exploded)
+    _resolve_deaths(monsters, stacks_of_monster, combatant_of_monster, id_monsters_exploded)
     thorns_char = stacks_of_modifier_kind_char.get(ModifierKind.Thorns, 0)
     damage_of_monster = {}
     health_lost_of_monster = {}
     for monster in monsters:
-        damage_before, health_lost_before = walk.damage, walk.health_lost
-        health_of_monster[monster.id] = _walk_monster_move(
-            walk,
+        damage_before, health_lost_before = combatant_char.damage, combatant_char.health_lost
+        _walk_monster_move(
+            combatant_char,
             monster,
             stacks_of_monster[monster.id],
-            health_of_monster[monster.id],
+            combatant_of_monster[monster.id],
             thorns_char,
         )
 
         # A death in its move sets off what a tick's does
-        if health_of_monster[monster.id] <= 0:
-            _resolve_deaths(monsters, stacks_of_monster, health_of_monster, id_monsters_exploded)
-        damage_of_monster[monster.id] = walk.damage - damage_before
-        health_lost_of_monster[monster.id] = walk.health_lost - health_lost_before
+        if combatant_of_monster[monster.id].health <= 0:
+            _resolve_deaths(
+                monsters, stacks_of_monster, combatant_of_monster, id_monsters_exploded
+            )
+        damage_of_monster[monster.id] = combatant_char.damage - damage_before
+        health_lost_of_monster[monster.id] = combatant_char.health_lost - health_lost_before
 
     return Incoming(
-        damage=walk.damage,
-        health_lost=walk.health_lost,
-        is_lethal=walk.is_lethal,
+        damage=combatant_char.damage,
+        health_lost=combatant_char.health_lost,
+        is_lethal=combatant_char.is_lethal,
         health_at_monsters=health_at_monsters,
         damage_of_monster=damage_of_monster,
         health_lost_of_monster=health_lost_of_monster,
