@@ -2,8 +2,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from slai import Action
+from slai import ActionType
 from slai import GameEnv
 from slai import GameState
+from slai import Relic
+from slai import RelicName
 
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import NEOW
@@ -13,8 +16,10 @@ from src.rl.reward import game_won
 from src.rl.reward import shop_gold_spent
 from src.rl.scripted import step_scripted
 from src.rl.tokens import get_character
+from src.rl.tokens import get_entities
 from src.rl.tokens import get_monster_entities
 from src.rl.tokens import get_y_x_current
+from src.rl.utils import action_masked
 
 
 _MAX_STEPS_EPISODE = 3000
@@ -43,6 +48,11 @@ class EpisodeResult:
     heart_damage: float = 0
     heart_reached: bool = False  # Reached the Heart's Room
 
+    # Frozen Eye's Shop purchase
+    frozen_eye_forced: bool = False   # The episode plays the purchase whenever it's legal
+    frozen_eye_offered: bool = False  # The purchase was legal at a state of the episode
+    frozen_eye_bought: bool = False   # The episode played the purchase
+
 
 def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
     """Start a game at `ascension` from `seed`.
@@ -67,9 +77,17 @@ def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
 
 
 def step_env(
-    env: GameEnv, game_state: GameState, episode_result: EpisodeResult, action: Action, gamma: float
-) -> tuple[GameState, np.ndarray, int, bool]:
+    env: GameEnv,
+    game_state: GameState,
+    legal_actions: list[Action],
+    episode_result: EpisodeResult,
+    action: Action,
+    gamma: float,
+) -> tuple[GameState, np.ndarray, int, bool, Action]:
     """Play `action` in a game and tally it into its episode's `EpisodeResult`.
+
+    An episode that forces Frozen Eye's Shop purchase plays it in place of `action` whenever
+    it's legal.
 
     Parameters
     ----------
@@ -77,11 +95,13 @@ def step_env(
         The game.
     game_state : GameState
         The game's state before the action.
+    legal_actions : list[Action]
+        The state's legal actions.
     episode_result : EpisodeResult
         The episode's running tally, updated in place, and finished once the episode ends or
         reaches _MAX_STEPS_EPISODE steps.
     action : Action
-        The action to play.
+        The action to play, unless the episode forces Frozen Eye's purchase in its place.
     gamma : float
         The reward's discount.
 
@@ -95,8 +115,18 @@ def step_env(
         The step's discounts, k in γ^k.
     done : bool
         Whether the episode ended, terminated or truncated.
+    action_played : Action
+        The action played: `action`, or Frozen Eye's purchase.
     """
-    game_state_next, terminated, num_discounts = step_scripted(env, action)
+    # Frozen Eye's purchase, played in place of `action` when the episode forces it
+    action_frozen_eye = _get_action_frozen_eye(game_state, legal_actions)
+    action_played = (
+        action_frozen_eye
+        if episode_result.frozen_eye_forced and action_frozen_eye is not None
+        else action
+    )
+
+    game_state_next, terminated, num_discounts = step_scripted(env, action_played)
 
     # A game at the step limit ends there, truncated, as a death
     truncated = not terminated and episode_result.length + 1 >= _MAX_STEPS_EPISODE
@@ -104,7 +134,7 @@ def step_env(
 
     # Compute transition reward
     reward = compute_reward(
-        game_state, game_state_next, done, gamma**num_discounts, action
+        game_state, game_state_next, done, gamma**num_discounts, action_played
     )  # (K,)
 
     # Compute `EpisodeResult`
@@ -112,7 +142,8 @@ def step_env(
         episode_result,
         game_state,
         game_state_next,
-        action,
+        action_played,
+        action_frozen_eye,
         reward,
         gamma,
         num_discounts,
@@ -120,22 +151,49 @@ def step_env(
         truncated,
     )
 
-    # Return the next state, the step's reward, its discounts and the done flag
-    return game_state_next, reward, num_discounts, done
+    # Return the next state, the step's reward, its discounts, the done flag and the action played
+    return game_state_next, reward, num_discounts, done, action_played
+
+
+def _get_action_frozen_eye(game_state: GameState, legal_actions: list[Action]) -> Action | None:
+    """Return the purchase of the Shop's Frozen Eye, if it's legal and the masks leave it open.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state `legal_actions` are legal in.
+    legal_actions : list[Action]
+        The state's legal actions.
+
+    Returns
+    -------
+    Action | None
+        The legal ShopBuyRelic whose Relic is Frozen Eye, or None.
+    """
+    for action in legal_actions:
+        if action.action_type == ActionType.ShopBuyRelic:
+            (relic,) = get_entities(game_state, [action.ids[0]], Relic)
+
+            # Only what the masks leave open, so no rule takes an action the policy couldn't
+            if relic.name == RelicName.FrozenEye and not action_masked(game_state, action):
+                return action
+
+    return None
 
 
 def _tally_step(
     episode_result: EpisodeResult,
     game_state: GameState,
     game_state_next: GameState,
-    action: Action,
+    action_played: Action,
+    action_frozen_eye: Action | None,
     np_reward: np.ndarray,
     gamma: float,
     num_discounts: int,
     done: bool,
     truncated: bool,
 ) -> None:
-    """Add one policy step: `action` took game_state to game_state_next and paid `np_reward`.
+    """Add one policy step: `action_played` took game_state to game_state_next, paying `np_reward`.
 
     On the episode's last step it also sets the fields the episode settles at its end, from
     game_state_next: won, truncated, floor, act, heart_reached, heart_damage, deck_size and
@@ -149,8 +207,10 @@ def _tally_step(
         The state before the step.
     game_state_next : GameState
         The state after the step.
-    action : Action
-        The action the policy took.
+    action_played : Action
+        The action played.
+    action_frozen_eye : Action | None
+        Frozen Eye's Shop purchase where it was legal at game_state, else None.
     np_reward : np.ndarray
         (K,) float64. The step's reward, one per reward stream.
     gamma : float
@@ -168,11 +228,17 @@ def _tally_step(
     episode_result.num_discounts += num_discounts
     
     # Gold spent
-    gold_spent = shop_gold_spent(game_state, action)
+    gold_spent = shop_gold_spent(game_state, action_played)
     episode_result.gold_spent += gold_spent
     episode_result.gold_gained += max(
         0, get_character(game_state_next).gold - get_character(game_state).gold + gold_spent
     )
+
+    # Frozen Eye's purchase: offered while legal, bought once played
+    if action_frozen_eye is not None:
+        episode_result.frozen_eye_offered = True
+        if action_played == action_frozen_eye:
+            episode_result.frozen_eye_bought = True
 
     # The last step fills the fields an episode settles at its end, from its last snapshot
     if done:

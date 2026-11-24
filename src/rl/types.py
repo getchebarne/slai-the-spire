@@ -330,7 +330,8 @@ class Rollout:
 
     # Tensors
     x_action: torch.Tensor             # (B, 3): action type, state-local selection offset, Monster rank
-    x_log_prob_behavior: torch.Tensor  # (B,) under the weights that played
+    x_log_prob_behavior: torch.Tensor  # (B,) the sampled action's, under the weights that played
+    x_forced: torch.Tensor             # (B,) bool: the action played was forced, not sampled
     x_reward: torch.Tensor             # (T, E, len(RewardStream))
     x_done: torch.Tensor               # (T, E)
     x_num_discount: torch.Tensor       # (T, E) long: k in each step's discount, γ^k
