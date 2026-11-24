@@ -91,8 +91,9 @@ def train(
     ppo_config : PPOConfig
         The PPO update's settings.
     rollout_config : RolloutConfig
-        The Actor's number of games, of workers and of steps per rollout, and the share of games
-        that start from Pandora's Box.
+        The Actor's number of games, of workers and of steps per rollout, the share of games that
+        start from Pandora's Box and the share that play Frozen Eye's Shop purchase whenever it's
+        legal.
     rank_info : RankInfo
         This process's rank, the number of ranks and its device.
     stop : threading.Event

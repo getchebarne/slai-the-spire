@@ -116,8 +116,13 @@ def update_ppo(
     x_advantage = x_advantage.sum(-1)
     x_advantage = (x_advantage - x_advantage.mean()) / (x_advantage.std() + 1e-8)
 
+    # A forced row's behavior log-prob is π_prox's, so its off-policy weight is exactly 1
+    x_log_prob_behavior = torch.where(
+        rollout.x_forced, x_log_prob_prox, rollout.x_log_prob_behavior
+    )
+
     # One row per state from here on
-    x_log_weight = x_log_prob_prox - rollout.x_log_prob_behavior
+    x_log_weight = x_log_prob_prox - x_log_prob_behavior
     x_weight = x_log_weight.exp()
     targets = _Targets(
         x_log_prob_prox=x_log_prob_prox,
