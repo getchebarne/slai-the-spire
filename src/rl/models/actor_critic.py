@@ -12,6 +12,7 @@ from src.rl.models.heads import HeadTarget
 from src.rl.models.heads import HeadSelection
 from src.rl.models.heads import HeadValue
 from src.rl.models.heads import PointerKeys
+from src.rl.models.heads import update_value_statistics
 from src.rl.models.map_encoder import message_passing
 from src.rl.reward import RewardStream
 from src.rl.types import CollectionKind
@@ -40,6 +41,8 @@ class ActorCritic(nn.Module):
       values.
     - `action_evaluate`: the Learner's update. Scores recorded actions and computes the values.
     - `get_values`: the Learner's bootstrap. Computes the values alone.
+    - `update_value_statistics`: the Learner's update, once before its minibatches. Runs no core:
+      steps the value head's statistics toward the rollout's returns, its values unchanged.
     """
 
     def __init__(
@@ -244,6 +247,31 @@ class ActorCritic(nn.Module):
             (B, len(RewardStream)). The values.
         """
         return self._head_value(self.core(states, map_dedup=map_dedup).x_global)
+
+    def update_value_statistics(
+        self, x_return_mean_rollout: torch.Tensor, x_return_second_moment_rollout: torch.Tensor
+    ) -> torch.Tensor:
+        """Step the value head's statistics toward the rollout's moments of the returns.
+
+        The value head's last layer is rescaled so that every value is unchanged.
+
+        Parameters
+        ----------
+        x_return_mean_rollout : torch.Tensor
+            (len(RewardStream),). Each stream's mean of the rollout's returns over every rank's
+            states, the same on every rank.
+        x_return_second_moment_rollout : torch.Tensor
+            (len(RewardStream),). Each stream's mean of the rollout's squared returns over every
+            rank's states, the same on every rank.
+
+        Returns
+        -------
+        torch.Tensor
+            (). The value head's scale σ after the step.
+        """
+        return update_value_statistics(
+            self._head_value, x_return_mean_rollout, x_return_second_moment_rollout
+        )
 
 
 def compile_hot_paths(model: ActorCritic) -> None:

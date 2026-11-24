@@ -64,6 +64,7 @@ class MetricKey(StrEnum):
     UPDATE_EPOCHS_RUN = "update/epochs_run"
     UPDATE_LR = "update/lr"
     VALUE_EV = "value/ev"  # Each reward stream's: value/ev_<stream>
+    VALUE_SCALE = "value/scale"
     WIN_RATE = "win_rate"
 
 

@@ -3,12 +3,12 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from src.rl.algorithms.actor_critic.distributed import GradientBuckets
 from src.rl.algorithms.actor_critic.distributed import RankMean
 from src.rl.algorithms.actor_critic.distributed import average_gradient_buckets
 from src.rl.algorithms.actor_critic.distributed import mean_over_ranks
+from src.rl.algorithms.actor_critic.distributed import mean_over_ranks_on_device
 from src.rl.algorithms.actor_critic.distributed import read_rank_mean
 from src.rl.algorithms.actor_critic.metrics import MetricKey
 from src.rl.batches import gather_states
@@ -122,6 +122,17 @@ def update_ppo(
         x_weight_capped=x_weight.clamp(max=ppo_config.is_clip),
     )
 
+    # Each stream's mean of the returns and of their squares over the rollout, averaged over ranks
+    x_return_mean_rollout = mean_over_ranks_on_device(targets.x_return.mean(dim=0))
+    x_return_second_moment_rollout = mean_over_ranks_on_device(
+        targets.x_return.square().mean(dim=0)
+    )
+
+    # Step the value head's statistics toward them, its values kept; σ' normalizes the value loss
+    x_value_scale = model.update_value_statistics(
+        x_return_mean_rollout, x_return_second_moment_rollout
+    )
+
     # All shuffles are drawn and transferred before the first minibatch launches
     idxs_minibatch = _plan_minibatches(
         len(rollout.states.x_context),
@@ -159,6 +170,7 @@ def update_ppo(
             states_mini,
             x_action_mini,
             targets_mini,
+            x_value_scale,
             ppo_config,
             map_dedup_mini,
         )
@@ -184,7 +196,9 @@ def update_ppo(
     # Each per-minibatch metric averaged over the minibatches run, then the once-per-update ones
     metrics_update = _average_minibatch_metrics(
         _read_metrics(*batch_x_metrics), num_minibatches
-    ) | _anchor_metrics(targets.x_return, x_value_prox, x_log_weight, x_weight, ppo_config.is_clip)
+    ) | _anchor_metrics(
+        targets.x_return, x_value_prox, x_value_scale, x_log_weight, x_weight, ppo_config.is_clip
+    )
     if approx_kl_update is not None:
         metrics_update[MetricKey.UPDATE_APPROX_KL] = approx_kl_update
 
@@ -413,6 +427,7 @@ def _update_minibatch(
     states: States[Live],
     x_action: torch.Tensor,
     targets: _Targets,
+    x_value_scale: torch.Tensor,
     ppo_config: PPOConfig,
     map_dedup: MapDedup,
 ) -> tuple[dict[str, torch.Tensor], RankMean]:
@@ -432,6 +447,9 @@ def _update_minibatch(
         (minibatch_size, 3) long. The recorded actions for these states.
     targets : _Targets
         What the update trains against, one row per selected state.
+    x_value_scale : torch.Tensor
+        (). The value head's scale σ' after the update's statistics step: the value residuals are
+        divided by it.
     ppo_config : PPOConfig
         The PPO settings.
     map_dedup : MapDedup
@@ -460,7 +478,7 @@ def _update_minibatch(
 
     # Value loss: summed over streams, mean over the batch
     x_return = targets.x_return
-    x_loss_value = 0.5 * F.mse_loss(x_value, x_return, reduction="none").sum(-1).mean()
+    x_loss_value = 0.5 * ((x_value - x_return) / x_value_scale).square().sum(-1).mean()
     x_loss_entropy = -torch.mean(policy_output.x_entropy.sum(dim=-1))
 
     # KL-Uniform barrier, summed per head like the entropy term; each head's KL falls
@@ -658,6 +676,7 @@ def _average_minibatch_metrics(
 def _anchor_metrics(
     x_return: torch.Tensor,
     x_value_prox: torch.Tensor,
+    x_value_scale: torch.Tensor,
     x_log_weight: torch.Tensor,
     x_weight: torch.Tensor,
     is_clip: float,
@@ -671,6 +690,8 @@ def _anchor_metrics(
     x_value_prox : torch.Tensor
         (rollout_length, num_envs, num_reward_streams). Each state's values under π_prox's
         weights.
+    x_value_scale : torch.Tensor
+        (). The value head's scale σ' after the update's statistics step.
     x_log_weight : torch.Tensor
         (batch_size,). The log of each state's off-policy weight, π_prox / π_behavior, uncapped.
     x_weight : torch.Tensor
@@ -690,6 +711,7 @@ def _anchor_metrics(
     return _read_metrics(
         {
             **{f"{MetricKey.VALUE_EV}_{reward_stream}": x_explained_var[idx_reward_stream] for idx_reward_stream, reward_stream in enumerate(RewardStream)},
+            MetricKey.VALUE_SCALE: x_value_scale,
             MetricKey.OFFPOLICY_IS_WEIGHT_MEAN: x_weight.clamp(max=is_clip).mean(),
             MetricKey.OFFPOLICY_IS_WEIGHT_TRUNCATED: (x_weight > is_clip).float().mean(),
             MetricKey.OFFPOLICY_KL_BEHAVIOR_PROX: _approx_kl(x_log_weight),

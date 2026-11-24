@@ -1,4 +1,5 @@
 import math
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -9,6 +10,13 @@ from src.rl.constants import ACTION_TYPES
 from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.types import CoreOutput
 from src.rl.types import EntityKind
+
+
+# The step of the value head's running mean and variance toward each rollout's, per stream
+_RETURN_MOMENT_STEP = 0.03
+
+# The floor of the variance the streams share, so that the value head's scale σ is at least 1
+_MIN_RETURN_VARIANCE = 1.0
 
 
 class HeadActionType(nn.Module):
@@ -356,6 +364,10 @@ class HeadValue(nn.Module):
     One output per reward stream (value decomposition): each output fits its own stream's return,
     and the total state value is the sum over outputs.
 
+    The network fits normalized returns (PopArt): a value is σ times the network's output plus its
+    stream's running mean of the return targets, with one σ ≥ 1 shared by the streams.
+    `update_value_statistics` steps those statistics, preserving every output.
+
     Parameters
     ----------
     dim_global : int
@@ -365,6 +377,9 @@ class HeadValue(nn.Module):
     num_streams : int
         The number of reward streams, one output each.
     """
+
+    _x_return_mean: torch.Tensor
+    _x_return_variance: torch.Tensor
 
     def __init__(self, dim_global: int, dim_ff: int, num_streams: int) -> None:
         super().__init__()
@@ -376,6 +391,10 @@ class HeadValue(nn.Module):
             nn.ReLU(),
             nn.Linear(dim_ff, num_streams),
         )
+
+        # Buffers of each stream's running mean and variance of the return targets
+        self.register_buffer("_x_return_mean", torch.zeros(num_streams), persistent=True)
+        self.register_buffer("_x_return_variance", torch.ones(num_streams), persistent=True)
 
     def forward(self, x_global: torch.Tensor) -> torch.Tensor:
         """Estimate per-stream state values.
@@ -390,4 +409,74 @@ class HeadValue(nn.Module):
         torch.Tensor
             (B, num_streams). Each state's value of each reward stream.
         """
-        return self._network(x_global)
+        return _get_value_scale(self) * self._network(x_global) + self._x_return_mean
+
+
+def update_value_statistics(
+    head_value: HeadValue,
+    x_return_mean_rollout: torch.Tensor,
+    x_return_second_moment_rollout: torch.Tensor,
+) -> torch.Tensor:
+    """Step the value head's statistics toward a rollout's moments of the returns.
+
+    Each stream's running mean takes one step toward the rollout's mean, and its running variance
+    one step toward the rollout's variance, the second moment minus the mean squared. The last
+    layer is then rescaled so that every output, σ times the network's plus μ, is unchanged under
+    the new σ and μ (PopArt). Adam's state is left as it is.
+
+    Parameters
+    ----------
+    head_value : HeadValue
+        The value head, its statistics and its last layer updated in place.
+    x_return_mean_rollout : torch.Tensor
+        (num_streams,). Each stream's mean of the rollout's returns over every rank's states, the
+        same on every rank.
+    x_return_second_moment_rollout : torch.Tensor
+        (num_streams,). Each stream's mean of the rollout's squared returns over every rank's
+        states, the same on every rank.
+
+    Returns
+    -------
+    torch.Tensor
+        (). The value head's scale σ after the step, on its device.
+    """
+    layer = cast(nn.Linear, head_value._network[-1])
+    with torch.no_grad():
+        # σ and μ before the step
+        x_value_scale_old = _get_value_scale(head_value)
+        x_return_mean_old = head_value._x_return_mean.clone()
+
+        # Each stream's variance over the rollout's states
+        x_return_variance_rollout = x_return_second_moment_rollout - x_return_mean_rollout.square()
+
+        # Step each mean and variance toward the rollout's: x ← (1 − step)·x + step·x_rollout
+        head_value._x_return_mean.lerp_(x_return_mean_rollout, _RETURN_MOMENT_STEP)
+        head_value._x_return_variance.lerp_(x_return_variance_rollout, _RETURN_MOMENT_STEP)
+
+        # W ← W·σ/σ', b ← (σ·b + μ − μ')/σ': under σ' and μ', every output is unchanged
+        x_value_scale = _get_value_scale(head_value)
+        layer.weight.mul_(x_value_scale_old / x_value_scale)
+        layer.bias.copy_(
+            (x_value_scale_old * layer.bias + x_return_mean_old - head_value._x_return_mean)
+            / x_value_scale
+        )
+
+    return x_value_scale
+
+
+def _get_value_scale(head_value: HeadValue) -> torch.Tensor:
+    """Derive the value head's scale σ from its statistics.
+
+    σ² is the mean over the streams of their running variance, floored at `_MIN_RETURN_VARIANCE`.
+
+    Parameters
+    ----------
+    head_value : HeadValue
+        The value head.
+
+    Returns
+    -------
+    torch.Tensor
+        (). σ, which every stream shares.
+    """
+    return head_value._x_return_variance.mean().clamp(min=_MIN_RETURN_VARIANCE).sqrt()
