@@ -50,9 +50,9 @@ class EpisodeResult:
     heart_reached: bool = False  # Reached the Heart's Room
 
     # Frozen Eye's Shop purchase
-    frozen_eye_forced: bool = False   # The episode plays the purchase whenever it's legal
-    frozen_eye_offered: bool = False  # The purchase was legal at a state of the episode
-    frozen_eye_bought: bool = False   # The episode played the purchase
+    frozen_eye_offered: bool = False        # The purchase was legal at a state of the episode
+    frozen_eye_bought: bool = False         # The episode played the purchase
+    frozen_eye_bought_forced: bool = False  # The purchase was forced on the episode
 
 
 def new_env(ascension: int, seed: int) -> tuple[GameEnv, GameState]:
@@ -84,11 +84,12 @@ def step_env(
     episode_result: EpisodeResult,
     action: Action,
     gamma: float,
+    frozen_eye_forced: bool,
 ) -> tuple[GameState, np.ndarray, int, bool, Action]:
     """Play `action` in a game and tally it into its episode's `EpisodeResult`.
 
-    An episode that forces Frozen Eye's Shop purchase plays it in place of `action` whenever
-    it's legal.
+    A game that forces Frozen Eye's Shop purchase plays it in place of `action` whenever it's
+    legal.
 
     Parameters
     ----------
@@ -102,9 +103,11 @@ def step_env(
         The episode's running tally, updated in place, and finished once the episode ends or
         reaches _MAX_STEPS_EPISODE steps.
     action : Action
-        The action to play, unless the episode forces Frozen Eye's purchase in its place.
+        The action to play, unless the game forces Frozen Eye's purchase in its place.
     gamma : float
         The reward's discount.
+    frozen_eye_forced : bool
+        Whether the game plays Frozen Eye's Shop purchase whenever it's legal.
 
     Returns
     -------
@@ -119,12 +122,10 @@ def step_env(
     action_played : Action
         The action played: `action`, or Frozen Eye's purchase.
     """
-    # Frozen Eye's purchase, played in place of `action` when the episode forces it
+    # Frozen Eye's purchase, played in place of `action` when the game forces it
     action_frozen_eye = _get_action_frozen_eye(game_state, legal_actions)
     action_played = (
-        action_frozen_eye
-        if episode_result.frozen_eye_forced and action_frozen_eye is not None
-        else action
+        action_frozen_eye if frozen_eye_forced and action_frozen_eye is not None else action
     )
 
     game_state_next, terminated, num_discounts = step_scripted(env, action_played)
@@ -145,6 +146,7 @@ def step_env(
         game_state_next,
         action_played,
         action_frozen_eye,
+        frozen_eye_forced,
         reward,
         gamma,
         num_discounts,
@@ -188,6 +190,7 @@ def _tally_step(
     game_state_next: GameState,
     action_played: Action,
     action_frozen_eye: Action | None,
+    frozen_eye_forced: bool,
     np_reward: np.ndarray,
     gamma: float,
     num_discounts: int,
@@ -212,6 +215,8 @@ def _tally_step(
         The action played.
     action_frozen_eye : Action | None
         Frozen Eye's Shop purchase where it was legal at game_state, else None.
+    frozen_eye_forced : bool
+        Whether the game forces Frozen Eye's purchase.
     np_reward : np.ndarray
         (K,) float64. The step's reward, one per reward stream.
     gamma : float
@@ -235,11 +240,13 @@ def _tally_step(
         0, get_character(game_state_next).gold - get_character(game_state).gold + gold_spent
     )
 
-    # Frozen Eye's purchase: offered while legal, bought once played
+    # Frozen Eye's purchase: offered while legal, bought once played, forced if its game forces it
     if action_frozen_eye is not None:
         episode_result.frozen_eye_offered = True
         if action_played == action_frozen_eye:
             episode_result.frozen_eye_bought = True
+        if frozen_eye_forced:
+            episode_result.frozen_eye_bought_forced = True
 
     # The last step fills the fields an episode settles at its end, from its last snapshot
     if done:
