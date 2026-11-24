@@ -41,7 +41,7 @@ _OFF_RELIC_COUNTER_REMAINING = _alloc("counter_remaining", _COUNTER_MAX)
 _OFF_RELIC_LINKED = _alloc("linked")
 _OFF_RELIC_ARMED = _alloc("armed")
 
-ENCODING_DIM_RELIC = sum(w for _, w, _ in _CHANNEL_LAYOUT_RELIC)
+ENCODING_DIM_RELIC_SPARSE = sum(w for _, w, _ in _CHANNEL_LAYOUT_RELIC)
 
 # Most nonzero columns a Relic row holds: one per channel, each a one-hot or a scalar
 ENCODING_DIM_SPARSE_RELIC = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_RELIC)
@@ -85,7 +85,7 @@ def encode_relic_into(
     gold : int
         The Character's gold, which its price is read against.
     np_own : np.ndarray
-        (ENCODING_DIM_RELIC,) float32. The Relic's own range of its token row, written in place.
+        (ENCODING_DIM_RELIC_SPARSE,) float32. The Relic's own range of its token row, written in place.
     np_shared : np.ndarray
         (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
     """

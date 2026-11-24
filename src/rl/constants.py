@@ -119,8 +119,7 @@ MAX_SIZE_CARD_PILE_STASIS = _slai.MAX_MONSTERS
 # Staged selections of an open multi-selection halt: at most a hand's worth
 MAX_SIZE_CARD_PILE_SELECTED = _slai.MAX_SIZE_CARD_PILE_HAND
 
-# Queued plays (replays, top-of-draw plays, end-of-turn self-plays) and the
-# nightmare pile: at most a hand's worth; past it they warn and drop
+# Queued plays and the Nightmare pile: at most a hand's worth
 MAX_SIZE_CARD_PLAY_QUEUE = _slai.MAX_SIZE_CARD_PILE_HAND
 MAX_SIZE_CARD_PILE_NIGHTMARE = _slai.MAX_SIZE_CARD_PILE_HAND
 
@@ -128,8 +127,8 @@ MAX_SIZE_CARD_PILE_NIGHTMARE = _slai.MAX_SIZE_CARD_PILE_HAND
 MAX_RELICS = 50
 
 # HP and gold per unit of their scaled channels, and the clip of every scaled channel
-HEALTH_SCALE = 100
-GOLD_SCALE = 100
+SCALE_HEALTH = 100
+SCALE_GOLD = 100
 MAX_SCALED = 5.0
 
 # Normalization caps for scalar features
@@ -181,8 +180,7 @@ _COLLECTION_KINDS_POTION = (
     CollectionKind.POTION_EVENT_ROLL,
 )
 
-# The Entity kinds in window order, each its collection kinds; the last four hold a single
-# collection kind
+# The Entity kinds in window order, each its collection kinds
 COLLECTION_KINDS_OF_ENTITY_KIND: dict[EntityKind, tuple[CollectionKind, ...]] = {
     EntityKind.CARD: COLLECTION_KINDS_CARD,
     EntityKind.RELIC: _COLLECTION_KINDS_RELIC,

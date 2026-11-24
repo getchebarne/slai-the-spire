@@ -26,7 +26,7 @@ _OFF_POTION_USABLE = _alloc("usable")
 ENCODING_DIM_POTION = sum(w for _, w, _ in _CHANNEL_LAYOUT_POTION)
 
 # Most nonzero columns a Potion row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_POTION = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_POTION)
+ENCODING_DIM_POTION_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_POTION)
 
 # Each tagged Potion's Tags, by name: Sacred Bark's variant keeps them
 _TAGS_OF_POTION_NAME: dict[PotionName, tuple[Tag, ...]] = {

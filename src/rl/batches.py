@@ -15,8 +15,8 @@ from src.rl.constants import MAX_MODIFIERS
 from src.rl.constants import MAX_TOKENS
 from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.encoding import ENCODING_DIM_CONTEXT
-from src.rl.encoding import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.encoding import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.encoding import ENCODING_DIM_EFFECT_SPARSE
+from src.rl.encoding import ENCODING_DIM_MODIFIER_SPARSE
 from src.rl.encoding import ENCODING_DIM_SPARSE_TOKEN
 from src.rl.encoding import NUM_CHANNELS
 from src.rl.types import CollectionKind
@@ -229,13 +229,13 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
             sparse=_allocate_sparse(num_buffers, num_tokens, ENCODING_DIM_SPARSE_TOKEN),
             effects=OwnedRows(
                 sparse=_allocate_sparse(
-                    num_buffers, buffer_size * MAX_EFFECTS, ENCODING_DIM_SPARSE_EFFECT
+                    num_buffers, buffer_size * MAX_EFFECTS, ENCODING_DIM_EFFECT_SPARSE
                 ),
                 x_count=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
             ),
             modifiers=OwnedRows(
                 sparse=_allocate_sparse(
-                    num_buffers, buffer_size * MAX_MODIFIERS, ENCODING_DIM_SPARSE_MODIFIER
+                    num_buffers, buffer_size * MAX_MODIFIERS, ENCODING_DIM_MODIFIER_SPARSE
                 ),
                 x_count=torch.zeros(num_buffers, num_tokens, dtype=torch.int16),
             ),
@@ -249,7 +249,7 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
         x_legal_target=torch.zeros(num_buffers, num_tokens, dtype=torch.long),
         x_needs_target=torch.zeros(num_buffers, num_tokens, dtype=torch.bool),
     )
-    effect_pending = _allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_SPARSE_EFFECT)
+    effect_pending = _allocate_sparse(num_buffers, buffer_size, ENCODING_DIM_EFFECT_SPARSE)
     x_total = torch.zeros(
         num_buffers, buffer_size, len(CollectionKind) + len(StateCollection), dtype=torch.int32
     )

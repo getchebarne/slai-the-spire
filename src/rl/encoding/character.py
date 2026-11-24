@@ -17,8 +17,8 @@ from slai import GameState
 from slai import RelicName
 from slai import get_card_templates
 
-from src.rl.constants import GOLD_SCALE
-from src.rl.constants import HEALTH_SCALE
+from src.rl.constants import SCALE_GOLD
+from src.rl.constants import SCALE_HEALTH
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.encoding.incoming import Incoming
@@ -96,7 +96,7 @@ _OFF_CHARACTER_GOLD_STOLEN = _alloc("gold_stolen")
 ENCODING_DIM_CHARACTER = sum(w for _, w, _ in _CHANNEL_LAYOUT_CHARACTER)
 
 # Most nonzero columns a Character row holds: one per one-hot or scalar, two per two-hot
-ENCODING_DIM_SPARSE_CHARACTER = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_CHARACTER)
+ENCODING_DIM_CHARACTER_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_CHARACTER)
 
 
 def _get_this_turn_plays_left(game_state: GameState, combat: Combat) -> int | None:
@@ -154,10 +154,10 @@ def encode_character_into(
         np_own[_OFF_CHARACTER_GOLD:][:_GOLD_DIM],
     )
 
-    np_own[_OFF_CHARACTER_GOLD_SCALAR] = get_linear_norm(character.gold, GOLD_SCALE)
+    np_own[_OFF_CHARACTER_GOLD_SCALAR] = get_linear_norm(character.gold, SCALE_GOLD)
     np_own[_OFF_CHARACTER_HEALTH_FRACTION] = character.health / max(character.health_max, 1)
     np_own[_OFF_CHARACTER_MAX_HEALTH_MAGNITUDE] = get_linear_norm(
-        character.health_max, HEALTH_SCALE
+        character.health_max, SCALE_HEALTH
     )
     np_own[_OFF_CHARACTER_DECK_SIZE] = get_sqrt_norm(len(deck), MAX_SIZE_CARD_PILE_DECK)
     np_own[_OFF_CHARACTER_DECK_UPGRADED_FRACTION] = sum(card.upgraded for card in deck) / max(
@@ -170,7 +170,7 @@ def encode_character_into(
         min(max(POTION_DROP_CHANCE_BASE + game_state.potion_drop_mod, 0), 100) / 100
     )
     np_own[_OFF_CHARACTER_SHOP_PURGE_COST_RUN] = get_linear_norm(
-        game_state.shop_purge_cost_run, GOLD_SCALE
+        game_state.shop_purge_cost_run, SCALE_GOLD
     )
     np_own[_OFF_CHARACTER_POTION_SLOTS_LEFT] = (
         game_state.potion_slots_max - len(game_state.id_potions)
@@ -180,7 +180,7 @@ def encode_character_into(
         if incoming is None:
             np_own[_OFF_CHARACTER_INCOMING_HIDDEN] = 1.0
         else:
-            np_own[_OFF_CHARACTER_INCOMING_DAMAGE] = get_linear_norm(incoming.damage, HEALTH_SCALE)
+            np_own[_OFF_CHARACTER_INCOMING_DAMAGE] = get_linear_norm(incoming.damage, SCALE_HEALTH)
             encode_piecewise_into(
                 incoming.damage,
                 0,
@@ -189,7 +189,7 @@ def encode_character_into(
                 np_own[_OFF_CHARACTER_INCOMING_DAMAGE_OHE:][:_INCOMING_DIM],
             )
             np_own[_OFF_CHARACTER_INCOMING_HEALTH_LOST] = get_linear_norm(
-                incoming.health_lost, HEALTH_SCALE
+                incoming.health_lost, SCALE_HEALTH
             )
             encode_piecewise_into(
                 incoming.health_lost,
@@ -227,7 +227,7 @@ def encode_character_into(
         np_own[_OFF_CHARACTER_BOSS_FIGHT] = float(combat.boss_fight)
         np_own[_OFF_CHARACTER_THIS_COMBAT_THIEF_ESCAPED] = float(combat.this_combat_thief_escaped)
         np_own[_OFF_CHARACTER_THIS_COMBAT_MONSTER_DIED] = float(combat.this_combat_monster_died)
-        np_own[_OFF_CHARACTER_GOLD_STOLEN] = get_linear_norm(combat.gold_stolen, GOLD_SCALE)
+        np_own[_OFF_CHARACTER_GOLD_STOLEN] = get_linear_norm(combat.gold_stolen, SCALE_GOLD)
 
     # Health & Block
     encode_shared_health_block_into(character.health, character.block, np_shared)

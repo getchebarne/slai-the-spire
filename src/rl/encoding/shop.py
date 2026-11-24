@@ -1,7 +1,7 @@
 import numpy as np
 from slai import GameState
 
-from src.rl.constants import GOLD_SCALE
+from src.rl.constants import SCALE_GOLD
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_linear_norm
 from src.rl.tokens import get_character
@@ -15,7 +15,7 @@ _OFF_SHOP_GOLD_GAP = _alloc("gold_gap")
 ENCODING_DIM_PRICE = sum(w for _, w, _ in _CHANNEL_LAYOUT_PRICE)
 
 # Most nonzero price columns a row holds: one per channel, each a scalar
-ENCODING_DIM_SPARSE_PRICE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_PRICE)
+ENCODING_DIM_PRICE_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_PRICE)
 
 # Shop meta: the purge-service price triple + the purged flag
 _OFF_SHOP_PURGED = ENCODING_DIM_PRICE
@@ -35,9 +35,9 @@ def encode_price_into(price: int, gold: int, np_out: np.ndarray) -> None:
         (ENCODING_DIM_PRICE,) float32. The price's range, a token's shared block or the Shop's
         context range, written in place.
     """
-    np_out[_OFF_SHOP_PRICE] = get_linear_norm(price, GOLD_SCALE)
+    np_out[_OFF_SHOP_PRICE] = get_linear_norm(price, SCALE_GOLD)
     np_out[_OFF_SHOP_AFFORDABLE] = float(gold >= price)
-    np_out[_OFF_SHOP_GOLD_GAP] = get_linear_norm(abs(gold - price), GOLD_SCALE)
+    np_out[_OFF_SHOP_GOLD_GAP] = get_linear_norm(abs(gold - price), SCALE_GOLD)
 
 
 def encode_shop_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
