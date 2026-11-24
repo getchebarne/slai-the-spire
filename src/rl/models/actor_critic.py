@@ -154,13 +154,18 @@ class ActorCritic(nn.Module):
             The selected actions and each level's statistics. Actions use the argmax under
             `greedy`, otherwise samples from `generator`.
         """
+        batch_size = states.tokens.x_count.shape[0]
+        num_selections = int(states.x_total_cpu[:, StateCollection.SELECTIONS].sum())
+        num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
+
+        # Core pass
         core_output = self.core(states, map_cache=map_cache)
         tokens_refined = core_output.tokens
-        batch_size = tokens_refined.x_count.shape[0]
+
+        # Calculate each token's pointer key
         x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
 
         # The joint rows and their logits, the legal selections counted on the host
-        num_selections = int(states.x_total_cpu[:, StateCollection.SELECTIONS].sum())
         _, x_joint_token_row, x_joint_action_type, x_joint_state = _get_joint_rows(
             core_output, self._x_action_type_no_selection, num_selections
         )
@@ -174,12 +179,11 @@ class ActorCritic(nn.Module):
         )
 
         # Select each state's joint row: its `ActionType` and selected token, its Character if none
-        x_joint_row = _select_row(x_logit_joint, x_joint_state, batch_size, greedy, generator)
+        x_joint_row = _select_row(x_logit_joint, x_joint_state, batch_size, greedy, generator) # (B,)
         x_action_type = x_joint_action_type[x_joint_row]
         x_selection_row = x_joint_token_row[x_joint_row]
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
         x_logit_target = self._head_target(
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
@@ -226,21 +230,25 @@ class ActorCritic(nn.Module):
         x_value : torch.Tensor
             (B, len(RewardStream)). The values.
         """
+        num_selections = int(states.x_total_cpu[:, StateCollection.SELECTIONS].sum())
+        num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
+
+        # Core pass
         core_output = self.core(states, map_dedup=map_dedup)
-        x_value = self._head_value(core_output.x_global)
         tokens_refined = core_output.tokens
 
-        # Pointer keys
+        # Value head
+        x_value = self._head_value(core_output.x_global)
+
+        # Calculate each token's pointer key
         x_token_key = self._pointer_keys(tokens_refined.features.x_value)  # (N, dim_key)
 
         # The joint rows, the legal selections counted on the host
-        num_selections = int(states.x_total_cpu[:, StateCollection.SELECTIONS].sum())
         x_selection_flat, x_joint_token_row, x_joint_action_type, x_joint_state = _get_joint_rows(
             core_output, self._x_action_type_no_selection, num_selections
         )
 
         # Each target row's state, the Monsters counted on the host
-        num_monsters = int(states.x_total_cpu[:, CollectionKind.MONSTERS].sum())
         x_target_state = _get_target_state(core_output, num_monsters)  # (M + B,)
 
         # The recorded selections, each as a row of its level's logits
@@ -268,7 +276,7 @@ class ActorCritic(nn.Module):
             core_output, x_token_key, x_target_state, x_action_type, x_selection_row
         )
 
-        policy_output = self._evaluate_selections(
+        return self._evaluate_selections(
             core_output,
             x_logit_joint,
             x_joint_state,
@@ -278,9 +286,7 @@ class ActorCritic(nn.Module):
             x_logit_target,
             x_target_state,
             x_target_row,
-        )
-
-        return policy_output, x_value
+        ), x_value
 
     def get_values(self, states: States[Live], map_dedup: MapDedup) -> torch.Tensor:
         """Compute the values.
@@ -460,6 +466,7 @@ def _get_target_state(core_output: CoreOutput, num_monsters: int) -> torch.Tenso
         (M + B,) long. Each target row's state.
     """
     batch_size = core_output.tokens.x_count.shape[0]
+    
     x_count_monster = core_output.x_total[:, CollectionKind.MONSTERS]
     x_monster_state = get_row_owner(x_count_monster, num_monsters)  # (M,)
     x_idx_state = torch.arange(batch_size, device=x_monster_state.device)
@@ -497,9 +504,11 @@ def _row_of_joint(
         (B,) long. Each state's joint row: its selection's, or its action type's among its
         state's rows after the selections where the offset is -1.
     """
+    batch_size = x_action_type.shape[0]
     num_selections = x_selection_flat.shape[0]
     num_action_types_no_selection = x_action_type_no_selection.shape[0]
-    x_idx_state = torch.arange(x_action_type.shape[0], device=x_action_type.device)
+
+    x_idx_state = torch.arange(batch_size, device=x_action_type.device)
 
     # A selection's row is its flat index's rank among the selections, which ascend
     x_joint_row_selection = torch.searchsorted(
@@ -508,13 +517,13 @@ def _row_of_joint(
 
     # An action type that selects nothing: its state's rows after the selections, then its rank;
     # `searchsorted` warns on a strided column, as a recorded one is
-    x_joint_row_no_selection = (
+    x_joint_row_selection_none = (
         num_selections
         + x_idx_state * num_action_types_no_selection
         + torch.searchsorted(x_action_type_no_selection, x_action_type.contiguous())
     )
 
-    return torch.where(x_selection_off >= 0, x_joint_row_selection, x_joint_row_no_selection)
+    return torch.where(x_selection_off >= 0, x_joint_row_selection, x_joint_row_selection_none)
 
 
 def _row_of_selection_off(core_output: CoreOutput, x_selection_off: torch.Tensor) -> torch.Tensor:
@@ -534,6 +543,7 @@ def _row_of_selection_off(core_output: CoreOutput, x_selection_off: torch.Tensor
         offset is -1.
     """
     batch_size = x_selection_off.shape[0]
+
     x_state_first_token = get_owner_first_row(core_output.tokens.x_count)  # (B,)
     x_character_row = get_entity_kind_rows(
         core_output.tokens.x_entity_kind, EntityKind.CHARACTER, batch_size
@@ -729,7 +739,7 @@ def _evaluate_row(
     """
     x_legal = x_logit != float("-inf")
 
-    # Each row's log-prob within its state; the max keeps the exponentials finite, and takes no
+    # Each row's log-prob within its state; the max keeps exponentials finite, and takes no
     # gradient, as in logsumexp
     x_shifted = x_logit - _max_by_state(x_logit.detach(), x_row_state, batch_size)[x_row_state]
     x_sum_exp = _sum_by_state(x_shifted.exp(), x_row_state, batch_size)
