@@ -11,9 +11,9 @@ from slai import GameState
 from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 
-from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
+from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_linear_norm
@@ -59,25 +59,19 @@ def derive_focus(game_state: GameState) -> Focus:
     return Focus.MAP
 
 
-_NUM_CHEST_KINDS = len(ChestKind.members())
-
-
-_BOMB_TURNS = BOMB_FUSE_TURNS  # The Bomb's fuse length
-
 _CHANNEL_LAYOUT_FOCUS, _alloc = make_channel_allocator()
 _OFF_FOCUS_KIND = _alloc("kind", len(Focus))
 _OFF_FOCUS_PENDING_COUNT = _alloc("pending_count")
 _OFF_FOCUS_PENDING_SKIPPABLE = _alloc("pending_skippable")
-_OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc("bomb_damage_due", _BOMB_TURNS)
-_OFF_FOCUS_CHEST_KIND = _alloc("chest_kind", _NUM_CHEST_KINDS)
+_OFF_FOCUS_BOMB_DAMAGE_DUE = _alloc("bomb_damage_due", BOMB_FUSE_TURNS)
+_OFF_FOCUS_CHEST_KIND = _alloc("chest_kind", len(ChestKind.members()))
 _OFF_FOCUS_CHEST_OPENED = _alloc("chest_opened")
 _OFF_FOCUS_REST_CONSUMED = _alloc("rest_consumed")
 _OFF_FOCUS_PRESENCE = _alloc("presence", 6)
 
 ENCODING_DIM_FOCUS = sum(w for _, w, _ in _CHANNEL_LAYOUT_FOCUS)
 
-# Every pool the engine can halt over; the selection count normalizes against the
-# pool's size ceiling (Combat piles are bounded by the deck)
+# Every pool the engine can halt over; the selection count normalizes against the pool's max size
 _INPUT_POOL_CAP = {
     CandidatePool.CardPileHand: MAX_SIZE_CARD_PILE_HAND,
     CandidatePool.CardPileDeck: MAX_SIZE_CARD_PILE_DECK,
@@ -123,10 +117,17 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
                 np_out[_OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
 
     if combat is not None:
+        # Bombs
         for turns_left, damage, _ in combat.bombs:
             np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE + turns_left - 1] += damage
-        due = np_out[_OFF_FOCUS_BOMB_DAMAGE_DUE : _OFF_FOCUS_BOMB_DAMAGE_DUE + _BOMB_TURNS]
-        due[:] = [get_linear_norm(damage_due, HEALTH_SCALE) for damage_due in due]
+
+        np_out_bomb_damage_due = np_out[
+            _OFF_FOCUS_BOMB_DAMAGE_DUE : _OFF_FOCUS_BOMB_DAMAGE_DUE + BOMB_FUSE_TURNS
+        ]
+        np_out_bomb_damage_due[:] = [
+            get_linear_norm(bomb_damage_due, SCALE_HEALTH)
+            for bomb_damage_due in np_out_bomb_damage_due
+        ]
 
     if chest is not None:
         np_out[_OFF_FOCUS_CHEST_KIND + int(chest.chest_kind)] = 1.0

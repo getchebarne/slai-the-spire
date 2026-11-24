@@ -21,47 +21,47 @@ from src.rl.constants import COLLECTION_KINDS_OF_ENTITY_KIND
 from src.rl.constants import MAX_EFFECTS
 from src.rl.constants import MAX_MODIFIERS
 from src.rl.encoding.card import ENCODING_DIM_CARD
-from src.rl.encoding.card import ENCODING_DIM_SPARSE_CARD
+from src.rl.encoding.card import ENCODING_DIM_CARD_SPARSE
 from src.rl.encoding.card import encode_card_into
 from src.rl.encoding.card import get_record_key_card
 from src.rl.encoding.character import ENCODING_DIM_CHARACTER
-from src.rl.encoding.character import ENCODING_DIM_SPARSE_CHARACTER
+from src.rl.encoding.character import ENCODING_DIM_CHARACTER_SPARSE
 from src.rl.encoding.character import encode_character_into
 from src.rl.encoding.context import encode_context_into
-from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
+from src.rl.encoding.effect import ENCODING_DIM_EFFECT_SPARSE
 from src.rl.encoding.effect import make_effect_row
 from src.rl.encoding.energy import get_energy_max
 from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION
-from src.rl.encoding.event import ENCODING_DIM_SPARSE_EVENT_OPTION
+from src.rl.encoding.event import ENCODING_DIM_EVENT_OPTION_SPARSE
 from src.rl.encoding.event import encode_event_option_into
-from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
+from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK_SPARSE
 from src.rl.encoding.incoming import project_incoming
 from src.rl.encoding.map_ import encode_map_grid_into
 from src.rl.encoding.mask import encode_batch_masks_into
 from src.rl.encoding.mask import unpack_legal_bits
-from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER_SPARSE
 from src.rl.encoding.modifier import make_modifier_row
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
-from src.rl.encoding.monster import ENCODING_DIM_SPARSE_MONSTER
+from src.rl.encoding.monster import ENCODING_DIM_MONSTER_SPARSE
 from src.rl.encoding.monster import encode_monster_into
 from src.rl.encoding.monster import moveset_effects
 from src.rl.encoding.potion import ENCODING_DIM_POTION
-from src.rl.encoding.potion import ENCODING_DIM_SPARSE_POTION
+from src.rl.encoding.potion import ENCODING_DIM_POTION_SPARSE
 from src.rl.encoding.potion import encode_potion_into
 from src.rl.encoding.potion import get_record_key_potion
 from src.rl.encoding.relic import ENCODING_DIM_RELIC
-from src.rl.encoding.relic import ENCODING_DIM_SPARSE_RELIC
+from src.rl.encoding.relic import ENCODING_DIM_RELIC_SPARSE
 from src.rl.encoding.relic import encode_relic_into
 from src.rl.encoding.relic import get_record_key_relic
 from src.rl.encoding.relic import is_relic_armed
 from src.rl.encoding.shared import ENCODING_DIM_SHARED
-from src.rl.encoding.shared import ENCODING_DIM_SPARSE_STASIS_SLOT
-from src.rl.encoding.shared import ENCODING_DIM_SPARSE_TAG
+from src.rl.encoding.shared import ENCODING_DIM_STASIS_SLOT_SPARSE
+from src.rl.encoding.shared import ENCODING_DIM_TAG_SPARSE
 from src.rl.encoding.shared import OFF_SHARED_HEALTH_BLOCK
 from src.rl.encoding.shared import OFF_SHARED_PRICE
 from src.rl.encoding.shared import OFF_SHARED_STASIS_SLOT
 from src.rl.encoding.shared import OFF_SHARED_TAG
-from src.rl.encoding.shop import ENCODING_DIM_SPARSE_PRICE
+from src.rl.encoding.shop import ENCODING_DIM_PRICE_SPARSE
 from src.rl.encoding.sparse import TABLE_ROW_EMPTY
 from src.rl.encoding.sparse import RowTable
 from src.rl.encoding.sparse import add_row
@@ -111,18 +111,18 @@ COL_START_TAG = _COL_START_SHARED + OFF_SHARED_TAG
 ENCODING_DIM_TOKEN = _COL_START_SHARED + ENCODING_DIM_SHARED
 
 # Most nonzero columns a token row holds
-ENCODING_DIM_SPARSE_TOKEN = max(
-    ENCODING_DIM_SPARSE_CARD
-    + ENCODING_DIM_SPARSE_PRICE
-    + ENCODING_DIM_SPARSE_STASIS_SLOT
-    + ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_RELIC + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_POTION + ENCODING_DIM_SPARSE_PRICE + ENCODING_DIM_SPARSE_TAG,
-    ENCODING_DIM_SPARSE_MONSTER
-    + ENCODING_DIM_SPARSE_HEALTH_BLOCK
-    + ENCODING_DIM_SPARSE_STASIS_SLOT,
-    ENCODING_DIM_SPARSE_CHARACTER + ENCODING_DIM_SPARSE_HEALTH_BLOCK,
-    ENCODING_DIM_SPARSE_EVENT_OPTION,
+ENCODING_DIM_TOKEN_SPARSE = max(
+    ENCODING_DIM_CARD_SPARSE
+    + ENCODING_DIM_PRICE_SPARSE
+    + ENCODING_DIM_STASIS_SLOT_SPARSE
+    + ENCODING_DIM_TAG_SPARSE,
+    ENCODING_DIM_RELIC_SPARSE + ENCODING_DIM_PRICE_SPARSE + ENCODING_DIM_TAG_SPARSE,
+    ENCODING_DIM_POTION_SPARSE + ENCODING_DIM_PRICE_SPARSE + ENCODING_DIM_TAG_SPARSE,
+    ENCODING_DIM_MONSTER_SPARSE
+    + ENCODING_DIM_HEALTH_BLOCK_SPARSE
+    + ENCODING_DIM_STASIS_SLOT_SPARSE,
+    ENCODING_DIM_CHARACTER_SPARSE + ENCODING_DIM_HEALTH_BLOCK_SPARSE,
+    ENCODING_DIM_EVENT_OPTION_SPARSE,
 )
 
 # The owned row kinds that have already warned about overflow — truncation is never silent
@@ -153,13 +153,13 @@ _NP_ENTITY_KIND_OF_COLLECTION_KIND = np.array(
 )
 
 # The token rows, each a token's whole row
-_ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_SPARSE_TOKEN)
+_ROW_TABLE_TOKEN = make_row_table(ENCODING_DIM_TOKEN_SPARSE)
 
 # The Effect rows, each scaled and with its source's one-hot
-_ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_SPARSE_EFFECT)
+_ROW_TABLE_EFFECT = make_row_table(ENCODING_DIM_EFFECT_SPARSE)
 
 # The Modifier rows, each with its owner's one-hot
-_ROW_TABLE_MODIFIER = make_row_table(ENCODING_DIM_SPARSE_MODIFIER)
+_ROW_TABLE_MODIFIER = make_row_table(ENCODING_DIM_MODIFIER_SPARSE)
 
 # The kept records of the Cards, Relics and Potions, by their record keys
 _RECORD_OF_CARD: dict[RecordKeyCard, _Record] = {}

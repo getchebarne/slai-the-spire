@@ -87,7 +87,7 @@ _OFF_CARD_DRAW_BELOW_SCALAR = _alloc("draw_below_scalar")
 ENCODING_DIM_CARD = sum(w for _, w, _ in _CHANNEL_LAYOUT_CARD)
 
 # Most nonzero columns a Card row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_CARD = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_CARD)
+ENCODING_DIM_CARD_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_CARD)
 
 # Each tagged Card's Tags, by name: an upgraded Card keeps them
 _TAGS_OF_CARD_NAME: dict[CardName, tuple[Tag, ...]] = {

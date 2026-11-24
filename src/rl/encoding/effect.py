@@ -53,11 +53,10 @@ from slai import get_potion_templates
 from slai import get_relic_templates
 
 from src.rl.constants import ASCENSION_LEVEL
-from src.rl.constants import GOLD_SCALE
-from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import MAX_SCALED
-from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
 from src.rl.constants import MULTI_STAB_INSTANCES_MAX
+from src.rl.constants import SCALE_GOLD
+from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_piecewise_dim
@@ -66,16 +65,15 @@ from src.rl.types import EffectSource
 
 __all__ = [
     "ENCODING_DIM_EFFECT",
-    "ENCODING_DIM_SPARSE_EFFECT",
+    "ENCODING_DIM_EFFECT_SPARSE",
     "catalog_effects",
     "make_effect_row",
 ]
 
-
-# Live Card / Relic amounts arrive Modifier-scaled, so a catalog maximum is a
-# floor rather than a ceiling; past this the channel clamps
-_LIVE_SCALE_HEADROOM = 1.5
 _ASCENSIONS = range(ASCENSION_LEVEL + 1)
+
+# Live Card / Relic amounts arrive Modifier-scaled; catalog maximum is floor rather than a ceiling
+_LIVE_SCALE_HEADROOM = 1.5
 
 
 def catalog_effects() -> Iterator[Effect]:
@@ -265,9 +263,9 @@ def _index_union(union: UnionType) -> dict[type, int]:
 
 
 _INDEX_EFFECT = _index_union(Effect)
-_INDEX_CAND_POOL = _index_enum(CandidatePool)
+_INDEX_CANDIDATE_POOL = _index_enum(CandidatePool)
 _INDEX_SELECTION_KIND = _index_union(SelectionKind)
-_INDEX_CAND_FILTER = _index_enum(CandidateFilter)
+_INDEX_CANDIDATE_FILTER = _index_enum(CandidateFilter)
 _INDEX_MODIFIER_KIND = _index_enum(ModifierKind)
 _INDEX_REWARD_ROLL_TRIGGER = _index_enum(RewardRollTrigger)
 _INDEX_DELTA_SIGN = _index_enum(DeltaSign)
@@ -351,12 +349,8 @@ _CAP_DELTA = _cap(_field(slai.EffectEventAdvanceStage, lambda effect: effect.del
 _CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda effect: effect.factor))
 _CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda effect: effect.amount))
 _CAP_TURNS = float(slai.BOMB_FUSE_TURNS)
-_CAP_SELECT_COUNT = float(MAX_SIZE_CARD_PILE_DECK)
+_CAP_SELECT_COUNT = float(MAX_SIZE_CARD_PILE_HAND)
 _CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
-
-
-# Contiguous groups; every column carries a cap and a mode
-
 
 # Each magnitude's two-hot knots: every integer up to here, then each square past it
 _LINEAR_SQRT_THRESHOLD = 25
@@ -379,24 +373,22 @@ def _bucket_width(cap: float) -> int:
 
 
 # The multi-hot channels' widths: each can set every one of its columns
-_CANDIDATE_FILTER_DIM = len(_INDEX_CAND_FILTER)
-_RELIC_NAME_DIM = len(_VOCAB_RELIC) + 1
-_MONSTER_NAME_DIM = len(_VOCAB_MONSTER) + 1
-
+_DIM_CANDIDATE_FILTER = len(_INDEX_CANDIDATE_FILTER)
+_DIM_RELIC_NAME = len(_VOCAB_RELIC) + 1
+_DIM_MONSTER_NAME = len(_VOCAB_MONSTER) + 1
 
 _CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
-
 
 # Effect's kind: one-hot over the Effect union
 _OFF_EFFECT_KIND = _alloc("effect_kind", len(_INDEX_EFFECT))
 
 # Target
 _OFF_TARGETED = _alloc("targeted")
-_OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CAND_POOL))
+_OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CANDIDATE_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
-_OFF_SELECT_COUNT_BUCKETS = _alloc("select_count_buckets", _bucket_width(_CAP_SELECT_COUNT), 2)
-_OFF_CANDIDATE_FILTER = _alloc("candidate_filter", _CANDIDATE_FILTER_DIM, _CANDIDATE_FILTER_DIM)
+_OFF_SELECT_COUNT_BUCKETS = _alloc("select_count_buckets", _bucket_width(_CAP_SELECT_COUNT))
+_OFF_CANDIDATE_FILTER = _alloc("candidate_filter", _DIM_CANDIDATE_FILTER, _DIM_CANDIDATE_FILTER)
 _OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))
 
 # Categorical params, named for the engine type they one-hot
@@ -417,8 +409,8 @@ _OFF_ROUNDING = _alloc("rounding", len(_INDEX_ROUNDING))
 
 # Identity vocabularies, named for the engine name enum (index 0 = unseen)
 _OFF_CARD_NAME = _alloc("card_name", len(_VOCAB_CARD) + 1)
-_OFF_RELIC_NAME = _alloc("relic_name", _RELIC_NAME_DIM, _RELIC_NAME_DIM)
-_OFF_MONSTER_NAME = _alloc("monster_name", _MONSTER_NAME_DIM, _MONSTER_NAME_DIM)
+_OFF_RELIC_NAME = _alloc("relic_name", _DIM_RELIC_NAME, _DIM_RELIC_NAME)
+_OFF_MONSTER_NAME = _alloc("monster_name", _DIM_MONSTER_NAME, _DIM_MONSTER_NAME)
 _OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
 
 # Magnitudes, one per physical unit
@@ -445,7 +437,6 @@ _OFF_FACTOR = _alloc("factor")
 _OFF_COST = _alloc("cost")
 _OFF_TURNS = _alloc("turns")
 
-# Boolean flags
 # Boolean flags, named for the engine field
 _OFF_ADVANCE_ON_MISS = _alloc("advance_on_miss")
 _OFF_BLOCK_FROM_HIT = _alloc("block_from_hit")
@@ -477,26 +468,25 @@ _BUCKET_META: tuple[tuple[int, int, float], ...] = (
 # Total
 ENCODING_DIM_EFFECT = sum(w for _, w, _ in _CHANNEL_LAYOUT_EFFECT)
 
-# Most nonzero columns an Effect row holds: one per one-hot or scalar channel, two per two-hot,
-# and every column of the multi-hot ones
-ENCODING_DIM_SPARSE_EFFECT = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_EFFECT)
+# Most nonzero columns an Effect row holds
+ENCODING_DIM_EFFECT_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_EFFECT)
 
 
 class _NormMode(StrEnum):
     SQRT = auto()
     LINEAR = auto()
-    SCALE = auto()  # Divided by its scale, then clipped to ±MAX_SCALED
+    SCALE = auto()  # Divided by its scale, then clipped to [-MAX_SCALED, MAX_SCALED]
 
 
 # (offset, cap or SCALE's scale, mode) for every non-unit channel
 _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (_OFF_SELECT_COUNT, _CAP_SELECT_COUNT, _NormMode.LINEAR),
     (_OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
-    (_OFF_DAMAGE, HEALTH_SCALE, _NormMode.SCALE),
+    (_OFF_DAMAGE, SCALE_HEALTH, _NormMode.SCALE),
     (_OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
-    (_OFF_BLOCK, HEALTH_SCALE, _NormMode.SCALE),
-    (_OFF_HEALTH_ABSOLUTE, HEALTH_SCALE, _NormMode.SCALE),
-    (_OFF_GOLD_ABSOLUTE, GOLD_SCALE, _NormMode.SCALE),
+    (_OFF_BLOCK, SCALE_HEALTH, _NormMode.SCALE),
+    (_OFF_HEALTH_ABSOLUTE, SCALE_HEALTH, _NormMode.SCALE),
+    (_OFF_GOLD_ABSOLUTE, SCALE_GOLD, _NormMode.SCALE),
     (_OFF_ENERGY, _CAP_ENERGY, _NormMode.LINEAR),
     (_OFF_STACKS, _CAP_STACKS, _NormMode.SQRT),
     (_OFF_COUNT, _CAP_COUNT, _NormMode.LINEAR),
@@ -518,11 +508,11 @@ for _off, _cap_value, _mode in _NORM_META:
     _NP_SQRT_MASK[_off] = _mode == _NormMode.SQRT
 
 # Only the _NORM_META channels need scaling at all
-_NP_IDX_SCALED = np.nonzero(_NP_SCALED_MASK)[0]
-_NP_SCALED_CAP = _NP_CAP[_NP_IDX_SCALED]
-_NP_SCALED_DIVISOR = _NP_DIVISOR[_NP_IDX_SCALED]
-_NP_SCALED_SQRT = _NP_SQRT_MASK[_NP_IDX_SCALED]
-_NP_SCALED_LINEAR = ~_NP_SCALED_SQRT
+_NP_SCALED_IDX = np.nonzero(_NP_SCALED_MASK)[0]
+_NP_CAP_SCALED = _NP_CAP[_NP_SCALED_IDX]
+_NP_DIVISOR_SCALED = _NP_DIVISOR[_NP_SCALED_IDX]
+_NP_SQRT_MASK_SCALED = _NP_SQRT_MASK[_NP_SCALED_IDX]
+_NP_SQRT_MASK_SCALED_INV = ~_NP_SQRT_MASK_SCALED
 
 
 # Per-effect-kind encoders
@@ -937,13 +927,13 @@ def _encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
     target = effect.target
     if target is not None:
         np_out[_OFF_TARGETED] = 1.0
-        np_out[_OFF_CANDIDATE_POOL + _INDEX_CAND_POOL[target.candidate_pool]] = 1.0
+        np_out[_OFF_CANDIDATE_POOL + _INDEX_CANDIDATE_POOL[target.candidate_pool]] = 1.0
         np_out[_OFF_SELECTION_KIND + _INDEX_SELECTION_KIND[type(target.selection_kind)]] = 1.0
         np_out[_OFF_SELECT_COUNT] = float(getattr(target.selection_kind, "count", 1))
 
         # Multi-hot over the target's filters; an empty list keeps every candidate
         for candidate_filter in target.filters:
-            np_out[_OFF_CANDIDATE_FILTER + _INDEX_CAND_FILTER[candidate_filter]] = 1.0
+            np_out[_OFF_CANDIDATE_FILTER + _INDEX_CANDIDATE_FILTER[candidate_filter]] = 1.0
 
     # Effect Type encoder
     encode = _ENCODERS.get(type(effect))
@@ -992,8 +982,8 @@ def make_effect_row(effect: Effect, effect_source: EffectSource) -> np.ndarray:
 def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
     """Scale the `_NORM_META` channels in place.
 
-    Each is clipped to ±its cap, then divided by the cap or sqrt-compressed; a SCALE channel is
-    divided by its scale, clipped to ±MAX_SCALED.
+    Each is clipped to +/- its cap, then divided by the cap or sqrt-compressed; a SCALE channel is
+    divided by its scale, clipped to [-MAX_SCALED, MAX_SCALED].
 
     Fancy indexing copies, so the transform runs on the gathered channels and the final
     assignment scatters them back.
@@ -1003,11 +993,20 @@ def _normalize_effect_row(np_effect_row: np.ndarray) -> None:
     np_effect_row : np.ndarray
         (ENCODING_DIM_EFFECT,) float32. A raw Effect row.
     """
-    np_effect_gather = np_effect_row[_NP_IDX_SCALED]
-    np.clip(np_effect_gather, -_NP_SCALED_CAP, _NP_SCALED_CAP, out=np_effect_gather)
-    np_effect_gather[_NP_SCALED_LINEAR] /= _NP_SCALED_DIVISOR[_NP_SCALED_LINEAR]
-    np_value_sqrt = np_effect_gather[_NP_SCALED_SQRT]
-    np_effect_gather[_NP_SCALED_SQRT] = np.sign(np_value_sqrt) * np.sqrt(
-        np.abs(np_value_sqrt) / _NP_SCALED_CAP[_NP_SCALED_SQRT]
+    # Gather to-be-scaled entries
+    np_effect_gather = np_effect_row[_NP_SCALED_IDX]
+
+    # Clip to [-MAX_SCALED, MAX_SCALED]
+    np.clip(np_effect_gather, -_NP_CAP_SCALED, _NP_CAP_SCALED, out=np_effect_gather)
+
+    # Linear scaling
+    np_effect_gather[_NP_SQRT_MASK_SCALED_INV] /= _NP_DIVISOR_SCALED[_NP_SQRT_MASK_SCALED_INV]
+
+    # Square-root scaling
+    np_value_sqrt = np_effect_gather[_NP_SQRT_MASK_SCALED]
+    np_effect_gather[_NP_SQRT_MASK_SCALED] = np.sign(np_value_sqrt) * np.sqrt(
+        np.abs(np_value_sqrt) / _NP_CAP_SCALED[_NP_SQRT_MASK_SCALED]
     )
-    np_effect_row[_NP_IDX_SCALED] = np_effect_gather
+
+    # Assign scaled entries
+    np_effect_row[_NP_SCALED_IDX] = np_effect_gather
