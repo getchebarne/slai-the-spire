@@ -2,15 +2,13 @@ import numpy as np
 from slai import Room
 from slai import RoomKind
 
+from src.rl.constants import EDGE_DELTAS
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.types import RecordKeyRoom
+from src.rl.utils import get_edge_channels
 
 
 _IDX_OF_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
-
-# Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
-EDGE_DELTAS = (-1, 0, 1)
-
 
 _CHANNEL_LAYOUT_ROOM, _alloc = make_channel_allocator()
 _OFF_ROOM_KIND = _alloc("room_kind", len(_IDX_OF_ROOM_KIND))
@@ -77,23 +75,3 @@ def get_record_key_room(room: Room, on_burning_path: bool, is_next_room: bool) -
         on_burning_path,
         is_next_room,
     )
-
-
-def get_edge_channels(room: Room) -> tuple[int, ...]:
-    """Turn a Room's edges into edge channels: the Room's token and the Map grid both hold them.
-
-    Parameters
-    ----------
-    room : Room
-        The Room.
-
-    Returns
-    -------
-    tuple[int, ...]
-        One 0/1 flag per `EDGE_DELTAS`: whether an edge leads to the next row, that many columns
-        over.
-    """
-    edges = room.edges  # Bound once: each read clones the list
-    x = room.x
-
-    return tuple(int(x + delta in edges) for delta in EDGE_DELTAS)

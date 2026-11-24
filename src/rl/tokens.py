@@ -71,6 +71,7 @@ __all__ = [
     "get_rooms_key",
     "get_room_burning",
     "get_burning_path",
+    "get_cells_next_room",
 ]
 
 
@@ -873,3 +874,26 @@ def _wing_boots_charges_to_room_burning(
                 )
                 
     return wb_charges
+
+
+def get_cells_next_room(game_state: GameState) -> set[tuple[int, int]]:
+    """Find the next-row Rooms the position's edges reach, Wing Boots aside.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    set[tuple[int, int]]
+        Their cells, as (row, column): every first-row Room before the act's first Room, and none
+        past the Map's last row.
+    """
+    y_current, x_current = get_y_x_current(game_state.map)
+    y_next = 0 if y_current is None else y_current + 1
+
+    return {
+        (y_next, x_next)
+        for x_next in next_row_candidate_cols(game_state, y_current, x_current, winged=False)
+    }

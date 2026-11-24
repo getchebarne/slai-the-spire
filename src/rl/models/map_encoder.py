@@ -6,10 +6,10 @@ import torch.nn.functional as F
 from src.rl.batches import dedup_rows
 from src.rl.batches import get_owner_first_row
 from src.rl.batches import get_unique_rep_row
+from src.rl.constants import EDGE_DELTAS
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.constants import MIN_BATCH_DEDUP
-from src.rl.encoding import EDGE_DELTAS
 from src.rl.encoding import OFF_MAP_TOKEN
 from src.rl.encoding import SLICE_MAP_EDGES
 from src.rl.models.entity_projector import hash_tokens

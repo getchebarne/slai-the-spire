@@ -73,11 +73,10 @@ from src.rl.encoding.sparse import drop_rows
 from src.rl.encoding.sparse import encode_table_rows_into
 from src.rl.encoding.sparse import make_row_table
 from src.rl.tokens import get_burning_path
+from src.rl.tokens import get_cells_next_room
 from src.rl.tokens import get_character
 from src.rl.tokens import get_rooms_key
-from src.rl.tokens import get_y_x_current
 from src.rl.tokens import iter_tokens
-from src.rl.tokens import next_row_candidate_cols
 from src.rl.types import CollectionKind
 from src.rl.types import EffectSource
 from src.rl.types import EntityKind
@@ -526,7 +525,7 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
     id_relic_linked = game_state.reward.id_relic_linked if game_state.reward is not None else None
     gold = character.gold
     burning_path = get_burning_path(game_state)
-    cells_next_room = _get_cells_next_room(game_state)
+    cells_next_room = get_cells_next_room(game_state)
     records: list[_Record] = []
 
     # Each queued Card's play source: its first CardPlay's
@@ -535,7 +534,9 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
         play_source_of_card_id.setdefault(card_play.id_card, card_play.play_source)
 
     # The records of its ROOMS_NOT_SELECTABLE tokens, its last
-    records_rooms_not_selectable = _get_records_rooms_not_selectable(game_state, tokens)
+    records_rooms_not_selectable = _get_records_rooms_not_selectable(
+        game_state, tokens, burning_path, cells_next_room
+    )
 
     # Iterate over the other tokens
     for collection_kinds, entity in tokens[: len(tokens) - len(records_rooms_not_selectable)]:
@@ -711,29 +712,6 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
     return records
 
 
-def _get_cells_next_room(game_state: GameState) -> set[tuple[int, int]]:
-    """Find the next-row Rooms the position's edges reach, Wing Boots aside.
-
-    Parameters
-    ----------
-    game_state : GameState
-        The state to read.
-
-    Returns
-    -------
-    set[tuple[int, int]]
-        Their cells, as (row, column): every first-row Room before the act's first Room, and none
-        past the Map's last row.
-    """
-    y_current, x_current = get_y_x_current(game_state.map)
-    y_next = 0 if y_current is None else y_current + 1
-
-    return {
-        (y_next, x_next)
-        for x_next in next_row_candidate_cols(game_state, y_current, x_current, winged=False)
-    }
-
-
 def _get_record_room(room: Room, on_burning_path: bool, is_next_room: bool) -> _Record:
     """Find a Room's record, making it the first time its key comes.
 
@@ -767,7 +745,10 @@ def _get_record_room(room: Room, on_burning_path: bool, is_next_room: bool) -> _
 
 
 def _get_records_rooms_not_selectable(
-    game_state: GameState, tokens: Sequence[Token]
+    game_state: GameState,
+    tokens: Sequence[Token],
+    burning_path: frozenset[tuple[int, int]],
+    cells_next_room: set[tuple[int, int]],
 ) -> tuple[_Record, ...]:
     """Find the records of a state's ROOMS_NOT_SELECTABLE tokens, by its Rooms key.
 
@@ -780,6 +761,10 @@ def _get_records_rooms_not_selectable(
         The state to encode.
     tokens : Sequence[Token]
         The state's tokens, as (collection kinds, Entity) in window order.
+    burning_path : frozenset[tuple[int, int]]
+        The cells on a path that still reaches the burning Room.
+    cells_next_room : set[tuple[int, int]]
+        The cells of the next-row Rooms the position's edges reach, Wing Boots aside.
 
     Returns
     -------
@@ -791,8 +776,6 @@ def _get_records_rooms_not_selectable(
     if records_rooms_not_selectable is not None:
         return records_rooms_not_selectable
 
-    burning_path = get_burning_path(game_state)
-    cells_next_room = _get_cells_next_room(game_state)
     records_rooms_not_selectable = tuple(
         _get_record_room(
             entity, (entity.y, entity.x) in burning_path, (entity.y, entity.x) in cells_next_room

@@ -102,6 +102,9 @@ INVINCIBLE_STACKS_MAX = max(INVINCIBLE_STACKS_OF_ASCENSION.values())
 
 FACTOR_VULN = _slai.GameEnv.FACTOR_VULN
 
+# Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
+EDGE_DELTAS = (-1, 0, 1)
+
 
 MAP_HEIGHT = _slai.GameEnv.MAP_HEIGHT
 MAP_WIDTH = _slai.GameEnv.MAP_WIDTH

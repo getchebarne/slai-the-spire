@@ -8,18 +8,17 @@ from slai import MonsterEncounter
 from slai import Room
 from slai import RoomKind
 
+from src.rl.constants import EDGE_DELTAS
 from src.rl.constants import MAP_HEIGHT
 from src.rl.constants import MAP_WIDTH
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.room import EDGE_DELTAS
-from src.rl.encoding.room import get_edge_channels
 from src.rl.tokens import get_entities
 from src.rl.tokens import get_room_entities
-from src.rl.tokens import get_rooms
 from src.rl.tokens import get_rooms_key
 from src.rl.tokens import get_y_x_current
 from src.rl.types import RoomsKey
 from src.rl.types import Token
+from src.rl.utils import get_edge_channels
 
 
 _IDX_OF_ROOM_KIND = {room_kind: int(room_kind) for room_kind in RoomKind.members()}
@@ -73,47 +72,9 @@ _OFF_MAP_POOL_EVENT_SPECIAL = _alloc("pool_event_special", len(_IDX_OF_EVENT_NAM
 
 ENCODING_DIM_MAP_META = sum(w for _, w in _CHANNEL_LAYOUT_MAP_META)
 
-# Static Map-grid cache keyed by map.identity_hash: the Rooms' edges are fixed per Map
-_MAP_GRID_CACHE: dict[int, np.ndarray] = {}
-_MAP_GRID_CACHE_MAX = 100_000
-
 # Map-grid cache keyed by `get_rooms_key`: a grid and its number of Room tokens
 _MAP_GRID_OF_ROOMS_KEY: dict[RoomsKey, tuple[np.ndarray, int]] = {}
-
-
-def _get_static_grid(game_state: GameState) -> np.ndarray:
-    identity_hash = game_state.map.identity_hash
-    np_grid = _MAP_GRID_CACHE.get(identity_hash)
-    if np_grid is not None:
-        return np_grid
-
-    # Initialize empty grid: no cell holds a token
-    np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.int16)
-    np_grid[:, :, OFF_MAP_TOKEN] = -1
-
-    # Iterate over Rooms
-    rooms = get_rooms(game_state)
-    for y, row in enumerate(rooms):
-        for x, room in enumerate(row):
-            if room is None:
-                continue
-
-            for x_next in room.edges:
-                delta = x_next - x  # -1, 0, or 1
-                if 0 <= x_next < MAP_WIDTH and delta in EDGE_DELTAS:
-                    if y + 1 >= MAP_HEIGHT or rooms[y + 1][x_next] is None:
-                        raise ValueError(f"Edge ({y}, {x})->({y + 1}, {x_next}) has no room")
-
-            np_grid[y, x, SLICE_MAP_EDGES] = get_edge_channels(room)
-
-    # Store in the cache. Guard the master copy against future writes
-    np_grid.flags.writeable = False
-    if len(_MAP_GRID_CACHE) >= _MAP_GRID_CACHE_MAX:
-        _MAP_GRID_CACHE.clear()
-
-    _MAP_GRID_CACHE[identity_hash] = np_grid
-
-    return np_grid
+_MAP_GRID_CACHE_MAX = 100_000
 
 
 def _get_grid(game_state: GameState, tokens: Sequence[Token]) -> tuple[np.ndarray, int]:
@@ -139,16 +100,24 @@ def _get_grid(game_state: GameState, tokens: Sequence[Token]) -> tuple[np.ndarra
     if grid is not None:
         return grid
 
-    # The Room tokens' cells, in the tokens' order
-    cells = [(entity.y, entity.x) for _, entity in tokens if isinstance(entity, Room)]
-    num_tokens_room = len(cells)
+    # The Room tokens' cells and edges, in the tokens' order
+    rooms = [entity for _, entity in tokens if isinstance(entity, Room)]
+    cells = [(room.y, room.x) for room in rooms]
+    edges = [get_edge_channels(room) for room in rooms]
+    num_tokens_room = len(rooms)
     np_y, np_x = np.array(cells, dtype=np.intp).reshape(-1, 2).T
 
+    # Every edge must lead to a Room token's cell
+    cells_token = set(cells)
+    for (y, x), edges_cell in zip(cells, edges):
+        for delta, edge in zip(EDGE_DELTAS, edges_cell):
+            if edge and (y + 1, x + delta) not in cells_token:
+                raise ValueError(f"Edge ({y}, {x})->({y + 1}, {x + delta}) has no Room token")
+
     # No cell holds a token, then each Room token's cell takes its Room's edges and its rank
-    np_grid_static = _get_static_grid(game_state)
-    np_grid = np.zeros_like(np_grid_static)
+    np_grid = np.zeros((MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS), dtype=np.int16)
     np_grid[:, :, OFF_MAP_TOKEN] = -1
-    np_grid[np_y, np_x] = np_grid_static[np_y, np_x]
+    np_grid[np_y, np_x, SLICE_MAP_EDGES] = np.array(edges).reshape(-1, len(EDGE_DELTAS))
     np_grid[np_y, np_x, OFF_MAP_TOKEN] = np.arange(num_tokens_room)
 
     # Store in the cache. Guard the master copy against future writes

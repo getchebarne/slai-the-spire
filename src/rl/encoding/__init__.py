@@ -12,7 +12,6 @@ from src.rl.encoding.map_ import OFF_MAP_TOKEN
 from src.rl.encoding.map_ import SLICE_MAP_EDGES
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
-from src.rl.encoding.room import EDGE_DELTAS
 from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_EVENT_OPTION
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
@@ -40,7 +39,6 @@ __all__ = [
     "COL_START_ROOM",
     "COL_START_STASIS_SLOT",
     "COL_START_TAG",
-    "EDGE_DELTAS",
     "ENCODING_DIM_CONTEXT",
     "ENCODING_DIM_EFFECT",
     "ENCODING_DIM_MODIFIER",
