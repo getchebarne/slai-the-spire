@@ -19,15 +19,17 @@ from src.rl.constants import INTENT_INSTANCES_MAX
 from src.rl.constants import MONSTER_TEMPLATES
 from src.rl.constants import SCALE_GOLD
 from src.rl.constants import SCALE_HEALTH
+from src.rl.encoding.damage import get_poison_tick
+from src.rl.encoding.damage import get_stacks_of_modifier_kind
+from src.rl.encoding.damage import make_combatant
 from src.rl.encoding.incoming import Incoming
-from src.rl.encoding.incoming import get_poison_tick
-from src.rl.encoding.incoming import get_stacks_of_modifier_kind
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.shared import encode_shared_health_block_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
+from src.rl.types import EntityKind
 
 
 _IDX_OF_MONSTER_NAME = {name: int(name) for name in MonsterName.members()}
@@ -200,7 +202,6 @@ def _poison_ticks_to_kill(
 
     stacks_poison = stacks_of_modifier_kind.get(ModifierKind.Poison, 0)
     stacks_regen = stacks_of_modifier_kind.get(ModifierKind.Regeneration, 0)
-    is_intangible = ModifierKind.Intangible in stacks_of_modifier_kind
     can_roll_debuffs_clear = (
         monster.name in _MONSTER_NAMES_HALF_HEALTH_ULTIMATE and not monster.ultimate_used
     )
@@ -209,28 +210,34 @@ def _poison_ticks_to_kill(
     debuffs_clear_next = can_roll_debuffs_clear and any(
         isinstance(effect, EffectDebuffsClear) for effect in monster.move_effects
     )
-    health = monster.health
+
+    # No tick touches its block
+    combatant_monster = make_combatant(
+        EntityKind.MONSTER, monster.health, 0, stacks_of_modifier_kind
+    )
     for ticks in range(1, min(stacks_poison, _POISON_TICKS_MAX) + 1):
-        health -= get_poison_tick(
-            stacks_poison - ticks + 1, is_intangible, stacks_of_modifier_kind, ascension
-        )
-        if health <= 0:
+        get_poison_tick(combatant_monster, stacks_poison - ticks + 1, ascension)
+        if combatant_monster.health <= 0:
             return ticks
         
         if debuffs_clear_next or (
             ModifierKind.Splittable in stacks_of_modifier_kind
-            and health <= monster.health_max // 2
+            and combatant_monster.health <= monster.health_max // 2
         ):
             return None
 
         # Below half, the roll behind its move is Anger or Haste
-        debuffs_clear_next = can_roll_debuffs_clear and health < monster.health_max // 2
+        debuffs_clear_next = (
+            can_roll_debuffs_clear and combatant_monster.health < monster.health_max // 2
+        )
 
         # Nemesis regains Intangible unless it still holds it
-        is_intangible = monster.name == MonsterName.Nemesis and not is_intangible
+        combatant_monster.is_intangible = (
+            monster.name == MonsterName.Nemesis and not combatant_monster.is_intangible
+        )
 
         # Regen health
-        health = min(health + stacks_regen, monster.health_max)
+        combatant_monster.health = min(combatant_monster.health + stacks_regen, monster.health_max)
 
     return None
 
