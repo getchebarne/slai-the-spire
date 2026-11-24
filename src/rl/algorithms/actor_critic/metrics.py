@@ -354,7 +354,7 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
         The metrics, keyed by `MetricKey`, with the episode count and each reward stream's
         discounted return. Every average but Frozen Eye's buy rate is over all the episodes: the
         Heart damage counts 0 for an episode that never reached the Heart. The buy rate is over
-        the episodes offered the purchase that don't force it, and missing when there are none.
+        the episodes offered the purchase that weren't forced, and missing when there are none.
     """
     num_episodes = len(episode_results)
     returns = [float(episode.reward_stream_rets.sum()) for episode in episode_results]
@@ -382,11 +382,11 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
         sum(episode.frozen_eye_offered for episode in episode_results) / num_episodes
     )
 
-    # Among the episodes offered it that don't force it, the share that bought it
+    # Among the episodes offered it that weren't forced, the share that bought it
     episode_results_offered_unforced = [
         episode
         for episode in episode_results
-        if episode.frozen_eye_offered and not episode.frozen_eye_forced
+        if episode.frozen_eye_offered and not episode.frozen_eye_bought_forced
     ]
     if episode_results_offered_unforced:
         metrics[MetricKey.FROZEN_EYE_BUY_RATE] = sum(

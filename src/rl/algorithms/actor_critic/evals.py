@@ -149,6 +149,7 @@ def _run_eval_battery(
                     episode_results[idx_game],
                     action,
                     gamma,
+                    frozen_eye_forced=False,
                 )
                 batch_done.append(done)
             batch_idx_game = [

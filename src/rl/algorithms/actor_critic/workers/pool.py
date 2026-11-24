@@ -413,7 +413,7 @@ def _worker_loop(
     """Run one shard of the games until the stop flag is set.
 
     It writes their first states, then on each request steps every game with its sampled action,
-    or the Frozen Eye purchase its episode forces, and writes the forced actions and flags, the
+    or the Frozen Eye purchase the game forces, and writes the forced actions and flags, the
     rewards, dones, discount counts and new states. A game whose episode ended is replaced by a
     new one at its current ascension.
 
@@ -444,14 +444,16 @@ def _worker_loop(
     # Initialize environments and gather initial observations
     batch_env = []
     batch_game_state = []
+    batch_frozen_eye_forced = []
     episode_results = []
     for ascension in step_buffer.x_ascension.tolist():
-        env, game_state, episode_result = _new_env_training(
+        env, game_state, frozen_eye_forced = _new_env_training(
             ascension, pandora_share, frozen_eye_share
         )
         batch_env.append(env)
         batch_game_state.append(game_state)
-        episode_results.append(episode_result)
+        batch_frozen_eye_forced.append(frozen_eye_forced)
+        episode_results.append(EpisodeResult()) 
 
     # Write initial encodings into the shared step buffer and signal the Actor
     batch_legal_actions = [env.get_legal_actions() for env in batch_env]
@@ -478,6 +480,7 @@ def _worker_loop(
                 episode_results[idx_env],
                 action,
                 gamma,
+                batch_frozen_eye_forced[idx_env],
             )
 
             # Write a forced action over the Actor's row, in the model's format, and the flag
@@ -496,8 +499,9 @@ def _worker_loop(
             # If done, put the episode's results into the queue and reset the environment
             if done:
                 episode_result_queue.put(episode_results[idx_env])
-                batch_env[idx_env], game_state_next, episode_results[idx_env] = _new_env_training(
-                    batch_ascension[idx_env], pandora_share, frozen_eye_share
+                episode_results[idx_env] = EpisodeResult()
+                batch_env[idx_env], game_state_next, batch_frozen_eye_forced[idx_env] = (
+                    _new_env_training(batch_ascension[idx_env], pandora_share, frozen_eye_share)
                 )
 
             # Overwrite current game state
@@ -537,11 +541,11 @@ def _wait_for_request(sph_request: Semaphore, x_stop: torch.Tensor) -> bool:
 
 def _new_env_training(
     ascension: int, pandora_share: float, frozen_eye_share: float
-) -> tuple[GameEnv, GameState, EpisodeResult]:
-    """Start a training game at `ascension` from a new random seed, with its episode's record.
+) -> tuple[GameEnv, GameState, bool]:
+    """Start a training game at `ascension` from a new random seed.
 
-    With probability `frozen_eye_share` the episode forces Frozen Eye's Shop purchase whenever
-    it's legal, and with probability `pandora_share` the game starts from Pandora's Box.
+    With probability `pandora_share` the game starts from Pandora's Box, and with probability
+    `frozen_eye_share` it forces Frozen Eye's Shop purchase whenever it's legal.
 
     Parameters
     ----------
@@ -550,7 +554,7 @@ def _new_env_training(
     pandora_share : float
         The probability that the game starts from Pandora's Box.
     frozen_eye_share : float
-        The probability that the episode plays Frozen Eye's Shop purchase whenever it's legal.
+        The probability that the game plays Frozen Eye's Shop purchase whenever it's legal.
 
     Returns
     -------
@@ -558,8 +562,8 @@ def _new_env_training(
         The game, with the run's `NEOW` setting.
     game_state : GameState
         Its first state.
-    episode_result : EpisodeResult
-        The episode's tally, zeroed, and whether it forces Frozen Eye's purchase.
+    frozen_eye_forced : bool
+        Whether the game plays Frozen Eye's Shop purchase whenever it's legal.
     """
     # A share of 0 skips this draw, so the seeds stay those of a run without forced purchases
     frozen_eye_forced = frozen_eye_share > 0 and random.random() < frozen_eye_share
@@ -570,7 +574,7 @@ def _new_env_training(
     else:
         env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
 
-    return env, game_state, EpisodeResult(frozen_eye_forced=frozen_eye_forced)
+    return env, game_state, frozen_eye_forced
 
 
 def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
