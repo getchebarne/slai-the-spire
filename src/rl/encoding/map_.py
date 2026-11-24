@@ -78,8 +78,7 @@ _OFF_MAP_UNKNOWN_CHANCE_MONSTER = _alloc("unknown_chance_monster")
 _OFF_MAP_UNKNOWN_CHANCE_SHOP = _alloc("unknown_chance_shop")
 _OFF_MAP_UNKNOWN_CHANCE_TREASURE = _alloc("unknown_chance_treasure")
 _OFF_MAP_ROOM_KIND_RESOLVED = _alloc("room_kind_resolved", _MAP_NUM_ROOM_KINDS)
-_OFF_MAP_POOL_EVENTS = _alloc("pool_events", len(_IDX_OF_EVENT_NAME))
-_OFF_MAP_POOL_EVENT_SPECIAL = _alloc("pool_event_special", len(_IDX_OF_EVENT_NAME))
+_OFF_MAP_EVENT_POOLS = _alloc("event_pools", len(_IDX_OF_EVENT_NAME))
 
 ENCODING_DIM_MAP_META = sum(w for _, w, _ in _CHANNEL_LAYOUT_MAP_META)
 
@@ -193,10 +192,8 @@ def _encode_unknown_room_into(game_state: GameState, np_out: np.ndarray) -> None
     if room_kind_resolved is not None:
         np_out[_OFF_MAP_ROOM_KIND_RESOLVED + _IDX_OF_ROOM_KIND[room_kind_resolved]] = 1.0
 
-    for event_name in game_state.pool_events:
-        np_out[_OFF_MAP_POOL_EVENTS + _IDX_OF_EVENT_NAME[event_name]] = 1.0
-    for event_name in game_state.pool_event_special:
-        np_out[_OFF_MAP_POOL_EVENT_SPECIAL + _IDX_OF_EVENT_NAME[event_name]] = 1.0
+    for event_name in (*game_state.pool_events, *game_state.pool_event_special):
+        np_out[_OFF_MAP_EVENT_POOLS + _IDX_OF_EVENT_NAME[event_name]] = 1.0
 
 
 def encode_map_grid_into(game_state: GameState, np_out: np.ndarray) -> None:

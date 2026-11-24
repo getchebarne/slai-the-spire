@@ -350,7 +350,10 @@ _CAP_FACTOR = _cap(_field(slai.EffectModifierMultiply, lambda effect: effect.fac
 _CAP_COST = _cap(_field(slai.EffectSetCostOverride, lambda effect: effect.amount))
 _CAP_TURNS = float(slai.BOMB_FUSE_TURNS)
 _CAP_SELECT_COUNT = float(MAX_SIZE_CARD_PILE_HAND)
-_CAP_RELIC_POOL_SIZE = float(max(len(_VOCAB_RELIC), 1))
+_CAP_RELIC_POOL_SIZE = _cap(
+    _field(slai.EffectRelicGrantPool, lambda effect: len(effect.pool)),
+    _field(slai.EffectRewardRollRelic, lambda effect: len(effect.pool)),
+)
 
 # Each magnitude's two-hot knots: every integer up to here, then each square past it
 _LINEAR_SQRT_THRESHOLD = 25
@@ -369,13 +372,31 @@ def _bucket_width(cap: float) -> int:
     int
         One column per integer up to _LINEAR_SQRT_THRESHOLD, then one per square-root step.
     """
-    return get_piecewise_dim(0, int(cap), _LINEAR_SQRT_THRESHOLD)
+    return get_piecewise_dim(1, int(cap), _LINEAR_SQRT_THRESHOLD)
 
 
-# The multi-hot channels' widths: each can set every one of its columns
+# The multi-hot channels' widths
 _DIM_CANDIDATE_FILTER = len(_INDEX_CANDIDATE_FILTER)
 _DIM_RELIC_NAME = len(_VOCAB_RELIC) + 1
 _DIM_MONSTER_NAME = len(_VOCAB_MONSTER) + 1
+
+# The multi-hot channels' nonzeros: the most columns any catalog Effect sets in each
+_MAX_CANDIDATE_FILTERS = int(
+    _cap(
+        len(set(effect.target.filters))
+        for effect in catalog_effects()
+        if effect.target is not None
+    )
+)
+_MAX_RELIC_NAMES = int(
+    _cap(
+        _field(slai.EffectRelicGrantPool, lambda effect: len(set(effect.pool))),
+        _field(slai.EffectRewardRollRelic, lambda effect: len(set(effect.pool))),
+    )
+)
+_MAX_MONSTER_NAMES = int(
+    _cap(_field(slai.EffectMonsterSummon, lambda effect: len(set(effect.pool))))
+)
 
 _CHANNEL_LAYOUT_EFFECT, _alloc = make_channel_allocator()
 
@@ -388,7 +409,7 @@ _OFF_CANDIDATE_POOL = _alloc("candidate_pool", len(_INDEX_CANDIDATE_POOL))
 _OFF_SELECTION_KIND = _alloc("selection_kind", len(_INDEX_SELECTION_KIND))
 _OFF_SELECT_COUNT = _alloc("select_count")
 _OFF_SELECT_COUNT_BUCKETS = _alloc("select_count_buckets", _bucket_width(_CAP_SELECT_COUNT))
-_OFF_CANDIDATE_FILTER = _alloc("candidate_filter", _DIM_CANDIDATE_FILTER, _DIM_CANDIDATE_FILTER)
+_OFF_CANDIDATE_FILTER = _alloc("candidate_filter", _DIM_CANDIDATE_FILTER, _MAX_CANDIDATE_FILTERS)
 _OFF_EFFECT_SOURCE = _alloc("effect_source", len(EffectSource))
 
 # Categorical params, named for the engine type they one-hot
@@ -409,8 +430,8 @@ _OFF_ROUNDING = _alloc("rounding", len(_INDEX_ROUNDING))
 
 # Identity vocabularies, named for the engine name enum (index 0 = unseen)
 _OFF_CARD_NAME = _alloc("card_name", len(_VOCAB_CARD) + 1)
-_OFF_RELIC_NAME = _alloc("relic_name", _DIM_RELIC_NAME, _DIM_RELIC_NAME)
-_OFF_MONSTER_NAME = _alloc("monster_name", _DIM_MONSTER_NAME, _DIM_MONSTER_NAME)
+_OFF_RELIC_NAME = _alloc("relic_name", _DIM_RELIC_NAME, _MAX_RELIC_NAMES)
+_OFF_MONSTER_NAME = _alloc("monster_name", _DIM_MONSTER_NAME, _MAX_MONSTER_NAMES)
 _OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
 
 # Magnitudes, one per physical unit
@@ -420,7 +441,7 @@ _OFF_INSTANCES = _alloc("instances")
 _OFF_BLOCK = _alloc("block")
 _OFF_BLOCK_BUCKETS = _alloc("block_buckets", _bucket_width(_CAP_BLOCK), 2)
 _OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
-_OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH), 2)
+_OFF_HEALTH_BUCKETS = _alloc("health_buckets", _bucket_width(_CAP_HEALTH))
 _OFF_HEALTH_RELATIVE = _alloc("health_relative")
 _OFF_GOLD_ABSOLUTE = _alloc("gold_absolute")
 _OFF_GOLD_BUCKETS = _alloc("gold_buckets", _bucket_width(_CAP_GOLD), 2)
@@ -946,7 +967,7 @@ def _encode_effect_row_into(effect: Effect, np_out: np.ndarray) -> None:
         if value:
             encode_piecewise_into(
                 abs(value),
-                0,
+                1,
                 int(cap),
                 _LINEAR_SQRT_THRESHOLD,
                 np_out[off_bucket:][: _bucket_width(cap)],
