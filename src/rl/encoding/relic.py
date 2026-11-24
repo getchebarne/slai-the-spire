@@ -44,7 +44,7 @@ _OFF_RELIC_ARMED = _alloc("armed")
 ENCODING_DIM_RELIC = sum(w for _, w, _ in _CHANNEL_LAYOUT_RELIC)
 
 # Most nonzero columns a Relic row holds: one per channel, each a one-hot or a scalar
-ENCODING_DIM_SPARSE_RELIC = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_RELIC)
+ENCODING_DIM_RELIC_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_RELIC)
 
 # Each tagged Relic's Tags, by name
 _TAGS_OF_RELIC_NAME: dict[RelicName, tuple[Tag, ...]] = {

@@ -40,7 +40,7 @@ _OFF_MODIFIER_OWNER = _alloc("owner", len(ModifierOwner))
 ENCODING_DIM_MODIFIER = sum(w for _, w, _ in _CHANNEL_LAYOUT_MODIFIER)
 
 # Most nonzero columns a Modifier row holds: one per one-hot or scalar, two per two-hot
-ENCODING_DIM_SPARSE_MODIFIER = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_MODIFIER)
+ENCODING_DIM_MODIFIER_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_MODIFIER)
 
 
 def make_modifier_row(modifier: Modifier, modifier_owner: ModifierOwner) -> np.ndarray:

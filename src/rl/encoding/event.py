@@ -9,8 +9,8 @@ from slai import GameState
 from slai import MonsterEncounter
 
 from src.rl.constants import EVENT_STAGE_CAP
-from src.rl.constants import HEALTH_SCALE
 from src.rl.constants import MAX_EVENT_OPTIONS
+from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_linear_norm
 from src.rl.utils import event_option_wasted
@@ -24,7 +24,6 @@ _IDX_OF_MONSTER_ENCOUNTER = {
     MonsterEncounter.ThreeSentries: 1,
     MonsterEncounter.LagavulinEvent: 2,
 }
-
 
 _CHANNEL_LAYOUT_EVENT_META, _alloc = make_channel_allocator()
 _OFF_EVENT_NAME = _alloc("name", len(_IDX_OF_EVENT_NAME))
@@ -45,14 +44,13 @@ ENCODING_DIM_EVENT_META = sum(w for _, w, _ in _CHANNEL_LAYOUT_EVENT_META)
 # Event kinds whose option list overflowed the cap (warn-once per kind)
 _WARNED_EVENT_TRUNCATED: set = set()
 
-
 _CHANNEL_LAYOUT_EVENT_OPTION, _alloc = make_channel_allocator()
 _OFF_EVENT_OPTION_AVAILABLE = _alloc("available")
 
 ENCODING_DIM_EVENT_OPTION = sum(w for _, w, _ in _CHANNEL_LAYOUT_EVENT_OPTION)
 
 # Most nonzero columns an Event option row holds
-ENCODING_DIM_SPARSE_EVENT_OPTION = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_EVENT_OPTION)
+ENCODING_DIM_EVENT_OPTION_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_EVENT_OPTION)
 
 
 def encode_event_option_into(
@@ -103,7 +101,7 @@ def encode_event_meta_into(game_state: GameState, np_out: np.ndarray) -> None:
     np_out[_OFF_EVENT_STAGE] = min(event.stage, EVENT_STAGE_CAP) / EVENT_STAGE_CAP
 
     # On the Character row's max-health scale, so the two compare directly
-    np_out[_OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_linear_norm(event.health_max_at_open, HEALTH_SCALE)
+    np_out[_OFF_EVENT_HEALTH_MAX_AT_OPEN] = get_linear_norm(event.health_max_at_open, SCALE_HEALTH)
 
     # Dead Adventurer only
     np_out[_OFF_EVENT_FOUND_GOLD] = float(event.found_gold)

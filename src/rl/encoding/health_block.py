@@ -2,7 +2,7 @@ import numpy as np
 
 from src.rl.constants import BLOCK_MAX_ENTITY
 from src.rl.constants import HEALTH_MAX_ENTITY
-from src.rl.constants import HEALTH_SCALE
+from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_linear_norm
@@ -31,7 +31,7 @@ _OFF_HEALTH_BLOCK_TOTAL_SCALAR = _alloc("total_scalar")
 ENCODING_DIM_HEALTH_BLOCK = sum(w for _, w, _ in _CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 # Most nonzero health/block columns a row holds: one per one-hot or scalar, two per two-hot
-ENCODING_DIM_SPARSE_HEALTH_BLOCK = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_HEALTH_BLOCK)
+ENCODING_DIM_HEALTH_BLOCK_SPARSE = sum(nonzeros for _, _, nonzeros in _CHANNEL_LAYOUT_HEALTH_BLOCK)
 
 
 def encode_health_block_into(health: int, block: int, np_out: np.ndarray) -> None:
@@ -72,6 +72,6 @@ def encode_health_block_into(health: int, block: int, np_out: np.ndarray) -> Non
     )
 
     # Scalars
-    np_out[_OFF_HEALTH_BLOCK_HEALTH_SCALAR] = get_linear_norm(health, HEALTH_SCALE)
-    np_out[_OFF_HEALTH_BLOCK_BLOCK_SCALAR] = get_linear_norm(block, HEALTH_SCALE)
-    np_out[_OFF_HEALTH_BLOCK_TOTAL_SCALAR] = get_linear_norm(total, HEALTH_SCALE)
+    np_out[_OFF_HEALTH_BLOCK_HEALTH_SCALAR] = get_linear_norm(health, SCALE_HEALTH)
+    np_out[_OFF_HEALTH_BLOCK_BLOCK_SCALAR] = get_linear_norm(block, SCALE_HEALTH)
+    np_out[_OFF_HEALTH_BLOCK_TOTAL_SCALAR] = get_linear_norm(total, SCALE_HEALTH)
