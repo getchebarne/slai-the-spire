@@ -1,6 +1,7 @@
 from typing import get_args
 
 import numpy as np
+from slai import MAX_ENERGY_MAX
 from slai import Card
 from slai import CardColor
 from slai import CardCostKind
@@ -9,12 +10,10 @@ from slai import CardKind
 from slai import CardName
 from slai import CardRarity
 from slai import CostScope
-from slai import EffectSetCostOverride
 from slai import PlaySource
 from slai import get_card_templates
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
-from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
@@ -33,14 +32,9 @@ _IDX_OF_COST_SCOPE = {scope: int(scope) for scope in CostScope.members()}
 _IDX_OF_PLAY_SOURCE = {play_source: int(play_source) for play_source in PlaySource.members()}
 _IDX_OF_CARD_COST_KIND = {cls: idx_class for idx_class, cls in enumerate(get_args(CardCostKind))}
 
-# Cost, derived: the catalog's widest base cost or override amount
+# Cost, derived: the engine's largest max energy
 _COST_MIN = 0
-_COST_MAX = max(
-    max(card_template.cost_base for card_template in get_card_templates()),
-    max(
-        effect.amount for effect in catalog_effects() if isinstance(effect, EffectSetCostOverride)
-    ),
-)
+_COST_MAX = MAX_ENERGY_MAX
 _COST_VECTOR_DIM = _COST_MAX - _COST_MIN + 1
 _COST_OFFSET_MAX = max(
     1.0,
