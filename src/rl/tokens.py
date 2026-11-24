@@ -12,7 +12,6 @@ from typing import Any, cast, get_args
 
 from slai import MAP_HEIGHT
 from slai import MAP_WIDTH
-from slai import MAX_CARD_REWARD_ROLL
 from slai import MAX_COMBAT_CARD_REWARD
 from slai import MAX_POTION_SLOTS
 from slai import MAX_SIZE_CARD_PILE_EVENT_ROLL
@@ -316,31 +315,30 @@ def _get_card_play_queue(game_state: GameState) -> list[int]:
     )
 
 
-def _get_card_reward_bundle(reward: Reward, idx_bundle: int, cap: int) -> list[int]:
+def _get_card_reward_bundle(reward: Reward, idx_bundle: int) -> list[int]:
     id_cards = reward.id_cards
 
-    return id_cards[idx_bundle][:cap] if idx_bundle < len(id_cards) else []
+    return id_cards[idx_bundle][:MAX_COMBAT_CARD_REWARD] if idx_bundle < len(id_cards) else []
 
 
 def _get_card_reward_0(reward: Reward) -> list[int]:
-    # Bundle 0 must hold The Library's single wide roll
-    return _get_card_reward_bundle(reward, 0, MAX_CARD_REWARD_ROLL)
+    return _get_card_reward_bundle(reward, 0)
 
 
 def _get_card_reward_1(reward: Reward) -> list[int]:
-    return _get_card_reward_bundle(reward, 1, MAX_COMBAT_CARD_REWARD)
+    return _get_card_reward_bundle(reward, 1)
 
 
 def _get_card_reward_2(reward: Reward) -> list[int]:
-    return _get_card_reward_bundle(reward, 2, MAX_COMBAT_CARD_REWARD)
+    return _get_card_reward_bundle(reward, 2)
 
 
 def _get_card_reward_3(reward: Reward) -> list[int]:
-    return _get_card_reward_bundle(reward, 3, MAX_COMBAT_CARD_REWARD)
+    return _get_card_reward_bundle(reward, 3)
 
 
 def _get_card_reward_4(reward: Reward) -> list[int]:
-    return _get_card_reward_bundle(reward, 4, MAX_COMBAT_CARD_REWARD)
+    return _get_card_reward_bundle(reward, 4)
 
 
 def _get_card_shop(shop: Shop) -> list[int]:
