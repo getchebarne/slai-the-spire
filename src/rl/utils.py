@@ -9,6 +9,7 @@ import torch.nn as nn
 import yaml
 from slai import ACT_FINAL
 from slai import MAP_HEIGHT
+from slai import MAP_ROW_TREASURE
 from slai import ActionType
 from slai import CardName
 from slai import EffectHealthDelta
@@ -378,7 +379,7 @@ def _leaves_key_sapphire(game_state: slai.GameState, action: slai.Action) -> boo
     """
     # Row 8 is always a Chest
     y_current, _ = get_y_x_current(game_state.map)
-    if y_current is None or y_current < 8:
+    if y_current is None or y_current < MAP_ROW_TREASURE:
         return False
 
     # An opened Chest closes for its Reward

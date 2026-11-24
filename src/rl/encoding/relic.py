@@ -1,4 +1,5 @@
 import numpy as np
+from slai import MAX_POCKETWATCH_PLAYS
 from slai import GameState
 from slai import Relic
 from slai import RelicName
@@ -28,9 +29,6 @@ _COUNTER_ARMED_OF_RELIC_NAME = {
     RelicName.PenNib: 9,  # The next Attack deals double
     RelicName.TinyChest: 3,  # The next "?" Room is a Treasure Room
 }
-
-# Pocketwatch: this many plays or fewer draw 3 next turn
-_POCKETWATCH_PLAYS_ARMED = 3
 
 
 _CHANNEL_LAYOUT_RELIC, _alloc = make_channel_allocator()
@@ -140,7 +138,7 @@ def is_relic_armed(relic: Relic, game_state: GameState) -> bool:
             return get_character(game_state).block == 0
         
         case RelicName.Pocketwatch:
-            return relic.counter <= _POCKETWATCH_PLAYS_ARMED
+            return relic.counter <= MAX_POCKETWATCH_PLAYS
         
         case RelicName.StoneCalendar:
             combat = game_state.combat
