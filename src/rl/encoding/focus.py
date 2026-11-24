@@ -2,9 +2,7 @@ from enum import IntEnum
 
 import numpy as np
 from slai import BOMB_FUSE_TURNS
-from slai import MAX_SIZE_CARD_PILE_EVENT_ROLL
 from slai import MAX_SIZE_CARD_PILE_HAND
-from slai import MAX_SIZE_RELIC_EVENT_ROLL
 from slai import CandidatePool
 from slai import ChestKind
 from slai import GameState
@@ -12,8 +10,6 @@ from slai import SelectionKindInput
 from slai import SelectionKindInputUpTo
 
 from src.rl.constants import SCALE_HEALTH
-from src.rl.constants import MAX_SIZE_CARD_PILE_DECK
-from src.rl.constants import MAX_SIZE_CARD_PILE_DISCOVER
 from src.rl.encoding.effect import catalog_effects
 from src.rl.encoding.layout import make_channel_allocator
 from src.rl.encoding.scalars import get_linear_norm
@@ -71,15 +67,15 @@ _OFF_FOCUS_PRESENCE = _alloc("presence", 6)
 
 ENCODING_DIM_FOCUS = sum(w for _, w, _ in _CHANNEL_LAYOUT_FOCUS)
 
-# Every pool the engine can halt over; the selection count normalizes against the pool's max size
-_INPUT_POOL_CAP = {
-    CandidatePool.CardPileHand: MAX_SIZE_CARD_PILE_HAND,
-    CandidatePool.CardPileDeck: MAX_SIZE_CARD_PILE_DECK,
-    CandidatePool.CardPileDiscover: MAX_SIZE_CARD_PILE_DISCOVER,
-    CandidatePool.CardPileDraw: MAX_SIZE_CARD_PILE_DECK,
-    CandidatePool.CardPileDiscard: MAX_SIZE_CARD_PILE_DECK,
-    CandidatePool.CardPileEventRoll: MAX_SIZE_CARD_PILE_EVENT_ROLL,
-    CandidatePool.RelicEventRoll: MAX_SIZE_RELIC_EVENT_ROLL,
+# Every pool the engine can halt over
+_INPUT_POOLS = {
+    CandidatePool.CardPileHand,
+    CandidatePool.CardPileDeck,
+    CandidatePool.CardPileDiscover,
+    CandidatePool.CardPileDraw,
+    CandidatePool.CardPileDiscard,
+    CandidatePool.CardPileEventRoll,
+    CandidatePool.RelicEventRoll,
 }
 
 
@@ -105,14 +101,13 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
     if target is not None:
         selection_kind = target.selection_kind
         if isinstance(selection_kind, (SelectionKindInput, SelectionKindInputUpTo)):
-            cap = _INPUT_POOL_CAP.get(target.candidate_pool)
-            if cap is None:
+            if target.candidate_pool not in _INPUT_POOLS:
                 raise ValueError(
                     f"Input selection from unexpected pool {target.candidate_pool}"
                     f" (pending {type(pending).__name__})"
                 )
 
-            np_out[_OFF_FOCUS_PENDING_COUNT] = selection_kind.count / cap
+            np_out[_OFF_FOCUS_PENDING_COUNT] = selection_kind.count / MAX_SIZE_CARD_PILE_HAND
             if isinstance(selection_kind, SelectionKindInputUpTo):
                 np_out[_OFF_FOCUS_PENDING_SKIPPABLE] = 1.0
 
@@ -144,7 +139,7 @@ def encode_focus_into(game_state: GameState, np_out: np.ndarray) -> None:
 
 
 def _check_tables() -> None:
-    """Check the selection-count caps cover exactly the pools the catalog's halts select from."""
+    """Check the input pools cover exactly the pools the catalog's halts select from."""
     halting: set[CandidatePool] = set()
     for effect in catalog_effects():
         target = effect.target
@@ -152,10 +147,10 @@ def _check_tables() -> None:
             continue
         if isinstance(target.selection_kind, (SelectionKindInput, SelectionKindInputUpTo)):
             halting.add(target.candidate_pool)
-    if set(_INPUT_POOL_CAP) != halting:
+    if _INPUT_POOLS != halting:
         raise RuntimeError(
-            "Halting-pool tables drifted: _INPUT_POOL_CAP and the catalog's halting pools "
-            f"differ on {set(_INPUT_POOL_CAP) ^ halting}"
+            "Halting-pool tables drifted: _INPUT_POOLS and the catalog's halting pools "
+            f"differ on {_INPUT_POOLS ^ halting}"
         )
 
 

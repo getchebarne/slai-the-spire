@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 from slai import FACTOR_VULN
+from slai import MAX_MONSTER_MOVES
 from slai import MAX_MOVE_HISTORY
 from slai import Effect
 from slai import EffectDebuffsClear
@@ -17,7 +18,7 @@ from src.rl.constants import SCALE_HEALTH
 from src.rl.constants import INTENT_DAMAGE_HIT_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
 from src.rl.constants import INTENT_INSTANCES_MAX
-from src.rl.constants import MONSTER_MOVESET_MAX
+from src.rl.constants import MONSTER_TEMPLATES
 from src.rl.encoding.incoming import Incoming
 from src.rl.encoding.incoming import get_poison_tick
 from src.rl.encoding.layout import make_channel_allocator
@@ -54,16 +55,76 @@ _LINEAR_SQRT_THRESHOLD = 18
 _DAMAGE_DIM = get_piecewise_dim(0, _DAMAGE_MAX, _LINEAR_SQRT_THRESHOLD)
 _DAMAGE_TOTAL_DIM = get_piecewise_dim(0, _DAMAGE_TOTAL_MAX, _LINEAR_SQRT_THRESHOLD)
 
+# Max HP: the shared block's health knots, from 1
+_MAX_HEALTH_LINEAR_SQRT_THRESHOLD = 25
+_DIM_MAX_HEALTH_OHE = get_piecewise_dim(1, _HEALTH_MAX, _MAX_HEALTH_LINEAR_SQRT_THRESHOLD)
+
 # Its turn starts until Poison alone kills it: past this, the channel reads none
 _POISON_TICKS_MAX = 10
 
 # Champ's Anger and Time Eater's Haste come below half HP, once per Combat
 _MONSTER_NAMES_HALF_HEALTH_ULTIMATE = {MonsterName.Champ, MonsterName.TimeEater}
 
+
+def _health_to_trigger(
+    name: MonsterName,
+    health: int,
+    health_max: int,
+    ultimate_used: bool,
+    stacks_of_modifier_kind: dict[ModifierKind, int],
+) -> int | None:
+    """Return the HP loss that fires the Monster's HP trigger.
+
+    Parameters
+    ----------
+    name : MonsterName
+        The Monster's name.
+    health : int
+        The Monster's health.
+    health_max : int
+        The Monster's max health.
+    ultimate_used : bool
+        Whether the Monster has used its once-per-Combat move below half HP.
+    stacks_of_modifier_kind : dict[ModifierKind, int]
+        The Monster's Modifiers: each kind's stacks.
+
+    Returns
+    -------
+    int | None
+        The HP, 0 when the trigger has fired; None for a Monster with no trigger waiting.
+    """
+    if ModifierKind.ModeShift in stacks_of_modifier_kind:
+        return max(stacks_of_modifier_kind[ModifierKind.ModeShift], 0)
+
+    health_half = health_max // 2
+
+    # Split at half or less, the once-per-Combat moves below half
+    if ModifierKind.Splittable in stacks_of_modifier_kind:
+        return max(health - health_half, 0)
+
+    if name in _MONSTER_NAMES_HALF_HEALTH_ULTIMATE and not ultimate_used:
+        return max(health - health_half + 1, 0)
+
+    return None
+
+
+# The trigger's largest HP loss: each template at its top HP roll, its Modifiers as spawned
+_HEALTH_TO_TRIGGER_MAX = max(
+    _health_to_trigger(
+        template.name,
+        template.hp_range[1],
+        template.hp_range[1],
+        False,
+        {spawn.kind: spawn.stacks_max for spawn in template.modifier_spawns},
+    )
+    or 0
+    for template in MONSTER_TEMPLATES
+)
+
 # Exact through a turn's burst
 _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD = 49
 _HEALTH_TO_TRIGGER_DIM = get_piecewise_dim(
-    0, _HEALTH_MAX, _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD
+    0, _HEALTH_TO_TRIGGER_MAX, _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD
 )
 
 _MOVE_PREV_COUNT_DIM = get_piecewise_dim(0, MAX_MOVE_HISTORY, _LINEAR_SQRT_THRESHOLD)
@@ -84,6 +145,7 @@ _OFF_MONSTER_INTENT_HAS_BUFF = _alloc("intent_has_buff")
 _OFF_MONSTER_INTENT_HAS_DEBUFF = _alloc("intent_has_debuff")
 _OFF_MONSTER_HIT_NO_HEALTH_LOST = _alloc("hit_no_health_lost")
 _OFF_MONSTER_HIT_IS_LETHAL = _alloc("hit_is_lethal")
+_OFF_MONSTER_MAX_HEALTH_OHE = _alloc("max_health_ohe", _DIM_MAX_HEALTH_OHE, 2)
 _OFF_MONSTER_MAX_HEALTH_MAGNITUDE = _alloc("max_health_magnitude")
 _OFF_MONSTER_HEALTH_FRACTION = _alloc("health_fraction")
 _OFF_MONSTER_POISON_TICKS_TO_KILL = _alloc("poison_ticks_to_kill", _POISON_TICKS_MAX)
@@ -92,9 +154,9 @@ _OFF_MONSTER_HEALTH_TO_TRIGGER_SCALAR = _alloc("health_to_trigger_scalar")
 _OFF_MONSTER_GOLD_STOLEN = _alloc("gold_stolen")
 _OFF_MONSTER_INTENT_KIND = _alloc("intent_kind", len(_IDX_OF_INTENT_KIND))
 _OFF_MONSTER_INTENT_HIDDEN = _alloc("intent_hidden")
-_OFF_MONSTER_MOVE_CURRENT = _alloc("move_current", MONSTER_MOVESET_MAX)
-_OFF_MONSTER_MOVE_PREV_1 = _alloc("move_prev_1", MONSTER_MOVESET_MAX)
-_OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MONSTER_MOVESET_MAX)
+_OFF_MONSTER_MOVE_CURRENT = _alloc("move_current", MAX_MONSTER_MOVES)
+_OFF_MONSTER_MOVE_PREV_1 = _alloc("move_prev_1", MAX_MONSTER_MOVES)
+_OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MAX_MONSTER_MOVES)
 _OFF_MONSTER_MOVE_PREV_COUNT = _alloc("move_prev_count", _MOVE_PREV_COUNT_DIM, 2)
 _OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")
 _OFF_MONSTER_HALF_DEAD = _alloc("half_dead")
@@ -170,38 +232,6 @@ def _poison_ticks_to_kill(
     return None
 
 
-def _health_to_trigger(
-    monster: Monster, stacks_of_modifier_kind: dict[ModifierKind, int]
-) -> int | None:
-    """Return the HP loss that fires the Monster's HP trigger.
-
-    Parameters
-    ----------
-    monster : Monster
-        The Monster.
-    stacks_of_modifier_kind : dict[ModifierKind, int]
-        The Monster's Modifiers: each kind's stacks.
-
-    Returns
-    -------
-    int | None
-        The HP, 0 when the trigger has fired; None for a Monster with no trigger waiting.
-    """
-    if ModifierKind.ModeShift in stacks_of_modifier_kind:
-        return max(stacks_of_modifier_kind[ModifierKind.ModeShift], 0)
-
-    health_half = monster.health_max // 2
-
-    # Split at half or less, the once-per-Combat moves below half
-    if ModifierKind.Splittable in stacks_of_modifier_kind:
-        return max(monster.health - health_half, 0)
-    
-    if monster.name in _MONSTER_NAMES_HALF_HEALTH_ULTIMATE and not monster.ultimate_used:
-        return max(monster.health - health_half + 1, 0)
-
-    return None
-
-
 def encode_monster_into(
     monster: Monster,
     incoming: Incoming | None,
@@ -226,6 +256,13 @@ def encode_monster_into(
         (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
     """
     np_own[_OFF_MONSTER_NAME + _IDX_OF_MONSTER_NAME[monster.name]] = 1.0
+    encode_piecewise_into(
+        monster.health_max,
+        1,
+        _HEALTH_MAX,
+        _MAX_HEALTH_LINEAR_SQRT_THRESHOLD,
+        np_own[_OFF_MONSTER_MAX_HEALTH_OHE:][:_DIM_MAX_HEALTH_OHE],
+    )
     np_own[_OFF_MONSTER_MAX_HEALTH_MAGNITUDE] = get_linear_norm(monster.health_max, SCALE_HEALTH)
     np_own[_OFF_MONSTER_HEALTH_FRACTION] = monster.health / max(monster.health_max, 1)
     np_own[_OFF_MONSTER_REPLAY_TARGET] = float(monster.replay_target)
@@ -239,12 +276,18 @@ def encode_monster_into(
         np_own[_OFF_MONSTER_POISON_TICKS_TO_KILL + poison_ticks - 1] = 1.0
 
     # HP to its trigger
-    health_to_trigger = _health_to_trigger(monster, stacks_of_modifier_kind)
+    health_to_trigger = _health_to_trigger(
+        monster.name,
+        monster.health,
+        monster.health_max,
+        monster.ultimate_used,
+        stacks_of_modifier_kind,
+    )
     if health_to_trigger is not None:
         encode_piecewise_into(
             health_to_trigger,
             0,
-            _HEALTH_MAX,
+            _HEALTH_TO_TRIGGER_MAX,
             _HEALTH_TO_TRIGGER_LINEAR_SQRT_THRESHOLD,
             np_own[_OFF_MONSTER_HEALTH_TO_TRIGGER:][:_HEALTH_TO_TRIGGER_DIM],
         )

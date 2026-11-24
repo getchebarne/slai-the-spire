@@ -19,12 +19,12 @@ ASCENSION_LEVEL = _slai.MAX_ASCENSION
 NEOW = True
 
 # Every Monster template across every ascension, for the catalog folds below
-_MONSTER_TEMPLATES = [
+MONSTER_TEMPLATES = [
     template
     for ascension in range(ASCENSION_LEVEL + 1)
     for template in _slai.get_monster_templates(ascension)
 ]
-_MONSTER_MOVES = [move for template in _MONSTER_TEMPLATES for move in template.moves]
+_MONSTER_MOVES = [move for template in MONSTER_TEMPLATES for move in template.moves]
 
 # The Character's max-health ceiling, which bounds Hexaghost's Divider
 _CHARACTER_HEALTH_CAP = 200
@@ -32,7 +32,7 @@ _CHARACTER_HEALTH_CAP = 200
 # The catalog's widest single block source (the Spire Shield's A18 block)
 BLOCK_MAX_ENTITY = max(
     value
-    for template in _MONSTER_TEMPLATES
+    for template in MONSTER_TEMPLATES
     for value in (
         template.block_start,
         *(
@@ -45,7 +45,7 @@ BLOCK_MAX_ENTITY = max(
 )
 
 # The catalog's widest Monster HP roll (the Transient's 999)
-HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in _MONSTER_TEMPLATES)
+HEALTH_MAX_ENTITY = max(template.hp_range[1] for template in MONSTER_TEMPLATES)
 
 # Widest raw intent hit; Vulnerable scaling is the encoder caps' job
 _DIVIDER_HIT_MAX = _CHARACTER_HEALTH_CAP // _slai.HEXAGHOST_DIVIDER_DIVISOR + 1
@@ -72,9 +72,6 @@ INTENT_INSTANCES_MAX = max(
     max(move.instances for move in _MONSTER_MOVES if move.instances is not None),
     MULTI_STAB_INSTANCES_MAX,
 )
-
-# Widest moveset in the catalog: the move-index OHE width
-MONSTER_MOVESET_MAX = max(len(template.moves) for template in _MONSTER_TEMPLATES)
 
 # Invincible caps the HP lost per turn at its stacks
 INVINCIBLE_STACKS_OF_ASCENSION = {

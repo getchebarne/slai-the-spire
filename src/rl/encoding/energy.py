@@ -1,5 +1,6 @@
 import numpy as np
 from slai import ENERGY_MAX_BASE
+from slai import MAX_ENERGY_MAX
 from slai import GameState
 from slai import Relic
 from slai import RelicName
@@ -26,13 +27,10 @@ _RELIC_NAMES_ENERGY = frozenset(
     }
 )
 
-# Slaver's Collar adds 1 more, in elite and boss fights only
-_ENERGY_MAX_CAP = ENERGY_MAX_BASE + len(_RELIC_NAMES_ENERGY) + 1
-
 _CHANNEL_LAYOUT_ENERGY, _alloc = make_channel_allocator()
 _OFF_ENERGY = _alloc("energy", _ENERGY_CURRENT_MAX - _ENERGY_CURRENT_MIN + 1)
 _OFF_ENERGY_SCALAR = _alloc("energy_scalar")
-_OFF_ENERGY_MAX = _alloc("energy_max", _ENERGY_MAX_CAP - ENERGY_MAX_BASE + 1)
+_OFF_ENERGY_MAX = _alloc("energy_max", MAX_ENERGY_MAX - ENERGY_MAX_BASE + 1)
 _OFF_ENERGY_MAX_SCALAR = _alloc("energy_max_scalar")
 
 ENCODING_DIM_ENERGY = sum(w for _, w, _ in _CHANNEL_LAYOUT_ENERGY)
@@ -75,7 +73,7 @@ def encode_energy_into(game_state: GameState, np_out: np.ndarray) -> None:
     """
     energy_max = get_energy_max(game_state)
     np_out[_OFF_ENERGY_MAX + energy_max - ENERGY_MAX_BASE] = 1.0
-    np_out[_OFF_ENERGY_MAX_SCALAR] = energy_max / _ENERGY_CURRENT_MAX
+    np_out[_OFF_ENERGY_MAX_SCALAR] = energy_max / MAX_ENERGY_MAX
 
     combat = game_state.combat
     if combat is None:
