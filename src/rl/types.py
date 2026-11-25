@@ -94,20 +94,23 @@ class EffectSource(IntEnum):
 
     # Monsters
     MONSTER_MOVE = 4
-    MONSTER_MOVESET = 5
+    MONSTER_MOVE_POSSIBLE = 5
+    MONSTER_MOVE_PREV_1 = 6
+    MONSTER_MOVE_PREV_2 = 7
+    MONSTER_MOVESET = 8
 
     # Relics
-    RELIC_COMBAT_START = 6
-    RELIC_TURN_START = 7
-    RELIC_TURN_END = 8
-    RELIC_COMBAT_END = 9
-    RELIC_PICKUP = 10
-    RELIC_REST = 11
-    RELIC_COUNTER = 12
+    RELIC_COMBAT_START = 9
+    RELIC_TURN_START = 10
+    RELIC_TURN_END = 11
+    RELIC_COMBAT_END = 12
+    RELIC_PICKUP = 13
+    RELIC_REST = 14
+    RELIC_COUNTER = 15
 
     # Cards, when discarded and when drawn
-    CARD_DISCARD = 13
-    CARD_DRAW = 14
+    CARD_DISCARD = 16
+    CARD_DRAW = 17
 
 
 class ModifierOwner(IntEnum):

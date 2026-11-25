@@ -45,7 +45,9 @@ from src.rl.encoding.modifier import make_modifier_row
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER
 from src.rl.encoding.monster import ENCODING_DIM_MONSTER_SPARSE
 from src.rl.encoding.monster import encode_monster_into
-from src.rl.encoding.monster import moveset_effects
+from src.rl.encoding.monster import get_move_effects
+from src.rl.encoding.monster import get_move_effects_shown
+from src.rl.encoding.monster import get_num_moves
 from src.rl.encoding.potion import ENCODING_DIM_POTION
 from src.rl.encoding.potion import ENCODING_DIM_POTION_SPARSE
 from src.rl.encoding.potion import encode_potion_into
@@ -644,20 +646,28 @@ def _encode_tokens_into(game_state: GameState, tokens: Sequence[Token]) -> list[
                     if card.playable and outgoing_slot is not None:
                         outgoing_monster.append(outgoing_slot)
 
+                ascension = game_state.ascension
                 np_row = np.zeros(ENCODING_DIM_TOKEN, dtype=np.float32)
                 encode_monster_into(
                     entity,
                     incoming,
                     outgoing_monster,
-                    game_state.ascension,
+                    ascension,
                     np_row[COL_START_MONSTER:COL_START_CHARACTER],
                     np_row[_COL_START_SHARED:],
                 )
 
                 # Effects
-                effects_moveset = moveset_effects(game_state.ascension)[entity.name]
+                effects_sure, effects_possible = get_move_effects_shown(entity, ascension)
+                effects_prev_1 = get_move_effects(entity, ascension, entity.move_history[-1:])
+                effects_prev_2 = get_move_effects(entity, ascension, entity.move_history[-2:-1])
+                idx_moves = range(get_num_moves(entity, ascension))
+                effects_moveset = get_move_effects(entity, ascension, idx_moves)
                 effect_table_rows = _get_effect_table_rows(
-                    (entity.move_effects, EffectSource.MONSTER_MOVE),
+                    (effects_sure, EffectSource.MONSTER_MOVE),
+                    (effects_possible, EffectSource.MONSTER_MOVE_POSSIBLE),
+                    (effects_prev_1, EffectSource.MONSTER_MOVE_PREV_1),
+                    (effects_prev_2, EffectSource.MONSTER_MOVE_PREV_2),
                     (effects_moveset, EffectSource.MONSTER_MOVESET),
                 )
 
