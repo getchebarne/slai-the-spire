@@ -25,7 +25,7 @@ def encode_room_into(
 ) -> None:
     """Write a forward Room's feature row.
 
-    The Map's cache keeps the rows by Rooms key (`tokens.get_rooms_key`), so all that a new input
+    The Map's cache keeps the rows by Map key (`tokens.get_map_key`), so all that a new input
     depends on goes in that key too.
 
     Parameters

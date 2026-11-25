@@ -72,8 +72,8 @@ type RecordKeyCard = tuple[int, int, int | None, int | None, int | None, PlaySou
 type RecordKeyRelic = tuple[int, bool, bool, int | None]
 type RecordKeyPotion = tuple[int, bool, int | None]
 
-# A state's Rooms key: all that its Map's features and topology depend on (`tokens.get_rooms_key`)
-type RoomsKey = tuple[int, int | None, int | None, int, bool]
+# A state's Map key: all that its Map's features and topology depend on (`tokens.get_map_key`)
+type MapKey = tuple[int, int | None, int | None, int, bool]
 
 
 class EffectSource(IntEnum):
