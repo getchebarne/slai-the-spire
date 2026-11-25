@@ -53,7 +53,7 @@ from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.types import CollectionKind
 from src.rl.types import Entity
-from src.rl.types import RoomsKey
+from src.rl.types import MapKey
 from src.rl.types import Token
 
 
@@ -67,7 +67,7 @@ __all__ = [
     "get_rooms",
     "get_room_entities",
     "get_rooms_forward",
-    "get_rooms_key",
+    "get_map_key",
     "get_room_burning",
     "get_burning_path",
     "get_cells_next_room",
@@ -77,8 +77,8 @@ __all__ = [
 # The collection kinds that have already warned about overflow
 _WARNED_OVERFLOW: set[CollectionKind] = set()
 
-# The burning path by Map, current Room and Wing Boots charges left
-_BURNING_PATH_CACHE: dict[tuple[int | None, ...], frozenset[tuple[int, int]]] = {}
+# The burning path by Map key
+_BURNING_PATH_CACHE: dict[MapKey, frozenset[tuple[int, int]]] = {}
 _BURNING_PATH_CACHE_MAX = 100_000
 
 
@@ -602,8 +602,8 @@ def get_rooms_forward(game_state: GameState) -> list[Room]:
     )
 
 
-def get_rooms_key(game_state: GameState) -> RoomsKey:
-    """Make a state's Rooms key: all that its Map's features and topology depend on.
+def get_map_key(game_state: GameState) -> MapKey:
+    """Make a state's Map key: all that its Map's features and topology depend on.
 
     Parameters
     ----------
@@ -612,7 +612,7 @@ def get_rooms_key(game_state: GameState) -> RoomsKey:
 
     Returns
     -------
-    RoomsKey
+    MapKey
         The Map's identity_hash, the current Room's row and column, the Wing Boots charges left,
         and whether the Emerald Key can still be taken.
     """
@@ -739,7 +739,7 @@ def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
     which hold a burning Room. The key masks force the path in Act 3 alone. A Room counts when the
     cheapest way to it from the current position plus the cheapest way from it to the burning Room
     burn no more charges than are left. Each move onto a Room not in the current Room's edges burns
-    one; the act's first move is free. Cached by Map, current Room and charges, all it depends on.
+    one; the act's first move is free. Cached by the state's Map key (`get_map_key`).
 
     Parameters
     ----------
@@ -755,17 +755,15 @@ def get_burning_path(game_state: GameState) -> frozenset[tuple[int, int]]:
     if game_state.key_emerald:
         return frozenset()
 
-    map_ = game_state.map
-    y_current, x_current = get_y_x_current(map_)
-    wb_charges_left = _get_wing_boots_charges(game_state)
-    cache_key = (map_.identity_hash, y_current, x_current, wb_charges_left)
-    burning_path = _BURNING_PATH_CACHE.get(cache_key)
+    map_key = get_map_key(game_state)
+    burning_path = _BURNING_PATH_CACHE.get(map_key)
     if burning_path is None:
+        _, _, _, wb_charges_left, _ = map_key
         burning_path = _get_burning_path_uncached(game_state, wb_charges_left)
         if len(_BURNING_PATH_CACHE) >= _BURNING_PATH_CACHE_MAX:
             _BURNING_PATH_CACHE.clear()
 
-        _BURNING_PATH_CACHE[cache_key] = burning_path
+        _BURNING_PATH_CACHE[map_key] = burning_path
 
     return burning_path
 
