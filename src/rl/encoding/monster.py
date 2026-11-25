@@ -1,17 +1,19 @@
 import math
+from collections.abc import Iterable
 
 import numpy as np
 from slai import FACTOR_VULN
-from slai import MAX_MONSTER_MOVES
 from slai import MAX_MOVE_HISTORY
 from slai import Effect
 from slai import EffectDebuffsClear
 from slai import IntentKind
 from slai import ModifierKind
 from slai import Monster
+from slai import MonsterMoveTemplate
 from slai import MonsterName
 from slai import get_monster_templates
 
+from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import HEALTH_MAX_ENTITY
 from src.rl.constants import INTENT_DAMAGE_HIT_MAX
 from src.rl.constants import INTENT_DAMAGE_TOTAL_MAX
@@ -158,9 +160,9 @@ _OFF_MONSTER_HEALTH_TO_TRIGGER_SCALAR = _alloc("health_to_trigger_scalar")
 _OFF_MONSTER_GOLD_STOLEN = _alloc("gold_stolen")
 _OFF_MONSTER_INTENT_KIND = _alloc("intent_kind", len(_IDX_OF_INTENT_KIND))
 _OFF_MONSTER_INTENT_HIDDEN = _alloc("intent_hidden")
-_OFF_MONSTER_MOVE_CURRENT = _alloc("move_current", MAX_MONSTER_MOVES)
-_OFF_MONSTER_MOVE_PREV_1 = _alloc("move_prev_1", MAX_MONSTER_MOVES)
-_OFF_MONSTER_MOVE_PREV_2 = _alloc("move_prev_2", MAX_MONSTER_MOVES)
+_OFF_MONSTER_MOVE_SHOWN_IS_PREV_1 = _alloc("move_shown_is_prev_1")
+_OFF_MONSTER_MOVE_SHOWN_IS_PREV_2 = _alloc("move_shown_is_prev_2")
+_OFF_MONSTER_MOVE_PREV_1_IS_PREV_2 = _alloc("move_prev_1_is_prev_2")
 _OFF_MONSTER_MOVE_PREV_COUNT = _alloc("move_prev_count", _MOVE_PREV_COUNT_DIM, 2)
 _OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")
 _OFF_MONSTER_HALF_DEAD = _alloc("half_dead")
@@ -193,8 +195,8 @@ def _poison_ticks_to_kill(
     -------
     int | None
         The ticks, 1 the next one; None when Poison wears off first, the kill is past
-        _POISON_TICKS_MAX, a move ends it first (a Split's children hold no Poison, Anger and Haste
-        clear it), or the Monster is half-dead, which no HP loss reaches.
+        _POISON_TICKS_MAX, a move may end it first (a Split's children hold no Poison, Anger and
+        Haste clear it), or the Monster is half-dead, which no HP loss reaches.
     """
     if monster.half_dead:
         return None
@@ -207,7 +209,9 @@ def _poison_ticks_to_kill(
 
     # Anger or Haste clears the Poison on its move, behind that turn's tick
     debuffs_clear_next = can_roll_debuffs_clear and any(
-        isinstance(effect, EffectDebuffsClear) for effect in monster.move_effects
+        isinstance(effect, EffectDebuffsClear)
+        for effects in get_move_effects_shown(monster, ascension)
+        for effect in effects
     )
 
     # No tick touches its block
@@ -261,7 +265,8 @@ def encode_monster_into(
         What each playable hand Card that hits it would take off it (card.py's
         `project_outgoing`): (HP lost, lethal).
     ascension : int
-        The game's ascension, which sets Invincible's cap on the health a Poison tick takes.
+        The game's ascension, which picks the Monster's movesets and sets Invincible's cap on the
+        health a Poison tick takes.
     np_own : np.ndarray
         (ENCODING_DIM_MONSTER,) float32. The Monster's own range of its token row, written in
         place.
@@ -356,19 +361,16 @@ def encode_monster_into(
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
         np_own[_OFF_MONSTER_INTENT_KIND + _IDX_OF_INTENT_KIND[intent.kind]] = 1.0
 
-    # Move identity: the current move + the two before it
-    if monster.move_current is not None:
-        np_own[_OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
-
-    # Under Runic Dome the history holds only the executed mov
-    shift = 0 if intent is None else 1
+    # Move identity: the shown moves + the two before them
+    moves_shown = monster.moves_shown
     move_history = monster.move_history
-    if len(move_history) >= 1 + shift:
-        np_own[_OFF_MONSTER_MOVE_PREV_1 + move_history[-1 - shift]] = 1.0
-    if len(move_history) >= 2 + shift:
-        np_own[_OFF_MONSTER_MOVE_PREV_2 + move_history[-2 - shift]] = 1.0
+    if len(move_history) >= 1:
+        np_own[_OFF_MONSTER_MOVE_SHOWN_IS_PREV_1] = float(move_history[-1] in moves_shown)
+    if len(move_history) >= 2:
+        np_own[_OFF_MONSTER_MOVE_SHOWN_IS_PREV_2] = float(move_history[-2] in moves_shown)
+        np_own[_OFF_MONSTER_MOVE_PREV_1_IS_PREV_2] = float(move_history[-1] == move_history[-2])
     encode_piecewise_into(
-        max(len(move_history) - shift, 0),
+        len(move_history),
         0,
         MAX_MOVE_HISTORY,
         _LINEAR_SQRT_THRESHOLD,
@@ -391,33 +393,115 @@ def encode_monster_into(
         )
 
 
-# Whole-moveset Effects per (ascension, MonsterName), collected once
-_MOVESET_EFFECTS: dict[int, dict[MonsterName, tuple[Effect, ...]]] = {}
+# The catalog's movesets per (ascension, MonsterName), read once
+_MOVESETS = {
+    ascension: {template.name: template.movesets for template in get_monster_templates(ascension)}
+    for ascension in range(ASCENSION_LEVEL + 1)
+}
 
 
-def moveset_effects(ascension: int) -> dict[MonsterName, tuple[Effect, ...]]:
-    """Return each Monster's catalog Effects at the requested ascension.
-
-    Repeated moves contribute their Effects once. The catalog is collected once per ascension.
+def _get_moves(monster: Monster, ascension: int, idx_move: int) -> list[MonsterMoveTemplate]:
+    """Return what the move at an index of the Monster's moveset can be.
 
     Parameters
     ----------
+    monster : Monster
+        The Monster.
     ascension : int
-        The ascension whose Monster templates supply the movesets.
+        The game's ascension, which picks the Monster's movesets.
+    idx_move : int
+        The move's index in the Monster's moveset.
 
     Returns
     -------
-    dict[MonsterName, tuple[Effect, ...]]
-        Each Monster name's Effects in moveset order, shared with the catalog cache.
+    list[MonsterMoveTemplate]
+        The move; while the Monster's spawn roll is hidden, the distinct moves its movesets hold
+        there.
     """
-    by_name = _MOVESET_EFFECTS.get(ascension)
-    if by_name is None:
-        by_name = {
-            template.name: tuple(
-                effect for move in dict.fromkeys(template.moves) for effect in move.effects
-            )
-            for template in get_monster_templates(ascension)
-        }
-        _MOVESET_EFFECTS[ascension] = by_name
+    movesets = _MOVESETS[ascension][monster.name]
+    if monster.moveset is not None:
+        return [movesets[monster.moveset][idx_move]]
 
-    return by_name
+    # An entry the roll doesn't change comes once
+    return list(dict.fromkeys(moveset[idx_move] for moveset in movesets))
+
+
+def get_num_moves(monster: Monster, ascension: int) -> int:
+    """Return the number of moves in the Monster's moveset.
+
+    Parameters
+    ----------
+    monster : Monster
+        The Monster.
+    ascension : int
+        The game's ascension, which picks the Monster's movesets.
+
+    Returns
+    -------
+    int
+        The number of moves, the same for every spawn roll.
+    """
+    return len(_MOVESETS[ascension][monster.name][0])
+
+
+def get_move_effects(monster: Monster, ascension: int, idx_moves: Iterable[int]) -> list[Effect]:
+    """Return the Effects of the moves at some indexes of the Monster's moveset.
+
+    While the Monster's spawn roll is hidden, an index gives the Effects of every move a roll
+    can put there.
+
+    Parameters
+    ----------
+    monster : Monster
+        The Monster.
+    ascension : int
+        The game's ascension, which picks the Monster's movesets.
+    idx_moves : Iterable[int]
+        The moves' indexes in the Monster's moveset.
+
+    Returns
+    -------
+    list[Effect]
+        Each move's Effects, in the indexes' order.
+    """
+    return [
+        effect
+        for idx_move in idx_moves
+        for move in _get_moves(monster, ascension, idx_move)
+        for effect in move.effects
+    ]
+
+
+def get_move_effects_shown(monster: Monster, ascension: int) -> tuple[list[Effect], list[Effect]]:
+    """Return the Effects of the moves the Monster's intent shows.
+
+    Parameters
+    ----------
+    monster : Monster
+        The Monster.
+    ascension : int
+        The game's ascension, which picks the Monster's movesets.
+
+    Returns
+    -------
+    effects_sure : list[Effect]
+        The Effects every such move has.
+    effects_possible : list[Effect]
+        The Effects only some of them have.
+    """
+    moves = [
+        move
+        for idx_move in monster.moves_shown
+        for move in _get_moves(monster, ascension, idx_move)
+    ]
+    if not moves:
+        return [], []
+
+    effects_sure = [
+        effect for effect in moves[0].effects if all(effect in move.effects for move in moves)
+    ]
+    effects_possible = [
+        effect for move in moves for effect in move.effects if effect not in effects_sure
+    ]
+
+    return effects_sure, effects_possible

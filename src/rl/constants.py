@@ -24,7 +24,9 @@ MONSTER_TEMPLATES = [
     for ascension in range(ASCENSION_LEVEL + 1)
     for template in _slai.get_monster_templates(ascension)
 ]
-_MONSTER_MOVES = [move for template in MONSTER_TEMPLATES for move in template.moves]
+_MONSTER_MOVES = [
+    move for template in MONSTER_TEMPLATES for moveset in template.movesets for move in moveset
+]
 
 # The Character's max-health ceiling, which bounds Hexaghost's Divider
 _CHARACTER_HEALTH_CAP = 200
@@ -37,7 +39,8 @@ BLOCK_MAX_ENTITY = max(
         template.block_start,
         *(
             effect.amount
-            for move in template.moves
+            for moveset in template.movesets
+            for move in moveset
             for effect in move.effects
             if isinstance(effect, _slai.EffectBlockGain)
         ),

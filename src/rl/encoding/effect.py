@@ -54,7 +54,6 @@ from slai import get_relic_templates
 
 from src.rl.constants import ASCENSION_LEVEL
 from src.rl.constants import MAX_SCALED
-from src.rl.constants import MULTI_STAB_INSTANCES_MAX
 from src.rl.constants import SCALE_GOLD
 from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.layout import make_channel_allocator
@@ -115,8 +114,9 @@ def catalog_effects() -> Iterator[Effect]:
     # Monster moves
     for ascension in _ASCENSIONS:
         for monster in get_monster_templates(ascension):
-            for move in monster.moves:
-                yield from move.effects
+            for moveset in monster.movesets:
+                for move in moveset:
+                    yield from move.effects
 
 
 # Bucketed by exact type once
@@ -304,12 +304,7 @@ _CAP_DAMAGE = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectRitualDaggerProc, lambda effect: effect.bump),
     _field(slai.EffectGlassKnifeDecay, lambda effect: effect.delta),
 )
-
-# The catalog's Multi-Stab is a 0-hit placeholder, so its live hit count is bridged
-_CAP_INSTANCES = max(
-    _cap(_field(slai.EffectDamagePhysical, lambda effect: effect.instances)),
-    float(MULTI_STAB_INSTANCES_MAX),
-)
+_CAP_INSTANCES = _cap(_field(slai.EffectDamagePhysical, lambda effect: effect.instances))
 _CAP_BLOCK = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectBlockGain, lambda effect: effect.amount),
     _field(slai.EffectEscapePlanCheck, lambda effect: effect.block),
