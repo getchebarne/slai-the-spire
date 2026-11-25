@@ -207,7 +207,7 @@ class ActorCritic(nn.Module):
         self,
         states: States[Live],
         x_recorded_action: torch.Tensor,
-        map_dedup: MapDedup,
+        map_dedup: MapDedup | None,
         token_dedup: TokenDedup | None,
     ) -> tuple[PolicyOutput, torch.Tensor]:
         """Score the recorded actions and compute the values.
@@ -222,8 +222,9 @@ class ActorCritic(nn.Module):
         x_recorded_action : torch.Tensor
             (B, 3) long. Each state's recorded action: action type, selection offset within that
             state, Monster target rank; -1 where a selection or target didn't apply.
-        map_dedup : MapDedup
-            The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+        map_dedup : MapDedup | None
+            The Maps the Map GNN runs, planned on the host for an update, or None to run every
+            state's (see `MapGNN.forward`).
         token_dedup : TokenDedup | None
             The unique tokens the projector runs, planned on the host for an update, or None to
             run every token (see `EntityProjector.forward`).
@@ -294,7 +295,7 @@ class ActorCritic(nn.Module):
         ), x_value
 
     def get_values(
-        self, states: States[Live], map_dedup: MapDedup, token_dedup: TokenDedup | None
+        self, states: States[Live], map_dedup: MapDedup | None, token_dedup: TokenDedup | None
     ) -> torch.Tensor:
         """Compute the values.
 
@@ -302,8 +303,9 @@ class ActorCritic(nn.Module):
         ----------
         states : States[Live]
             The game states.
-        map_dedup : MapDedup
-            The Maps the Map GNN runs, planned on the host for an update (see `MapGNN.forward`).
+        map_dedup : MapDedup | None
+            The Maps the Map GNN runs, planned on the host for an update, or None to run every
+            state's (see `MapGNN.forward`).
         token_dedup : TokenDedup | None
             The unique tokens the projector runs, planned on the host for an update, or None to
             run every token (see `EntityProjector.forward`).
