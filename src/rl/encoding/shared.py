@@ -1,5 +1,6 @@
 """The shared block, the run of columns that ends every token row (health/block, price, stasis
-slot, Tags): its layout, the single writer of each range, and a price's part of a record key.
+slot, outgoing, Tags): its layout, the single writer of each range, and a price's part of a
+record key.
 """
 
 from collections.abc import Iterable
@@ -7,9 +8,11 @@ from collections.abc import Iterable
 import numpy as np
 from slai import MAX_MONSTERS
 
+from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.health_block import ENCODING_DIM_HEALTH_BLOCK
 from src.rl.encoding.health_block import encode_health_block_into
 from src.rl.encoding.layout import make_channel_allocator
+from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.shop import ENCODING_DIM_PRICE
 from src.rl.encoding.shop import encode_price_into
 from src.rl.types import Tag
@@ -19,6 +22,10 @@ from src.rl.types import Tag
 _ENCODING_DIM_STASIS_SLOT = MAX_MONSTERS
 ENCODING_DIM_STASIS_SLOT_SPARSE = 1
 
+# The outgoing columns: what a Card play would take off each slot's Monster
+ENCODING_DIM_OUTGOING_CARD_SPARSE = 2 * MAX_MONSTERS
+ENCODING_DIM_OUTGOING_MONSTER_SPARSE = 2
+
 # The Tag columns: a Multi-Hot over the Tags
 _ENCODING_DIM_TAG = len(Tag)
 ENCODING_DIM_TAG_SPARSE = _ENCODING_DIM_TAG
@@ -27,6 +34,8 @@ _CHANNEL_LAYOUT_SHARED, _alloc = make_channel_allocator()
 OFF_SHARED_HEALTH_BLOCK = _alloc("health_block", ENCODING_DIM_HEALTH_BLOCK)
 OFF_SHARED_PRICE = _alloc("price", ENCODING_DIM_PRICE)
 OFF_SHARED_STASIS_SLOT = _alloc("stasis_slot", _ENCODING_DIM_STASIS_SLOT)
+OFF_SHARED_OUTGOING_HEALTH_LOST = _alloc("outgoing_health_lost", MAX_MONSTERS, MAX_MONSTERS)
+_OFF_SHARED_OUTGOING_IS_LETHAL = _alloc("outgoing_is_lethal", MAX_MONSTERS, MAX_MONSTERS)
 OFF_SHARED_TAG = _alloc("tag", _ENCODING_DIM_TAG, ENCODING_DIM_TAG_SPARSE)
 
 ENCODING_DIM_SHARED = sum(w for _, w, _ in _CHANNEL_LAYOUT_SHARED)
@@ -80,6 +89,28 @@ def encode_shared_stasis_slot_into(slot: int, np_shared: np.ndarray) -> None:
         (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
     """
     np_shared[OFF_SHARED_STASIS_SLOT + slot] = 1.0
+
+
+def encode_shared_outgoing_into(
+    slot: int, health_lost: int, is_lethal: bool, np_shared: np.ndarray
+) -> None:
+    """Write what a Card play would take off a slot's Monster at that slot's outgoing columns.
+
+    Parameters
+    ----------
+    slot : int
+        The slot of a Monster the token's Card would hit, or of the token's Monster.
+    health_lost : int
+        The HP the token's Card would take off that Monster, or the most one playable hand Card
+        would take off the token's Monster.
+    is_lethal : bool
+        Whether the token's Card would kill that Monster, or whether one playable hand Card would
+        kill the token's Monster.
+    np_shared : np.ndarray
+        (ENCODING_DIM_SHARED,) float32. The token's shared block, written in place.
+    """
+    np_shared[OFF_SHARED_OUTGOING_HEALTH_LOST + slot] = get_linear_norm(health_lost, SCALE_HEALTH)
+    np_shared[_OFF_SHARED_OUTGOING_IS_LETHAL + slot] = float(is_lethal)
 
 
 def encode_shared_tag_into(tags: Iterable[Tag], np_shared: np.ndarray) -> None:

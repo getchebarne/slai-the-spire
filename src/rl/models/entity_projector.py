@@ -17,6 +17,7 @@ from src.rl.encoding import COL_START_CHARACTER
 from src.rl.encoding import COL_START_EVENT_OPTION
 from src.rl.encoding import COL_START_HEALTH_BLOCK
 from src.rl.encoding import COL_START_MONSTER
+from src.rl.encoding import COL_START_OUTGOING
 from src.rl.encoding import COL_START_POTION
 from src.rl.encoding import COL_START_PRICE
 from src.rl.encoding import COL_START_RELIC
@@ -148,6 +149,7 @@ class EntityProjector(nn.Module):
                     COL_START_HEALTH_BLOCK,
                     COL_START_PRICE,
                     COL_START_STASIS_SLOT,
+                    COL_START_OUTGOING,
                     COL_START_TAG,
                 ),
                 dim=1,
