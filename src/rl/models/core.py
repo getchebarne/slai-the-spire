@@ -52,7 +52,7 @@ class Core(nn.Module):
         super().__init__()
 
         # Entity projector
-        self._entity_projector = EntityProjector(dim_entity, dim_map)
+        self._entity_projector = EntityProjector(dim_entity)
 
         # Entity transformer
         self._entity_transformer = EntityTransformer(
@@ -63,7 +63,7 @@ class Core(nn.Module):
         self._collection_kind_emb = nn.Embedding(len(CollectionKind), dim_entity)
 
         # Map GNN
-        self._map_gnn = MapGNN(gnn_num_layers, dim_map)
+        self._map_gnn = MapGNN(gnn_num_layers, dim_map, dim_entity)
 
         # Global context: global token + Character + Map readout + collection-kind counts
         # + raw flats
@@ -156,16 +156,16 @@ class Core(nn.Module):
         # Each token's state
         x_token_state = get_row_owner(tokens.x_count, num_tokens)  # (N,)
 
-        # Map GNN: the Room tokens' cell features and the whole-graph readout
-        num_rooms = int(states.x_total_cpu[:, CollectionKind.ROOMS].sum())
-        x_room_hidden, x_map_readout = self._map_gnn(
-            states.x_map_grid, num_rooms, map_cache, map_dedup
-        )
-
         # Token embeddings grouped by state, and the embedded pending halt
-        tokens_projected, x_effect_pending = self._entity_projector(
-            states, x_room_hidden, token_dedup
-        )
+        tokens_projected, x_effect_pending = self._entity_projector(states, token_dedup)
+
+        # Map GNN: the selectable Rooms' rows and the whole-graph readout
+        x_room_hidden, x_map_readout = self._map_gnn(states, map_cache, map_dedup)
+
+        # The Room tokens' rows are the Map GNN's, which come in the Room tokens' order
+        num_rooms = x_room_hidden.shape[0]
+        x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, num_rooms)
+        tokens_projected.features.x_value[x_room_row] = x_room_hidden
 
         # The tokens' memberships, their collection kinds, counted on the host
         num_memberships = int(states.x_total_cpu[:, : len(CollectionKind)].sum())
@@ -224,7 +224,7 @@ class Core(nn.Module):
         Parameters
         ----------
         x_projected : torch.Tensor
-            (N, dim_entity). The projector's token embeddings.
+            (N, dim_entity). The projector's token embeddings, the Room tokens' the Map GNN's.
         x_collection_kind : torch.Tensor
             (N, len(CollectionKind)) uint8. Each token's collection kinds, 1 at each collection
             holding it.

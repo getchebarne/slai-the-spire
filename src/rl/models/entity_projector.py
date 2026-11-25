@@ -8,7 +8,6 @@ import torch.nn.functional as F
 
 from src.rl.batches import dedup_rows
 from src.rl.batches import expand_ranges
-from src.rl.batches import get_entity_kind_rows
 from src.rl.batches import get_owner_first_row
 from src.rl.batches import get_row_owner
 from src.rl.batches import get_unique_rep_row
@@ -50,27 +49,23 @@ from src.rl.types import Tokens
     _HASH_WEIGHT_EFFECT,
     _HASH_WEIGHT_MODIFIER,
     _HASH_WEIGHT_MIX,
-    _HASH_WEIGHT_ROOM,
-) = (torch.randint(1 << 62, (7,), generator=torch.Generator().manual_seed(0)) | 1).tolist()
+) = (torch.randint(1 << 62, (6,), generator=torch.Generator().manual_seed(0)) | 1).tolist()
 
 
 class EntityProjector(nn.Module):
     """Factored (AlphaStar-style) Entity embedder.
 
-    One first layer over the token columns plus each token's Entity kind bias, the Rooms' cell
-    features through their own, the owned row kinds (Effects, Modifiers) added into their owners,
-    then one shared second layer + LayerNorm. Returns the token embeddings grouped by state and
-    the embedded pending halt.
+    One first layer over the token columns plus each token's Entity kind bias, the owned row
+    kinds (Effects, Modifiers) added into their owners, then one shared second layer + LayerNorm.
+    Returns the token embeddings grouped by state and the embedded pending halt.
 
     Parameters
     ----------
     dim_entity : int
         The width of every Entity token's embedding.
-    dim_map : int
-        The width of the Map GNN's cell features.
     """
 
-    def __init__(self, dim_entity: int, dim_map: int) -> None:
+    def __init__(self, dim_entity: int) -> None:
         super().__init__()
 
         # Every Entity kind's first layer: one projection over the token columns
@@ -78,9 +73,6 @@ class EntityProjector(nn.Module):
 
         # Per-Entity kind bias
         self._x_bias_entity_kind = nn.Parameter(torch.zeros(len(EntityKind), dim_entity))
-
-        # Rooms are separate because they come already-processed by `MapGNN`
-        self._pre_room = nn.Linear(dim_map, dim_entity)
 
         # Per-Effect embedder w/ >=2 layers is a must due to OHE-summing semantics
         self._effects_mlp = nn.Sequential(
@@ -130,7 +122,6 @@ class EntityProjector(nn.Module):
     def forward(
         self,
         states: States[Live],
-        x_room_hidden: torch.Tensor,
         token_dedup: TokenDedup | None = None,
     ) -> tuple[Tokens[Dense], torch.Tensor]:
         """Embed `states`' window.
@@ -139,12 +130,9 @@ class EntityProjector(nn.Module):
         ----------
         states : States[Live]
             The game states.
-        x_room_hidden : torch.Tensor
-            (N_rooms, dim_map). Each Room token's cell features from the Map GNN, in the Room
-            tokens' order (see `MapGNN.forward`).
         token_dedup : TokenDedup | None, default None
-            The unique tokens to run, planned on the host for an update with the Maps the Map
-            GNN ran (see `plan_tokens`), or None to run every token.
+            The unique tokens to run, planned on the host for an update (see `plan_tokens`), or
+            None to run every token.
 
         Returns
         -------
@@ -158,22 +146,12 @@ class EntityProjector(nn.Module):
         tokens = states.tokens
         features = tokens.features
 
-        # Rooms: the Room tokens' rows, in the order of their cell features
-        num_rooms = x_room_hidden.shape[0]
-        x_room_row = get_entity_kind_rows(tokens.x_entity_kind, EntityKind.ROOM, num_rooms)
-
         if token_dedup is None:
-            x_hidden = self._embed_tokens(
-                features, tokens.x_entity_kind, x_room_row, x_room_hidden
-            )  # (N_tok, D)
+            x_hidden = self._embed_tokens(features, tokens.x_entity_kind)  # (N_tok, D)
         else:
             # Each unique token runs once and gathers back, up to a hash collision and rounding
-            features_rep, x_entity_kind_rep, x_room_rep, x_room_hidden_rep = _gather_tokens(
-                tokens, token_dedup, x_room_row, x_room_hidden
-            )
-            x_hidden = self._embed_tokens(
-                features_rep, x_entity_kind_rep, x_room_rep, x_room_hidden_rep
-            )
+            features_rep, x_entity_kind_rep = _gather_tokens(tokens, token_dedup)
+            x_hidden = self._embed_tokens(features_rep, x_entity_kind_rep)
             x_hidden = x_hidden.index_select(0, token_dedup.x_token_unique)  # (N_tok, D)
 
         # The pending halt owns no token: its Effect row is a global-context input instead
@@ -192,15 +170,11 @@ class EntityProjector(nn.Module):
         ), x_effect_pending
 
     def _embed_tokens(
-        self,
-        features: EncodedFeatures[Live],
-        x_entity_kind: torch.Tensor,
-        x_room_row: torch.Tensor,
-        x_room_hidden: torch.Tensor,
+        self, features: EncodedFeatures[Live], x_entity_kind: torch.Tensor
     ) -> torch.Tensor:
         """Embed the tokens: all of what the projector does per token.
 
-        Whatever this reads per token, `plan_tokens` must hash.
+        Whatever this reads per token, `_hash_tokens` must hash.
 
         Parameters
         ----------
@@ -209,10 +183,6 @@ class EntityProjector(nn.Module):
             they own.
         x_entity_kind : torch.Tensor
             (N,) int16. Each token's Entity kind.
-        x_room_row : torch.Tensor
-            (N_rooms,) long. The Room tokens' rows.
-        x_room_hidden : torch.Tensor
-            (N_rooms, dim_map). Each Room token's cell features.
 
         Returns
         -------
@@ -223,9 +193,6 @@ class EntityProjector(nn.Module):
         x_first = _project_sparse(self._pre_token, features.sparse) + SpreadEmbedding.apply(
             self._x_bias_entity_kind, x_entity_kind.long()
         )
-
-        # Rooms: each Room token's cell features, through _pre_room in place of the first layer
-        x_first[x_room_row] = self._pre_room(x_room_hidden)
 
         # Project owned rows
         x_effect = _project_sparse(self._effects_mlp, features.effects.sparse)
@@ -239,44 +206,50 @@ class EntityProjector(nn.Module):
         return self._layer_norm(self._post_shared(F.relu(x_first)))
 
 
-def plan_tokens(states: States[Live], x_room_key: torch.Tensor) -> TokenPlan:
+def _hash_tokens(tokens: Tokens[EncodedFeatures[Live]]) -> torch.Tensor:
+    """Hash each token: everything `_embed_tokens` reads per token.
+
+    The hash reads values as 32-bit words, so it is float32-only.
+
+    Parameters
+    ----------
+    tokens : Tokens[EncodedFeatures[Live]]
+        The tokens, N of them.
+
+    Returns
+    -------
+    torch.Tensor
+        (N,) long. Each token's hash.
+    """
+    features = tokens.features
+
+    return (
+        _hash_sparse(features.sparse)
+        + tokens.x_entity_kind.long() * _HASH_WEIGHT_ENTITY_KIND
+        + _hash_owned(features.effects) * _HASH_WEIGHT_EFFECT
+        + _hash_owned(features.modifiers) * _HASH_WEIGHT_MODIFIER
+    )
+
+
+def plan_tokens(states: States[Live]) -> TokenPlan:
     """Find the update's unique tokens and the sizes needed to gather their features.
 
     Parameters
     ----------
     states : States[Live]
         The rollout's states followed by its final states.
-    x_room_key : torch.Tensor
-        (N_rooms,) long. An ID for each (Map, cell) pair, in Room token order. Equal keys
-        identify the same input to the projector's Room layer for any given model weights.
 
     Returns
     -------
     TokenPlan
         Each state's first token, each token's plan ID and each unique token's sizes.
-        The hash reads values as 32-bit words, so the plan is float32-only.
     """
     tokens = states.tokens
     features = tokens.features
 
-    # Everything `_embed_tokens` reads per token, but a Room token's cell features
-    x_hash = (
-        _hash_sparse(features.sparse)
-        + tokens.x_entity_kind.long() * _HASH_WEIGHT_ENTITY_KIND
-        + _hash_owned(features.effects) * _HASH_WEIGHT_EFFECT
-        + _hash_owned(features.modifiers) * _HASH_WEIGHT_MODIFIER
-    )  # (N,)
-
-    x_room_row = get_entity_kind_rows(
-        tokens.x_entity_kind, EntityKind.ROOM, x_room_key.numel()
-    )  # (N_rooms,)
-
-    # The 1 hashes being a Room token, whatever its Map and cell
-    x_hash[x_room_row] += (_mix_hash(x_room_key) + 1) * _HASH_WEIGHT_ROOM
-
     # x_uniq: (U_plan,)
     # x_inv: (N,) / x_inv[n] ∈ [0, U_plan). Maps each token to its plan ID
-    x_uniq, x_inv = torch.unique(x_hash, return_inverse=True)
+    x_uniq, x_inv = torch.unique(_hash_tokens(tokens), return_inverse=True)
     x_rep = get_unique_rep_row(x_inv, x_uniq.shape[0])  # (U_plan,)
 
     # Each unique token's sizes, in the order `_gather_tokens` reads them
@@ -287,10 +260,9 @@ def plan_tokens(states: States[Live], x_room_key: torch.Tensor) -> TokenPlan:
             _count_owned_entries(features.effects)[x_rep],
             features.modifiers.x_count[x_rep].long(),
             _count_owned_entries(features.modifiers)[x_rep],
-            (tokens.x_entity_kind[x_rep] == EntityKind.ROOM).long(),
         ),
         dim=1,
-    )  # (U_plan, 6)
+    )  # (U_plan, 5)
 
     # The tokens' unique tokens and the sizes in one host read
     num_tokens = x_inv.shape[0]
@@ -351,12 +323,9 @@ def dedup_tokens(
 
 
 def _gather_tokens(
-    tokens: Tokens[EncodedFeatures[Live]],
-    token_dedup: TokenDedup,
-    x_room_row: torch.Tensor,
-    x_room_hidden: torch.Tensor,
-) -> tuple[EncodedFeatures[Live], torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Gather the unique tokens with all their rows, and the cell features of the Room ones.
+    tokens: Tokens[EncodedFeatures[Live]], token_dedup: TokenDedup
+) -> tuple[EncodedFeatures[Live], torch.Tensor]:
+    """Gather the unique tokens with all their rows.
 
     Parameters
     ----------
@@ -364,10 +333,6 @@ def _gather_tokens(
         The tokens, N of them.
     token_dedup : TokenDedup
         The U tokens to gather, in output order, and their sizes.
-    x_room_row : torch.Tensor
-        (N_rooms,) long. The Room tokens' rows, in increasing order.
-    x_room_hidden : torch.Tensor
-        (N_rooms, dim_map). Each Room token's cell features.
 
     Returns
     -------
@@ -375,15 +340,10 @@ def _gather_tokens(
         The gathered tokens' features, with their rows.
     x_entity_kind_rep : torch.Tensor
         (U,) int16. The gathered tokens' Entity kinds.
-    x_room_rep : torch.Tensor
-        (U_rooms,) long. The Room tokens' rows among them.
-    x_room_hidden_rep : torch.Tensor
-        (U_rooms, dim_map). Those Room tokens' cell features.
     """
     features = tokens.features
     effects, modifiers = features.effects, features.modifiers
     x_rep = token_dedup.x_rep
-    x_is_room = tokens.x_entity_kind[x_rep] == EntityKind.ROOM  # (U,)
 
     # Every size the gathers need, as the plan counted them
     (
@@ -392,7 +352,6 @@ def _gather_tokens(
         num_effect_entries,
         num_modifiers,
         num_modifier_entries,
-        num_rooms,
     ) = token_dedup.np_size.tolist()
 
     # Each collection's source rows under the tokens, in output order
@@ -418,11 +377,7 @@ def _gather_tokens(
         ),
     )
 
-    # The Room tokens among them, and each one's cell features by its place among the Room tokens
-    x_room_rep = torch.nonzero_static(x_is_room, size=num_rooms).squeeze(1)  # (U_rooms,)
-    x_room_hidden_rep = x_room_hidden[torch.searchsorted(x_room_row, x_rep[x_room_rep])]
-
-    return features_rep, tokens.x_entity_kind[x_rep], x_room_rep, x_room_hidden_rep
+    return features_rep, tokens.x_entity_kind[x_rep]
 
 
 def _get_owner_rows(
@@ -469,7 +424,7 @@ def _count_owned_entries(owned_rows: OwnedRows[Live]) -> torch.Tensor:
     return x_count.index_add_(0, x_row_token, owned_rows.sparse.x_count.long())
 
 
-def _mix_hash(x_hash: torch.Tensor) -> torch.Tensor:
+def mix_hash(x_hash: torch.Tensor) -> torch.Tensor:
     """Scramble 64-bit hashes, so that a sum of them ties only by chance.
 
     Parameters
@@ -506,7 +461,7 @@ def _hash_sparse(sparse: Sparse[Live]) -> torch.Tensor:
     x_entry_row = get_row_owner(sparse.x_count, sparse.x_col.shape[0])  # (F,)
     x_bit = sparse.x_value.view(torch.int32).long()
     x_hash_entry = (sparse.x_col.long() + 1) * _HASH_WEIGHT_COL + x_bit * _HASH_WEIGHT_VALUE
-    x_hash_entry = _mix_hash(x_hash_entry)  # (F,)
+    x_hash_entry = mix_hash(x_hash_entry)  # (F,)
     x_hash = torch.zeros(sparse.x_count.shape[0], dtype=torch.long, device=x_hash_entry.device)
 
     return x_hash.index_add_(0, x_entry_row, x_hash_entry)
@@ -529,7 +484,7 @@ def _hash_owned(owned_rows: OwnedRows[Live]) -> torch.Tensor:
     """
     # Mix first: a row's hash sums its entries, so two Modifiers that swap their stacks would tie
     x_hash_row = _hash_sparse(owned_rows.sparse)  # (M,)
-    x_hash_row = _mix_hash(x_hash_row)
+    x_hash_row = mix_hash(x_hash_row)
 
     # Each owned row's token
     x_row_token = get_row_owner(owned_rows.x_count, x_hash_row.shape[0])  # (M,)
