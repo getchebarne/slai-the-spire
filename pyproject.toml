@@ -22,6 +22,7 @@ flake8 = "^6.1.0"
 black = "^23.7.0"
 isort = "^5.12.0"
 pytest = "^8.1.1"
+types-pyyaml = "^6.0.12.20261122"
 
 [tool.isort]
 force_single_line = true
