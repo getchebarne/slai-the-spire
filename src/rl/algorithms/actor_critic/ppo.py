@@ -433,7 +433,7 @@ def _update_minibatch(
     x_action: torch.Tensor,
     targets: _Targets,
     ppo_config: PPOConfig,
-    map_dedup: MapDedup,
+    map_dedup: MapDedup | None,
     token_dedup: TokenDedup | None,
 ) -> tuple[dict[str, torch.Tensor], RankMean]:
     """Take one optimizer step on the selected states, actions and targets.
@@ -454,8 +454,8 @@ def _update_minibatch(
         What the update trains against, one row per selected state.
     ppo_config : PPOConfig
         The PPO settings.
-    map_dedup : MapDedup
-        The Maps the Map GNN runs for these states.
+    map_dedup : MapDedup | None
+        The Maps the Map GNN runs for these states, or None to run every state's.
     token_dedup : TokenDedup | None
         The unique tokens the projector runs for these states, or None to run every token.
 

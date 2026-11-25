@@ -388,11 +388,13 @@ def plan_maps(states: States[Live]) -> MapPlan:
     )
 
 
-def dedup_maps(map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device) -> MapDedup:
+def dedup_maps(
+    map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device
+) -> MapDedup | None:
     """Take one forward's `MapDedup` from its update's plan, on the host.
 
     A forward of MIN_BATCH_DEDUP states or more runs its unique Maps, in the plan's order, each
-    from its first state; a smaller one runs every state's.
+    from its first state; a smaller one runs every state's, without a `MapDedup`.
 
     Parameters
     ----------
@@ -405,21 +407,14 @@ def dedup_maps(map_plan: MapPlan, np_idx_state: np.ndarray, device: torch.device
 
     Returns
     -------
-    MapDedup
+    MapDedup | None
         The Maps the forward runs, each state's among them, and their forward Rooms with 0 to 3
-        children.
+        children; None for a forward under MIN_BATCH_DEDUP states.
     """
-    batch_size = len(np_idx_state)
+    if len(np_idx_state) < MIN_BATCH_DEDUP:
+        return None
+
     np_state_map_plan = map_plan.np_state_map[np_idx_state]  # (B,)
-    if batch_size < MIN_BATCH_DEDUP:
-        x_rep = torch.arange(batch_size, device=device)  # Every state's own Map
-
-        return MapDedup(
-            x_rep=x_rep,
-            x_state_map=x_rep,
-            np_count_room_forward=map_plan.np_count_room_forward[np_state_map_plan].sum(0),
-        )
-
     x_rep, x_state_map, np_count_room_forward = dedup_rows(
         np_state_map_plan, map_plan.np_count_room_forward, device
     )
