@@ -7,15 +7,13 @@ exposes the layout names the models and `batches.py` read.
 from src.rl.encoding.context import ENCODING_DIM_CONTEXT
 from src.rl.encoding.effect import ENCODING_DIM_EFFECT
 from src.rl.encoding.effect import ENCODING_DIM_SPARSE_EFFECT
-from src.rl.encoding.map_ import EDGE_DELTAS
-from src.rl.encoding.map_ import NUM_CHANNELS
-from src.rl.encoding.map_ import NUM_FEATURE_CHANNELS
-from src.rl.encoding.map_ import OFF_MAP_POSITION
+from src.rl.encoding.map_ import MAP_TOPOLOGY_CHANNELS
+from src.rl.encoding.map_ import OFF_MAP_ROOM_FORWARD
 from src.rl.encoding.map_ import OFF_MAP_SELECTABLE
 from src.rl.encoding.map_ import SLICE_MAP_EDGES
-from src.rl.encoding.map_ import SLICE_MAP_ROOM_KIND
 from src.rl.encoding.modifier import ENCODING_DIM_MODIFIER
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
+from src.rl.encoding.room import ENCODING_DIM_ROOM
 from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_EVENT_OPTION
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
@@ -41,18 +39,16 @@ __all__ = [
     "COL_START_RELIC",
     "COL_START_STASIS_SLOT",
     "COL_START_TAG",
-    "EDGE_DELTAS",
     "ENCODING_DIM_CONTEXT",
     "ENCODING_DIM_EFFECT",
     "ENCODING_DIM_MODIFIER",
+    "ENCODING_DIM_ROOM",
     "ENCODING_DIM_SPARSE_EFFECT",
     "ENCODING_DIM_SPARSE_MODIFIER",
     "ENCODING_DIM_SPARSE_TOKEN",
     "ENCODING_DIM_TOKEN",
-    "NUM_CHANNELS",
-    "NUM_FEATURE_CHANNELS",
-    "OFF_MAP_POSITION",
+    "MAP_TOPOLOGY_CHANNELS",
+    "OFF_MAP_ROOM_FORWARD",
     "OFF_MAP_SELECTABLE",
     "SLICE_MAP_EDGES",
-    "SLICE_MAP_ROOM_KIND",
 ]

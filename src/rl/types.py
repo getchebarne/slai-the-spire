@@ -72,6 +72,9 @@ type RecordKeyCard = tuple[int, int, int | None, int | None, int | None, PlaySou
 type RecordKeyRelic = tuple[int, bool, bool, int | None]
 type RecordKeyPotion = tuple[int, bool, int | None]
 
+# A state's Rooms key: all that its Map's features and topology depend on (`tokens.get_rooms_key`)
+type RoomsKey = tuple[int, int | None, int | None, int, bool]
+
 
 class EffectSource(IntEnum):
     """What applies the Effect, and for Relics on which trigger.
@@ -224,9 +227,11 @@ class States[TStorage]:
     """Encoded game states, with explicit collections of tokens, owned rows and sparse entries.
 
     Tokens belong to states; Effects and Modifiers belong to tokens. The pending Effect has one
-    sparse feature row per state, empty where no halt is pending. TStorage propagates Live or
-    Reserved to these collections. `read_states` turns reserved capacity into populated views;
-    rewriting that capacity invalidates its earlier views. The worker protocol owns access.
+    sparse feature row per state, empty where no halt is pending. The Map is two arrays with one
+    row per cell, zero where the cell holds no forward Room: the Room's features, and the
+    topology the Map GNN builds its graph from. TStorage propagates Live or Reserved to these
+    collections. `read_states` turns reserved capacity into populated views; rewriting that
+    capacity invalidates its earlier views. The worker protocol owns access.
 
     `x_total` holds each state's derived totals on the data's device, and `x_total_cpu` holds
     the same totals on the CPU so output sizes need no device readback. CPU states use the same
@@ -239,7 +244,8 @@ class States[TStorage]:
 
     # One row per state
     x_context: torch.Tensor            # (B, ENCODING_DIM_CONTEXT) float32; encoding.context owns its layout
-    x_map_grid: torch.Tensor           # (B, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS) uint8
+    x_map_feature: torch.Tensor        # (B, MAP_HEIGHT, MAP_WIDTH, ENCODING_DIM_ROOM) uint8
+    x_map_topology: torch.Tensor       # (B, MAP_HEIGHT, MAP_WIDTH, MAP_TOPOLOGY_CHANNELS) uint8
     x_legal_action_type: torch.Tensor  # (B, NUM_ACTION_TYPES) bool — L1
     x_total: torch.Tensor              # (B, len(CollectionKind) + len(StateCollection)) int32
     x_total_cpu: torch.Tensor          # Same totals on CPU; aliases x_total for CPU states
@@ -283,15 +289,13 @@ class PolicyOutput:
 class MapCache:
     """The Map GNN's outputs for every game of a rollout, whose weights don't change.
 
-    The GNN reruns only the games whose Map changed since `x_cell`, and writes their rows in
-    place; the others keep theirs. Empty until the rollout's first step. The cache keeps the
-    caller's grid without copying it, so a caller must hand a new buffer each step (the Actor's
-    snapshots do).
+    The GNN reruns only the games whose Map changed since `x_hash_map`, up to a hash collision,
+    and writes their rows in place; the others keep theirs. Empty until the rollout's first step.
     """
 
-    x_cell: torch.Tensor | None = None     # (E, H * W, NUM_FEATURE_CHANNELS) uint8
-    x_hidden: torch.Tensor | None = None   # (E, H * W, dim_map)
-    x_readout: torch.Tensor | None = None  # (E, dim_map)
+    x_hash_map: torch.Tensor | None = None  # (E,) long
+    x_hidden: torch.Tensor | None = None    # (E, H * W, dim_map)
+    x_readout: torch.Tensor | None = None   # (E, dim_map)
 
 
 @final
@@ -300,7 +304,7 @@ class MapPlan:
     """An update's unique Maps, found once over the states of its rollout and read to the host.
 
     Its states are the rollout's B states, then its E final states; its U Maps are the distinct
-    ones among them, in the order `torch.unique` sorts their packed grids.
+    ones among them, up to a hash collision, in the order `torch.unique` sorts their hashes.
     """
 
     np_state_map: np.ndarray           # (B + E,) int64: each state's Map, by its index among the U
@@ -325,12 +329,12 @@ class TokenPlan:
     Its N tokens belong to the rollout's B states followed by its E final states, state after
     state. Its U distinct tokens follow the order in which `torch.unique` sorts their hashes.
     For each unique token, `_gather_tokens` needs its counts of entries, Effects, Effect entries,
-    Modifiers and Modifier entries, followed by 1 for a Room token and 0 otherwise.
+    Modifiers and Modifier entries.
     """
 
     np_state_first_token: np.ndarray  # (B + E + 1,) int64: each state's first token, then N
     np_token_unique: np.ndarray       # (N,) int64: each token's unique token, by index among the U
-    np_size: np.ndarray               # (U, 6) int64: each unique token's sizes
+    np_size: np.ndarray               # (U, 5) int64: each unique token's sizes
 
 
 @final
@@ -340,7 +344,7 @@ class TokenDedup:
 
     x_rep: torch.Tensor           # (U,) long, on the device: each unique token's first token
     x_token_unique: torch.Tensor  # (N,) long, on the device: each token's unique token, by index
-    np_size: np.ndarray           # (6,) int64: their sizes, summed
+    np_size: np.ndarray           # (5,) int64: their sizes, summed
 
 
 @dataclass

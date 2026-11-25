@@ -36,7 +36,7 @@ from src.rl.encoding.event import ENCODING_DIM_SPARSE_EVENT_OPTION
 from src.rl.encoding.event import encode_event_option_into
 from src.rl.encoding.health_block import ENCODING_DIM_SPARSE_HEALTH_BLOCK
 from src.rl.encoding.incoming import project_incoming
-from src.rl.encoding.map_ import encode_map_grid_into
+from src.rl.encoding.map_ import encode_map_into
 from src.rl.encoding.mask import encode_batch_masks_into
 from src.rl.encoding.modifier import ENCODING_DIM_SPARSE_MODIFIER
 from src.rl.encoding.modifier import make_modifier_row
@@ -242,12 +242,14 @@ def encode_states_into(
 
     # Context and Map
     np_context = states_reserved.x_context.numpy()
-    np_map_grid = states_reserved.x_map_grid.numpy()
+    np_map_feature = states_reserved.x_map_feature.numpy()
+    np_map_topology = states_reserved.x_map_topology.numpy()
     np_context.fill(0)
-    np_map_grid.fill(0)
-    for game_state, np_context_row, np_grid in zip(batch_game_state, np_context, np_map_grid):
+    for game_state, np_context_row, np_feature, np_topology in zip(
+        batch_game_state, np_context, np_map_feature, np_map_topology
+    ):
         encode_context_into(game_state, np_context_row)
-        encode_map_grid_into(game_state, np_grid)
+        encode_map_into(game_state, np_feature, np_topology)
 
     _encode_batch_effect_pending_into(states_reserved.effect_pending, batch_game_state)
 

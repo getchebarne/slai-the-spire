@@ -99,6 +99,9 @@ INVINCIBLE_STACKS_OF_ASCENSION = {
 }
 INVINCIBLE_STACKS_MAX = max(INVINCIBLE_STACKS_OF_ASCENSION.values())
 
+# Relative outgoing edges {-1,0,+1}: engine edges are within ±1 column; translation-equivariant
+EDGE_DELTAS = (-1, 0, 1)
+
 MAX_SIZE_CARD_MATCH_PAIRS = _slai.MATCH_AND_KEEP_ATTEMPTS  # One pair per attempt at most
 
 # Size ceiling for the master deck
