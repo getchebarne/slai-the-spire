@@ -25,12 +25,11 @@ from slai import RelicName
 from slai import get_card_templates
 
 from src.rl.constants import MAX_SIZE_CARD_PILE_DRAW
-from src.rl.constants import SCALE_HEALTH
 from src.rl.encoding.damage import deal_damage
 from src.rl.encoding.damage import get_stacks_of_modifier_kind
 from src.rl.encoding.damage import make_combatant
 from src.rl.encoding.layout import make_channel_allocator
-from src.rl.encoding.scalars import get_linear_norm
+from src.rl.encoding.shared import encode_shared_outgoing_into
 from src.rl.encoding.shared import encode_shared_price_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
 from src.rl.encoding.shared import encode_shared_tag_into
@@ -98,9 +97,6 @@ _OFF_CARD_PLAY_SOURCE = _alloc("play_source", len(_IDX_OF_PLAY_SOURCE))
 _OFF_CARD_DRAW_DEPTH = _alloc("draw_depth", MAX_SIZE_CARD_PILE_DRAW)
 _OFF_CARD_DRAW_DEPTH_SCALAR = _alloc("draw_depth_scalar")
 _OFF_CARD_DRAW_BELOW_SCALAR = _alloc("draw_below_scalar")
-# Hand only: what playing it would take off each slot's Monster
-_OFF_CARD_OUTGOING_HEALTH_LOST = _alloc("outgoing_health_lost", MAX_MONSTERS, MAX_MONSTERS)
-_OFF_CARD_OUTGOING_IS_LETHAL = _alloc("outgoing_is_lethal", MAX_MONSTERS, MAX_MONSTERS)
 
 ENCODING_DIM_CARD = sum(w for _, w, _ in _CHANNEL_LAYOUT_CARD)
 
@@ -164,7 +160,7 @@ def encode_card_into(
     np_own: np.ndarray,
     np_shared: np.ndarray,
 ) -> None:
-    """Write a Card's token: its own columns, then its price, its holder's slot and its Tags.
+    """Write a Card's token: its own columns, then its price, holder's slot, outgoing and Tags.
 
     Every input besides the Card is in the Card's record key (`get_record_key_card`), so a new
     input goes in the key too.
@@ -228,14 +224,6 @@ def encode_card_into(
         np_own[_OFF_CARD_DRAW_BELOW_SCALAR] = (
             min(draw_below, MAX_SIZE_CARD_PILE_DRAW) / MAX_SIZE_CARD_PILE_DRAW
         )
-    if outgoing is not None:
-        for slot, outgoing_slot in enumerate(outgoing):
-            if outgoing_slot is not None:
-                health_lost, is_lethal = outgoing_slot
-                np_own[_OFF_CARD_OUTGOING_HEALTH_LOST + slot] = get_linear_norm(
-                    health_lost, SCALE_HEALTH
-                )
-                np_own[_OFF_CARD_OUTGOING_IS_LETHAL + slot] = float(is_lethal)
 
     # Shop price
     encode_shared_price_into(card.price, gold, np_shared)
@@ -243,6 +231,13 @@ def encode_card_into(
     # Stasis slot. Shared w/ Monsters
     if slot_holder is not None:
         encode_shared_stasis_slot_into(slot_holder, np_shared)
+
+    # Outgoing. Shared w/ Monsters
+    if outgoing is not None:
+        for slot, outgoing_slot in enumerate(outgoing):
+            if outgoing_slot is not None:
+                health_lost, is_lethal = outgoing_slot
+                encode_shared_outgoing_into(slot, health_lost, is_lethal, np_shared)
 
     # Tags. Shared w/ Relics and Potions
     encode_shared_tag_into(_TAGS_OF_CARD_NAME.get(card.name, ()), np_shared)
