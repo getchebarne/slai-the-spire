@@ -53,6 +53,7 @@ from src.rl.constants import MAX_SIZE_CARD_PLAY_QUEUE
 from src.rl.constants import MAX_SIZE_SHOP_CARDS
 from src.rl.types import CollectionKind
 from src.rl.types import Entity
+from src.rl.types import RoomsKey
 from src.rl.types import Token
 
 
@@ -65,9 +66,11 @@ __all__ = [
     "get_y_x_current",
     "get_rooms",
     "get_room_entities",
-    "next_row_candidate_cols",
+    "get_rooms_forward",
+    "get_rooms_key",
     "get_room_burning",
     "get_burning_path",
+    "get_cells_next_room",
 ]
 
 
@@ -485,7 +488,7 @@ def get_rooms(game_state: GameState) -> list[list[Room | None]]:
     )
 
 
-def next_row_candidate_cols(
+def _next_row_candidate_cols(
     game_state: GameState, y_current: int | None, x_current: int | None, winged: bool
 ) -> list[int]:
     """Return the columns of reachable Rooms in the next Map row.
@@ -561,7 +564,7 @@ def _get_id_rooms_next(game_state: GameState) -> list[int]:
     map_ = game_state.map
     y_current, x_current = get_y_x_current(map_)
     winged = _get_wing_boots_charges(game_state) > 0
-    cols = next_row_candidate_cols(game_state, y_current, x_current, winged)
+    cols = _next_row_candidate_cols(game_state, y_current, x_current, winged)
     if not cols:
         return []
 
@@ -572,6 +575,57 @@ def _get_id_rooms_next(game_state: GameState) -> list[int]:
         for x, id_room in enumerate(map_.id_rooms[y_next])
         if x in cols and id_room is not None
     ]
+
+
+def get_rooms_forward(game_state: GameState) -> list[Room]:
+    """Return the forward Rooms, in cell order: the Rooms on the rows past the current Room's.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    list[Room]
+        Every Room before the act's first Room, and none in the boss and boss treasure Rooms,
+        which sit past the Map's rows; row after row and column after column.
+    """
+    map_ = game_state.map
+    y_current, _ = get_y_x_current(map_)
+    y_next = 0 if y_current is None else y_current + 1
+
+    return get_entities(
+        game_state,
+        [id_room for row in map_.id_rooms[y_next:] for id_room in row if id_room is not None],
+        Room,
+    )
+
+
+def get_rooms_key(game_state: GameState) -> RoomsKey:
+    """Make a state's Rooms key: all that its Map's features and topology depend on.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    RoomsKey
+        The Map's identity_hash, the current Room's row and column, the Wing Boots charges left,
+        and whether the Emerald Key can still be taken.
+    """
+    map_ = game_state.map
+    y_current, x_current = get_y_x_current(map_)
+
+    return (
+        map_.identity_hash,
+        y_current,
+        x_current,
+        _get_wing_boots_charges(game_state),
+        not game_state.key_emerald,
+    )
 
 
 # The reader of a collection kind's context, then the collection kind's getter of its Entities' ids
@@ -813,3 +867,26 @@ def _wing_boots_charges_to_room_burning(
                 )
                 
     return wb_charges
+
+
+def get_cells_next_room(game_state: GameState) -> set[tuple[int, int]]:
+    """Find the next-row Rooms the position's edges reach, Wing Boots aside.
+
+    Parameters
+    ----------
+    game_state : GameState
+        The state to read.
+
+    Returns
+    -------
+    set[tuple[int, int]]
+        Their cells, as (row, column): every first-row Room before the act's first Room, and none
+        past the Map's last row.
+    """
+    y_current, x_current = get_y_x_current(game_state.map)
+    y_next = 0 if y_current is None else y_current + 1
+
+    return {
+        (y_next, x_next)
+        for x_next in _next_row_candidate_cols(game_state, y_current, x_current, winged=False)
+    }

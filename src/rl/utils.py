@@ -20,6 +20,7 @@ from slai import EventName
 from slai import PotionName
 from slai import RelicName
 
+from src.rl.constants import EDGE_DELTAS
 from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_character
 from src.rl.tokens import get_entities
@@ -74,6 +75,26 @@ def parent_alive() -> bool:
     parent = mp.parent_process()
 
     return parent is not None and parent.is_alive()
+
+
+def get_edge_channels(room: slai.Room) -> tuple[int, ...]:
+    """Turn a Room's edges into edge channels: its feature row and the Map's topology hold them.
+
+    Parameters
+    ----------
+    room : slai.Room
+        The Room.
+
+    Returns
+    -------
+    tuple[int, ...]
+        One 0/1 flag per `EDGE_DELTAS`: whether an edge leads to the next row, that many columns
+        over.
+    """
+    edges = room.edges  # Bound once: each read clones the list
+    x = room.x
+
+    return tuple(int(x + delta in edges) for delta in EDGE_DELTAS)
 
 
 def _potion_can_arrive(game_state: slai.GameState) -> bool:

@@ -18,8 +18,9 @@ from src.rl.constants import NUM_ACTION_TYPES
 from src.rl.encoding import ENCODING_DIM_CONTEXT
 from src.rl.encoding import ENCODING_DIM_EFFECT_SPARSE
 from src.rl.encoding import ENCODING_DIM_MODIFIER_SPARSE
+from src.rl.encoding import ENCODING_DIM_ROOM
 from src.rl.encoding import ENCODING_DIM_TOKEN_SPARSE
-from src.rl.encoding import NUM_CHANNELS
+from src.rl.encoding import MAP_TOPOLOGY_CHANNELS
 from src.rl.types import CollectionKind
 from src.rl.types import EncodedFeatures
 from src.rl.types import EntityKind
@@ -326,8 +327,16 @@ def allocate_states(num_buffers: int, buffer_size: int) -> States[Reserved]:
         x_context=torch.zeros(
             num_buffers, buffer_size, ENCODING_DIM_CONTEXT, dtype=torch.float32
         ),
-        x_map_grid=torch.zeros(
-            num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+        x_map_feature=torch.zeros(
+            num_buffers, buffer_size, MAP_HEIGHT, MAP_WIDTH, ENCODING_DIM_ROOM, dtype=torch.uint8
+        ),
+        x_map_topology=torch.zeros(
+            num_buffers,
+            buffer_size,
+            MAP_HEIGHT,
+            MAP_WIDTH,
+            MAP_TOPOLOGY_CHANNELS,
+            dtype=torch.uint8,
         ),
         x_legal_action_type=torch.zeros(
             num_buffers, buffer_size, NUM_ACTION_TYPES, dtype=torch.bool
@@ -691,7 +700,8 @@ def _select_states[TStorage](
             states.effect_pending, selector_states, selectors[StateCollection.PENDING_ENTRIES]
         ),
         x_context=states.x_context[selector_states],
-        x_map_grid=states.x_map_grid[selector_states],
+        x_map_feature=states.x_map_feature[selector_states],
+        x_map_topology=states.x_map_topology[selector_states],
         x_legal_action_type=states.x_legal_action_type[selector_states],
         x_total=(
             x_total_cpu_selected
