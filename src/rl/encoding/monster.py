@@ -28,6 +28,7 @@ from src.rl.encoding.scalars import encode_piecewise_into
 from src.rl.encoding.scalars import get_linear_norm
 from src.rl.encoding.scalars import get_piecewise_dim
 from src.rl.encoding.shared import encode_shared_health_block_into
+from src.rl.encoding.shared import encode_shared_outgoing_into
 from src.rl.encoding.shared import encode_shared_stasis_slot_into
 from src.rl.types import EntityKind
 
@@ -164,8 +165,6 @@ _OFF_MONSTER_MOVE_PREV_COUNT = _alloc("move_prev_count", _MOVE_PREV_COUNT_DIM, 2
 _OFF_MONSTER_REPLAY_TARGET = _alloc("replay_target")
 _OFF_MONSTER_HALF_DEAD = _alloc("half_dead")
 _OFF_MONSTER_ULTIMATE_USED = _alloc("ultimate_used")
-_OFF_MONSTER_OUTGOING_HEALTH_LOST_MAX = _alloc("outgoing_health_lost_max")
-_OFF_MONSTER_OUTGOING_IS_LETHAL = _alloc("outgoing_is_lethal")
 
 ENCODING_DIM_MONSTER = sum(w for _, w, _ in _CHANNEL_LAYOUT_MONSTER)
 
@@ -250,7 +249,7 @@ def encode_monster_into(
     np_own: np.ndarray,
     np_shared: np.ndarray,
 ) -> None:
-    """Write a Monster's token: its own columns, then its health/block and its slot.
+    """Write a Monster's token: its own columns, then its health/block, slot and outgoing.
 
     Parameters
     ----------
@@ -357,15 +356,6 @@ def encode_monster_into(
         # The intent category flags above miss Escape / Sleep / Stunned / Unknown
         np_own[_OFF_MONSTER_INTENT_KIND + _IDX_OF_INTENT_KIND[intent.kind]] = 1.0
 
-    # The most HP one playable hand Card would take off it, and whether one would kill it
-    if outgoing_monster:
-        np_own[_OFF_MONSTER_OUTGOING_HEALTH_LOST_MAX] = get_linear_norm(
-            max(health_lost_card for health_lost_card, _ in outgoing_monster), SCALE_HEALTH
-        )
-        np_own[_OFF_MONSTER_OUTGOING_IS_LETHAL] = float(
-            any(is_lethal_card for _, is_lethal_card in outgoing_monster)
-        )
-
     # Move identity: the current move + the two before it
     if monster.move_current is not None:
         np_own[_OFF_MONSTER_MOVE_CURRENT + monster.move_current] = 1.0
@@ -390,6 +380,15 @@ def encode_monster_into(
 
     # Stasis slot. Shared w/ Cards in the stasis pile
     encode_shared_stasis_slot_into(monster.slot, np_shared)
+
+    # Outgoing: the best playable hand Card's. Shared w/ hand Cards
+    if outgoing_monster:
+        encode_shared_outgoing_into(
+            monster.slot,
+            max(health_lost_card for health_lost_card, _ in outgoing_monster),
+            any(is_lethal_card for _, is_lethal_card in outgoing_monster),
+            np_shared,
+        )
 
 
 # Whole-moveset Effects per (ascension, MonsterName), collected once

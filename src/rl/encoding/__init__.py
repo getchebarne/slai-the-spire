@@ -21,6 +21,7 @@ from src.rl.encoding.state import COL_START_CHARACTER
 from src.rl.encoding.state import COL_START_EVENT_OPTION
 from src.rl.encoding.state import COL_START_HEALTH_BLOCK
 from src.rl.encoding.state import COL_START_MONSTER
+from src.rl.encoding.state import COL_START_OUTGOING
 from src.rl.encoding.state import COL_START_POTION
 from src.rl.encoding.state import COL_START_PRICE
 from src.rl.encoding.state import COL_START_RELIC
@@ -38,6 +39,7 @@ __all__ = [
     "COL_START_EVENT_OPTION",
     "COL_START_HEALTH_BLOCK",
     "COL_START_MONSTER",
+    "COL_START_OUTGOING",
     "COL_START_POTION",
     "COL_START_PRICE",
     "COL_START_RELIC",
