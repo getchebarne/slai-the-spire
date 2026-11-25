@@ -16,11 +16,11 @@ from src.rl.encoding.room import encode_room_into
 from src.rl.tokens import get_burning_path
 from src.rl.tokens import get_cells_next_room
 from src.rl.tokens import get_entities
+from src.rl.tokens import get_map_key
 from src.rl.tokens import get_room_entities
 from src.rl.tokens import get_rooms_forward
-from src.rl.tokens import get_rooms_key
 from src.rl.tokens import get_y_x_current
-from src.rl.types import RoomsKey
+from src.rl.types import MapKey
 from src.rl.utils import get_edge_channels
 
 
@@ -70,13 +70,13 @@ _OFF_MAP_EVENT_POOLS = _alloc("event_pools", len(_IDX_OF_EVENT_NAME))
 
 ENCODING_DIM_MAP_META = sum(w for _, w, _ in _CHANNEL_LAYOUT_MAP_META)
 
-# Map cache keyed by `get_rooms_key`: a Map's features and its topology
-_MAP_OF_ROOMS_KEY: dict[RoomsKey, tuple[np.ndarray, np.ndarray]] = {}
+# Map cache keyed by `get_map_key`: a Map's features and its topology
+_MAP_OF_MAP_KEY: dict[MapKey, tuple[np.ndarray, np.ndarray]] = {}
 _MAP_CACHE_MAX = 4_096
 
 
 def _get_map(game_state: GameState) -> tuple[np.ndarray, np.ndarray]:
-    """Find the Map of the states that share a Rooms key, making it the first time it comes.
+    """Find the Map of the states that share a Map key, making it the first time it comes.
 
     Parameters
     ----------
@@ -92,8 +92,8 @@ def _get_map(game_state: GameState) -> tuple[np.ndarray, np.ndarray]:
         (MAP_HEIGHT, MAP_WIDTH, MAP_TOPOLOGY_CHANNELS) uint8. Each forward Room's topology at its
         cell, zero where the cell holds none.
     """
-    rooms_key = get_rooms_key(game_state)
-    map_cached = _MAP_OF_ROOMS_KEY.get(rooms_key)
+    map_key = get_map_key(game_state)
+    map_cached = _MAP_OF_MAP_KEY.get(map_key)
     if map_cached is not None:
         return map_cached
 
@@ -126,10 +126,10 @@ def _get_map(game_state: GameState) -> tuple[np.ndarray, np.ndarray]:
     # Store in the cache. Guard the master copies against future writes
     np_feature.flags.writeable = False
     np_topology.flags.writeable = False
-    if len(_MAP_OF_ROOMS_KEY) >= _MAP_CACHE_MAX:
-        _MAP_OF_ROOMS_KEY.clear()
+    if len(_MAP_OF_MAP_KEY) >= _MAP_CACHE_MAX:
+        _MAP_OF_MAP_KEY.clear()
 
-    _MAP_OF_ROOMS_KEY[rooms_key] = (np_feature, np_topology)
+    _MAP_OF_MAP_KEY[map_key] = (np_feature, np_topology)
 
     return np_feature, np_topology
 
