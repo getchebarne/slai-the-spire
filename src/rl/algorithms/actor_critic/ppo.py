@@ -29,6 +29,10 @@ from src.rl.types import TokenDedup
 from src.rl.types import TokenPlan
 
 
+# A log-ratio's ceiling before the policy loss's exp: float32's exp overflows past 88.7
+_LOG_RATIO_MAX = 20.0
+
+
 @dataclass
 class PPOConfig:
     lam: float
@@ -472,7 +476,7 @@ def _update_minibatch(
 
     # Policy Loss
     x_log_ratio = policy_output.x_log_prob.sum(-1) - targets.x_log_prob_prox
-    x_ratio = x_log_ratio.exp()
+    x_ratio = x_log_ratio.clamp(max=_LOG_RATIO_MAX).exp()
     x_loss_policy = _compute_loss_policy(
         x_ratio,
         targets.x_advantage,
