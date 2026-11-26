@@ -29,8 +29,6 @@ class MetricKey(StrEnum):
     ENTROPY_L1 = "entropy/l1"
     ENTROPY_L2 = "entropy/l2"
     FLOOR_AVG = "floor_avg"
-    FROZEN_EYE_BUY_RATE = "frozen_eye_buy_rate"
-    FROZEN_EYE_OFFER_RATE = "frozen_eye_offer_rate"
     GOLD_AVG = "gold_avg"
     GOLD_SPENT_AVG = "gold_spent_avg"
     GRAD_NORM_PRECLIP = "grad/norm_preclip"
@@ -350,9 +348,8 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
     -------
     dict[str, float]
         The metrics, keyed by `MetricKey`, with the episode count and each reward stream's
-        discounted return. Every average but Frozen Eye's buy rate is over all the episodes: the
-        Heart damage counts 0 for an episode that never reached the Heart. The buy rate is over
-        the episodes offered the purchase that weren't forced, and missing when there are none.
+        discounted return. Every average is over all the episodes: the Heart damage counts 0 for
+        an episode that never reached the Heart.
     """
     num_episodes = len(episode_results)
     returns = [float(episode.reward_stream_rets.sum()) for episode in episode_results]
@@ -374,22 +371,6 @@ def _aggregate_episode_results(episode_results: list[EpisodeResult]) -> dict[str
         MetricKey.DECK_SIZE_AVG: sum(episode.deck_size for episode in episode_results) / num_episodes,
         MetricKey.TRUNCATED_RATE: sum(episode.truncated for episode in episode_results) / num_episodes,
     }
-
-    # The share of episodes offered Frozen Eye's purchase
-    metrics[MetricKey.FROZEN_EYE_OFFER_RATE] = (
-        sum(episode.frozen_eye_offered for episode in episode_results) / num_episodes
-    )
-
-    # Among the episodes offered it that weren't forced, the share that bought it
-    episode_results_offered_unforced = [
-        episode
-        for episode in episode_results
-        if episode.frozen_eye_offered and not episode.frozen_eye_bought_forced
-    ]
-    if episode_results_offered_unforced:
-        metrics[MetricKey.FROZEN_EYE_BUY_RATE] = sum(
-            episode.frozen_eye_bought for episode in episode_results_offered_unforced
-        ) / len(episode_results_offered_unforced)
 
     # Discounted per-stream returns, the optimizer's actual objective
     for idx_reward_stream, reward_stream in enumerate(RewardStream):

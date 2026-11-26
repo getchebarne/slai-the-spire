@@ -136,20 +136,18 @@ def _run_eval_battery(
 
             # Game step: the games that end leave the batch
             batch_done = []
-            for idx_game, legal_actions, (idx_action_type, idx_selection, idx_target) in zip(
-                batch_idx_game, batch_legal_actions, policy.x_action.tolist()
+            for idx_game, (idx_action_type, idx_selection, idx_target) in zip(
+                batch_idx_game, policy.x_action.tolist()
             ):
                 action = engine_action(
                     idx_action_type, idx_selection, idx_target, batch_game_state[idx_game]
                 )
-                batch_game_state[idx_game], _, _, done, _ = step_env(
+                batch_game_state[idx_game], _, _, done = step_env(
                     batch_env[idx_game],
                     batch_game_state[idx_game],
-                    legal_actions,
                     episode_results[idx_game],
                     action,
                     gamma,
-                    frozen_eye_forced=False,
                 )
                 batch_done.append(done)
             batch_idx_game = [

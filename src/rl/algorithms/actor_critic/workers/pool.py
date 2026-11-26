@@ -17,7 +17,6 @@ from slai import GameState
 from slai import RelicName
 
 from src.rl.actions import engine_action
-from src.rl.actions import model_action
 from src.rl.algorithms.actor_critic.curriculum import ascensions
 from src.rl.algorithms.actor_critic.envs import EpisodeResult
 from src.rl.algorithms.actor_critic.envs import new_env
@@ -57,7 +56,6 @@ class _StepBuffer:
     x_reward: torch.Tensor        # (B, K)
     x_done: torch.Tensor          # (B,)
     x_num_discount: torch.Tensor  # (B,) long: k in the step's discount, γ^k
-    x_forced: torch.Tensor        # (B,) bool: the worker wrote a forced action over x_action
 
     states_reserved: States[Reserved]  # The encoded states, at worst-case capacity
 
@@ -92,7 +90,6 @@ def start_workers(
     gamma: float,
     seed: int,
     pandora_share: float,
-    frozen_eye_share: float,
 ) -> Workers:
     """Start `num_workers` processes, each stepping an equal share of the `num_envs` games.
 
@@ -112,8 +109,6 @@ def start_workers(
         The seed each worker's own seed derives from.
     pandora_share : float
         The probability that each new game starts from Pandora's Box.
-    frozen_eye_share : float
-        The probability that each new game plays Frozen Eye's Shop purchase whenever it's legal.
 
     Returns
     -------
@@ -157,7 +152,6 @@ def start_workers(
                     seed * 7919 + idx_step_buffer,
                     gamma,
                     pandora_share,
-                    frozen_eye_share,
                 ),
                 daemon=True,
             )
@@ -199,7 +193,6 @@ def _allocate_step_buffers(num_buffers: int, buffer_size: int) -> list[_StepBuff
         x_reward=torch.zeros(num_buffers, buffer_size, len(RewardStream), dtype=torch.float32),
         x_done=torch.zeros(num_buffers, buffer_size, dtype=torch.float32),
         x_num_discount=torch.zeros(num_buffers, buffer_size, dtype=torch.long),
-        x_forced=torch.zeros(num_buffers, buffer_size, dtype=torch.bool),
         states_reserved=allocate_states(num_buffers, buffer_size),
     )
 
@@ -213,9 +206,7 @@ def _allocate_step_buffers(num_buffers: int, buffer_size: int) -> list[_StepBuff
 
 def step_workers(
     workers: Workers, x_action: torch.Tensor
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[EpisodeResult]
-]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[EpisodeResult]]:
     """Have every worker step its games and write the new states, and wait for every reply.
 
     Parameters
@@ -228,12 +219,6 @@ def step_workers(
 
     Returns
     -------
-    x_action_played : torch.Tensor
-        (E, 3) long on the CPU. The actions played: each game's row of `x_action`, or the forced
-        action its worker wrote over it, independent of the workers' reusable storage.
-    x_forced : torch.Tensor
-        (E,) bool on the CPU. Whether each game's action was forced, independent of the workers'
-        reusable storage.
     x_reward : torch.Tensor
         (E, K) float32 on the CPU. The rewards, independent of the workers' reusable storage.
     x_done : torch.Tensor
@@ -266,10 +251,6 @@ def step_workers(
     # Wait for the workers to act on their environments
     _wait_for_replies(workers._handles)
 
-    # Collect the actions played and whether each was forced
-    x_action_played = torch.cat([step_buffer.x_action for step_buffer in step_buffers])
-    x_forced = torch.cat([step_buffer.x_forced for step_buffer in step_buffers])
-
     # Collect instant rewards and done flags
     x_reward = torch.cat([step_buffer.x_reward for step_buffer in step_buffers])
     x_done = torch.cat([step_buffer.x_done for step_buffer in step_buffers])
@@ -285,7 +266,7 @@ def step_workers(
             except Empty:
                 _check_workers_alive(workers._handles)
 
-    return x_action_played, x_forced, x_reward, x_done, x_num_discount, episode_results
+    return x_reward, x_done, x_num_discount, episode_results
 
 
 def write_ascensions(workers: Workers, ascension_current: float) -> None:
@@ -407,14 +388,12 @@ def _worker_loop(
     seed: int,
     gamma: float,
     pandora_share: float,
-    frozen_eye_share: float,
 ) -> None:
     """Run one shard of the games until the stop flag is set.
 
-    It writes their first states, then on each request steps every game with its sampled action,
-    or the Frozen Eye purchase the game forces, and writes the forced actions and flags, the
-    rewards, dones, discount counts and new states. A game whose episode ended is replaced by a
-    new one at its current ascension.
+    It writes their first states, then on each request steps every game with its sampled action
+    and writes the rewards, dones, discount counts and new states. A game whose episode ended is
+    replaced by a new one at its current ascension.
 
     Parameters
     ----------
@@ -434,8 +413,6 @@ def _worker_loop(
         The discount the games' rewards and discounted returns use.
     pandora_share : float
         The probability that each new game starts from Pandora's Box.
-    frozen_eye_share : float
-        The probability that each new game plays Frozen Eye's Shop purchase whenever it's legal.
     """
     set_rng_seeds(seed)
     torch.set_num_threads(1)
@@ -443,23 +420,18 @@ def _worker_loop(
     # Initialize environments and gather initial observations
     batch_env = []
     batch_game_state = []
-    batch_frozen_eye_forced = []
     episode_results = []
     for ascension in step_buffer.x_ascension.tolist():
-        env, game_state, frozen_eye_forced = _new_env_training(
-            ascension, pandora_share, frozen_eye_share
-        )
+        env, game_state = _new_env_training(ascension, pandora_share)
         batch_env.append(env)
         batch_game_state.append(game_state)
-        batch_frozen_eye_forced.append(frozen_eye_forced)
         episode_results.append(EpisodeResult()) 
 
     # Write initial encodings into the shared step buffer and signal the Actor
-    batch_legal_actions = [env.get_legal_actions() for env in batch_env]
     encode_states_into(
         step_buffer.states_reserved,
         batch_game_state,
-        batch_legal_actions,
+        [env.get_legal_actions() for env in batch_env],
     )
     sph_reply.release()
 
@@ -472,23 +444,9 @@ def _worker_loop(
             action = engine_action(idx_action_type, idx_selection, idx_target, batch_game_state[idx_env])
 
             # Step the environment
-            game_state_next, reward, num_discounts, done, action_played = step_env(
-                batch_env[idx_env],
-                batch_game_state[idx_env],
-                batch_legal_actions[idx_env],
-                episode_results[idx_env],
-                action,
-                gamma,
-                batch_frozen_eye_forced[idx_env],
+            game_state_next, reward, num_discounts, done = step_env(
+                batch_env[idx_env], batch_game_state[idx_env], episode_results[idx_env], action, gamma
             )
-
-            # Write a forced action over the Actor's row, in the model's format, and the flag
-            forced = action_played != action
-            if forced:
-                step_buffer.x_action[idx_env] = torch.tensor(
-                    model_action(action_played, batch_game_state[idx_env])
-                )
-            step_buffer.x_forced[idx_env] = forced
 
             # Write reward and done status into the shared step buffer 
             step_buffer.x_reward[idx_env] = torch.from_numpy(reward)
@@ -499,19 +457,18 @@ def _worker_loop(
             if done:
                 episode_result_queue.put(episode_results[idx_env])
                 episode_results[idx_env] = EpisodeResult()
-                batch_env[idx_env], game_state_next, batch_frozen_eye_forced[idx_env] = (
-                    _new_env_training(batch_ascension[idx_env], pandora_share, frozen_eye_share)
+                batch_env[idx_env], game_state_next = _new_env_training(
+                    batch_ascension[idx_env], pandora_share
                 )
 
             # Overwrite current game state
             batch_game_state[idx_env] = game_state_next
 
         # Write the step's encoded game states into the shared step buffer and singal the Actor
-        batch_legal_actions = [env.get_legal_actions() for env in batch_env]
         encode_states_into(
             step_buffer.states_reserved,
             batch_game_state,
-            batch_legal_actions,
+            [env.get_legal_actions() for env in batch_env],
         )
         sph_reply.release()
 
@@ -538,13 +495,10 @@ def _wait_for_request(sph_request: Semaphore, x_stop: torch.Tensor) -> bool:
     return not x_stop
 
 
-def _new_env_training(
-    ascension: int, pandora_share: float, frozen_eye_share: float
-) -> tuple[GameEnv, GameState, bool]:
+def _new_env_training(ascension: int, pandora_share: float) -> tuple[GameEnv, GameState]:
     """Start a training game at `ascension` from a new random seed.
 
-    With probability `pandora_share` the game starts from Pandora's Box, and with probability
-    `frozen_eye_share` it forces Frozen Eye's Shop purchase whenever it's legal.
+    With probability `pandora_share` the game starts from Pandora's Box.
 
     Parameters
     ----------
@@ -552,8 +506,6 @@ def _new_env_training(
         The game's ascension.
     pandora_share : float
         The probability that the game starts from Pandora's Box.
-    frozen_eye_share : float
-        The probability that the game plays Frozen Eye's Shop purchase whenever it's legal.
 
     Returns
     -------
@@ -561,19 +513,12 @@ def _new_env_training(
         The game, with the run's `NEOW` setting.
     game_state : GameState
         Its first state.
-    frozen_eye_forced : bool
-        Whether the game plays Frozen Eye's Shop purchase whenever it's legal.
     """
-    # A share of 0 skips this draw, so the seeds stay those of a run without forced purchases
-    frozen_eye_forced = frozen_eye_share > 0 and random.random() < frozen_eye_share
-
     # A share of 0 skips this draw, so the seeds stay those of a run without Pandora starts
     if pandora_share > 0 and random.random() < pandora_share:
-        env, game_state = _new_env_pandora(ascension)
-    else:
-        env, game_state = new_env(ascension, random.randint(0, 2**31 - 1))
+        return _new_env_pandora(ascension)
 
-    return env, game_state, frozen_eye_forced
+    return new_env(ascension, random.randint(0, 2**31 - 1))
 
 
 def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
