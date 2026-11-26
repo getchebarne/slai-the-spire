@@ -214,13 +214,13 @@ def adapt_lr(lr: float, approx_kl: float, target_kl: float) -> float:
     -------
     float
         `lr` divided by 1.5 when `approx_kl` is above twice `target_kl`, down to 1e-5;
-        multiplied by 1.5 when below half of it, up to 1e-3; unchanged otherwise.
+        multiplied by 1.5 when below half of it, up to 1e-4; unchanged otherwise.
     """
     if approx_kl > 2.0 * target_kl:
         return max(lr / 1.5, 1e-5)
     
     if approx_kl < 0.5 * target_kl:
-        return min(lr * 1.5, 1e-3)
+        return min(lr * 1.5, 1e-4)
     
     return lr
 
