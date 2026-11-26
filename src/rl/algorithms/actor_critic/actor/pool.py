@@ -44,7 +44,6 @@ class RolloutConfig:
     num_workers: int
     rollout_length: int
     pandora_share: float
-    frozen_eye_share: float
 
 
 @dataclass
@@ -109,8 +108,8 @@ def start_actor(
     model_config : dict[str, Any]
         The model's architecture, which the Actor process builds a model of its own from.
     rollout_config : RolloutConfig
-        The games, worker processes and steps a rollout plays, the share of games that start from
-        Pandora's Box and the share that play Frozen Eye's Shop purchase whenever it's legal.
+        The games, worker processes and steps a rollout plays, and the share of games that start
+        from Pandora's Box.
     device : torch.device
         The device the Actor process plays on.
     gamma : float
@@ -316,7 +315,6 @@ def _actor_loop(
             actor_config.gamma,
             actor_config.seed,
             actor_config.rollout_config.pandora_share,
-            actor_config.rollout_config.frozen_eye_share,
         )
         stack.callback(stop_workers, workers)
 
@@ -408,9 +406,8 @@ def _collect_rollout(
         The episodes finished during the rollout.
     """
     batch_states: list[States[Live]] = []  # Per step, in state order
-    batch_x_action_played: list[torch.Tensor] = []  # Per step, (E, 3) on the CPU
+    batch_x_action: list[torch.Tensor] = []  # Per step, (E, 3) on the device
     batch_x_log_prob: list[torch.Tensor] = []  # Per step, (E,) on the device
-    batch_x_forced: list[torch.Tensor] = []  # Per step, (E,) bool on the CPU
     batch_x_reward: list[torch.Tensor] = []  # Per step, (E, K) on the CPU
     batch_x_done: list[torch.Tensor] = []  # Per step, (E,) on the CPU
     batch_x_num_discount: list[torch.Tensor] = []  # Per step, (E,) long on the CPU
@@ -428,20 +425,14 @@ def _collect_rollout(
             x_step_action = policy_output.x_action
 
             # Step the worker's environments
-            (
-                x_step_action_played,
-                x_step_forced,
-                x_step_reward,
-                x_step_done,
-                x_step_num_discount,
-                step_episode_results,
-            ) = step_workers(workers, x_step_action)
+            x_step_reward, x_step_done, x_step_num_discount, step_episode_results = (
+                step_workers(workers, x_step_action)
+            )
 
             # Append the step's data
             batch_states.append(states)
-            batch_x_action_played.append(x_step_action_played)
+            batch_x_action.append(x_step_action)
             batch_x_log_prob.append(policy_output.x_log_prob.sum(-1))
-            batch_x_forced.append(x_step_forced)
             batch_x_reward.append(x_step_reward)
             batch_x_done.append(x_step_done)
             batch_x_num_discount.append(x_step_num_discount)
@@ -454,9 +445,8 @@ def _collect_rollout(
         Rollout(
             states=cat_states(batch_states),
             states_final=states,
-            x_action=torch.cat(batch_x_action_played).to(device),
+            x_action=torch.cat(batch_x_action),
             x_log_prob_behavior=torch.cat(batch_x_log_prob),
-            x_forced=torch.cat(batch_x_forced).to(device),
             x_reward=torch.stack(batch_x_reward).to(device),
             x_done=torch.stack(batch_x_done).to(device),
             x_num_discount=torch.stack(batch_x_num_discount).to(device),
