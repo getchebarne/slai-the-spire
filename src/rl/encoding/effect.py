@@ -305,6 +305,9 @@ _CAP_DAMAGE = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectGlassKnifeDecay, lambda effect: effect.delta),
 )
 _CAP_INSTANCES = _cap(_field(slai.EffectDamagePhysical, lambda effect: effect.instances))
+_CAP_DAMAGE_TOTAL = _LIVE_SCALE_HEADROOM * _cap(
+    _field(slai.EffectDamagePhysical, lambda effect: effect.amount * effect.instances)
+)
 _CAP_BLOCK = _LIVE_SCALE_HEADROOM * _cap(
     _field(slai.EffectBlockGain, lambda effect: effect.amount),
     _field(slai.EffectEscapePlanCheck, lambda effect: effect.block),
@@ -433,6 +436,9 @@ _OFF_RELIC_POOL_SIZE = _alloc("relic_pool_size")
 _OFF_DAMAGE = _alloc("damage")
 _OFF_DAMAGE_BUCKETS = _alloc("damage_buckets", _bucket_width(_CAP_DAMAGE), 2)
 _OFF_INSTANCES = _alloc("instances")
+_OFF_INSTANCES_BUCKETS = _alloc("instances_buckets", _bucket_width(_CAP_INSTANCES))
+_OFF_DAMAGE_TOTAL = _alloc("damage_total")
+_OFF_DAMAGE_TOTAL_BUCKETS = _alloc("damage_total_buckets", _bucket_width(_CAP_DAMAGE_TOTAL), 2)
 _OFF_BLOCK = _alloc("block")
 _OFF_BLOCK_BUCKETS = _alloc("block_buckets", _bucket_width(_CAP_BLOCK), 2)
 _OFF_HEALTH_ABSOLUTE = _alloc("health_absolute")
@@ -475,6 +481,8 @@ _OFF_UPGRADED = _alloc("upgraded")
 _BUCKET_META: tuple[tuple[int, int, float], ...] = (
     (_OFF_SELECT_COUNT, _OFF_SELECT_COUNT_BUCKETS, _CAP_SELECT_COUNT),
     (_OFF_DAMAGE, _OFF_DAMAGE_BUCKETS, _CAP_DAMAGE),
+    (_OFF_INSTANCES, _OFF_INSTANCES_BUCKETS, _CAP_INSTANCES),
+    (_OFF_DAMAGE_TOTAL, _OFF_DAMAGE_TOTAL_BUCKETS, _CAP_DAMAGE_TOTAL),
     (_OFF_BLOCK, _OFF_BLOCK_BUCKETS, _CAP_BLOCK),
     (_OFF_HEALTH_ABSOLUTE, _OFF_HEALTH_BUCKETS, _CAP_HEALTH),
     (_OFF_GOLD_ABSOLUTE, _OFF_GOLD_BUCKETS, _CAP_GOLD),
@@ -500,6 +508,7 @@ _NORM_META: tuple[tuple[int, float, _NormMode], ...] = (
     (_OFF_RELIC_POOL_SIZE, _CAP_RELIC_POOL_SIZE, _NormMode.LINEAR),
     (_OFF_DAMAGE, SCALE_HEALTH, _NormMode.SCALE),
     (_OFF_INSTANCES, _CAP_INSTANCES, _NormMode.LINEAR),
+    (_OFF_DAMAGE_TOTAL, SCALE_HEALTH, _NormMode.SCALE),
     (_OFF_BLOCK, SCALE_HEALTH, _NormMode.SCALE),
     (_OFF_HEALTH_ABSOLUTE, SCALE_HEALTH, _NormMode.SCALE),
     (_OFF_GOLD_ABSOLUTE, SCALE_GOLD, _NormMode.SCALE),
@@ -677,6 +686,7 @@ def _encode_damage_physical(np_out: np.ndarray, effect: slai.EffectDamagePhysica
     if effect.if_poisoned:
         np_out[_OFF_IF_POISONED] = 1.0
     np_out[_OFF_INSTANCES] += effect.instances
+    np_out[_OFF_DAMAGE_TOTAL] += effect.amount * effect.instances
     if effect.lifesteal:
         np_out[_OFF_LIFESTEAL] = 1.0
 
