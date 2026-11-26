@@ -1,28 +1,36 @@
-[tool.poetry]
+[project]
 name = "slai-the-spire"
 version = "0.1.0"
 description = "Training a Deep Reinforcement Learning agent to beat Slay the Spire."
-authors = ["Guillermo Etchebarne <guillermo.etchebarne@gmail.com>"]
+authors = [{ name = "Guillermo Etchebarne", email = "guillermo.etchebarne@gmail.com" }]
 readme = "README.md"
-packages = [{include = "src"}]
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "numpy>=1.26.3,<2",
+    "torch>=2.9.1,<2.10",
+    "tensorboard>=2.17.0,<3",
+    "pyyaml>=6.0.2,<7",
+    "click>=8.1.8,<9",
+    "slai",
+    "maturin>=1.13.1,<2",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.12,<3.15"
-numpy = "^1.26.3"
-ipdb = "^0.13.13"
-torch = "~2.9.1"
-tensorboard = "^2.17.0"
-pyyaml = "^6.0.2"
-click = "^8.1.8"
-slai = { path = "../slai", develop = true }
-maturin = "^1.13.1"
+[dependency-groups]
+dev = [
+    "flake8>=6.1.0,<7",
+    "black>=23.7.0,<24",
+    "isort>=5.12.0,<6",
+    "pytest>=8.1.1,<9",
+    "types-pyyaml>=6.0.12.20261122,<7",
+    "ipdb>=0.13.13,<0.14",
+]
 
-[tool.poetry.group.dev.dependencies]
-flake8 = "^6.1.0"
-black = "^23.7.0"
-isort = "^5.12.0"
-pytest = "^8.1.1"
-types-pyyaml = "^6.0.12.20261122"
+[tool.uv]
+package = false
+python-preference = "only-managed"
+
+[tool.uv.sources]
+slai = { path = "../slai", editable = true }
 
 [tool.isort]
 force_single_line = true
@@ -32,7 +40,3 @@ line_length = 99
 
 [tool.black]
 line-length = 99
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
