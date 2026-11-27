@@ -35,7 +35,7 @@ class EpisodeResult:
     gold_gained: int = 0     # Per step, the gold delta plus the Shop spend, floored at 0
     gold_spent: int = 0      # Gold spent at Shops (reward.shop_gold_spent) over the episode
     deck_size: int = 0       # Deck size at episode end
-    truncated: bool = False  # Cut at _MAX_STEPS_EPISODE while the game still ran
+    truncated: bool = False  # Cut (_MAX_STEPS_EPISODE, softlock) while the game still ran
 
     # Keys held at the episode's end
     keys_end: int = 0
@@ -79,8 +79,8 @@ def step_env(
     game_state : GameState
         The game's state before the action.
     episode_result : EpisodeResult
-        The episode's running tally, updated in place, and finished once the episode ends or
-        reaches _MAX_STEPS_EPISODE steps.
+        The episode's running tally, updated in place, and finished once the episode ends,
+        reaches _MAX_STEPS_EPISODE steps or is softlocked.
     action : Action
         The action to play.
     gamma : float
@@ -97,10 +97,10 @@ def step_env(
     done : bool
         Whether the episode ended, terminated or truncated.
     """
-    game_state_next, terminated, num_discounts = step_scripted(env, action)
+    game_state_next, terminated, num_discounts, softlocked = step_scripted(env, action)
 
-    # A game at the step limit ends there, truncated, as a death
-    truncated = not terminated and episode_result.length + 1 >= _MAX_STEPS_EPISODE
+    # A game at the step limit or softlocked ends there, truncated, as a death
+    truncated = softlocked or (not terminated and episode_result.length + 1 >= _MAX_STEPS_EPISODE)
     done = terminated or truncated
 
     # Compute transition reward
@@ -161,7 +161,7 @@ def _tally_step(
     done : bool
         Whether the episode ended this step.
     truncated : bool
-        Whether the step cut the episode at the step limit while the game still ran.
+        Whether the step cut the episode (step limit, softlock) while the game still ran.
     """
     # Increment 
     episode_result.length += 1

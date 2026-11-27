@@ -557,7 +557,7 @@ def _new_env_pandora(ascension: int) -> tuple[GameEnv, GameState]:
         )
 
         # Take the swap outside the policy, and keep the game if it granted Pandora's Box
-        game_state, _, _ = step_scripted(
+        game_state, _, _, _ = step_scripted(
             env, Action(ActionType.EventOptionSelect, [option_swap.id])
         )
         if relic_held(game_state, RelicName.PandorasBox):

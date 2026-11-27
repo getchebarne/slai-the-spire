@@ -17,7 +17,7 @@ from src.rl.utils import action_masked
 from src.rl.utils import curse_useful
 
 
-# Most scripted actions per policy step, so forced turn ends can't hang a worker
+# Most scripted actions per policy step: a game that takes them all and still runs is softlocked
 _ACTIONS_SCRIPTED_MAX = 32
 
 # A Reward's takes move no game time, so they cost no discount; every other action costs one
@@ -195,10 +195,12 @@ def _action_scripted(game_state: GameState, actions: list[Action]) -> Action | N
     return None
 
 
-def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int]:
+def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int, bool]:
     """Run `env.step(action)`, then the scripted actions until the policy has a choice.
 
-    All of them run inside this one policy step, whose discount counts them.
+    All of them run inside this one policy step, whose discount counts them. A game that takes
+    `_ACTIONS_SCRIPTED_MAX` of them and still runs is softlocked: the policy has had no choice
+    for that long.
 
     Parameters
     ----------
@@ -215,10 +217,13 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int]:
         Whether the game ended.
     num_discounts : int
         The actions taken, Reward takes aside: k in the step's discount, γ^k.
+    softlocked : bool
+        Whether the game is softlocked.
     """
     game_state, terminated = env.step(action)
     num_discounts = int(action.action_type not in _ACTION_TYPES_REWARD_TAKE)
-    
+    softlocked = False
+
     for _ in range(_ACTIONS_SCRIPTED_MAX):
         if terminated:
             break
@@ -229,5 +234,8 @@ def step_scripted(env: GameEnv, action: Action) -> tuple[GameState, bool, int]:
         
         game_state, terminated = env.step(action_scripted)
         num_discounts += action_scripted.action_type not in _ACTION_TYPES_REWARD_TAKE
-    
-    return game_state, terminated, num_discounts
+    else:
+        # Every scripted action allowed was taken
+        softlocked = not terminated
+
+    return game_state, terminated, num_discounts, softlocked
