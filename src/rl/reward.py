@@ -124,8 +124,8 @@ def compute_reward(
     game_state_next : slai.GameState
         The state after the step.
     done : bool
-        Whether the episode ended this step: the game ended, or the step cut it at the episode
-        step limit.
+        Whether the episode ended this step: the game ended, or the step cut it, at the episode
+        step limit or softlocked.
     discount : float
         The step's discount, γ^k: γ is the trainer's discount, k comes from `step_scripted`.
     action : slai.Action
@@ -141,7 +141,7 @@ def compute_reward(
     character = get_character(game_state)
     character_next = get_character(game_state_next)
 
-    # Any end but a win pays a death: a death, a cut at the step limit, a door-shut kill
+    # Any end but a win pays a death: a death, a cut (step limit, softlock), a door-shut kill
     death = done and not won
     health_next = 0 if death else character_next.health
 
@@ -152,7 +152,7 @@ def compute_reward(
     )
 
     # A (1 − γ^k) time cost per step makes a death total ≈ −1 at any length. Only game_over or
-    # the step-limit cut ends the run: health alone never does (Fairy Potion and Lizard Tail
+    # a cut ends the run: health alone never does (Fairy Potion and Lizard Tail
     # revive)
     outcome = -(1.0 - discount)
     if won:

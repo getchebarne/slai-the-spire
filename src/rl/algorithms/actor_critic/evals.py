@@ -76,7 +76,7 @@ def _run_eval_battery(
     The games play training's mix of levels at ascension_current: the first
     round(frac(ascension_current)*games) play the frontier level ceil(ascension_current), the rest
     floor(ascension_current). Each step runs one greedy forward over the games still running, until
-    every game ends or reaches the step limit.
+    every game ends, reaches the step limit or is softlocked.
 
     Parameters
     ----------
